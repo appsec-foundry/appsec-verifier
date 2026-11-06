@@ -54,6 +54,7 @@ setup(
         "PyYAML>=6.0",
         "jsonschema>=4.0",
     ],
+    extras_require={"dev": ["pytest>=7.0"]},
     entry_points={"console_scripts": ["appsec-verifier=appsec_verifier.cli:main"]},
     cmdclass={"build_py": BuildVerifier},
 )

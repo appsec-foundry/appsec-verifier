@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from .loader import load_plans, select
+from .scope import ScopeGuard
 from .version_info import resource_root, version_string
 
 EXIT_OK = 0
@@ -95,12 +96,14 @@ def cmd_scope(args: argparse.Namespace) -> int:
             print(f"  - {e}", file=sys.stderr)
         return EXIT_BLOCKED
     window = scope.get("window", {})
+    guard = ScopeGuard(scope)
+    win = guard.within_window()
     rows = [
         ("base_url", str(scope.get("base_url"))),
         ("hosts", ", ".join(scope.get("hosts", []) or [scope.get("base_url", "")])),
         ("ports", ", ".join(map(str, scope.get("ports", []) or []))),
         ("path_prefixes", ", ".join(scope.get("path_prefixes", []) or ["/"])),
-        ("window", f"{window.get('from')} → {window.get('until')}"),
+        ("window", f"{window.get('from')} → {window.get('until')}  [{'ok' if win.allowed else 'EXPIRED/UNOPENED'}]"),
         ("owner", str((scope.get("owner") or {}).get("name"))),
         ("state change", "allowed" if scope.get("allow_state_change") else "read-only"),
         ("auth_hosts", ", ".join(scope.get("auth_hosts", []) or ["—"])),
@@ -108,28 +111,12 @@ def cmd_scope(args: argparse.Namespace) -> int:
     ]
     print(_box("AppSec Verifier · scope", rows))
     if args.target:
-        inside = _target_in_scope(args.target, scope)
-        print(f"\ntarget {args.target}: {'INSIDE scope' if inside else 'OUT OF SCOPE'}")
-        if not inside:
+        d = guard.authorize(args.target, "target")
+        print(f"\ntarget {args.target}: {'INSIDE scope' if d.allowed else 'OUT OF SCOPE — ' + d.reason}")
+        if not d.allowed:
             return EXIT_BLOCKED
     print("\nscope only — nothing was contacted.")
     return EXIT_OK
-
-
-def _target_in_scope(target: str, scope: dict) -> bool:
-    from urllib.parse import urlparse
-    u = urlparse(target)
-    hosts = set(scope.get("hosts") or [urlparse(scope.get("base_url", "")).hostname or ""])
-    ports = set(scope.get("ports") or [])
-    schemes = set(scope.get("schemes") or ["https"])
-    prefixes = scope.get("path_prefixes") or ["/"]
-    port = u.port or (443 if u.scheme == "https" else 80)
-    path = u.path or "/"
-    if u.scheme not in schemes or (u.hostname or "") not in hosts:
-        return False
-    if ports and port not in ports:
-        return False
-    return any(path.startswith(p) for p in prefixes)
 
 
 # ── not-yet-implemented ───────────────────────────────────────────────────────
