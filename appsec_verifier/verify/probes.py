@@ -41,6 +41,9 @@ class ProbeContext:
     callback: dict
     safe: bool = True                  # VER-030: cautious by default
     read_only: bool = True             # VER-014: no state change unless explicitly allowed
+    sessions: object | None = None     # SessionManager, or None offline
+    source: object | None = None       # SourceReader (read-only target checkout), or None
+    target_base: str = ""              # target base URL the agent's requests are joined to
 
 
 @runtime_checkable

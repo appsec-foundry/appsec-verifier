@@ -86,6 +86,8 @@ def run_verification(
     target_base: str,
     authorization: dict,
     http=None,
+    sessions=None,
+    source=None,
     environment: str | None = None,
     safe: bool = True,
     read_only: bool = True,
@@ -103,7 +105,8 @@ def run_verification(
         return ProbeContext(
             plan=plan, scope=scope, guard=guard, budget=budget, http=http,
             identities=identities, callback=scope.get("callback") or {},
-            safe=safe, read_only=read_only,
+            safe=safe, read_only=read_only, sessions=sessions, source=source,
+            target_base=target_base,
         )
 
     results = [_result_entry(i, p, _verify_one(p, registry, ctx_factory)) for i, p in enumerate(plans, start=1)]
