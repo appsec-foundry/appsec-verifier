@@ -73,7 +73,7 @@ annotate the assessment, with evidence artefacts (VER-020, VER-027, VER-022).
 | `--scope PATH` | Authorisation scope file (`schemas/scope.schema.yaml`). The only source of the target boundary, plus the declared proxy and auth hosts. | VER-001 |
 | `--url URL` (alias `--target`) | Start/base URL to test. Must fall inside the scope; mismatch is refused. If omitted, the scope's `base_url` is used. | VER-001/004 |
 | `--identities PATH` | Test-identity config (`schemas/identities.schema.yaml`): bearer, basic, form, or OIDC login per role. Secret **values** come from env, never this file. | VER-016/028 |
-| `--proxy URL` | Route target and auth traffic through this HTTP/HTTPS proxy, overriding the scope's `proxy.url`. Proxy credentials still come from the env vars the scope names. | VER-029 |
+| `--proxy URL` | *Not implemented yet; set `proxy.url` in the scope file.* Route target and auth traffic through this HTTP/HTTPS proxy, overriding the scope's `proxy.url`. Proxy credentials still come from the env vars the scope names. | VER-029 |
 
 ### Select what to verify (VER-026)
 
@@ -125,8 +125,10 @@ sweeps, many payload variants). Writing to the target — needed for stored XSS
 and some IDOR cases — happens only with `--allow-intrusive`, the scope's
 `allow_state_change` true, and `--read-only` unset; such requests use unique
 markers, are logged, and are cleaned up where possible (VER-014). Deletes,
-bulk/destructive operations, DoS, and evasion are never performed, regardless of
-flags.
+bulk/destructive operations, DoS, and evasion must never be performed, regardless
+of flags. Today the code enforces this only in safe mode (GET, HEAD and OPTIONS
+only); intrusive mode does not yet block DELETE, so use it only against a
+disposable test instance.
 
 **Verifying one category.** The selectors isolate a single category —
 `--category xss`, or `--category idor` for IDOR alone — and safe mode applies the

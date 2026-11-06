@@ -1,8 +1,9 @@
 """appsec-verifier — command-line entry point.
 
-Today `scope` and `plan` run (offline, no network, no model calls); `verify` and
-`export` are specified in requirements.md / docs/cli.md but not implemented yet
-and exit non-zero with that notice. See docs/cli.md for the full design.
+`scope`, `plan` and `export` run offline (no network, no model calls). `verify`
+contacts the target through an agent only when model access is configured;
+otherwise it reports every selected finding not-attempted. See docs/cli.md for
+the full design.
 """
 
 from __future__ import annotations
