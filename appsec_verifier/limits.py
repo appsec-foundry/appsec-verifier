@@ -60,3 +60,9 @@ class RunBudget:
     def check_time(self) -> None:
         if self.limits.max_duration_s and (self._clock() - self.start) > self.limits.max_duration_s:
             raise LimitExceeded("time", f"run time budget {self.limits.max_duration_s}s exceeded")
+
+    def remaining_time(self) -> float | None:
+        """Seconds left in the run time budget, or None when it is unbounded."""
+        if not self.limits.max_duration_s:
+            return None
+        return max(0.0, self.limits.max_duration_s - (self._clock() - self.start))

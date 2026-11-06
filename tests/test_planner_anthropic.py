@@ -90,11 +90,11 @@ def test_end_turn_without_tool_is_inconclusive():
     assert action["verdict"]["verdict"] == "inconclusive"
 
 
-def test_build_planner_factory_gating(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert _build_planner_factory(SimpleNamespace(model=None)) is None
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    assert _build_planner_factory(SimpleNamespace(model=None)) is not None
+def test_build_planner_factory_gating():
+    args = SimpleNamespace(model=None, backend="auto")
+    assert _build_planner_factory(args, environ={}) == (None, None)
+    factory, info = _build_planner_factory(args, environ={"ANTHROPIC_API_KEY": "sk-test"})
+    assert factory is not None and info == {"backend": "api", "model": "claude-opus-5-5"}
 
 
 def test_agent_registry_covers_classes():

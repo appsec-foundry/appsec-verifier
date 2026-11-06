@@ -134,15 +134,35 @@ def _load_identities(path: str | None) -> list[dict]:
     return _load_yaml(Path(path)).get("identities", []) or []
 
 
-def _build_planner_factory(args):
-    """A planner factory when model access is available (ANTHROPIC_API_KEY set, or
-    --model given), else None — in which case the run stays offline and every
-    selected finding is reported not-attempted."""
-    if not os.environ.get("ANTHROPIC_API_KEY") and not args.model:
-        return None
-    from .agent import AnthropicPlanner
+class BackendUnavailable(Exception):
+    """The model backend requested with --backend cannot be used."""
+
+
+def _build_planner_factory(args, environ=None):
+    """Resolve the model backend (--backend) into (planner factory, agent info).
+    Returns (None, None) when `auto` finds no API credentials: the run then stays
+    offline and every selected finding is reported not-attempted. `auto` never
+    picks Claude Code; it is used only when requested explicitly."""
+    environ = os.environ if environ is None else environ
     model = args.model or "claude-opus-5-5"
-    return lambda: AnthropicPlanner(model=model)
+    backend = args.backend
+    has_api_key = bool(environ.get("ANTHROPIC_API_KEY") or environ.get("ANTHROPIC_AUTH_TOKEN"))
+    if backend == "auto":
+        if not has_api_key:
+            return None, None
+        backend = "api"
+    if backend == "api":
+        if not has_api_key:
+            raise BackendUnavailable("--backend api needs ANTHROPIC_API_KEY")
+        from .agent import AnthropicPlanner
+        return (lambda: AnthropicPlanner(model=model)), {"backend": "api", "model": model}
+    from .agent import ClaudeCodeBackend, ClaudeCodePlanner, ClaudeCodeUnavailable
+    try:
+        cc = ClaudeCodeBackend.resolve(model=model, environ=environ)
+    except ClaudeCodeUnavailable as exc:
+        raise BackendUnavailable(str(exc)) from exc
+    info = {"backend": "claude-code", "model": model, "runtime": f"{cc.version or 'claude'} ({cc.binary})"}
+    return (lambda: ClaudeCodePlanner(cc)), info
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -190,7 +210,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     identities = _load_identities(args.identities)
     budget = RunBudget(limits)
-    planner_factory = _build_planner_factory(args)
+    try:
+        planner_factory, agent_info = _build_planner_factory(args)
+    except BackendUnavailable as exc:
+        print(f"model backend unavailable: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
     http = sessions = source = None
     if planner_factory is not None:
         from .agent import SourceReader, agent_registry
@@ -206,7 +230,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     have_probe = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
     contact = (planner_factory is not None) and have_probe
 
-    print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact))
+    print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info))
 
     if contact:
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
@@ -229,7 +253,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         limits=limits, identities=identities, registry=registry, http=http,
         sessions=sessions, source=source, budget=budget,
         verifier_version=version_string(), target_base=target, authorization=authorization,
-        safe=safe, read_only=read_only, contacted=contact,
+        safe=safe, read_only=read_only, contacted=contact, agent=agent_info,
     )
 
     out_dir = Path(args.output)
@@ -254,10 +278,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 3 if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
 
 
-def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact) -> str:
+def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info) -> str:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
+    if agent_info is None:
+        agent = "none (no ANTHROPIC_API_KEY; use --backend claude-code for a local Claude Code)"
+    elif agent_info["backend"] == "claude-code":
+        agent = f"claude-code · {agent_info['model']} · {agent_info['runtime']}"
+    else:
+        agent = f"api · {agent_info['model']}"
     return _box("AppSec Verifier · verify", [
+        ("agent", agent),
         ("assessment", str(assessment)),
         ("target", f"{target}  ({'will contact' if contact else 'not contacted yet'})"),
         ("scope", f"{', '.join(scope.get('hosts', []) or [target])}  owner: {(scope.get('owner') or {}).get('name')}"),
@@ -384,6 +415,10 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--dry-run", action="store_true", help="resolve selection + scope, write nothing, contact nothing")
     vf.add_argument("--headful", action="store_true", help="run the proof browser visibly (local debugging)")
     vf.add_argument("--model", help="reasoning model for the verification agent")
+    vf.add_argument("--backend", choices=["auto", "api", "claude-code"], default="auto",
+                    help="how to reach the model: 'api' needs ANTHROPIC_API_KEY; 'claude-code' uses a local, "
+                         "logged-in Claude Code (e.g. a Claude subscription); 'auto' (default) uses the API "
+                         "when a key is set and never picks Claude Code")
 
     ex = sub.add_parser("export", help="re-emit a verification.yaml for AppSec Analyzer")
     ex.add_argument("--verification", required=True, help="verification.yaml to export")

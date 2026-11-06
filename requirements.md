@@ -270,7 +270,9 @@ optional hardening.
 - **VER-023: Run as a standalone CLI.** The Verifier is a standalone command-line
   tool, usable in CI, that takes an assessment, a scope file, and a target URL,
   and produces the verification report. It resolves its own agent runtime and
-  does not depend on a coding assistant being present.
+  does not depend on a coding assistant being present. A locally installed Claude
+  Code may supply the model instead of an API key, but only on explicit request,
+  and only as a planner without tools of its own (VER-017).
 
 - **VER-024: Explain what it could and could not do.** When a finding class is
   unsupported, a target is unreachable, a required test identity is missing, or a

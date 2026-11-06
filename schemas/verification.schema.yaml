@@ -42,6 +42,11 @@ properties:
       model:
         type: [string, "null"]
         description: Reasoning model used by the verification agent.
+      backend:
+        enum: [api, claude-code, null]
+        description: |
+          How the model was reached: `api` (Anthropic API key) or `claude-code`
+          (a local, logged-in Claude Code). Null when no agent ran.
       source_assessment:
         type: string
         description: Path to the security-assessment.yaml that was verified.

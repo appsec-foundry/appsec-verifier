@@ -15,8 +15,15 @@ Early version.
 - `verify` runs an AI agent per finding (Anthropic API, default model
   `claude-opus-5-5`, change with `--model`). The agent reads the finding and,
   with `--source`, the relevant source code, then sends HTTP requests within the
-  scope. It has no other tools. Without `ANTHROPIC_API_KEY`, `verify` contacts
-  nothing and marks every finding `not-attempted`.
+  scope. It has no other tools. Without `ANTHROPIC_API_KEY` (and without
+  `--backend claude-code`), `verify` contacts nothing and marks every finding
+  `not-attempted`.
+- `--backend claude-code` runs the model through a local, logged-in Claude Code
+  (`claude -p`) instead of an API key, for example on a Claude subscription.
+  Claude Code then has no tools, settings or MCP servers and only proposes the
+  next step; the Verifier executes it within the scope. This backend is never
+  chosen automatically. Check Anthropic's current terms before using a
+  subscription this way.
 - Not built yet: the headless browser that shows an XSS payload actually
   executes, and the callback listener for SSRF. For now the agent judges from
   HTTP responses only.
@@ -92,7 +99,7 @@ Python 3.10 or later, with [pipx](https://pipx.pypa.io/stable/):
 
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-pipx inject appsec-verifier anthropic      # needed for verify against a target
+pipx inject appsec-verifier anthropic      # needed for verify with an API key (not for --backend claude-code)
 ```
 
 From a local checkout: `pip install -e '.[agent]'`.

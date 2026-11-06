@@ -95,6 +95,7 @@ def run_verification(
     target_status: dict | None = None,
     now: datetime | None = None,
     budget: RunBudget | None = None,
+    agent: dict | None = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     budget = budget or RunBudget(limits)
@@ -125,6 +126,8 @@ def run_verification(
         "schema_version": 1,
         "generated": _iso(now),
         "verifier_version": verifier_version,
+        "model": (agent or {}).get("model"),
+        "backend": (agent or {}).get("backend"),
         "source_assessment": str(assessment_path),
         "source_assessment_sha256": _sha256(assessment_path),
         "target": {

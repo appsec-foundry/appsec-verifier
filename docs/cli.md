@@ -116,6 +116,24 @@ says so before it starts. Prefer categories and severities over CWEs.
 | `--dry-run` | Resolve selection + scope and print the plan; send nothing to the target. | VER-008 |
 | `--headful` | Run the proof browser visibly (local debugging only). | VER-009 |
 | `--model NAME` | Reasoning model for the verification agent. | — |
+| `--backend auto\|api\|claude-code` | How the agent reaches the model (below). Default `auto`. | VER-023 |
+
+**Model backend.** `api` calls the Anthropic API and needs `ANTHROPIC_API_KEY`
+(or `ANTHROPIC_AUTH_TOKEN`). `claude-code` runs each planning step through a
+local, logged-in Claude Code (`claude -p`), for example on a Claude
+subscription. `auto` uses the API when a key is set and otherwise stays offline;
+it never picks Claude Code. An explicitly requested backend that is not
+available stops the run before anything is contacted.
+
+With `claude-code`, Claude Code runs without built-in tools, MCP servers,
+settings, skills or session persistence, in an empty working directory, and
+without API keys or identity secrets in its environment. It only returns the
+next step as structured output; the Verifier validates it and executes it
+through the same scope-guarded tools as the API backend. If a session ever
+offers another tool or an MCP server, that finding ends `inconclusive` and no
+further Claude Code call is made in the run. The cost Claude Code reports per
+call counts against `--cost-limit`; on a subscription it is the API-equivalent
+value, not a charge.
 
 **Safe mode (default, VER-030).** Unless `--allow-intrusive` is given, the run
 stays read-only even when the scope permits state change, sends the single most
