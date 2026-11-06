@@ -219,8 +219,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
     source = SourceReader(args.source) if args.source else None
     registry = agent_registry(planner_factory)
     contact = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
+    browser, browser_note = _proof_browser(args, http, sel)
 
-    print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info))
+    print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
+                                browser_note))
 
     if contact:
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
@@ -238,13 +240,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print("\n--dry-run: selection and scope resolved; no report written, nothing contacted.")
         return EXIT_OK
 
-    doc = run_verification(
-        assessment_path=assessment, scope=scope, scope_path=scope_path, plans=sel,
-        limits=limits, identities=identities, registry=registry, http=http,
-        sessions=sessions, source=source, budget=budget,
-        verifier_version=version_string(), target_base=target, authorization=authorization,
-        safe=safe, read_only=read_only, contacted=contact, agent=agent_info,
-    )
+    try:
+        doc = run_verification(
+            assessment_path=assessment, scope=scope, scope_path=scope_path, plans=sel,
+            limits=limits, identities=identities, registry=registry, http=http,
+            sessions=sessions, source=source, budget=budget,
+            verifier_version=version_string(), target_base=target, authorization=authorization,
+            safe=safe, read_only=read_only, contacted=contact, agent=agent_info, browser=browser,
+        )
+    finally:
+        if browser is not None:
+            browser.close()
 
     out_dir = Path(args.output)
     if args.append:
@@ -268,14 +274,31 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 3 if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
 
 
-def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info) -> str:
+def _proof_browser(args, http, sel):
+    """The XSS proof browser when an XSS finding is selected (VER-009), else None;
+    with a line for the pre-flight box. Without it XSS findings stay unconfirmed."""
+    if not any(p.status == "dynamic" and p.cls == "xss" for p in sel):
+        return None, None
+    from .tools.browser import BrowserUnavailable, ProofBrowser
+
+    try:
+        ProofBrowser.check_available()
+    except BrowserUnavailable as exc:
+        return None, f"unavailable ({exc}); XSS findings cannot be confirmed"
+    browser = ProofBrowser(http, Path(args.output) / "evidence", headless=not args.headful)
+    return browser, "Google Chrome via Playwright" + (", visible" if args.headful else "") + ", started on first use"
+
+
+def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
+                          browser_note=None) -> str:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
     from .agent import SUBSCRIPTION_PROFILES
 
     cost = ("cost: subscription, not reported" if agent_info["profile"] in SUBSCRIPTION_PROFILES
             else f"cost ≤ ${limits.cost_limit_usd:.2f}")
-    return _box("AppSec Verifier · verify", [
+    rows = [("browser", browser_note)] if browser_note else []
+    return _box("AppSec Verifier · verify", rows + [
         ("profile", " · ".join(agent_info[k] for k in ("profile", "model", "runtime", "auth"))),
         ("assessment", str(assessment)),
         ("target", f"{target}  ({'will contact' if contact else 'not contacted yet'})"),

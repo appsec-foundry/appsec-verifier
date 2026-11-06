@@ -44,6 +44,25 @@ def _result_from_verdict(v: dict) -> ProbeResult:
     )
 
 
+def _xss_proof(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
+    """VER-009: an XSS finding is confirmed only when the proof browser saw the
+    marker execute; the model's word is not enough. The browser's evidence, not
+    the model's, then backs the verdict."""
+    if getattr(ctx.plan, "cls", None) != "xss" or result.verdict != "confirmed":
+        return result
+    proofs = [h["result"] for h in history if h.get("tool") == "browser_check"
+              and isinstance(h.get("result"), dict) and h["result"].get("executed") is True]
+    if not proofs:
+        return ProbeResult(
+            verdict="inconclusive", confidence=result.confidence, identities_used=result.identities_used,
+            observations=result.observations,
+            rationale="indicative, not executed: no browser_check saw the marker execute (VER-009). "
+                      f"Agent's claim: {result.rationale or ''}".strip(),
+        )
+    result.evidence = [e for p in proofs for e in p.get("evidence") or []]
+    return result
+
+
 class AgentProbe:
     """A generic agent-driven probe. `cls` is the verification class it is
     registered for (e.g. "access-control" for IDOR). `planner_factory` returns a
@@ -65,7 +84,7 @@ class AgentProbe:
                 return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
             action = planner.next_step(ctx, history)
             if "verdict" in action:
-                return _result_from_verdict(action["verdict"])
+                return _xss_proof(ctx, history, _result_from_verdict(action["verdict"]))
             name, args = action.get("tool"), action.get("args", {})
             try:
                 result = tools.call(name, args)

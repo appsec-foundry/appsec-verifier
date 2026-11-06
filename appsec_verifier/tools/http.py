@@ -48,11 +48,13 @@ class GuardedHttpClient:
         self._max_redirects = max_redirects
 
     def request(self, method: str, url: str, headers: dict | None = None, *,
-                purpose: str | None = None, **kwargs):
+                purpose: str | None = None, follow_redirects: bool = True, **kwargs):
         """Send one request through the injected transport, authorised and
         budgeted. `kwargs` (e.g. data=, json=, params=) are forwarded to the
         transport; on a redirect the request body is dropped and sensitive
-        headers are stripped when the origin changes (VER-018)."""
+        headers are stripped when the origin changes (VER-018). With
+        `follow_redirects=False` a redirect is returned as is, for a caller (the
+        proof browser) that sends each hop through this client again."""
         purpose = purpose or self._default_purpose
         headers = dict(headers or {})
         req_kwargs = dict(kwargs)
@@ -68,7 +70,7 @@ class GuardedHttpClient:
             status = getattr(resp, "status_code", None)
             resp_headers = getattr(resp, "headers", {}) or {}
             location = resp_headers.get("Location") or resp_headers.get("location")
-            if status and 300 <= status < 400 and location and hops < self._max_redirects:
+            if follow_redirects and status and 300 <= status < 400 and location and hops < self._max_redirects:
                 target = urljoin(url, location)
                 headers = strip_cross_origin_auth(headers, url, target)  # VER-018
                 url = target

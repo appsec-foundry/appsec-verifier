@@ -57,6 +57,8 @@ setup(
     ],
     extras_require={
         "agent": ["anthropic>=0.40"],   # live agent planner (verify against a target)
+        # XSS proof browser (VER-009); drives the installed Google Chrome. Pinned to the reviewed release.
+        "browser": ["playwright==1.64.1"],
         "dev": ["pytest>=7.0", "anthropic>=0.40"],
     },
     entry_points={"console_scripts": ["appsec-verifier=appsec_verifier.cli:main"]},

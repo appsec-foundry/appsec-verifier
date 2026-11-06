@@ -30,9 +30,14 @@ Early version.
   scope. `--non-interactive` requires an explicit `--profile`. Codex CLI and
   Copilot CLI have no live end-to-end test yet. Subscription use follows the
   provider's terms for that plan.
-- Not built yet: the headless browser that shows an XSS payload actually
-  executes, and the callback listener for SSRF. For now the agent judges from
-  HTTP responses only.
+- XSS findings are confirmed only in a headless proof browser (Google Chrome
+  through Playwright, `appsec-verifier[browser]`): the payload must evaluate a
+  per-finding marker, and a screenshot is saved when it does. Every request the
+  browser makes goes through the scope check. Without the browser, XSS findings
+  cannot be confirmed. The browser has only been tested offline so far; see
+  `tests/test_browser_live.py` to run it against real Chrome.
+- Not built yet: the callback listener for SSRF. Other classes are judged from
+  HTTP responses.
 
 ## Usage
 
@@ -107,12 +112,13 @@ Python 3.10 or later, with [pipx](https://pipx.pypa.io/stable/):
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
 pipx inject appsec-verifier anthropic      # only for --profile anthropic-api
+pipx inject appsec-verifier playwright==1.64.1   # XSS proof browser; uses the installed Google Chrome
 ```
 
 For the CLI profiles, install the agent CLI and log in (`claude`, `codex login`,
 `copilot login`).
 
-From a local checkout: `pip install -e '.[agent]'`.
+From a local checkout: `pip install -e '.[agent,browser]'`.
 
 ## Commands
 

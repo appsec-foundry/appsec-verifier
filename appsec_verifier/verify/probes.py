@@ -44,6 +44,8 @@ class ProbeContext:
     sessions: object | None = None     # SessionManager, or None offline
     source: object | None = None       # SourceReader (read-only target checkout), or None
     target_base: str = ""              # target base URL the agent's requests are joined to
+    browser: object | None = None      # ProofBrowser for XSS (VER-009), or None when unavailable
+    marker: tuple[str, str] = ("", "")  # per-finding XSS marker parts; only their runtime join counts
 
 
 @runtime_checkable

@@ -98,7 +98,8 @@ def to_markdown(doc: dict) -> str:
         if r.get("deviation"):
             lines.append(f"- deviation: {r['deviation']}")
         for ev in r.get("evidence") or []:
-            lines.append(f"- evidence: {ev.get('kind')} → {ev.get('path')}")
+            note = f" ({ev['note']})" if ev.get("note") else ""
+            lines.append(f"- evidence: {ev.get('kind')} → {ev.get('path')}{note}")
         lines.append("")
     return "\n".join(lines)
 
@@ -119,7 +120,9 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
             "rationale": r.get("rationale"),
             "verified_at": meta.get("generated"),
             "result_ref": r.get("result_id"),
-            "evidence_ref": (r.get("evidence") or [{}])[0].get("path") if r.get("evidence") else None,
+            # Screenshots can show target data and stay out of the export (VER-022).
+            "evidence_ref": next((e.get("path") for e in r.get("evidence") or []
+                                  if e.get("kind") != "screenshot"), None),
         })
     return {
         "meta": {

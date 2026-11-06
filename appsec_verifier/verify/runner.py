@@ -96,10 +96,12 @@ def run_verification(
     now: datetime | None = None,
     budget: RunBudget | None = None,
     agent: dict | None = None,
+    browser=None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     budget = budget or RunBudget(limits)
     from ..scope import ScopeGuard
+    from ..tools.browser import new_marker
     guard = ScopeGuard(scope)
 
     def ctx_factory(plan: FindingPlan) -> ProbeContext:
@@ -107,7 +109,7 @@ def run_verification(
             plan=plan, scope=scope, guard=guard, budget=budget, http=http,
             identities=identities, callback=scope.get("callback") or {},
             safe=safe, read_only=read_only, sessions=sessions, source=source,
-            target_base=target_base,
+            target_base=target_base, browser=browser, marker=new_marker(),
         )
 
     results = [_result_entry(i, p, _verify_one(p, registry, ctx_factory)) for i, p in enumerate(plans, start=1)]

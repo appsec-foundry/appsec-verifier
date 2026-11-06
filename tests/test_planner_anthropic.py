@@ -56,9 +56,9 @@ def _ctx_lite():
                            target_base="https://shop.example.com", safe=True)
 
 
-def test_tool_defs_expose_only_the_three_tools():
+def test_tool_defs_expose_only_the_confined_tools():
     names = {t["name"] for t in _tool_defs()}
-    assert names == {"http_request", "read_source", "submit_verdict"}
+    assert names == {"http_request", "read_source", "browser_check", "submit_verdict"}
     verdict = next(t for t in _tool_defs() if t["name"] == "submit_verdict")
     assert "confirmed" in verdict["input_schema"]["properties"]["verdict"]["enum"]
 

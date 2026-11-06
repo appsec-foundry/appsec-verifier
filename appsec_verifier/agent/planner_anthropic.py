@@ -47,6 +47,22 @@ def _tool_defs() -> list[dict]:
             },
         },
         {
+            "name": "browser_check",
+            "description": "XSS findings only: load one target page (GET, path relative to the target base URL, "
+                           "payload in the path or query) in the headless proof browser, optionally as an "
+                           "identity, and report whether your marker expression executed. Requests the page "
+                           "makes stay within the scope and run mode.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "role": {"type": "string", "description": "identity role label, or omit for unauthenticated"},
+                    "wait_ms": {"type": "integer", "minimum": 0, "maximum": 5000},
+                },
+                "required": ["path"],
+            },
+        },
+        {
             "name": "submit_verdict",
             "description": "Submit the final verdict for this finding and end the probe.",
             "input_schema": {
@@ -81,6 +97,18 @@ def _system(ctx) -> str:
         "Do not pursue other weaknesses; note anything incidental as an observation. "
         "When you have enough evidence — or cannot get it — call submit_verdict. "
         "If you cannot reproduce it, say not-reproducible or inconclusive; do not guess confirmed."
+        + _xss_marker_hint(ctx)
+    )
+
+
+def _xss_marker_hint(ctx) -> str:
+    plan, marker = getattr(ctx, "plan", None), getattr(ctx, "marker", ("", ""))
+    if getattr(plan, "cls", None) != "xss" or not all(marker):
+        return ""
+    return (
+        f"\nXSS proof: your payload must call alert('{marker[0]}'+'{marker[1]}') — the two parts joined at "
+        "runtime (quotes may change to fit the context). Only that evaluated value counts as execution, and only "
+        "browser_check observes it; confirmed without an executed marker is downgraded."
     )
 
 

@@ -142,6 +142,26 @@ finding `inconclusive` and stops every later model call of the run. Copilot CLI
 prints only the answer, so its confinement rests on the pinned version and its
 flags. `codex-cli` and `copilot-cli` have only offline tests so far.
 
+**XSS proof browser (VER-009, VER-018, VER-022).** For XSS findings the agent
+gets one more tool, `browser_check`, which loads a target page in headless
+Google Chrome (Playwright, `appsec-verifier[browser]`; `--headful` shows it).
+Chrome opens no connection itself: every request of the page is intercepted and
+sent through the same scope guard, budget and safe mode as the agent's HTTP
+requests, identity headers are added only for the target's origin, redirects go
+back to the browser so each hop is checked, and anything else is aborted
+(WebSockets and service workers included). Chrome runs with its own sandbox;
+where that is unavailable (some containers), the browser does not start and XSS
+findings cannot be confirmed. Each finding gets a random two-part
+marker; the payload must call `alert('<part1>'+'<part2>')`, and only a dialog
+showing the joined value counts, so a page that merely echoes the payload text
+is not mistaken for execution. A `confirmed` XSS verdict without such an
+executed marker is downgraded to `inconclusive` ("indicative, not executed"),
+whatever the model says. On execution the browser draws a banner and saves a
+screenshot and a JSON event record under `evidence/` (owner-only). Screenshots
+can show target data; the report marks them for review before sharing, and the
+Analyzer export never references them. Without Playwright or Chrome the
+pre-flight box says so and XSS findings cannot be confirmed.
+
 **Safe mode (default, VER-030).** Unless `--allow-intrusive` is given, the run
 stays read-only even when the scope permits state change, sends the single most
 benign payload that can still decide a verdict, keeps request count and rate
@@ -307,6 +327,8 @@ Written under `--output` (default `./verification`):
   each entry keyed to the source finding by id + match_key (VER-007, VER-020).
 - `evidence/` — request/response traces, browser events, screenshots, and
   callback records, redacted of credentials and sensitive target data (VER-022).
+  Today only the proof browser writes here: `<finding>-xss-<n>.json` and `.png`
+  when an XSS marker executed. Screenshots are not redacted and are marked so.
 - `analyzer-verification.json` — optional Analyzer re-ingest export (VER-021),
   produced by `--format analyzer-annotations` or the `export` command.
 

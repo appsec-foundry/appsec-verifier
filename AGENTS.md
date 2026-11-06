@@ -18,7 +18,10 @@ ruff check .                # must be clean (config in pyproject.toml)
 
 Tests run offline. Network, model and agent-CLI calls are replaced by fakes
 (`FakeTransport`, `FakeClient`, `FakeRun`, `httpx.MockTransport`). Never let a
-test start a real CLI, reach a real host, or need a real API key.
+test start a real CLI, reach a real host, or need a real API key. The only
+exception is opt-in: `APPSEC_VERIFIER_BROWSER_TESTS=1 python -m pytest
+tests/test_browser_live.py` starts Google Chrome against a fake target (needs
+the `[browser]` extra; still no network).
 
 ## Layout
 
@@ -58,6 +61,10 @@ needs an explicit decision from the maintainer, not a workaround.
   through `steps.parse_step`; where a CLI reports tool use (`claude`,
   `codex-cli`), it is a breach that stops all later model calls. Keep the
   isolation flags in line with AppSec Analyzer's adapters.
+- The proof browser (`tools/browser.py`) never connects by itself: every page
+  request goes through `answer()` and the `GuardedHttpClient`, or is aborted.
+  A confirmed XSS needs a `browser_check` result with `executed: true`
+  (`agent/loop.py`); the model's verdict alone never suffices (VER-009).
 - Missing or invalid scope, identity or confirmation blocks the run.
 
 Changes to these controls need tests that cover the refused case
@@ -68,8 +75,8 @@ Changes to these controls need tests that cover the refused case
 - `from __future__ import annotations`, line length 120, ruff rules
   `E, F, I, UP, B`.
 - Module docstrings name the VER-IDs they implement. Keep that up to date.
-- `anthropic` is optional (`[agent]` extra) and imported lazily in
-  `agent/planner_anthropic.py`. `plan`, `scope` and `export` must work without it.
+- `anthropic` (`[agent]`) and `playwright` (`[browser]`, pinned) are optional and
+  imported lazily. `plan`, `scope` and `export` must work without them.
 - Runtime files are found with `version_info.resource_root()`. A new runtime
   directory must be added to `RUNTIME_DIRS` in `setup.py`, `_RUNTIME_DIRS` in
   `version_info.py`, and `MANIFEST.in`.
