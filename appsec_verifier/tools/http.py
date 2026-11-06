@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 
 _SENSITIVE = ("authorization", "cookie", "proxy-authorization")
 
-Transport = Callable[[str, str, dict], Any]
+Transport = Callable[..., Any]   # transport(method, url, headers, **kwargs) -> Response
 
 
 class ScopeViolation(Exception):
@@ -47,9 +47,15 @@ class GuardedHttpClient:
         self._default_purpose = default_purpose
         self._max_redirects = max_redirects
 
-    def request(self, method: str, url: str, headers: dict | None = None, *, purpose: str | None = None):
+    def request(self, method: str, url: str, headers: dict | None = None, *,
+                purpose: str | None = None, **kwargs):
+        """Send one request through the injected transport, authorised and
+        budgeted. `kwargs` (e.g. data=, json=, params=) are forwarded to the
+        transport; on a redirect the request body is dropped and sensitive
+        headers are stripped when the origin changes (VER-018)."""
         purpose = purpose or self._default_purpose
         headers = dict(headers or {})
+        req_kwargs = dict(kwargs)
         hops = 0
         while True:
             decision = self._guard.authorize(url, purpose)
@@ -57,7 +63,7 @@ class GuardedHttpClient:
                 raise ScopeViolation(decision.reason)
             self._budget.check_time()
             self._budget.note_request()
-            resp = self._transport(method, url, headers)
+            resp = self._transport(method, url, headers, **req_kwargs)
 
             status = getattr(resp, "status_code", None)
             resp_headers = getattr(resp, "headers", {}) or {}
@@ -66,6 +72,7 @@ class GuardedHttpClient:
                 target = urljoin(url, location)
                 headers = strip_cross_origin_auth(headers, url, target)  # VER-018
                 url = target
+                req_kwargs = {}            # never resend the body across a redirect
                 hops += 1
                 continue
             return resp

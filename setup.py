@@ -53,6 +53,7 @@ setup(
     install_requires=[
         "PyYAML>=6.0",
         "jsonschema>=4.0",
+        "httpx>=0.25",
     ],
     extras_require={"dev": ["pytest>=7.0"]},
     entry_points={"console_scripts": ["appsec-verifier=appsec_verifier.cli:main"]},
