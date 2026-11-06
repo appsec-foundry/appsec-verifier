@@ -14,3 +14,18 @@ __pycache__/
 # Local secrets — never commit (VER-016). Credentials belong in env vars.
 *.env
 .env
+
+# Sandbox/home environment artifacts that surface in the repo root — not project
+# content (shell rc, editor/tool config, git/mcp config, tooling state).
+/.bash_profile
+/.bashrc
+/.profile
+/.zprofile
+/.zshrc
+/.gitconfig
+/.gitmodules
+/.mcp.json
+/.ripgreprc
+/.idea
+/.vscode
+/.claude/
