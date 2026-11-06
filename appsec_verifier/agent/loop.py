@@ -10,6 +10,7 @@ not refuted (VER-024).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 from ..limits import LimitExceeded
@@ -45,15 +46,16 @@ def _result_from_verdict(v: dict) -> ProbeResult:
 
 class AgentProbe:
     """A generic agent-driven probe. `cls` is the verification class it is
-    registered for (e.g. "access-control" for IDOR); the planner is seeded with
-    class-specific guidance."""
+    registered for (e.g. "access-control" for IDOR). `planner_factory` returns a
+    FRESH planner per run, because a planner carries per-run conversation state."""
 
-    def __init__(self, cls: str, planner: Planner, *, max_steps: int = 12):
+    def __init__(self, cls: str, planner_factory: Callable[[], Planner], *, max_steps: int = 12):
         self.cls = cls
-        self._planner = planner
+        self._planner_factory = planner_factory
         self._max_steps = max_steps
 
     def run(self, ctx: ProbeContext) -> ProbeResult:
+        planner = self._planner_factory()
         tools = AgentTools(ctx)
         history: list[dict] = []
         for _ in range(self._max_steps):
@@ -61,7 +63,7 @@ class AgentProbe:
                 ctx.budget.check_time()
             except LimitExceeded as exc:
                 return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
-            action = self._planner.next_step(ctx, history)
+            action = planner.next_step(ctx, history)
             if "verdict" in action:
                 return _result_from_verdict(action["verdict"])
             name, args = action.get("tool"), action.get("args", {})

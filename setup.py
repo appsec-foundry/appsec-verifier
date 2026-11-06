@@ -55,7 +55,10 @@ setup(
         "jsonschema>=4.0",
         "httpx>=0.25",
     ],
-    extras_require={"dev": ["pytest>=7.0"]},
+    extras_require={
+        "agent": ["anthropic>=0.40"],   # live agent planner (verify against a target)
+        "dev": ["pytest>=7.0", "anthropic>=0.40"],
+    },
     entry_points={"console_scripts": ["appsec-verifier=appsec_verifier.cli:main"]},
     cmdclass={"build_py": BuildVerifier},
 )

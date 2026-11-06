@@ -8,11 +8,12 @@ and exit non-zero with that notice. See docs/cli.md for the full design.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .limits import Limits
+from .limits import Limits, RunBudget
 from .loader import load_plans, select
 from .preflight import confirm_authorization
 from .scope import ScopeGuard
@@ -123,12 +124,23 @@ def cmd_scope(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-# ── not-yet-implemented ───────────────────────────────────────────────────────
+# ── verify ────────────────────────────────────────────────────────────────────
 
 def _load_identities(path: str | None) -> list[dict]:
     if not path:
         return []
     return _load_yaml(Path(path)).get("identities", []) or []
+
+
+def _build_planner_factory(args):
+    """A planner factory when model access is available (ANTHROPIC_API_KEY set, or
+    --model given), else None — in which case the run stays offline and every
+    selected finding is reported not-attempted."""
+    if not os.environ.get("ANTHROPIC_API_KEY") and not args.model:
+        return None
+    from .agent import AnthropicPlanner
+    model = args.model or "claude-opus-5-5"
+    return lambda: AnthropicPlanner(model=model)
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -174,11 +186,23 @@ def cmd_verify(args: argparse.Namespace) -> int:
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
 
-    registry = default_registry()
     identities = _load_identities(args.identities)
-    transport = None  # real HTTP transport not wired yet
+    budget = RunBudget(limits)
+    planner_factory = _build_planner_factory(args)
+    http = sessions = source = None
+    if planner_factory is not None:
+        from .agent import SourceReader, agent_registry
+        from .auth import SessionManager
+        from .tools import GuardedHttpClient
+        from .tools.httpx_transport import transport_from_scope
+        http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
+        sessions = SessionManager(identities, http, env=os.environ)
+        source = SourceReader(args.source) if args.source else None
+        registry = agent_registry(planner_factory)
+    else:
+        registry = default_registry()
     have_probe = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
-    contact = bool(transport) and have_probe
+    contact = (planner_factory is not None) and have_probe
 
     print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact))
 
@@ -200,7 +224,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     doc = run_verification(
         assessment_path=assessment, scope=scope, scope_path=scope_path, plans=sel,
-        limits=limits, identities=identities, registry=registry, http=transport,
+        limits=limits, identities=identities, registry=registry, http=http,
+        sessions=sessions, source=source, budget=budget,
         verifier_version=version_string(), target_base=target, authorization=authorization,
         safe=safe, read_only=read_only, contacted=contact,
     )
@@ -298,6 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--scope", required=True, help="authorisation scope file")
     vf.add_argument("--target", help="base URL to test (default: scope base_url); must be in scope")
     vf.add_argument("--identities", help="identities.yaml (roles + env-var credential refs)")
+    vf.add_argument("--source", help="read-only checkout of the target repo, to ground the agent (VER-017)")
     vf.add_argument("--output", default="./verification", help="report/evidence directory")
     # selection (VER-026) — same selectors as `plan`
     vf.add_argument("--class", dest="cls", help="classes, comma-separated (e.g. a single class)")

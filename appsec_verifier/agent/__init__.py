@@ -10,7 +10,12 @@ offline with a scripted planner; the real Anthropic planner is wired separately.
 from __future__ import annotations
 
 from .loop import AgentProbe, Planner
+from .planner_anthropic import AnthropicPlanner
+from .registry import AGENT_CLASSES, agent_registry
 from .source_reader import SourceReader
 from .tools import AgentTools, ToolError
 
-__all__ = ["AgentProbe", "Planner", "AgentTools", "ToolError", "SourceReader"]
+__all__ = [
+    "AgentProbe", "Planner", "AgentTools", "ToolError", "SourceReader",
+    "AnthropicPlanner", "agent_registry", "AGENT_CLASSES",
+]

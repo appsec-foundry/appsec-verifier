@@ -72,7 +72,7 @@ def test_idor_two_identity_contrast_confirms():
                          "proof": {"identity_a": "customer-a", "identity_b": "customer-b",
                                    "observed_difference": "a received b's basket (UserId 2)"}}},
         ])
-        res = AgentProbe("access-control", planner, max_steps=10).run(ctx)
+        res = AgentProbe("access-control", lambda: planner, max_steps=10).run(ctx)
 
     assert res.verdict == "confirmed" and res.confidence == "high"
     assert res.identities_used == ["customer-a", "customer-b"]
@@ -90,6 +90,6 @@ def test_planner_never_submits_is_inconclusive_not_refuted():
 
     with tempfile.TemporaryDirectory() as d:
         ctx = _ctx(Path(d), lambda m, u, h, **k: Resp())
-        res = AgentProbe("access-control", LoopPlanner(), max_steps=3).run(ctx)
+        res = AgentProbe("access-control", LoopPlanner, max_steps=3).run(ctx)
     assert res.verdict == "inconclusive"
     assert res.limits_hit == "attempts"
