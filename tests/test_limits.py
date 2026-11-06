@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from appsec_verifier.limits import Limits, LimitExceeded, RunBudget
+from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
 
 
 def test_request_cap_stops():

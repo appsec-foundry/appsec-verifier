@@ -155,6 +155,17 @@ optional hardening.
   techniques are never performed. A probe whose outcome is unknown is reconciled
   or treated as having had an effect, never blindly retried.
 
+- **VER-030: Safe mode is the default.** By default the Verifier runs in a
+  cautious mode: it stays read-only even when the scope permits state change,
+  sends the single most benign payload that can still decide a verdict, keeps the
+  request count and rate low, and avoids pervasive or noisy behaviour such as
+  wordlist fuzzing, broad parameter sweeps, or trying many payload variants.
+  Going beyond this — the marked, cleaned-up state-changing probes of VER-014, or
+  more thorough probing — requires an explicit opt-out, and that choice is
+  recorded in the report. Safe mode never disables a safety control; it only
+  tightens behaviour. A single class can be verified on its own (VER-026), and
+  safe mode applies the same way to that one class.
+
 - **VER-015: Bound every run.** Limits on total requests, per-finding attempts,
   retries, request rate, wall-clock time, and model spend are enforced outside
   the model. Each bound comes from the invocation or a documented default.

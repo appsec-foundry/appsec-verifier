@@ -107,16 +107,26 @@ says so before it starts.
 | `--annotate [PATH]` | Add verification status to the assessment instead. Writes a copy next to the report by default; the bare in-place form needs the explicit `--in-place`. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. | VER-027 |
 | `--non-interactive` / `--ci` | No prompts: selection, scope confirmation, and cost ceiling all come from the invocation. Recorded in the report. | VER-002/026 |
+| `--allow-intrusive` | Opt out of safe mode (below) for marked state-changing or more thorough probing. Recorded in the report. | VER-030 |
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
 | `--dry-run` | Resolve selection + scope and print the plan; send nothing to the target. | VER-008 |
 | `--headful` | Run the proof browser visibly (local debugging only). | VER-009 |
 | `--model NAME` | Reasoning model for the verification agent. | — |
 
-Writing to the target (needed for stored XSS and some IDOR cases) happens only
-when the scope's `allow_state_change` is true and `--read-only` is not set; such
-requests use unique markers, are logged, and are cleaned up where possible
-(VER-014). Deletes, bulk/destructive operations, DoS, and evasion are never
-performed, regardless of flags.
+**Safe mode (default, VER-030).** Unless `--allow-intrusive` is given, the run
+stays read-only even when the scope permits state change, sends the single most
+benign payload that can still decide a verdict, keeps request count and rate
+low, and avoids pervasive or noisy behaviour (wordlist fuzzing, broad parameter
+sweeps, many payload variants). Writing to the target — needed for stored XSS
+and some IDOR cases — happens only with `--allow-intrusive`, the scope's
+`allow_state_change` true, and `--read-only` unset; such requests use unique
+markers, are logged, and are cleaned up where possible (VER-014). Deletes,
+bulk/destructive operations, DoS, and evasion are never performed, regardless of
+flags.
+
+**Verifying one class.** The selectors isolate a single class — `--class xss`,
+or `--cwe CWE-639` for IDOR alone — and safe mode applies the same way to that
+one class.
 
 ### Interactive vs non-interactive
 

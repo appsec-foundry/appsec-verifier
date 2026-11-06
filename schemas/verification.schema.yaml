@@ -55,7 +55,7 @@ properties:
         properties:
           base_url:        { type: string }
           environment:     { type: [string, "null"] }
-          reachable:       { type: boolean }
+          reachable:       { type: [boolean, "null"] }
           detected_build:  { type: [string, "null"] }
           build_match:
             type: [string, "null"]
@@ -119,6 +119,13 @@ properties:
         description: Run-wide safety posture. Mirrors the pentest-tasks safety contract.
         additionalProperties: true
         properties:
+          mode:
+            type: string
+            enum: [safe, intrusive]
+            description: >-
+              "safe" (default, VER-030): read-only, single benign payload, low
+              volume, no pervasive probing. "intrusive": the operator explicitly
+              opted out for marked state-changing or more thorough probing.
           read_only:            { type: boolean }
           destructive_actions:  { const: forbidden }
           state_changes_cleaned: { type: [boolean, "null"] }
@@ -128,7 +135,7 @@ properties:
     description: One entry per finding considered, tested or not.
     items:
       type: object
-      required: [result_id, finding_ref, class, eligibility, verdict]
+      required: [result_id, finding_ref, eligibility, verdict]
       additionalProperties: true
       properties:
 
@@ -162,7 +169,8 @@ properties:
             cwe:   { type: [string, "null"], pattern: "^CWE-\\d+$" }
 
         class:
-          type: string
+          type: [string, "null"]
+          description: Verification class, or null when the finding's CWE maps to none.
           enum:
             - xss
             - access-control
@@ -170,6 +178,7 @@ properties:
             - path-traversal
             - open-redirect
             - ssrf
+            - null
 
         eligibility:
           type: object
@@ -186,7 +195,7 @@ properties:
             reason: { type: [string, "null"] }
 
         target_location:
-          type: object
+          type: [object, "null"]
           description: What was actually probed — the finding's own location only (VER-008).
           additionalProperties: true
           properties:
@@ -207,15 +216,15 @@ properties:
             - not-attempted      # not dynamically tested (see eligibility/limits)
 
         confidence:
-          type: string
-          enum: [high, medium, low]
+          type: [string, "null"]
+          enum: [high, medium, low, null]
 
         rationale:
           type: [string, "null"]
           description: Short, honest reason for the verdict.
 
         proof:
-          type: object
+          type: [object, "null"]
           description: |
             Class-specific proof detail. For xss, `executed` MUST be true for a
             `confirmed` verdict — a merely reflected payload is `executed: false`

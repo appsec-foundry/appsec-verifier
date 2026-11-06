@@ -10,7 +10,8 @@ particular HTTP library yet.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 _SENSITIVE = ("authorization", "cookie", "proxy-authorization")
@@ -59,7 +60,8 @@ class GuardedHttpClient:
             resp = self._transport(method, url, headers)
 
             status = getattr(resp, "status_code", None)
-            location = (getattr(resp, "headers", {}) or {}).get("Location") or (getattr(resp, "headers", {}) or {}).get("location")
+            resp_headers = getattr(resp, "headers", {}) or {}
+            location = resp_headers.get("Location") or resp_headers.get("location")
             if status and 300 <= status < 400 and location and hops < self._max_redirects:
                 target = urljoin(url, location)
                 headers = strip_cross_origin_auth(headers, url, target)  # VER-018

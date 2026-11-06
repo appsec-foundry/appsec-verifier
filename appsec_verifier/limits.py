@@ -28,7 +28,7 @@ class Limits:
     rate_rps: float = 5
 
     @classmethod
-    def load(cls, overrides: dict | None = None) -> "Limits":
+    def load(cls, overrides: dict | None = None) -> Limits:
         """Defaults from data/limits.yaml, with any provided overrides applied."""
         with open(resource_root() / "data" / "limits.yaml", encoding="utf-8") as fh:
             doc = (yaml.safe_load(fh) or {}).get("limits", {})

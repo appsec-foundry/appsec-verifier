@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from appsec_verifier.limits import Limits, LimitExceeded, RunBudget
+from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
 from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.tools import GuardedHttpClient, ScopeViolation, same_origin, strip_cross_origin_auth
 
