@@ -1,0 +1,161 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://appsec-verifier/schemas/scope.schema.yaml
+title: Verification authorisation scope
+description: |
+  The authorisation boundary for a verification run, passed as `--scope` to
+  `appsec-verifier verify`. It is the ONLY source of what the Verifier may
+  contact (VER-001). The Verifier contacts a destination only when its host,
+  port, scheme, and path prefix all fall inside this file and the current time
+  is within `window`. Anything outside is refused, never attempted. The target
+  URL, scope, and credentials come from the operator per run; the Verifier never
+  derives them from the assessment, the target, or the network, and never widens
+  the scope on anything the target or a model says during a run (VER-004).
+
+  SAFETY: a missing, schema-invalid, or expired scope blocks the run (exit 2),
+  it does not weaken to a default (VER-025). State-changing probes are allowed
+  only when `allow_state_change` is true (VER-014).
+
+type: object
+required: [schema_version, base_url, owner, window]
+additionalProperties: false
+properties:
+
+  schema_version:
+    const: 1
+
+  base_url:
+    type: string
+    description: |
+      Canonical base URL of the authorised target, e.g. https://localhost:3000.
+      `--target` must resolve inside this scope; if `--target` is omitted this
+      value is used.
+
+  hosts:
+    type: array
+    description: |
+      Allowed hosts. When absent, only the host of `base_url` is allowed.
+      Entries are exact hostnames or IPs; no wildcards. Each is enforced against
+      the address resolved at connection time, including IPv6 (VER-018).
+    items: { type: string }
+
+  ports:
+    type: array
+    description: Allowed TCP ports. When absent, only the port of `base_url`.
+    items: { type: integer, minimum: 1, maximum: 65535 }
+
+  schemes:
+    type: array
+    description: Allowed URL schemes. Default ["https"].
+    items: { type: string, enum: [http, https] }
+    default: [https]
+
+  path_prefixes:
+    type: array
+    description: |
+      Allowed request path prefixes (e.g. "/", "/api/"). A request whose path
+      does not start with one of these is out of scope. When absent, "/" is
+      assumed (whole host in scope).
+    items: { type: string }
+
+  deny_paths:
+    type: array
+    description: |
+      Path prefixes that are never contacted even though they fall under
+      path_prefixes — e.g. destructive admin routes. Deny wins over allow.
+    items: { type: string }
+
+  window:
+    type: object
+    description: Authorisation time window. Outside it the run is refused.
+    required: [from, until]
+    additionalProperties: false
+    properties:
+      from:  { type: string, description: ISO-8601 UTC start }
+      until: { type: string, description: ISO-8601 UTC end }
+
+  owner:
+    type: object
+    description: The party accountable for authorising this test. Recorded in the report.
+    required: [name]
+    additionalProperties: true
+    properties:
+      name:      { type: string }
+      contact:   { type: [string, "null"] }
+      reference: { type: [string, "null"], description: Ticket, engagement id, or approval reference. }
+
+  environment:
+    type: string
+    description: Human label for the target environment. Advisory only.
+    enum: [local, test, staging, other]
+    default: other
+
+  expected_build:
+    type: object
+    description: |
+      Build the assessment was produced against, for the version-match check
+      (VER-003). When it cannot be confirmed against the live target, the run
+      records the mismatch and proceeds only after confirmation.
+    additionalProperties: false
+    properties:
+      commit:  { type: [string, "null"] }
+      version: { type: [string, "null"] }
+
+  allow_state_change:
+    type: boolean
+    description: |
+      Whether state-changing (write) probes are permitted (VER-014). When false,
+      the Verifier is read-only and stored-write findings are reported as
+      not-attempted with that reason. `--read-only` can force this off per run
+      but never on. Even when true, deletes, bulk/destructive operations, DoS,
+      and detection evasion are never performed.
+    default: false
+
+  callback:
+    type: object
+    description: |
+      Operator-controlled benign endpoint used to prove SSRF and open redirect
+      (VER-012). The Verifier runs its own listener bound to `host`:`port` and
+      watches it for a hit; `base_url` is how the target should reach that
+      listener (it may differ from the bind address behind NAT or a proxy). The
+      Verifier only ever steers those two probe classes toward this destination.
+    additionalProperties: false
+    properties:
+      base_url: { type: [string, "null"], description: URL the target uses to reach the listener. }
+      host:     { type: [string, "null"], description: Local bind host for the built-in listener. }
+      port:     { type: [integer, "null"], minimum: 1, maximum: 65535, description: Local bind port. }
+
+  auth_hosts:
+    type: array
+    description: |
+      Additional hosts the Verifier may contact ONLY to authenticate — SSO /
+      OIDC identity providers and token endpoints (VER-028). They are permitted
+      destinations for the login flow, not part of the target attack surface:
+      findings are never probed here. Each entry is an exact host or host:port.
+      Everything not in `hosts`/`ports` or this list is refused (VER-001).
+    items: { type: string }
+
+  proxy:
+    type: [object, "null"]
+    description: |
+      HTTP/HTTPS proxy through which the Verifier routes its target and
+      authentication traffic (VER-029). Proxy credentials, when needed, come
+      from the environment (never inline). The proxy host is a permitted
+      transport destination in addition to `hosts`.
+    additionalProperties: false
+    properties:
+      url:
+        type: string
+        description: Proxy URL, e.g. http://proxy.corp.example:8080.
+      username_env:
+        type: [string, "null"]
+        description: Env var holding the proxy username, when the proxy authenticates.
+      password_env:
+        type: [string, "null"]
+        description: Env var holding the proxy password. Never an inline value.
+      no_proxy:
+        type: array
+        description: Hosts to reach directly, bypassing the proxy.
+        items: { type: string }
+
+  notes:
+    type: [string, "null"]

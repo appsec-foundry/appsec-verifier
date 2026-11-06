@@ -1,0 +1,16 @@
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Verification run outputs (default output dir)
+/verification/
+
+# Hook/runtime artifacts written into the worktree (not project content)
+/docs/security/
+
+# Local secrets — never commit (VER-016). Credentials belong in env vars.
+*.env
+.env

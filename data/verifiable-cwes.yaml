@@ -1,0 +1,91 @@
+# Positive list of CWE IDs the Verifier can actively confirm against a running
+# target, grouped into the V1 verification classes (see schemas/verification.schema.yaml
+# `results[].class`). It is deliberately NARROWER than the Analyzer's
+# data/pentest-eligible-cwes.yaml: a CWE appears here only when the Verifier has
+# a concrete, safe proof method for it (VER-006).
+#
+# `proof_method` encodes the evidence a `confirmed` verdict requires (VER-009..VER-012):
+#   browser-execution       marker payload actually executes in a real headless
+#                           browser; a merely reflected payload is NOT confirmed (VER-009)
+#   cross-identity-contrast identity A reaches/alters what belongs to identity B,
+#                           or an anonymous caller reaches a protected operation (VER-010)
+#   behavioural-difference  a controlled, observable response/timing difference,
+#                           never exfiltrated data (VER-011)
+#   marker-file             a pre-placed, non-sensitive marker file is read back (VER-012)
+#   controlled-redirect     the response lands on an operator-controlled benign URL (VER-012)
+#   out-of-band-callback    a request arrives at the operator-controlled callback (VER-012)
+#
+# `may_require_state_change: true` means a confirmed proof can need a write
+# (allowed only with scope.allow_state_change and marker + cleanup, VER-014).
+# A CWE absent here is reported `static-only` with a reason, never as refuted.
+
+version: 1
+
+verifiable_cwes:
+
+  # --- Cross-site scripting ---------------------------------------------
+  - cwe: CWE-79
+    name: Cross-Site Scripting
+    class: xss
+    technique: xss
+    proof_method: browser-execution
+    may_require_state_change: true    # stored XSS needs a marked, cleaned-up write
+    notes: Reflected, stored, and DOM-based. Confirmed only on real execution.
+
+  # --- Broken access control / IDOR ------------------------------------
+  - cwe: CWE-639
+    name: Authorization Bypass via User-Controlled Key (IDOR)
+    class: access-control
+    technique: idor
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: Needs at least two independent test identities.
+  - cwe: CWE-862
+    name: Missing Authorization
+    class: access-control
+    technique: missing-authz
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+  - cwe: CWE-863
+    name: Incorrect Authorization
+    class: access-control
+    technique: authz-bypass
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+
+  # --- Injection --------------------------------------------------------
+  - cwe: CWE-89
+    name: SQL Injection
+    class: injection
+    technique: sqli
+    proof_method: behavioural-difference
+    may_require_state_change: false
+    notes: Boolean/timing contrast only; never dump or exfiltrate data.
+  - cwe: CWE-943
+    name: NoSQL / Improper Query Language Neutralization
+    class: injection
+    technique: nosqli
+    proof_method: behavioural-difference
+    may_require_state_change: false
+
+  # --- Traversal / redirect / SSRF -------------------------------------
+  - cwe: CWE-22
+    name: Path Traversal
+    class: path-traversal
+    technique: path-traversal
+    proof_method: marker-file
+    may_require_state_change: false
+    notes: Read a pre-placed, non-sensitive marker file; never system files.
+  - cwe: CWE-601
+    name: Open Redirect
+    class: open-redirect
+    technique: open-redirect
+    proof_method: controlled-redirect
+    may_require_state_change: false
+  - cwe: CWE-918
+    name: Server-Side Request Forgery
+    class: ssrf
+    technique: ssrf
+    proof_method: out-of-band-callback
+    may_require_state_change: false
+    notes: Confirmed by a hit on scope.callback; never reach internal/metadata hosts.

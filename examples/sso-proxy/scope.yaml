@@ -1,0 +1,51 @@
+# Example scope for a target behind a corporate HTTP proxy, with sessions
+# obtained from an SSO / OIDC identity provider on a DIFFERENT host.
+# The proxy and the IdP are declared as permitted destinations in addition to
+# the target's attack surface; everything else is refused (VER-001, VER-029).
+# Schema: schemas/scope.schema.yaml.
+
+schema_version: 1
+
+base_url: https://app.staging.example.com
+
+hosts:
+  - app.staging.example.com
+ports:
+  - 443
+schemes:
+  - https
+
+path_prefixes:
+  - /
+
+window:
+  from:  "2026-01-01T00:00:00Z"    # EDIT to your authorised window
+  until: "2026-06-30T23:59:59Z"
+
+owner:
+  name: "EDIT — authorising owner"
+  contact: null
+  reference: "EDIT — engagement / ticket id"
+
+environment: staging
+
+allow_state_change: false          # staging with shared data: read-only by default
+
+# Hosts the Verifier may contact ONLY to authenticate — never probed for findings.
+auth_hosts:
+  - sso.example.com:443
+
+# Route target and auth traffic through the corporate proxy.
+proxy:
+  url: http://proxy.corp.example:8080
+  username_env: VERIFIER_PROXY_USER   # omit both if the proxy does not authenticate
+  password_env: VERIFIER_PROXY_PASS
+  no_proxy:
+    - localhost
+    - 127.0.0.1
+
+callback:
+  base_url: null                     # set an operator-controlled host for SSRF/redirect proofs
+  host: null
+
+notes: "Target reached via corp proxy; sessions issued by sso.example.com."

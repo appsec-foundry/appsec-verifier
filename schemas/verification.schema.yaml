@@ -1,0 +1,288 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://appsec-verifier/schemas/verification.schema.yaml
+title: Dynamic verification report
+description: |
+  Output written to `$OUTPUT_DIR/verification.yaml` by `appsec-verifier verify`.
+  It records the result of actively testing the findings of a
+  `security-assessment.yaml` against a running target. Every result is keyed to
+  exactly one source finding by id and fingerprint (VER-007), so it can be traced
+  back and re-matched after the assessment is regenerated. The source assessment
+  is never modified (VER-020).
+
+  A result's `verdict` reflects what was actually observed against the live
+  target. The Verifier never marks a weakness `confirmed` without the evidence
+  class its finding type requires (VER-009..VER-013), and distinguishes
+  "could not reproduce" from "not exploitable" (VER-013). Findings that were not
+  dynamically tested still appear, with `eligibility` and a reason, so an
+  unverified finding is never mistaken for a refuted one (VER-024).
+
+type: object
+required: [meta, results]
+additionalProperties: true
+properties:
+
+  meta:
+    type: object
+    required:
+      - schema_version
+      - generated
+      - verifier_version
+      - source_assessment
+      - target
+      - scope
+      - authorization
+      - limits
+    additionalProperties: true
+    properties:
+      schema_version: { const: 1 }
+      generated:
+        type: string
+        description: ISO-8601 UTC timestamp.
+      verifier_version: { type: string }
+      model:
+        type: [string, "null"]
+        description: Reasoning model used by the verification agent.
+      source_assessment:
+        type: string
+        description: Path to the security-assessment.yaml that was verified.
+      source_assessment_sha256:
+        type: [string, "null"]
+        description: Digest of the assessment input, to detect drift.
+      target:
+        type: object
+        description: The live target as actually probed (VER-003).
+        additionalProperties: true
+        properties:
+          base_url:        { type: string }
+          environment:     { type: [string, "null"] }
+          reachable:       { type: boolean }
+          detected_build:  { type: [string, "null"] }
+          build_match:
+            type: [string, "null"]
+            enum: [match, mismatch, unknown, null]
+      scope:
+        type: object
+        description: Provenance of the authorisation scope that bounded the run.
+        required: [file]
+        additionalProperties: true
+        properties:
+          file:         { type: string }
+          sha256:       { type: [string, "null"] }
+          owner:        { type: [string, "null"] }
+          window_from:  { type: [string, "null"] }
+          window_until: { type: [string, "null"] }
+      authorization:
+        type: object
+        description: How the run was authorised before any request (VER-002).
+        required: [confirmed, mode]
+        additionalProperties: true
+        properties:
+          confirmed: { type: boolean }
+          mode:
+            type: string
+            enum: [interactive, ci-flag]
+          at: { type: [string, "null"], description: ISO-8601 UTC time of confirmation. }
+      limits:
+        type: object
+        description: Execution bounds enforced during the run (VER-015).
+        additionalProperties: true
+        properties:
+          max_requests: { type: [integer, "null"], minimum: 0 }
+          max_attempts: { type: [integer, "null"], minimum: 0 }
+          max_duration_s: { type: [number, "null"], minimum: 0 }
+          rate_rps: { type: [number, "null"], minimum: 0 }
+      identities:
+        type: array
+        description: |
+          Test identities available to the run, by role label ONLY. No
+          credential values appear here or anywhere in this document (VER-016).
+        items:
+          type: object
+          required: [role]
+          additionalProperties: false
+          properties:
+            role:          { type: string }
+            authenticated: { type: [boolean, "null"] }
+      summary:
+        type: object
+        description: Verdict tally across results. Derived, for convenience.
+        additionalProperties: true
+        properties:
+          total:            { type: integer, minimum: 0 }
+          confirmed:        { type: integer, minimum: 0 }
+          not_reproducible: { type: integer, minimum: 0 }
+          blocked:          { type: integer, minimum: 0 }
+          inconclusive:     { type: integer, minimum: 0 }
+          not_attempted:    { type: integer, minimum: 0 }
+      safety:
+        type: object
+        description: Run-wide safety posture. Mirrors the pentest-tasks safety contract.
+        additionalProperties: true
+        properties:
+          read_only:            { type: boolean }
+          destructive_actions:  { const: forbidden }
+          state_changes_cleaned: { type: [boolean, "null"] }
+
+  results:
+    type: array
+    description: One entry per finding considered, tested or not.
+    items:
+      type: object
+      required: [result_id, finding_ref, class, eligibility, verdict]
+      additionalProperties: true
+      properties:
+
+        result_id:
+          type: string
+          pattern: "^VF-\\d{3,}$"
+
+        finding_ref:
+          type: object
+          description: Link back to exactly one source finding (VER-007).
+          required: [id, match_key]
+          additionalProperties: true
+          properties:
+            id:
+              type: string
+              description: Finding id from the assessment (e.g. T-037 or F-001). Stable within one assessment; renumbers across re-runs.
+            match_key:
+              type: string
+              description: >-
+                Cross-run stable identity the Verifier recomputes the way the
+                Analyzer does: "<normalized-file>|<cwe-family>" — the evidence
+                file lowercased with a leading "./" stripped, joined to the
+                CWE folded into its drift family. This is the Analyzer's own
+                delta key, reproducible from the finding's file + cwe.
+            instance:
+              type: [string, "null"]
+              description: >-
+                "file:line" of the specific location verified, when a finding
+                has several. Disambiguates two findings that share a match_key.
+            title: { type: [string, "null"] }
+            cwe:   { type: [string, "null"], pattern: "^CWE-\\d+$" }
+
+        class:
+          type: string
+          enum:
+            - xss
+            - access-control
+            - injection
+            - path-traversal
+            - open-redirect
+            - ssrf
+
+        eligibility:
+          type: object
+          description: Whether the finding was dynamically verifiable (VER-006).
+          required: [status]
+          additionalProperties: false
+          properties:
+            status:
+              type: string
+              enum:
+                - dynamic            # verifiable against a running system
+                - static-only        # out of scope for dynamic verification
+                - input-incomplete   # assessment lacked evidence file/line/route
+            reason: { type: [string, "null"] }
+
+        target_location:
+          type: object
+          description: What was actually probed — the finding's own location only (VER-008).
+          additionalProperties: true
+          properties:
+            url:       { type: [string, "null"] }
+            method:    { type: [string, "null"] }
+            parameter: { type: [string, "null"] }
+            source_file: { type: [string, "null"] }
+            source_line: { type: [integer, "null"], minimum: 0 }
+
+        verdict:
+          type: string
+          description: Observed outcome against the live target (VER-013).
+          enum:
+            - confirmed          # weakness reproduced with the required evidence
+            - not-reproducible   # probe did not reproduce it
+            - blocked-by-control # a runtime control prevented it
+            - inconclusive       # evidence insufficient either way
+            - not-attempted      # not dynamically tested (see eligibility/limits)
+
+        confidence:
+          type: string
+          enum: [high, medium, low]
+
+        rationale:
+          type: [string, "null"]
+          description: Short, honest reason for the verdict.
+
+        proof:
+          type: object
+          description: |
+            Class-specific proof detail. For xss, `executed` MUST be true for a
+            `confirmed` verdict — a merely reflected payload is `executed: false`
+            and cannot be confirmed (VER-009). For access-control, the two
+            identities and what each one saw (VER-010). For injection, the
+            observed behavioural difference, never exfiltrated data (VER-011).
+            For traversal/redirect/ssrf, the marker file or callback hit (VER-012).
+          additionalProperties: true
+          properties:
+            marker:         { type: [string, "null"] }
+            executed:       { type: [boolean, "null"] }
+            trigger:        { type: [string, "null"] }
+            identity_a:     { type: [string, "null"] }
+            identity_b:     { type: [string, "null"] }
+            observed_difference: { type: [string, "null"] }
+            callback_hit:   { type: [boolean, "null"] }
+
+        identities_used:
+          type: array
+          items: { type: string }
+          description: Role labels of identities used for this result (VER-016).
+
+        state_changes:
+          type: array
+          description: Writes this probe made, with cleanup status (VER-014).
+          items:
+            type: object
+            required: [marker, action]
+            additionalProperties: true
+            properties:
+              marker:      { type: string }
+              action:      { type: string }
+              cleaned_up:  { type: [boolean, "null"] }
+
+        deviation:
+          type: [string, "null"]
+          description: Any departure from the finding's named location, recorded (VER-008).
+
+        observations:
+          type: array
+          description: Unverified side notes noticed but NOT pursued (VER-008).
+          items: { type: string }
+
+        limits_hit:
+          type: [string, "null"]
+          description: Which bound, if any, stopped this result early (VER-015).
+
+        evidence:
+          type: array
+          description: |
+            Self-contained artefacts behind the verdict, redacted of credentials
+            and sensitive target data (VER-022).
+          items:
+            type: object
+            required: [kind, path]
+            additionalProperties: true
+            properties:
+              kind:
+                type: string
+                enum: [request, response, har, screenshot, browser-event, callback, note]
+              path:     { type: string, description: Path under evidence/, relative to the report. }
+              sha256:   { type: [string, "null"] }
+              redacted: { type: [boolean, "null"] }
+
+        timing:
+          type: object
+          additionalProperties: true
+          properties:
+            started:  { type: [string, "null"] }
+            finished: { type: [string, "null"] }

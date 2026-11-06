@@ -1,0 +1,124 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://appsec-verifier/schemas/analyzer-annotations.schema.yaml
+title: Dynamic-verification annotations for AppSec Analyzer
+description: |
+  Output written by `appsec-verifier export --format analyzer-annotations` (and
+  by `verify --annotate`) so AppSec Analyzer can read the dynamic-verification
+  results back and show, next to each finding, whether it was confirmed against
+  the running system (VER-021, VER-027).
+
+  It is ADDITIVE and keyed by finding identity: each annotation names the source
+  finding by `finding_id` AND `match_key`, so the Analyzer binds it to exactly
+  one finding and can detect drift. `match_key` is the Analyzer's own cross-run
+  delta key, "<normalized-file>|<cwe-family>", which the Verifier recomputes from
+  the finding's file + cwe — not the display fingerprint `comp|cwe|title`, which
+  the Analyzer's own code documents as drifting between runs. The annotations
+  never change, re-score, or remove a finding; they only attach a verification
+  status, verdict, and a pointer to the evidence. An annotation whose match
+  (`match_key`, and `instance` when present) no longer resolves is reported by
+  the consumer, not applied.
+
+type: object
+required: [meta, annotations]
+additionalProperties: true
+properties:
+
+  meta:
+    type: object
+    required:
+      - schema_version
+      - generated
+      - verifier_version
+      - source_assessment
+      - verification_report
+    additionalProperties: true
+    properties:
+      schema_version: { const: 1 }
+      generated:
+        type: string
+        description: ISO-8601 UTC timestamp.
+      verifier_version: { type: string }
+      source_assessment:
+        type: string
+        description: Path to the security-assessment.yaml these annotations verify.
+      source_assessment_sha256:
+        type: [string, "null"]
+        description: Digest of the assessment the verification ran against, for drift detection.
+      verification_report:
+        type: string
+        description: Path to the verification.yaml these annotations are derived from.
+      run_id:
+        type: [string, "null"]
+      target:
+        type: [object, "null"]
+        additionalProperties: true
+        properties:
+          base_url:    { type: [string, "null"] }
+          environment: { type: [string, "null"] }
+          build_match:
+            type: [string, "null"]
+            enum: [match, mismatch, unknown, null]
+
+  annotations:
+    type: array
+    description: One annotation per verified finding. Additive; never re-scores.
+    items:
+      type: object
+      required: [finding_id, match_key, verdict]
+      additionalProperties: true
+      properties:
+
+        finding_id:
+          type: string
+          description: Finding id from the assessment (e.g. T-037 or F-001). Within-run handle.
+
+        match_key:
+          type: string
+          description: >-
+            Cross-run stable key "<normalized-file>|<cwe-family>", recomputed the
+            way the Analyzer computes its delta key. Binds the annotation across
+            re-runs.
+
+        instance:
+          type: [string, "null"]
+          description: '"file:line" verified, when the finding has several locations.'
+
+        class:
+          type: string
+          enum:
+            - xss
+            - access-control
+            - injection
+            - path-traversal
+            - open-redirect
+            - ssrf
+
+        verdict:
+          type: string
+          description: Observed outcome against the running system (mirrors verification.schema.yaml).
+          enum:
+            - confirmed
+            - not-reproducible
+            - blocked-by-control
+            - inconclusive
+            - not-attempted
+
+        confidence:
+          type: [string, "null"]
+          enum: [high, medium, low, null]
+
+        rationale:
+          type: [string, "null"]
+          description: Short reason for the verdict. Redacted of sensitive target data.
+
+        verified_at:
+          type: [string, "null"]
+          description: ISO-8601 UTC time the finding was verified.
+
+        result_ref:
+          type: [string, "null"]
+          description: result_id in verification.yaml (VF-NNN) this annotation came from.
+
+        evidence_ref:
+          type: [string, "null"]
+          description: Relative path to the evidence for this verdict, under the report's evidence/.

@@ -1,0 +1,40 @@
+# Example test identities for verifying a local OWASP Juice Shop.
+# This file names ROLES and the environment variables that hold their
+# credentials — it contains no secret values (VER-016). Export the referenced
+# variables before the run, e.g.:
+#
+#   export VERIFIER_CUST_A_USER='customer-a@juice.test'
+#   export VERIFIER_CUST_A_PASS='...'      # your own throwaway test account
+#   export VERIFIER_CUST_B_USER='customer-b@juice.test'
+#   export VERIFIER_CUST_B_PASS='...'
+#
+# Credential values are used only to obtain a session and never appear in logs,
+# the report, evidence artefacts, or any model prompt — only the role label
+# travels, and requests are redacted of Authorization headers and cookies.
+#
+# Two independent customers are what the access-control / IDOR proofs
+# contrast (VER-010). Juice Shop logs in via a JSON form POST to /rest/user/login
+# and returns a bearer token, so these use method=form. Schema:
+# schemas/identities.schema.yaml.
+
+identities:
+  - role: customer-a
+    method: form
+    auth:
+      login_url: http://localhost:3000/rest/user/login
+      username_field: email
+      password_field: password
+      username_env: VERIFIER_CUST_A_USER
+      password_env: VERIFIER_CUST_A_PASS
+
+  - role: customer-b
+    method: form
+    auth:
+      login_url: http://localhost:3000/rest/user/login
+      username_field: email
+      password_field: password
+      username_env: VERIFIER_CUST_B_USER
+      password_env: VERIFIER_CUST_B_PASS
+
+  - role: anonymous          # no credentials; used for missing-authentication probes
+    method: none

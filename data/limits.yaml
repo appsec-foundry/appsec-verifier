@@ -1,0 +1,33 @@
+# Default execution bounds for a verification run (VER-015). Every value here is
+# a default that the invocation can override: --cost-limit, --max-requests,
+# --max-attempts, --max-duration, --rate. Reaching any bound stops the affected
+# work rather than pressing on; the run stays cancellable. These bounds protect
+# the target from accidental load, cap the cost of a run, and keep it from
+# drifting beyond the finding under test.
+
+version: 1
+
+limits:
+  # Model-spend ceiling for the whole run, in USD. When a run would exceed it,
+  # it stops; an interactive run may ask to raise it, a non-interactive run
+  # stops with exit 3 (VER-015).
+  cost_limit_usd: 10.0
+
+  # Hard cap on total HTTP requests sent to the target across the run.
+  max_requests: 2000
+
+  # Cap on probe attempts for a single finding before it is called inconclusive.
+  max_attempts: 40
+
+  # Wall-clock ceiling for the whole run, in seconds (default 30 min).
+  max_duration_s: 1800
+
+  # Per-finding wall-clock ceiling, in seconds (default 3 min).
+  max_finding_duration_s: 180
+
+  # Maximum request rate to the target, requests per second.
+  rate_rps: 5
+
+  # Retries for a transient transport error (not for a side-effecting probe with
+  # an unknown outcome — that is reconciled, never blindly retried, VER-014).
+  transport_retries: 2

@@ -1,0 +1,274 @@
+# Requirements for AppSec Verifier
+
+AppSec Verifier takes the findings of a static security assessment and tries to
+**prove or disprove each one against the running application**. Where AppSec
+Analyzer reasons about source code, the Verifier interacts with a live target:
+it reproduces a finding with a safe, marked probe, observes the application's
+real behaviour, and records whether the weakness is confirmed, not reproducible,
+or blocked by a control that the static view could not see.
+
+It reads a finished `security-assessment.yaml`, verifies one finding at a time
+against a target the operator is authorised to test, and writes its own report.
+It never re-runs the static analysis, never re-scores a finding on its own, and
+never rates a finding it did not actively test.
+
+**Non-goals.** The Verifier is not a scanner and not a pentest agent. It does
+not crawl for new weaknesses, does not chain exploits for impact, and does not
+try to extract real data, escalate privileges for their own sake, or damage the
+target. It confirms or refutes the specific findings it is given.
+
+**Authorisation.** Running the Verifier against a system is an active security
+test. It acts only against targets for which the operator has supplied an
+explicit, confirmed authorisation scope (see *Target the right system*). These
+authorisation, scope, secret-handling, and bounded-execution requirements follow
+the AI Secure Coding Baseline (aiscb); they are controls on a dual-use tool, not
+optional hardening.
+
+---
+
+## Target the right system
+
+- **VER-001: Require an explicit authorisation scope.** Every run names a scope
+  file that lists the authorised target: base URL, host, allowed ports, allowed
+  path prefixes, an authorisation window (from/until), and a responsible owner.
+  The Verifier contacts only destinations inside that scope. Anything outside it
+  — a different host, port, scheme, or path prefix, or a time outside the window
+  — is refused, not attempted. There is no implicit or default target.
+
+- **VER-002: Confirm before the first request.** Before it sends anything to the
+  target, the Verifier prints the resolved scope (target, ports, path prefixes,
+  window, owner) and asks for one explicit confirmation. Silence, a timeout, or
+  an unrelated answer does not count as confirmation. In non-interactive or CI
+  use, a single explicit flag stands in for the prompt and is recorded in the
+  report; nothing else suppresses the question.
+
+- **VER-003: Verify the target before testing.** The Verifier first checks that
+  the target is reachable and, where possible, that its version or commit matches
+  the assessment it is verifying. If they diverge, it records the mismatch and
+  continues only after the operator confirms, because a finding verified against
+  the wrong build proves nothing. Starting, resetting, or provisioning the target
+  application is out of scope; the operator supplies a running URL.
+
+- **VER-004: Keep the operator in control of the target boundary.** The target
+  URL, the scope file, and any session credentials come from the operator per
+  run. The Verifier does not read them from the assessment, from the target, or
+  from the network, and it does not widen the scope on anything the target or a
+  model says during a run.
+
+## Read the assessment
+
+- **VER-005: Consume the assessment as untrusted input.** The input is a
+  validated `security-assessment.yaml`. The Verifier reads the fields it needs
+  from each `threats[]` entry — identifier, title, `cwe`, `evidence` file and
+  line, `scenario`, and the finding's `verification` hint — and validates their
+  types and values before use. Unknown, missing, or malformed fields for a given
+  finding mean that finding is reported as *not verifiable from the input*, never
+  silently skipped and never guessed.
+
+- **VER-026: Let the operator choose what to verify.** From the referenced
+  assessment the operator selects which findings to verify — by weakness class,
+  by severity (a floor or an explicit set), by CWE, or by finding id — and the
+  Verifier tests only that selection. In interactive mode the selection and the
+  resulting count are shown for confirmation before any request; in
+  non-interactive mode the selection comes entirely from the invocation. An empty
+  selection is reported, not silently treated as "verify everything".
+
+- **VER-006: Select only verifiable finding classes.** A finding is eligible for
+  active verification only when its weakness can be probed against a running
+  system and its CWE is on a supported positive list. Static-only findings — a
+  weak PRNG choice, a hard-coded secret literal, an insecure practice with no
+  runtime effect — are reported as *out of scope for dynamic verification* with a
+  short reason, not marked unconfirmed. Version 1 supports:
+  - **Cross-site scripting** (CWE-79): reflected, stored, and DOM-based.
+  - **Broken access control / IDOR** (CWE-639, CWE-862, CWE-863): missing object-
+    and function-level authorisation.
+  - **Injection** (CWE-89 SQL, CWE-943 NoSQL): confirmed through observable
+    behavioural differences, not data exfiltration.
+  - **Path traversal, open redirect, SSRF** (CWE-22, CWE-601, CWE-918):
+    confirmed through harmless marker files or operator-controlled callbacks.
+
+- **VER-007: Preserve the link to the finding.** Each verification result carries
+  the finding's identifier and a cross-run stable key, so a result can be traced
+  back to exactly one finding in the source assessment and matched again after
+  the assessment is re-generated. The stable key is the one the Analyzer uses for
+  its own deltas — `<normalized-file>|<cwe-family>` — which the Verifier
+  recomputes from the finding's evidence file and CWE, not the display
+  fingerprint `component|cwe|title` that the Analyzer treats as drifting. When a
+  finding has several locations, the result also records the `file:line` it
+  tested, so two findings that share a key stay distinct.
+
+## Verify findings with evidence
+
+- **VER-008: Test exactly the finding, nothing else.** For each finding the
+  Verifier probes the specific location, route, and parameter the finding names.
+  It does not explore other endpoints, try unrelated parameters, or pursue
+  follow-on weaknesses. If the named location is unreachable or the probe must
+  deviate (for example a required login step), the deviation is recorded with the
+  result. Anything the Verifier happens to notice outside the finding is reported
+  as an unverified observation and is not pursued.
+
+- **VER-009: Require real execution as proof of XSS.** An XSS finding counts as
+  confirmed only when a unique, harmless marker payload actually executes in a
+  real headless browser against the target — proven by the triggered event plus a
+  captured screenshot and request/response trace. A payload merely reflected
+  unencoded in an HTTP response is recorded as *indicative, not executed*, never
+  as confirmed, so DOM handling and sanitisers are not mistaken for exploitable
+  output.
+
+- **VER-010: Prove access-control findings by comparison.** An IDOR or missing-
+  authorisation finding is confirmed by showing that identity A can perform or
+  read something that belongs to identity B, or that an unauthenticated caller
+  reaches a protected operation. This requires at least two independent test
+  identities (see VER-016). The result records which identity saw what, with the
+  requests and responses as evidence. A single successful request without the
+  cross-identity contrast is not sufficient.
+
+- **VER-011: Prove injection without exfiltration.** Injection findings are
+  confirmed through controlled, observable behavioural differences — a boolean
+  condition flipping a response, or a bounded, clearly-marked timing difference —
+  not by dumping database contents. The Verifier never attempts to read, copy, or
+  exfiltrate real application data to prove a point.
+
+- **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path
+  traversal is confirmed by reading a pre-placed, non-sensitive marker file;
+  open redirect by landing on an operator-controlled benign URL; SSRF by a
+  request arriving at a callback the Verifier itself listens on, bound to the
+  host and port the scope declares. The Verifier does not read system files,
+  follow redirects to arbitrary hosts, or reach internal or metadata addresses to
+  demonstrate impact. The callback destination is the only place those two probe
+  classes are steered toward.
+
+- **VER-013: State each verdict and its confidence.** Every tested finding gets
+  one verdict — confirmed, not reproducible, blocked by a control, or
+  inconclusive — with the concrete evidence behind it and a short, honest reason.
+  The Verifier distinguishes "I could not reproduce it" from "it is not
+  exploitable" and never reports a weakness as confirmed without the evidence
+  class its finding type requires.
+
+## Stay safe and in scope
+
+- **VER-014: Use safe, marked, reversible probes.** Probes use unique,
+  identifiable markers so every artefact they create can be found and attributed.
+  State-changing requests are allowed only with those markers, are logged, and
+  are cleaned up afterwards where the application allows it. Deleting data,
+  bulk or destructive operations, denial-of-service, and detection-evasion
+  techniques are never performed. A probe whose outcome is unknown is reconciled
+  or treated as having had an effect, never blindly retried.
+
+- **VER-015: Bound every run.** Limits on total requests, per-finding attempts,
+  retries, request rate, wall-clock time, and model spend are enforced outside
+  the model. Each bound comes from the invocation or a documented default.
+  Reaching a limit stops the affected work rather than pressing on, and the run
+  is cancellable. These bounds protect the target from accidental load, cap the
+  cost of a run, and keep it from drifting beyond the finding under test. When a
+  run would exceed the cost ceiling, it stops; in interactive mode it may ask to
+  raise the ceiling, in non-interactive mode it stops with a distinct exit.
+
+- **VER-016: Handle test credentials as secrets.** Session credentials for the
+  test identities — bearer tokens, usernames and passwords, client secrets — come
+  from external configuration — environment variables or a restricted secret
+  store — supplied by the operator, never committed, never bundled, and never a
+  default or shared account. Credential and token **values** never appear in
+  logs, in the report, in evidence artefacts, or in any prompt sent to a model;
+  only a role label identifies an identity, and captured requests are redacted of
+  Authorization headers, cookies, and token parameters. Self-registration is used
+  only when the scope explicitly allows it and the target has open registration,
+  and any account it creates is marked and reported.
+
+- **VER-028: Authenticate through the operator's mechanism.** The Verifier
+  obtains sessions the way the target expects: a static bearer token, HTTP basic
+  or form login with a username and password, or an SSO/OIDC flow — resource-
+  owner password grant, client-credentials grant, or a browser-driven
+  authorization-code flow run in the proof browser. Each identity declares its
+  method and the exact authentication endpoint; the Verifier sends the identity's
+  credentials only to that bound endpoint, obtains a token or session, and
+  attaches it to requests to the target. It never sends a credential to an
+  endpoint the identity did not name, and never re-sends a token across a
+  redirect to a different origin (VER-018). A token is obtained once per identity
+  and reused, and re-obtained transparently when it expires or a request is
+  rejected as unauthenticated, so a long run stays within its bounds without
+  re-logging in for every finding.
+
+- **VER-029: Reach the target through a declared proxy.** When the operator
+  declares an HTTP/HTTPS proxy, the Verifier routes its target and authentication
+  traffic through it, with optional proxy credentials taken from the environment
+  under the same secret handling as VER-016. The proxy and the identity-provider
+  and token endpoints are named in the authorisation scope as permitted
+  destinations; they widen only where the Verifier may connect for transport and
+  authentication, separately from the target's attack surface, and the scope
+  still refuses every destination not listed (VER-001).
+
+- **VER-017: Give the agent the least authority it needs.** The verification
+  agent is driven through narrow, purpose-built tools — a scoped HTTP client, a
+  sandboxed browser, a marker/callback service — not an open shell or arbitrary
+  network access. Model-selected actions and their arguments are treated as
+  untrusted proposals: each is validated and authorised against the active scope
+  before it runs, and any request to act outside the scope is refused and logged,
+  not executed.
+
+- **VER-018: Confine the browser and outbound requests.** The headless browser
+  and any outbound request the agent makes are restricted at connection time to
+  the authorised scope plus the explicitly declared proxy and authentication/
+  identity-provider hosts, including after redirects and for IPv6, so a probe
+  cannot be steered to internal, loopback, or metadata endpoints. Resolved
+  addresses are checked against that boundary when the connection is made, not by
+  a separate earlier DNS lookup. A session token or credential is attached only
+  to its intended origin and is dropped, never forwarded, when a redirect leads
+  to a different origin.
+
+- **VER-019: Keep model and tool output from steering the run.** Content from the
+  target, from retrieved pages, and from the model is data, not instructions. It
+  cannot change the scope, the authorisation, the finding under test, the tool
+  set, or the safety limits. Structured output from the model is validated
+  against a strict schema before anything acts on it.
+
+## Report the results
+
+- **VER-020: Write a standalone verification report by default.** Unless the
+  operator asks otherwise, each run writes its own `verification.md` for reading
+  and `verification.yaml` for further processing, and leaves the source
+  assessment untouched. Every entry names the finding it tested (identifier and
+  cross-run key), the verdict and its confidence, the evidence (requests,
+  responses, browser events, screenshots, callback hits), the target and build
+  tested, any deviation from the finding, and the authorisation under which the
+  test ran.
+
+- **VER-027: Choose report or annotate.** The operator chooses, per run, between
+  the standalone report (default) and annotating the assessment with the
+  verification results. Annotating only adds each finding's dynamic-verification
+  status, verdict, and evidence pointer next to the existing finding; it never
+  changes, re-scores, or removes the static result, and it records that the file
+  was annotated and by which run. Both output modes work in interactive and in
+  non-interactive runs; annotating the source file in place requires an explicit
+  instruction, never a default.
+
+- **VER-021: Offer a result the Analyzer can re-ingest.** The verdicts can also
+  be emitted in a form keyed by finding identifier and the cross-run key (VER-007)
+  that AppSec Analyzer can read back to annotate findings with their dynamic-
+  verification status. This export is explicit and additive; it never rewrites or
+  re-scores the assessment itself.
+
+- **VER-022: Make evidence self-contained and safe to share.** Evidence
+  artefacts are stored next to the report, are enough to let a reader confirm a
+  verdict without re-running the test, and contain no real secrets or sensitive
+  target data. Captured requests and responses are redacted of credentials and of
+  any sensitive values the target returned.
+
+## Run and maintain
+
+- **VER-023: Run as a standalone CLI.** The Verifier is a standalone command-line
+  tool, usable in CI, that takes an assessment, a scope file, and a target URL,
+  and produces the verification report. It resolves its own agent runtime and
+  does not depend on a coding assistant being present.
+
+- **VER-024: Explain what it could and could not do.** When a finding class is
+  unsupported, a target is unreachable, a required test identity is missing, or a
+  limit was hit, the report says so plainly per finding, so an unverified finding
+  is never mistaken for a refuted one.
+
+- **VER-025: Verify its own safety controls.** The Verifier ships with tests that
+  prove the scope gate refuses out-of-scope hosts, ports, and paths; that
+  destructive actions and credential leakage into logs, reports, and prompts are
+  rejected; that execution limits and cancellation stop runaway or duplicate
+  side effects; and that missing or invalid authorisation or credentials block a
+  run rather than weakening it.

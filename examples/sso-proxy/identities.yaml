@@ -1,0 +1,49 @@
+# Example identities for a target whose sessions come from an SSO / OIDC
+# identity provider. Secrets are env references only (VER-016). Export before
+# the run, e.g.:
+#
+#   export VERIFIER_OIDC_CLIENT_SECRET='...'
+#   export VERIFIER_USER_A_NAME='alice@example.com'
+#   export VERIFIER_USER_A_PASS='...'
+#   export VERIFIER_USER_B_NAME='bob@example.com'
+#   export VERIFIER_USER_B_PASS='...'
+#   export VERIFIER_SVC_TOKEN='eyJ...'            # pre-issued bearer, if used
+#
+# Each identity sends its credentials only to its named endpoint, which must be
+# the target or a scope `auth_hosts` entry (sso.example.com here). Schema:
+# schemas/identities.schema.yaml.
+
+identities:
+  # Two end users via the OIDC resource-owner password grant — the pair the
+  # access-control / IDOR proofs contrast (VER-010).
+  - role: user-a
+    method: oidc-password
+    auth:
+      token_url: https://sso.example.com/realms/app/protocol/openid-connect/token
+      client_id: verifier-cli
+      client_secret_env: VERIFIER_OIDC_CLIENT_SECRET
+      scope: openid
+      username_env: VERIFIER_USER_A_NAME
+      password_env: VERIFIER_USER_A_PASS
+      target_origin: https://app.staging.example.com
+
+  - role: user-b
+    method: oidc-password
+    auth:
+      token_url: https://sso.example.com/realms/app/protocol/openid-connect/token
+      client_id: verifier-cli
+      client_secret_env: VERIFIER_OIDC_CLIENT_SECRET
+      scope: openid
+      username_env: VERIFIER_USER_B_NAME
+      password_env: VERIFIER_USER_B_PASS
+      target_origin: https://app.staging.example.com
+
+  # A pre-issued bearer token for a service identity.
+  - role: service
+    method: bearer
+    auth:
+      token_env: VERIFIER_SVC_TOKEN
+      target_origin: https://app.staging.example.com
+
+  - role: anonymous
+    method: none

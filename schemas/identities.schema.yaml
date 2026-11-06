@@ -1,0 +1,87 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://appsec-verifier/schemas/identities.schema.yaml
+title: Verification test identities
+description: |
+  Test identities for a verification run, passed as `--identities` to
+  `appsec-verifier verify`. Each identity is a role label plus the mechanism
+  that obtains its session (VER-028). This file holds NO secret values: every
+  credential, token, and client secret is named by the environment variable that
+  carries it (`*_env`), read at run time (VER-016). The role label is all that
+  appears in the report; captured requests are redacted of Authorization
+  headers, cookies, and token parameters.
+
+  Access-control / IDOR proofs contrast two independent identities (VER-010), so
+  such a run needs at least two with sessions plus, often, an `anonymous` one.
+
+  Each identity sends its credentials ONLY to the endpoint it names, which must
+  be the target or a host listed in the scope's `auth_hosts` (VER-028, VER-001).
+
+type: object
+required: [identities]
+additionalProperties: false
+properties:
+
+  identities:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      required: [role, method]
+      additionalProperties: false
+      properties:
+
+        role:
+          type: string
+          description: Stable label for this identity; the only thing that reaches the report.
+
+        method:
+          type: string
+          description: How a session is obtained.
+          enum:
+            - none                       # unauthenticated (e.g. anonymous probes)
+            - bearer                     # static bearer token supplied via env
+            - basic                      # HTTP Basic with username + password
+            - form                       # HTML form login (username + password)
+            - oidc-password              # OIDC resource-owner password grant
+            - oidc-client-credentials    # OIDC client-credentials grant
+            - oidc-authorization-code    # browser-driven OIDC authorization code
+
+        auth:
+          type: object
+          description: |
+            Method-specific parameters. Secret values are never here — only env
+            references. `target_origin` is where the obtained token/session is
+            attached; it defaults to the target base URL. The endpoint fields
+            (`login_url`, `token_url`, `authorize_url`) must resolve to the target
+            or a scope `auth_hosts` entry.
+          additionalProperties: false
+          properties:
+            target_origin:    { type: [string, "null"] }
+            token_env:        { type: [string, "null"], description: "method=bearer: env var holding the token." }
+            username_env:     { type: [string, "null"] }
+            password_env:     { type: [string, "null"] }
+            login_url:        { type: [string, "null"], description: "method=form: form submit endpoint." }
+            username_field:   { type: [string, "null"] }
+            password_field:   { type: [string, "null"] }
+            token_url:        { type: [string, "null"], description: "OIDC token endpoint." }
+            authorize_url:    { type: [string, "null"], description: "oidc-authorization-code: authorize endpoint." }
+            redirect_uri:     { type: [string, "null"] }
+            client_id:        { type: [string, "null"], description: "Non-secret client id; use client_id_env if confidential." }
+            client_id_env:    { type: [string, "null"] }
+            client_secret_env: { type: [string, "null"] }
+            scope:            { type: [string, "null"], description: "OIDC scopes, space-separated." }
+
+      # Require the fields each method actually needs; secrets stay as *_env.
+      allOf:
+        - if:  { properties: { method: { const: bearer } } }
+          then: { required: [auth], properties: { auth: { required: [token_env] } } }
+        - if:  { properties: { method: { const: basic } } }
+          then: { required: [auth], properties: { auth: { required: [username_env, password_env] } } }
+        - if:  { properties: { method: { const: form } } }
+          then: { required: [auth], properties: { auth: { required: [login_url, username_env, password_env] } } }
+        - if:  { properties: { method: { const: oidc-password } } }
+          then: { required: [auth], properties: { auth: { required: [token_url, username_env, password_env] } } }
+        - if:  { properties: { method: { const: oidc-client-credentials } } }
+          then: { required: [auth], properties: { auth: { required: [token_url, client_secret_env] } } }
+        - if:  { properties: { method: { const: oidc-authorization-code } } }
+          then: { required: [auth], properties: { auth: { required: [authorize_url, token_url, username_env, password_env] } } }

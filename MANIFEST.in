@@ -1,0 +1,8 @@
+include README.md
+include requirements.md
+recursive-include schemas *.yaml
+recursive-include data *.yaml
+recursive-include docs *.md
+recursive-include examples *.yaml
+global-exclude __pycache__/*
+global-exclude *.pyc
