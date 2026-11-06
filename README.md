@@ -27,13 +27,14 @@ appsec-analyzer assess --repo … --output ./out        # produces security-asse
 appsec-verifier verify \
   --assessment ./out/security-assessment.yaml \
   --scope ./scope.yaml --identities ./identities.yaml \
-  --class xss,access-control --min-severity high \
+  --url https://localhost:3000 \
+  --category xss,access-control --min-severity high \
   --cost-limit 5 --output ./verification
 ```
 
 You hand the Verifier the assessment the Analyzer produced, the boundaries of
 what it may do (target scope, cost, request/time limits), and the findings to
-check (by class, severity, CWE, or id). It confirms what it can, with evidence,
+check (by category, severity, or id). It confirms what it can, with evidence,
 and leaves everything else clearly marked as unverified — never as refuted.
 
 ## What it verifies (V1)
@@ -92,7 +93,7 @@ Then:
 
 ```sh
 appsec-verifier --version
-appsec-verifier plan  --assessment ./out/security-assessment.yaml --class xss --min-severity high
+appsec-verifier plan  --assessment ./out/security-assessment.yaml --category xss --min-severity high
 appsec-verifier scope --scope ./scope.yaml --target http://localhost:3000
 ```
 

@@ -30,6 +30,17 @@ def load_verifiable_cwes() -> dict[str, dict]:
     return {e["cwe"].strip().upper(): e for e in doc.get("verifiable_cwes", []) if e.get("cwe")}
 
 
+def list_categories() -> list[str]:
+    """Selectable category names: every class and technique in the catalog."""
+    names = set()
+    for e in load_verifiable_cwes().values():
+        if e.get("class"):
+            names.add(e["class"])
+        if e.get("technique"):
+            names.add(e["technique"])
+    return sorted(names)
+
+
 @dataclass
 class FindingPlan:
     id: str
@@ -41,6 +52,7 @@ class FindingPlan:
     status: str                     # dynamic | static-only | input-incomplete
     cls: str | None                 # weakness class when dynamic
     reason: str
+    technique: str | None = None    # finer category (e.g. idor, sqli) when dynamic
 
 
 def _first_location(threat: dict) -> str | None:
@@ -80,6 +92,7 @@ def classify(threat: dict, catalog: dict[str, dict]) -> FindingPlan:
         status=status,
         cls=cls,
         reason=reason,
+        technique=(entry.get("technique") if entry else None),
     )
 
 
@@ -92,18 +105,24 @@ def load_plans(assessment_path: Path) -> list[FindingPlan]:
 
 def select(
     plans: list[FindingPlan], *,
+    categories: set[str] | None = None,
     classes: set[str] | None = None,
     severities: set[str] | None = None,
     min_severity: str | None = None,
     cwes: set[str] | None = None,
     ids: set[str] | None = None,
 ) -> list[FindingPlan]:
-    """Apply the VER-026 selectors (AND-combined). `ids` overrides the rest."""
+    """Apply the VER-026 selectors (AND-combined). `ids` overrides the rest.
+    `categories` matches a finding's class OR its finer technique (e.g. "idor"),
+    so a category can be selected without naming a CWE."""
     if ids:
         return [p for p in plans if p.id in ids]
+    cats = {c.lower() for c in (categories or set())}
     floor = _SEVERITY_RANK.get((min_severity or "").lower(), 0)
     out = []
     for p in plans:
+        if cats and (p.cls or "").lower() not in cats and (p.technique or "").lower() not in cats:
+            continue
         if classes and p.cls not in classes:
             continue
         if cwes and p.cwe not in cwes:

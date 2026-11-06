@@ -46,6 +46,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     plans = load_plans(Path(args.assessment))
     sel = select(
         plans,
+        categories=_csv(args.category),
         classes=_csv(args.cls),
         severities=_csv(args.severity),
         min_severity=args.min_severity,
@@ -170,13 +171,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     plans = load_plans(assessment)
     sel = select(
-        plans, classes=_csv(args.cls), severities=_csv(args.severity),
-        min_severity=args.min_severity,
+        plans, categories=_csv(args.category), classes=_csv(args.cls),
+        severities=_csv(args.severity), min_severity=args.min_severity,
         cwes={c.upper() for c in (_csv(args.cwe) or set())} or None,
         ids=_csv(args.only),
     )
     if not sel:
-        print("empty selection — nothing to verify (refine --class/--severity/--cwe/--only).", file=sys.stderr)
+        print("empty selection — nothing to verify (refine --category/--severity/--only).", file=sys.stderr)
         return EXIT_BLOCKED
 
     limits = Limits.load({
@@ -231,6 +232,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     )
 
     out_dir = Path(args.output)
+    if args.append:
+        existing_path = out_dir / "verification.yaml"
+        if existing_path.is_file():
+            from .verify import merge_reports
+            doc = merge_reports(_load_yaml(existing_path), doc)
     paths = write_reports(doc, out_dir)
     extra: list[str] = []
     if args.annotate:
@@ -241,6 +247,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
             yaml.safe_dump(annotated, fh, sort_keys=False, allow_unicode=True)
         extra.append(f"annotated assessment: {dest}" + (" (in place)" if args.in_place else ""))
 
+    if args.print_results:
+        _print_results(doc)
     print(_verify_summary_box(doc, paths, extra))
     return 3 if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
 
@@ -257,6 +265,23 @@ def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_onl
                        f"≤ {int(limits.max_duration_s)}s · {limits.rate_rps} rps"),
         ("mode", f"{'safe' if safe else 'intrusive'} · {'read-only' if read_only else 'state-changing'}"),
     ])
+
+
+_VERDICT_MARK = {"confirmed": "✓", "not-reproducible": "✗", "blocked-by-control": "⊘",
+                 "inconclusive": "?", "not-attempted": "·"}
+
+
+def _print_results(doc) -> None:
+    """Render per-finding verdicts to the console (VER-013)."""
+    print("\nResults:")
+    for r in doc["results"]:
+        fr = r.get("finding_ref", {})
+        mark = _VERDICT_MARK.get(r["verdict"], " ")
+        conf = f" ({r['confidence']})" if r.get("confidence") else ""
+        title = fr.get("title") or fr.get("cwe") or ""
+        print(f"{mark} {fr.get('id'):<8} {str(r.get('class') or '-'):<15} {r['verdict']}{conf}  {title}")
+        if r.get("rationale"):
+            print(f"    {r['rationale']}")
 
 
 def _verify_summary_box(doc, paths, extra) -> str:
@@ -308,10 +333,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     pl = sub.add_parser("plan", help="list dynamically verifiable findings (offline)")
     pl.add_argument("--assessment", required=True, help="security-assessment.yaml to read")
-    pl.add_argument("--class", dest="cls", help="filter: classes, comma-separated")
+    pl.add_argument("--category", help="filter: categories (class or technique), comma-separated")
     pl.add_argument("--severity", help="filter: exact severities, comma-separated")
     pl.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], help="severity floor")
-    pl.add_argument("--cwe", help="filter: CWEs, comma-separated")
+    pl.add_argument("--class", dest="cls", help="(advanced) filter: classes, comma-separated")
+    pl.add_argument("--cwe", help="(advanced) filter: CWEs, comma-separated")
     pl.add_argument("--only", help="filter: finding ids, comma-separated")
 
     sc = sub.add_parser("scope", help="resolve and validate an authorisation scope file")
@@ -321,15 +347,18 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="verify selected findings against a target (safe mode by default)")
     vf.add_argument("--assessment", required=True, help="security-assessment.yaml to verify")
     vf.add_argument("--scope", required=True, help="authorisation scope file")
-    vf.add_argument("--target", help="base URL to test (default: scope base_url); must be in scope")
+    vf.add_argument("--url", "--target", dest="target",
+                    help="start/base URL to test (default: scope base_url); must be in scope")
     vf.add_argument("--identities", help="identities.yaml (roles + env-var credential refs)")
     vf.add_argument("--source", help="read-only checkout of the target repo, to ground the agent (VER-017)")
     vf.add_argument("--output", default="./verification", help="report/evidence directory")
-    # selection (VER-026) — same selectors as `plan`
-    vf.add_argument("--class", dest="cls", help="classes, comma-separated (e.g. a single class)")
-    vf.add_argument("--severity", help="exact severities, comma-separated")
-    vf.add_argument("--min-severity", choices=["low", "medium", "high", "critical"])
-    vf.add_argument("--cwe", help="CWEs, comma-separated (e.g. CWE-639 for IDOR only)")
+    # selection (VER-026)
+    vf.add_argument("--category", help="categories, comma-separated: class or technique "
+                                       "(e.g. 'idor', 'access-control', 'sqli', 'xss')")
+    vf.add_argument("--severity", help="exact severities, comma-separated (e.g. critical,high)")
+    vf.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], help="severity floor")
+    vf.add_argument("--class", dest="cls", help="(advanced) weakness classes, comma-separated")
+    vf.add_argument("--cwe", help="(advanced) CWEs, comma-separated")
     vf.add_argument("--only", help="finding ids, comma-separated")
     # boundaries (VER-015)
     vf.add_argument("--cost-limit", type=float, help="model-spend ceiling, USD")
@@ -339,6 +368,10 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--rate", type=float, help="max requests/second")
     # output mode (VER-020/027) and run mode (VER-002/030)
     vf.add_argument("--report", action="store_true", help="standalone report (default)")
+    vf.add_argument("--print", dest="print_results", action="store_true",
+                    help="also print per-finding results to the console")
+    vf.add_argument("--append", action="store_true",
+                    help="extend an existing report in --output instead of overwriting")
     vf.add_argument("--annotate", action="store_true", help="also write an annotated assessment copy")
     vf.add_argument("--in-place", action="store_true", help="with --annotate: modify the assessment file itself")
     vf.add_argument("--non-interactive", "--ci", dest="non_interactive", action="store_true",

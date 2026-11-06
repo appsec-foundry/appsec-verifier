@@ -9,10 +9,10 @@ probe is implemented yet: dynamically verifiable findings are reported as
 from __future__ import annotations
 
 from .probes import Probe, ProbeContext, ProbeRegistry, ProbeResult, default_registry
-from .report import build_annotations, write_reports
+from .report import build_annotations, merge_reports, write_reports
 from .runner import run_verification
 
 __all__ = [
     "Probe", "ProbeContext", "ProbeRegistry", "ProbeResult", "default_registry",
-    "run_verification", "write_reports", "build_annotations",
+    "run_verification", "write_reports", "build_annotations", "merge_reports",
 ]

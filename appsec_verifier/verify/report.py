@@ -18,6 +18,35 @@ _VERDICT_LABEL = {
 }
 
 
+def merge_reports(existing: dict, new: dict) -> dict:
+    """Extend a prior report with a new run's results (VER-027, `--append`): a
+    finding verified again replaces its earlier result; findings not re-tested are
+    kept. Result ids are renumbered and the summary recomputed. Meta comes from
+    the new run; the earlier generated time is kept as `previous_generated`."""
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for r in (existing.get("results") or []) + (new.get("results") or []):
+        key = r.get("finding_ref", {}).get("id") or r.get("result_id")
+        if key not in by_id:
+            order.append(key)
+        by_id[key] = r
+    merged = []
+    for i, key in enumerate(order, start=1):
+        r = dict(by_id[key])
+        r["result_id"] = f"VF-{i:03d}"
+        merged.append(r)
+    tally = {"confirmed": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0, "not_attempted": 0}
+    _key = {"confirmed": "confirmed", "not-reproducible": "not_reproducible", "blocked-by-control": "blocked",
+            "inconclusive": "inconclusive", "not-attempted": "not_attempted"}
+    for r in merged:
+        tally[_key[r["verdict"]]] += 1
+    tally["total"] = len(merged)
+    meta = dict(new["meta"])
+    meta["summary"] = tally
+    meta["previous_generated"] = existing.get("meta", {}).get("generated")
+    return {"meta": meta, "results": merged}
+
+
 def write_reports(doc: dict, out_dir: Path) -> dict:
     """Write verification.yaml + verification.md (+ an empty evidence/ dir) into
     out_dir. Returns the written paths."""

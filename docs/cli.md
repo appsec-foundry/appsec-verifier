@@ -51,7 +51,8 @@ appsec-verifier verify \
   --assessment ./security-assessment.yaml \
   --scope ./scope.yaml \
   --identities ./identities.yaml \
-  --class xss,access-control \
+  --url https://localhost:3000 \
+  --category xss,access-control \
   --min-severity high \
   --cost-limit 5 \
   --output ./verification
@@ -70,7 +71,7 @@ annotate the assessment, with evidence artefacts (VER-020, VER-027, VER-022).
 | --- | --- | --- |
 | `--assessment PATH` | `security-assessment.yaml` to verify (the one the Analyzer produced). | VER-005 |
 | `--scope PATH` | Authorisation scope file (`schemas/scope.schema.yaml`). The only source of the target boundary, plus the declared proxy and auth hosts. | VER-001 |
-| `--target URL` | Base URL to test. Must fall inside the scope; mismatch is refused. If omitted, the scope's `base_url` is used. | VER-001/004 |
+| `--url URL` (alias `--target`) | Start/base URL to test. Must fall inside the scope; mismatch is refused. If omitted, the scope's `base_url` is used. | VER-001/004 |
 | `--identities PATH` | Test-identity config (`schemas/identities.schema.yaml`): bearer, basic, form, or OIDC login per role. Secret **values** come from env, never this file. | VER-016/028 |
 | `--proxy URL` | Route target and auth traffic through this HTTP/HTTPS proxy, overriding the scope's `proxy.url`. Proxy credentials still come from the env vars the scope names. | VER-029 |
 
@@ -78,15 +79,16 @@ annotate the assessment, with evidence artefacts (VER-020, VER-027, VER-022).
 
 All selectors read from the referenced assessment and combine with AND. With no
 selector, the run verifies every *dynamically verifiable* finding (VER-006) and
-says so before it starts.
+says so before it starts. Prefer categories and severities over CWEs.
 
 | Flag | Meaning |
 | --- | --- |
-| `--class LIST` | Weakness classes: `xss,access-control,injection,path-traversal,open-redirect,ssrf`. |
+| `--category LIST` | Categories, by class or finer technique: `access-control`, `idor`, `sqli`, `nosqli`, `xss`, `path-traversal`, `open-redirect`, `ssrf`, … So `--category idor` verifies IDOR alone — no CWE needed. (`plan` lists the available categories.) |
 | `--severity LIST` | Exact severities, e.g. `critical,high`. |
 | `--min-severity LEVEL` | Severity floor: `low\|medium\|high\|critical`. |
-| `--cwe LIST` | Specific CWEs, e.g. `CWE-79,CWE-639`. |
 | `--only ID[,ID]` | Specific finding ids, e.g. `T-037,F-001`. Overrides the other selectors. |
+| `--class LIST` | (advanced) weakness classes. |
+| `--cwe LIST` | (advanced) specific CWEs, e.g. `CWE-79,CWE-639`. |
 
 ### Boundaries — cost and load (VER-015)
 
@@ -104,6 +106,8 @@ says so before it starts.
 | --- | --- | --- |
 | `--output DIR` | Report and evidence directory (created, owner-readable). Default `./verification`. | VER-020 |
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
+| `--print` | Also print the per-finding verdicts to the console. | VER-013 |
+| `--append` | Extend an existing report in `--output` instead of overwriting: a finding verified again replaces its earlier result, others are kept, ids renumbered. | VER-027 |
 | `--annotate [PATH]` | Add verification status to the assessment instead. Writes a copy next to the report by default; the bare in-place form needs the explicit `--in-place`. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. | VER-027 |
 | `--non-interactive` / `--ci` | No prompts: selection, scope confirmation, and cost ceiling all come from the invocation. Recorded in the report. | VER-002/026 |
@@ -124,9 +128,9 @@ markers, are logged, and are cleaned up where possible (VER-014). Deletes,
 bulk/destructive operations, DoS, and evasion are never performed, regardless of
 flags.
 
-**Verifying one class.** The selectors isolate a single class — `--class xss`,
-or `--cwe CWE-639` for IDOR alone — and safe mode applies the same way to that
-one class.
+**Verifying one category.** The selectors isolate a single category —
+`--category xss`, or `--category idor` for IDOR alone — and safe mode applies the
+same way. Combine with a severity floor, e.g. `--category idor --min-severity high`.
 
 ### Interactive vs non-interactive
 
