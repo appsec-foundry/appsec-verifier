@@ -94,9 +94,10 @@ says so before it starts. Prefer categories and severities over CWEs.
 
 | Flag | Meaning |
 | --- | --- |
-| `--cost-limit USD` | Model-spend ceiling for the run. Default from `data/limits.yaml`. Interactive runs may ask to raise it; non-interactive runs stop (exit 3). |
+| `--cost-limit USD` | Model-spend ceiling for the run. Default from `data/limits.yaml`. Interactive runs may ask to raise it; non-interactive runs stop (exit 3). Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
 | `--max-requests N` | Hard cap on total requests to the target. |
 | `--max-attempts N` | Cap on probe attempts per finding. |
+| `--max-calls N` | Cap on model calls (planning steps) for the run, for every profile. |
 | `--max-duration S` | Wall-clock cap; cancellable mid-run. |
 | `--rate RPS` | Max request rate to the target. |
 
@@ -115,25 +116,31 @@ says so before it starts. Prefer categories and severities over CWEs.
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
 | `--dry-run` | Resolve selection + scope and print the plan; send nothing to the target. | VER-008 |
 | `--headful` | Run the proof browser visibly (local debugging only). | VER-009 |
-| `--model NAME` | Reasoning model for the verification agent. | — |
-| `--backend auto\|api\|claude-code` | How the agent reaches the model (below). Default `auto`. | VER-023 |
+| `--profile NAME` | Model profile (below), as in AppSec Analyzer. Default `claude`; required with `--non-interactive`. | VER-023 |
+| `--model NAME` | Model for the selected profile; default is the profile's model. | — |
 
-**Model backend.** `api` calls the Anthropic API and needs `ANTHROPIC_API_KEY`
-(or `ANTHROPIC_AUTH_TOKEN`). `claude-code` runs each planning step through a
-local, logged-in Claude Code (`claude -p`), for example on a Claude
-subscription. `auto` uses the API when a key is set and otherwise stays offline;
-it never picks Claude Code. An explicitly requested backend that is not
-available stops the run before anything is contacted.
+**Model profiles.** The profile decides which agent CLI or API plans each step.
+An unavailable profile (CLI missing or too old, not logged in, key missing,
+model unknown) stops the run before anything is contacted.
 
-With `claude-code`, Claude Code runs without built-in tools, MCP servers,
-settings, skills or session persistence, in an empty working directory, and
-without API keys or identity secrets in its environment. It only returns the
-next step as structured output; the Verifier validates it and executes it
-through the same scope-guarded tools as the API backend. If a session ever
-offers another tool or an MCP server, that finding ends `inconclusive` and no
-further Claude Code call is made in the run. The cost Claude Code reports per
-call counts against `--cost-limit`; on a subscription it is the API-equivalent
-value, not a charge.
+| Profile | Runs | Credentials | Default model | Spend |
+| --- | --- | --- | --- | --- |
+| `claude` | `claude -p` | Claude login, or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | `claude-opus-5-5` | reported USD (API-equivalent on a subscription) |
+| `codex-cli` | `codex exec`, 0.163.0+ | ChatGPT login only | `gpt-sol` | not reported |
+| `copilot-cli` | `copilot`, exactly 1.0.101 | Copilot login | `gpt-5.4` | not reported; soft limit of 30 AI credits per call |
+| `codex` | OpenAI Responses API | `OPENAI_API_KEY` | `gpt-sol` | tokens × `data/model-catalog.yaml` prices |
+| `anthropic-api` | Anthropic SDK | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | not counted yet |
+
+Every host only proposes the next step as one JSON object; the Verifier
+validates it strictly and executes it through the same scope-guarded tools for
+every profile (VER-017, VER-019). The CLIs run in an empty temporary directory
+with no built-in tools, MCP servers, settings, skills, custom instructions or
+session history, and receive only the environment they need: no identity
+secrets, and no API keys of other providers. `claude` and `codex-cli` also
+check each call for tool use; a session that offers or uses a tool ends the
+finding `inconclusive` and stops every later model call of the run. Copilot CLI
+prints only the answer, so its confinement rests on the pinned version and its
+flags. `codex-cli` and `copilot-cli` have only offline tests so far.
 
 **Safe mode (default, VER-030).** Unless `--allow-intrusive` is given, the run
 stays read-only even when the scope permits state change, sends the single most

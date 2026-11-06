@@ -18,7 +18,7 @@ from .limits import Limits, RunBudget
 from .loader import load_plans, select
 from .preflight import confirm_authorization
 from .scope import ScopeGuard
-from .verify import build_annotations, default_registry, run_verification, write_reports
+from .verify import build_annotations, run_verification, write_reports
 from .verify.report import annotate_assessment
 from .version_info import resource_root, version_string
 
@@ -134,35 +134,29 @@ def _load_identities(path: str | None) -> list[dict]:
     return _load_yaml(Path(path)).get("identities", []) or []
 
 
-class BackendUnavailable(Exception):
-    """The model backend requested with --backend cannot be used."""
+class ProfileError(Exception):
+    """The model profile cannot be used for this run."""
 
 
 def _build_planner_factory(args, environ=None):
-    """Resolve the model backend (--backend) into (planner factory, agent info).
-    Returns (None, None) when `auto` finds no API credentials: the run then stays
-    offline and every selected finding is reported not-attempted. `auto` never
-    picks Claude Code; it is used only when requested explicitly."""
-    environ = os.environ if environ is None else environ
-    model = args.model or "claude-opus-5-5"
-    backend = args.backend
-    has_api_key = bool(environ.get("ANTHROPIC_API_KEY") or environ.get("ANTHROPIC_AUTH_TOKEN"))
-    if backend == "auto":
-        if not has_api_key:
-            return None, None
-        backend = "api"
-    if backend == "api":
-        if not has_api_key:
-            raise BackendUnavailable("--backend api needs ANTHROPIC_API_KEY")
-        from .agent import AnthropicPlanner
-        return (lambda: AnthropicPlanner(model=model)), {"backend": "api", "model": model}
-    from .agent import ClaudeCodeBackend, ClaudeCodePlanner, ClaudeCodeUnavailable
+    """Resolve the model profile (--profile) into (planner factory, agent info),
+    chosen as in AppSec Analyzer: without --profile an interactive run uses
+    `claude`; a non-interactive run must name its profile."""
+    from .agent import DEFAULT_PROFILE, PROFILES, SUBSCRIPTION_PROFILES, HostUnavailable
+    from .agent.profiles import resolve
+
+    profile = args.profile
+    if profile is None:
+        if args.non_interactive:
+            raise ProfileError(f"--non-interactive needs an explicit --profile ({', '.join(PROFILES)})")
+        profile = DEFAULT_PROFILE
+    if profile in SUBSCRIPTION_PROFILES and args.cost_limit is not None:
+        raise ProfileError(f"--cost-limit is not available with {profile}, which reports no cost; "
+                           "bound the run with --max-calls and --max-duration")
     try:
-        cc = ClaudeCodeBackend.resolve(model=model, environ=environ)
-    except ClaudeCodeUnavailable as exc:
-        raise BackendUnavailable(str(exc)) from exc
-    info = {"backend": "claude-code", "model": model, "runtime": f"{cc.version or 'claude'} ({cc.binary})"}
-    return (lambda: ClaudeCodePlanner(cc)), info
+        return resolve(profile, model=args.model, environ=os.environ if environ is None else environ)
+    except HostUnavailable as exc:
+        raise ProfileError(f"{profile}: {exc}") from exc
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -203,7 +197,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     limits = Limits.load({
         "cost_limit_usd": args.cost_limit, "max_requests": args.max_requests,
-        "max_attempts": args.max_attempts, "max_duration_s": args.max_duration, "rate_rps": args.rate,
+        "max_attempts": args.max_attempts, "max_calls": args.max_calls, "max_duration_s": args.max_duration,
+        "rate_rps": args.rate,
     })
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
@@ -212,23 +207,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
     budget = RunBudget(limits)
     try:
         planner_factory, agent_info = _build_planner_factory(args)
-    except BackendUnavailable as exc:
-        print(f"model backend unavailable: {exc}", file=sys.stderr)
+    except ProfileError as exc:
+        print(f"model profile unavailable: {exc}", file=sys.stderr)
         return EXIT_BLOCKED
-    http = sessions = source = None
-    if planner_factory is not None:
-        from .agent import SourceReader, agent_registry
-        from .auth import SessionManager
-        from .tools import GuardedHttpClient
-        from .tools.httpx_transport import transport_from_scope
-        http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
-        sessions = SessionManager(identities, http, env=os.environ)
-        source = SourceReader(args.source) if args.source else None
-        registry = agent_registry(planner_factory)
-    else:
-        registry = default_registry()
-    have_probe = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
-    contact = (planner_factory is not None) and have_probe
+    from .agent import SourceReader, agent_registry
+    from .auth import SessionManager
+    from .tools import GuardedHttpClient
+    from .tools.httpx_transport import transport_from_scope
+    http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
+    sessions = SessionManager(identities, http, env=os.environ)
+    source = SourceReader(args.source) if args.source else None
+    registry = agent_registry(planner_factory)
+    contact = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
 
     print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info))
 
@@ -281,19 +271,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info) -> str:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
-    if agent_info is None:
-        agent = "none (no ANTHROPIC_API_KEY; use --backend claude-code for a local Claude Code)"
-    elif agent_info["backend"] == "claude-code":
-        agent = f"claude-code · {agent_info['model']} · {agent_info['runtime']}"
-    else:
-        agent = f"api · {agent_info['model']}"
+    from .agent import SUBSCRIPTION_PROFILES
+
+    cost = ("cost: subscription, not reported" if agent_info["profile"] in SUBSCRIPTION_PROFILES
+            else f"cost ≤ ${limits.cost_limit_usd:.2f}")
     return _box("AppSec Verifier · verify", [
-        ("agent", agent),
+        ("profile", " · ".join(agent_info[k] for k in ("profile", "model", "runtime", "auth"))),
         ("assessment", str(assessment)),
         ("target", f"{target}  ({'will contact' if contact else 'not contacted yet'})"),
         ("scope", f"{', '.join(scope.get('hosts', []) or [target])}  owner: {(scope.get('owner') or {}).get('name')}"),
         ("selection", f"{len(sel)} findings · {dyn} dynamic · classes: {', '.join(classes) or '—'}"),
-        ("boundaries", f"cost ≤ ${limits.cost_limit_usd:.2f} · ≤ {limits.max_requests} req · "
+        ("boundaries", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} req · "
                        f"≤ {int(limits.max_duration_s)}s · {limits.rate_rps} rps"),
         ("mode", f"{'safe' if safe else 'intrusive'} · {'read-only' if read_only else 'state-changing'}"),
     ])
@@ -396,6 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--cost-limit", type=float, help="model-spend ceiling, USD")
     vf.add_argument("--max-requests", type=int)
     vf.add_argument("--max-attempts", type=int)
+    vf.add_argument("--max-calls", type=int, help="cap on model calls (planning steps) for the run")
     vf.add_argument("--max-duration", type=float, help="run wall-clock ceiling, seconds")
     vf.add_argument("--rate", type=float, help="max requests/second")
     # output mode (VER-020/027) and run mode (VER-002/030)
@@ -414,11 +403,12 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--read-only", action="store_true", help="force read-only even if the scope allows state change")
     vf.add_argument("--dry-run", action="store_true", help="resolve selection + scope, write nothing, contact nothing")
     vf.add_argument("--headful", action="store_true", help="run the proof browser visibly (local debugging)")
-    vf.add_argument("--model", help="reasoning model for the verification agent")
-    vf.add_argument("--backend", choices=["auto", "api", "claude-code"], default="auto",
-                    help="how to reach the model: 'api' needs ANTHROPIC_API_KEY; 'claude-code' uses a local, "
-                         "logged-in Claude Code (e.g. a Claude subscription); 'auto' (default) uses the API "
-                         "when a key is set and never picks Claude Code")
+    vf.add_argument("--profile", choices=["claude", "codex-cli", "copilot-cli", "codex", "anthropic-api"],
+                    help="model profile, as in AppSec Analyzer: claude (Claude CLI, login or key; default when "
+                         "interactive), codex-cli (ChatGPT login), copilot-cli (Copilot login), codex "
+                         "(OPENAI_API_KEY), anthropic-api (ANTHROPIC_API_KEY, no CLI needed). "
+                         "Required with --non-interactive")
+    vf.add_argument("--model", help="model for the selected profile (default: the profile's model)")
 
     ex = sub.add_parser("export", help="re-emit a verification.yaml for AppSec Analyzer")
     ex.add_argument("--verification", required=True, help="verification.yaml to export")

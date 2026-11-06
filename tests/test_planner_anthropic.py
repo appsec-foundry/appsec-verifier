@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from appsec_verifier.agent import AgentProbe, AnthropicPlanner, agent_registry
 from appsec_verifier.agent.planner_anthropic import _tool_defs
 from appsec_verifier.auth import SessionManager
-from appsec_verifier.cli import _build_planner_factory
+from appsec_verifier.cli import ProfileError, _build_planner_factory
 from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
@@ -90,11 +92,13 @@ def test_end_turn_without_tool_is_inconclusive():
     assert action["verdict"]["verdict"] == "inconclusive"
 
 
-def test_build_planner_factory_gating():
-    args = SimpleNamespace(model=None, backend="auto")
-    assert _build_planner_factory(args, environ={}) == (None, None)
+def test_anthropic_api_profile_gating():
+    args = SimpleNamespace(model=None, profile="anthropic-api", non_interactive=True, cost_limit=None)
+    with pytest.raises(ProfileError):
+        _build_planner_factory(args, environ={})
     factory, info = _build_planner_factory(args, environ={"ANTHROPIC_API_KEY": "sk-test"})
-    assert factory is not None and info == {"backend": "api", "model": "claude-opus-5-5"}
+    assert callable(factory)
+    assert info["profile"] == "anthropic-api" and info["model"] == "claude-opus-5-5"
 
 
 def test_agent_registry_covers_classes():

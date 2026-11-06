@@ -127,7 +127,7 @@ def run_verification(
         "generated": _iso(now),
         "verifier_version": verifier_version,
         "model": (agent or {}).get("model"),
-        "backend": (agent or {}).get("backend"),
+        "profile": (agent or {}).get("profile"),
         "source_assessment": str(assessment_path),
         "source_assessment_sha256": _sha256(assessment_path),
         "target": {
@@ -152,6 +152,7 @@ def run_verification(
         "limits": {
             "max_requests": limits.max_requests,
             "max_attempts": limits.max_attempts,
+            "max_calls": limits.max_calls,
             "max_duration_s": limits.max_duration_s,
             "rate_rps": limits.rate_rps,
             "cost_limit_usd": limits.cost_limit_usd,

@@ -270,9 +270,12 @@ optional hardening.
 - **VER-023: Run as a standalone CLI.** The Verifier is a standalone command-line
   tool, usable in CI, that takes an assessment, a scope file, and a target URL,
   and produces the verification report. It resolves its own agent runtime and
-  does not depend on a coding assistant being present. A locally installed Claude
-  Code may supply the model instead of an API key, but only on explicit request,
-  and only as a planner without tools of its own (VER-017).
+  does not depend on a coding assistant being present. The model comes from a
+  profile chosen as in AppSec Analyzer: an installed agent CLI (Claude, Codex,
+  Copilot) with its login, or an API with a key. Without a profile an
+  interactive run uses the Claude CLI; a non-interactive run must name one. An
+  API profile keeps CI runs possible without any agent CLI. Every profile only
+  plans, without tools of its own (VER-017).
 
 - **VER-024: Explain what it could and could not do.** When a finding class is
   unsupported, a target is unreachable, a required test identity is missing, or a

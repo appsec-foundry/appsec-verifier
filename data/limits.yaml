@@ -1,6 +1,6 @@
 # Default execution bounds for a verification run (VER-015). Every value here is
 # a default that the invocation can override: --cost-limit, --max-requests,
-# --max-attempts, --max-duration, --rate. Reaching any bound stops the affected
+# --max-attempts, --max-calls, --max-duration, --rate. Reaching any bound stops the affected
 # work rather than pressing on; the run stays cancellable. These bounds protect
 # the target from accidental load, cap the cost of a run, and keep it from
 # drifting beyond the finding under test.
@@ -10,8 +10,12 @@ version: 1
 limits:
   # Model-spend ceiling for the whole run, in USD. When a run would exceed it,
   # it stops; an interactive run may ask to raise it, a non-interactive run
-  # stops with exit 3 (VER-015).
+  # stops with exit 3 (VER-015). Not available with the subscription profiles
+  # codex-cli and copilot-cli, which report no cost; max_calls bounds them.
   cost_limit_usd: 10.0
+
+  # Cap on model calls (planning steps) across the run, for every profile.
+  max_calls: 500
 
   # Hard cap on total HTTP requests sent to the target across the run.
   max_requests: 2000

@@ -12,18 +12,24 @@ analysis and does not change severities.
 Early version.
 
 - `plan`, `scope` and `export` work offline.
-- `verify` runs an AI agent per finding (Anthropic API, default model
-  `claude-opus-5-5`, change with `--model`). The agent reads the finding and,
-  with `--source`, the relevant source code, then sends HTTP requests within the
-  scope. It has no other tools. Without `ANTHROPIC_API_KEY` (and without
-  `--backend claude-code`), `verify` contacts nothing and marks every finding
-  `not-attempted`.
-- `--backend claude-code` runs the model through a local, logged-in Claude Code
-  (`claude -p`) instead of an API key, for example on a Claude subscription.
-  Claude Code then has no tools, settings or MCP servers and only proposes the
-  next step; the Verifier executes it within the scope. This backend is never
-  chosen automatically. Check Anthropic's current terms before using a
-  subscription this way.
+- `verify` runs an AI agent per finding. The agent reads the finding and, with
+  `--source`, the relevant source code, then sends HTTP requests within the
+  scope. It has no other tools.
+- The model comes from a profile, chosen as in AppSec Analyzer (`--profile`):
+
+  | Profile | Uses | Bounded by |
+  | --- | --- | --- |
+  | `claude` (default) | Claude CLI with its login or `ANTHROPIC_API_KEY` | USD, calls, time |
+  | `codex-cli` | Codex CLI 0.163.0+ with a ChatGPT login | calls, time |
+  | `copilot-cli` | GitHub Copilot CLI 1.0.101 with its login | calls, time |
+  | `codex` | OpenAI Responses API with `OPENAI_API_KEY` | USD, calls, time |
+  | `anthropic-api` | Anthropic API with `ANTHROPIC_API_KEY`, no CLI needed | calls, time |
+
+  Every CLI runs without tools, MCP servers, settings or session history and
+  only proposes the next step; the Verifier checks it and executes it within the
+  scope. `--non-interactive` requires an explicit `--profile`. Codex CLI and
+  Copilot CLI have no live end-to-end test yet. Subscription use follows the
+  provider's terms for that plan.
 - Not built yet: the headless browser that shows an XSS payload actually
   executes, and the callback listener for SSRF. For now the agent judges from
   HTTP responses only.
@@ -33,8 +39,7 @@ Early version.
 ```sh
 appsec-analyzer assess --repo … --output ./out        # writes security-assessment.yaml
 
-export ANTHROPIC_API_KEY=…
-appsec-verifier verify \
+appsec-verifier verify --profile claude \
   --assessment ./out/security-assessment.yaml \
   --scope ./scope.yaml --identities ./identities.yaml \
   --url https://localhost:3000 \
@@ -83,9 +88,11 @@ explicitly allows. The controls follow the
   Requests outside it are refused.
 - Passwords, tokens and client secrets are read from environment variables. They
   do not appear in logs or the report, and the agent only sees role names.
-- Requests, attempts per finding, request rate, run time and model spend are
-  capped. Defaults are in [`data/limits.yaml`](data/limits.yaml). Reaching a
-  limit stops the work it affects.
+- Requests, attempts per finding, model calls, request rate, run time and model
+  spend are capped. Defaults are in [`data/limits.yaml`](data/limits.yaml).
+  Reaching a limit stops the work it affects. Spend is counted for `claude` and
+  `codex`; `codex-cli` and `copilot-cli` report no cost and reject
+  `--cost-limit`.
 - Safe mode is the default. The agent can then only send GET, HEAD and OPTIONS
   requests, uses one harmless payload per test and keeps the request count low.
   Write requests (needed for stored XSS and some IDOR cases) require
@@ -99,8 +106,11 @@ Python 3.10 or later, with [pipx](https://pipx.pypa.io/stable/):
 
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-pipx inject appsec-verifier anthropic      # needed for verify with an API key (not for --backend claude-code)
+pipx inject appsec-verifier anthropic      # only for --profile anthropic-api
 ```
+
+For the CLI profiles, install the agent CLI and log in (`claude`, `codex login`,
+`copilot login`).
 
 From a local checkout: `pip install -e '.[agent]'`.
 
@@ -120,6 +130,8 @@ Details in [`docs/cli.md`](docs/cli.md).
   Test accounts by role, with `bearer`, `basic`, `form` or OIDC login. Secrets
   only as names of environment variables.
 - Default limits: [`data/limits.yaml`](data/limits.yaml)
+- OpenAI models and prices for `codex` and `codex-cli`:
+  [`data/model-catalog.yaml`](data/model-catalog.yaml)
 
 Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form
 login) and [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a

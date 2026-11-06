@@ -42,11 +42,11 @@ properties:
       model:
         type: [string, "null"]
         description: Reasoning model used by the verification agent.
-      backend:
-        enum: [api, claude-code, null]
+      profile:
+        enum: [claude, codex-cli, copilot-cli, codex, anthropic-api, null]
         description: |
-          How the model was reached: `api` (Anthropic API key) or `claude-code`
-          (a local, logged-in Claude Code). Null when no agent ran.
+          Model profile that planned the verification (agent CLI or API, as in
+          AppSec Analyzer). Null when no agent ran.
       source_assessment:
         type: string
         description: Path to the security-assessment.yaml that was verified.
@@ -94,6 +94,7 @@ properties:
         properties:
           max_requests: { type: [integer, "null"], minimum: 0 }
           max_attempts: { type: [integer, "null"], minimum: 0 }
+          max_calls: { type: [integer, "null"], minimum: 0 }
           max_duration_s: { type: [number, "null"], minimum: 0 }
           rate_rps: { type: [number, "null"], minimum: 0 }
       identities:

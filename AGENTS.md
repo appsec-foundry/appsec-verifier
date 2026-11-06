@@ -16,9 +16,9 @@ python -m pytest -q         # must pass
 ruff check .                # must be clean (config in pyproject.toml)
 ```
 
-Tests run offline. Network and model calls are replaced by fakes
-(`FakeTransport`, `FakeClient`, `httpx.MockTransport`). Never let a test
-reach a real host or need a real `ANTHROPIC_API_KEY`.
+Tests run offline. Network, model and agent-CLI calls are replaced by fakes
+(`FakeTransport`, `FakeClient`, `FakeRun`, `httpx.MockTransport`). Never let a
+test start a real CLI, reach a real host, or need a real API key.
 
 ## Layout
 
@@ -27,12 +27,12 @@ reach a real host or need a real `ANTHROPIC_API_KEY`.
 | `appsec_verifier/cli.py` | argparse entry point: `plan`, `scope`, `verify`, `export` |
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
-| `limits.py` | `RunBudget`: request, cost and time caps, raises `LimitExceeded` |
+| `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/sessions.py` | sessions per test identity; secrets come from env vars |
-| `agent/` | agent loop, planners (Anthropic API, Claude Code), the agent's narrow tool set, source reader |
+| `agent/` | agent loop and narrow tool set; model profiles (`profiles.py`), the step contract (`steps.py`), `HostPlanner` (`hosts.py`) with one `host_*.py` per CLI/API, the Anthropic SDK planner |
 | `verify/` | runner (injectable, offline-testable), probes, report/export/annotate |
-| `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`) |
+| `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`, `model-catalog.yaml`) |
 | `examples/` | sample scope and identities files |
 
 ## Safety invariants (do not weaken)
@@ -52,9 +52,12 @@ needs an explicit decision from the maintainer, not a workaround.
 - Secret values only come from environment variables. They never appear in
   logs, reports, prompts or files. The agent sees role names only.
 - Credentials are dropped on cross-origin redirects.
-- The Claude Code backend (`agent/planner_claude_code.py`) runs `claude -p`
-  without tools, settings, MCP servers or session persistence, checks the
-  session's tool set on every call, and is never selected by `--backend auto`.
+- Model hosts only plan. Agent CLIs run without tools, MCP servers, settings
+  or session history, from an empty temp directory, with an allow-listed
+  environment (no identity secrets, no other provider's keys). Every step goes
+  through `steps.parse_step`; where a CLI reports tool use (`claude`,
+  `codex-cli`), it is a breach that stops all later model calls. Keep the
+  isolation flags in line with AppSec Analyzer's adapters.
 - Missing or invalid scope, identity or confirmation blocks the run.
 
 Changes to these controls need tests that cover the refused case

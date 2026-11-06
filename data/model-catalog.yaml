@@ -1,0 +1,27 @@
+# OpenAI models the `codex` (API) and `codex-cli` profiles may use, with the
+# prices the `codex` profile charges against the run's USD ceiling (VER-015).
+# Taken from AppSec Analyzer's data/model-catalog.yaml; change both together.
+# Aliases do not discover new models over the network.
+
+schema_version: 1
+price_revision: openai-standard-2026-10-17
+aliases:
+  gpt-sol: gpt-6.1-sol
+  gpt-luna: gpt-6-luna
+  gpt-astra: gpt-6-astra
+models:
+  gpt-6.1-sol:
+    max_output_tokens: 128000
+    input_usd_per_million: 2.5
+    output_usd_per_million: 10.0
+    source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  gpt-6-luna:
+    max_output_tokens: 128000
+    input_usd_per_million: 0.125
+    output_usd_per_million: 0.5
+    source: https://developers.openai.com/api/docs/models/gpt-6-luna
+  gpt-6-astra:
+    max_output_tokens: 128000
+    input_usd_per_million: 12.5
+    output_usd_per_million: 50
+    source: https://developers.openai.com/api/docs/models/gpt-6-astra

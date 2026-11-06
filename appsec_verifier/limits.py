@@ -16,7 +16,7 @@ from .version_info import resource_root
 class LimitExceeded(Exception):
     def __init__(self, kind: str, detail: str):
         super().__init__(detail)
-        self.kind = kind  # "requests" | "cost" | "time" | "attempts"
+        self.kind = kind  # "requests" | "cost" | "time" | "attempts" | "calls"
 
 
 @dataclass
@@ -24,6 +24,7 @@ class Limits:
     cost_limit_usd: float = 10.0
     max_requests: int = 2000
     max_attempts: int = 40
+    max_calls: int = 500
     max_duration_s: float = 1800
     rate_rps: float = 5
 
@@ -46,6 +47,19 @@ class RunBudget:
         self.start = clock()
         self.requests = 0
         self.cost = 0.0
+        self.calls = 0
+
+    def note_call(self) -> None:
+        """Count one model call; refuse it once the run's call cap is reached."""
+        if self.limits.max_calls and self.calls >= self.limits.max_calls:
+            raise LimitExceeded("calls", f"model call cap {self.limits.max_calls} reached")
+        self.calls += 1
+
+    def remaining_cost(self) -> float | None:
+        """USD left under the cost ceiling, or None when it is unbounded."""
+        if not self.limits.cost_limit_usd:
+            return None
+        return max(0.0, self.limits.cost_limit_usd - self.cost)
 
     def note_request(self) -> None:
         self.requests += 1
