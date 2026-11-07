@@ -96,10 +96,10 @@ says so before it starts. Prefer categories and severities over CWEs.
 | --- | --- |
 | `--cost-limit USD` | Model-spend ceiling for the run. Default from `data/limits.yaml`. Interactive runs may ask to raise it; non-interactive runs stop (exit 3). Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
 | `--max-requests N` | Hard cap on total requests to the target. |
-| `--max-attempts N` | Cap on probe attempts per finding. |
+| `--max-attempts N` | Cap on agent steps per finding (each step is one planner call: a tool call or the verdict). Default 12. Reaching it ends the finding `inconclusive` with `limits_hit: attempts`. |
 | `--max-calls N` | Cap on model calls (planning steps) for the run, for every profile. |
 | `--max-duration S` | Wall-clock cap; cancellable mid-run. |
-| `--rate RPS` | Max request rate to the target. |
+| `--rate RPS` | Max request rate to the target and its login endpoints: every request, redirect hops and the proof browser's included, waits until it is 1/RPS seconds after the previous one. `0` turns the rate limit off. |
 
 ### Output mode and run mode
 

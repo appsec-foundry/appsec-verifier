@@ -20,8 +20,9 @@ limits:
   # Hard cap on total HTTP requests sent to the target across the run.
   max_requests: 2000
 
-  # Cap on probe attempts for a single finding before it is called inconclusive.
-  max_attempts: 40
+  # Cap on agent steps (planning calls, each one tool call or the verdict) for a
+  # single finding before it is called inconclusive (limits_hit: attempts).
+  max_attempts: 12
 
   # Wall-clock ceiling for the whole run, in seconds (default 30 min).
   max_duration_s: 1800
@@ -29,7 +30,8 @@ limits:
   # Per-finding wall-clock ceiling, in seconds (default 3 min).
   max_finding_duration_s: 180
 
-  # Maximum request rate to the target, requests per second.
+  # Maximum request rate to the target and its login endpoints, requests per
+  # second; requests, the proof browser's included, are spaced 1/rate_rps apart.
   rate_rps: 5
 
   # Retries for a transient transport error (not for a side-effecting probe with

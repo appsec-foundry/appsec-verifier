@@ -256,7 +256,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
     sessions = SessionManager(identities, http, env=os.environ)
     source = SourceReader(args.source) if args.source else None
-    registry = agent_registry(planner_factory)
+    registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
     contact = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
     browser, browser_note = _proof_browser(args, http, sel)
 

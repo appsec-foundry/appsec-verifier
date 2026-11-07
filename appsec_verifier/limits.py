@@ -1,6 +1,8 @@
 """Execution bounds enforced outside the model (VER-015): total requests, cost,
-and wall-clock time. Reaching a bound raises LimitExceeded so the caller stops
-the affected work rather than pressing on.
+model calls, wall-clock time and the request rate. Reaching a bound raises
+LimitExceeded so the caller stops the affected work rather than pressing on;
+the rate is kept by waiting, not by refusing. `max_attempts` bounds the agent
+steps per finding and is applied by the agent loop (agent/loop.py).
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ class LimitExceeded(Exception):
 class Limits:
     cost_limit_usd: float = 10.0
     max_requests: int = 2000
-    max_attempts: int = 40
+    max_attempts: int = 12
     max_calls: int = 500
     max_duration_s: float = 1800
     rate_rps: float = 5
@@ -39,15 +41,28 @@ class Limits:
 
 
 class RunBudget:
-    """Tracks consumption against the limits. `clock` is injectable for tests."""
+    """Tracks consumption against the limits. `clock` and `sleep` are injectable for tests."""
 
-    def __init__(self, limits: Limits, clock=time.monotonic):
+    def __init__(self, limits: Limits, clock=time.monotonic, sleep=time.sleep):
         self.limits = limits
         self._clock = clock
+        self._sleep = sleep
         self.start = clock()
         self.requests = 0
         self.cost = 0.0
         self.calls = 0
+        self._next_request_at: float | None = None
+
+    def pace(self) -> None:
+        """Wait until the next request may be sent under `rate_rps`: requests are
+        spaced at least 1/rate_rps seconds apart, with no burst (VER-015)."""
+        if not self.limits.rate_rps or self.limits.rate_rps <= 0:
+            return
+        now = self._clock()
+        if self._next_request_at is not None and now < self._next_request_at:
+            self._sleep(self._next_request_at - now)
+            now = self._next_request_at
+        self._next_request_at = now + 1.0 / self.limits.rate_rps
 
     def note_call(self) -> None:
         """Count one model call; refuse it once the run's call cap is reached."""

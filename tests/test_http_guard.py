@@ -113,6 +113,21 @@ def test_same_origin_is_false_for_unparseable_urls():
     assert not same_origin("not a url", "not a url")
 
 
+def test_every_request_and_redirect_hop_is_paced_to_the_rate():
+    now, slept = [0.0], []
+
+    def sleep(s):
+        slept.append(s)
+        now[0] += s
+
+    budget = RunBudget(Limits(rate_rps=2), clock=lambda: now[0], sleep=sleep)
+    hops = iter([Resp(302, {"Location": "/b"}), Resp(200), Resp(200)])
+    http = GuardedHttpClient(ScopeGuard(SCOPE), budget, lambda m, u, h, **k: next(hops))
+    http.request("GET", "https://app.example.com/a")      # two requests: /a and its redirect /b
+    http.request("GET", "https://app.example.com/c")
+    assert slept == [0.5, 0.5]
+
+
 WINDOW = {"from": "2026-01-01T00:00:00Z", "until": "2026-01-02T00:00:00Z"}
 
 

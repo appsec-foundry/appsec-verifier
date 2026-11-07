@@ -1,8 +1,8 @@
 """Scope- and budget-confined HTTP client (VER-001, VER-017, VER-018, VER-015).
 
 Every request, each redirect hop included, is authorised by the ScopeGuard and
-checked against the authorisation window before it is sent, and counted
-against the RunBudget. Credentials (Authorization, Cookie, proxy auth) are
+checked against the authorisation window before it is sent, paced to the
+run's request rate, and counted against the RunBudget. Credentials (Authorization, Cookie, proxy auth) are
 dropped, never forwarded, when a redirect leads to a different origin. Only
 the methods in ALLOWED_METHODS are ever sent, whoever asks; DELETE and every
 other method are refused here (VER-014). Safe mode narrows this further to
@@ -80,6 +80,7 @@ class GuardedHttpClient:
             decision = self._guard.authorize(url, purpose)
             if not decision.allowed:
                 raise ScopeViolation(decision.reason)
+            self._budget.pace()                   # VER-015: --rate, before the checks it may outlast
             self._guard.check_window()            # VER-001: the window may close mid-run
             self._budget.check_time()
             self._budget.note_request()
