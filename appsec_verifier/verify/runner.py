@@ -53,6 +53,7 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
         "observations": res.observations,
         "limits_hit": res.limits_hit,
         "evidence": res.evidence,
+        "poc": res.poc,
         "target_location": res.target_location or (
             {"source_file": plan.instance.rsplit(":", 1)[0], "source_line": None} if plan.instance else None
         ),

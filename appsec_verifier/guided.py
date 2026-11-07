@@ -396,7 +396,8 @@ def _free_dir(path: Path) -> str:
 _VALUE_OPTIONS = (("identities", "--identities"), ("source", "--source"), ("output", "--output"),
                   ("category", "--category"), ("cls", "--class"), ("severity", "--severity"),
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
-                  *((attr, flag) for attr, flag, *_ in _LIMITS), ("profile", "--profile"), ("model", "--model"))
+                  *((attr, flag) for attr, flag, *_ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
+                  ("screenshots", "--screenshots"))
 _FLAGS = (("print_results", "--print"), ("append", "--append"), ("annotate", "--annotate"),
           ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"), ("read_only", "--read-only"),
           ("dry_run", "--dry-run"), ("headful", "--headful"))

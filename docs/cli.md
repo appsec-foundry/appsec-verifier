@@ -6,7 +6,7 @@ one at a time against the application and writes a verification report. It
 never re-runs or re-scores the static assessment. For installation and a quick
 start, see the [README](../README.md).
 
-The requirement IDs (VER-001 to VER-033, [`requirements.md`](../requirements.md))
+The requirement IDs (VER-001 to VER-035, [`requirements.md`](../requirements.md))
 are cited per command and option.
 
 ## Commands
@@ -199,6 +199,7 @@ retried; the only resend is one new login after the target answers 401.
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
 | `--dry-run` | Resolve selection + scope and print the plan; send nothing to the target. | VER-008 |
 | `--headful` | Run the proof browser visibly (local debugging only). | VER-009 |
+| `--screenshots CLASSES` | Classes that get screenshots, comma-separated: `xss`, `access-control`; or `none`. Default `xss,access-control`. Without screenshots an XSS proof still holds. | VER-035 |
 | `--profile NAME` | Model profile (below), as in AppSec Analyzer. Default `claude`; required with `--non-interactive`. | VER-023 |
 | `--model NAME` | Model for the selected profile; default is the profile's model. | — |
 
@@ -256,14 +257,43 @@ The code checks them against what the tools returned (`agent/proof.py`):
   `proof_steps` are needed.
 
 A `confirmed` verdict that fails its check becomes `inconclusive` ("indicative,
-not proven: …"), with the model's claim kept in the rationale. When the check
-passes, the code's record replaces the model's evidence. For access control,
-injection, open redirect and path traversal that is
-`evidence/<finding>-exchanges.json` (owner-only): per cited step the method,
-path, parameters, body, identity, status, length and a hash of the redacted
-response body, no response body and no headers. For SSRF it is
+not proven: …"), with the model's claim kept in the rationale. Evidence the
+model lists itself is never taken over. When the check passes, the code adds
+the record it checked. For access control, injection, open redirect and path
+traversal that is `evidence/<finding>-exchanges.json` (owner-only): per cited
+step the method, path, parameters, body, identity, status, length and a hash
+of the redacted response body. For SSRF it is
 `evidence/<finding>-callback-hits.json` with time, method and source address of
 each hit.
+
+**Proof of concept (VER-034).** Every finding the agent tested gets a proof of
+concept, whatever the verdict, also when a limit stopped it. The code records
+each request an agent step sent to the target and the response to it:
+`http_request` one exchange (two when it renewed a session after a 401),
+`browser_check` every request of the page that the guarded client answered,
+with bodies only for documents, XHR and fetch. They are written to
+`evidence/<finding>-poc.har` (HTTP Archive 1.2, owner-only), which Burp, ZAP or
+a browser's developer tools can import. Each entry names its step (`_step`),
+and `_decisive` marks the steps the verdict rests on: for a confirmed verdict
+the steps its proof check used, for XSS also the `browser_check` in which the
+marker executed and for SSRF the request that reached the listener; for any
+other verdict the steps it cites in `proof_steps`. The report lists every step
+in one line and shows the decisive ones as raw HTTP: the request in full, and
+of the response the status, the headers and 1,500 characters of the body around
+the part that decides (the marker file's content, the XSS marker, the first
+difference between two injection answers, otherwise the start). The model sees
+none of this beyond its own tool results.
+
+Before an exchange is recorded, headers the identity added read
+`[identity <role>]`. The values of `Authorization`, `Cookie` and `Set-Cookie`
+(cookie names and attributes stay), of other headers whose name contains
+`token`, `secret`, `passw`, `api-key`, `session`, `credential` or the word
+`auth`, of query parameters named that way, every credential value the run
+knows and every JWT read `[redacted]`. Bodies are kept up to 256 KiB each after
+redaction and up to 4 MiB for all bodies of a finding, binary bodies only with
+type, length and hash. Other data the
+target returned stays, because the proof needs it: the report says to review
+the evidence before sharing it, and `export` never references the HAR file.
 
 **Markers for path traversal and SSRF (VER-012).** These probes are aimed only
 at harmless markers. In a path-traversal probe, a parameter or body value that
@@ -306,10 +336,26 @@ that shows a parameter through `alert()` by design would display it without
 any injected script. A `confirmed` XSS verdict without such an
 executed marker is downgraded to `inconclusive` ("indicative, not executed"),
 whatever the model says. On execution the browser draws a banner and saves a
-screenshot and a JSON event record under `evidence/` (owner-only). Screenshots
-can show target data; the report marks them for review before sharing, and the
-Analyzer export never references them. Without Playwright or Chrome the
-`Browser` line in the run settings says so and XSS findings cannot be confirmed.
+JSON event record under `evidence/` (owner-only) and, unless `--screenshots`
+leaves out `xss`, a screenshot. Its caption names the finding, the URL as
+requested, the identity, the time and the element that carries the payload,
+which is outlined in red; the page is moved clear of banner and caption. The
+proof does not depend on the screenshot. Screenshots can show target data; the
+report marks them for review before sharing, and the Analyzer export never
+references them. Without Playwright or Chrome the `Browser` line in the run
+settings says so and XSS findings cannot be confirmed. The line also names the
+classes that get screenshots.
+
+**Access-control screenshots (VER-035).** For a confirmed access-control
+finding, each decisive response that is an HTML page is rendered in the proof
+browser from the recorded, redacted response. Only the page itself is answered;
+images, styles and scripts are aborted and scripts are off, so nothing is sent
+to the target and the page may look unstyled. A JSON or other response gets no
+screenshot; its proof is in the HAR file. The caption names finding, step,
+request, identity, status and time. Up to three values the model names in
+`highlight`, such as the other identity's email, are marked in yellow when
+they occur in the response. The browser starts for this only when an
+access-control finding is selected and `--screenshots` includes the class.
 
 **Safe mode (default, VER-030).** Without `--allow-intrusive` the run stays
 read-only, even when the scope permits state change. It sends the most harmless
@@ -561,8 +607,9 @@ files or a model prompt; only the role name is passed on, and recorded requests
 are stripped of Authorization headers, cookies and token parameters (VER-016,
 VER-022). If the target echoes a credential, every value the run knows (each
 `*_env` value and each token obtained, also JSON-escaped and URL-encoded) is
-replaced by `[redacted]` in tool results and in the report. Values shorter
-than 4 characters are not replaced, and screenshots are not redacted.
+replaced by `[redacted]` in tool results, the report and the proof of
+concept. Values shorter than 4 characters are not replaced, and XSS screenshots
+are not redacted.
 
 ### Limits — `data/limits.yaml`
 
@@ -576,7 +623,7 @@ per run (VER-015).
 Written to `--output` (default `./verification`):
 
 - `verification.md` — the report: one section per finding with verdict,
-  evidence and the authorisation context.
+  evidence and its proof of concept, and the authorisation context.
 - `verification.yaml` — the same results as data
   (`schemas/verification.schema.yaml`), each entry linked to its finding by id
   and `match_key` (VER-007, VER-020).
@@ -588,11 +635,12 @@ Written to `--output` (default `./verification`):
   (VER-017). It holds no response bodies or source text, credential values are
   redacted (VER-016), and only the owner can read it. `--append` extends it;
   otherwise each run starts it fresh.
-- `evidence/` — owner-only proof records: `<finding>-exchanges.json` and
-  `<finding>-callback-hits.json` (see proof per class above), and for an XSS
-  marker that executed `<finding>-xss-<n>.json` with a screenshot `.png`.
-  Screenshots are not redacted and are marked for review before sharing
-  (VER-022).
+- `evidence/` — owner-only: `<finding>-poc.har` for every tested finding (see
+  proof of concept above), the proof records `<finding>-exchanges.json` and
+  `<finding>-callback-hits.json` (see proof per class above), for an XSS marker
+  that executed `<finding>-xss-<n>.json` with a screenshot `.png`, and
+  `<finding>-access-control-<n>.png`. XSS screenshots are not redacted.
+  Responses and screenshots are marked for review before sharing (VER-022).
 - `security-assessment.annotated.yaml` — only with `--annotate`; with
   `--in-place` the assessment itself is changed instead (VER-027).
 

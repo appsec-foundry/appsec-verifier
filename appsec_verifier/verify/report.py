@@ -1,13 +1,22 @@
 """Serialize a verification run: the standalone report (verification.yaml +
 verification.md, VER-020), the AppSec Analyzer re-ingest export (VER-021), and
 an additive assessment annotation (VER-027).
+
+Each tested finding's section in verification.md ends with its proof of
+concept (VER-034): one line per step and the decisive steps as raw HTTP, in
+code fences that target content cannot close, and its screenshots (VER-035).
+Recorded responses and screenshots can show target data; the report says so
+and the export never references them (VER-022).
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
+
+from .poc import TARGET_DATA_NOTE
 
 _VERDICT_LABEL = {
     "confirmed": "confirmed",
@@ -76,6 +85,8 @@ def to_markdown(doc: dict) -> str:
         f"{'read-only' if meta.get('safety', {}).get('read_only') else 'state-changing'} · "
         f"target contacted: {meta.get('contacted_target')}",
         f"- **Generated:** {meta.get('generated')} · verifier {meta.get('verifier_version')}",
+        *([f"- **Evidence:** the proofs of concept and screenshots below {TARGET_DATA_NOTE}"]
+          if any(r.get("poc") or r.get("evidence") for r in results) else []),
         "",
         "## Summary",
         "",
@@ -100,8 +111,36 @@ def to_markdown(doc: dict) -> str:
         for ev in r.get("evidence") or []:
             note = f" ({ev['note']})" if ev.get("note") else ""
             lines.append(f"- evidence: {ev.get('kind')} → {ev.get('path')}{note}")
+        lines += _poc_markdown(r)
         lines.append("")
     return "\n".join(lines)
+
+
+def _fenced(text: str, info: str = "http") -> str:
+    """`text` in a code fence longer than any backtick run inside it, so target content cannot close it."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{info}\n{text}\n{fence}"
+
+
+def _poc_markdown(r: dict) -> list[str]:
+    """The proof of concept (VER-034): one line per step, then the steps the verdict rests on as raw HTTP."""
+    poc = r.get("poc") or {}
+    if not poc.get("steps"):
+        return []
+    out = ["", "#### Proof of concept", ""]
+    if poc.get("file"):
+        out += [f"All requests and responses: `{poc['file']}` (HAR, {TARGET_DATA_NOTE}).", ""]
+    # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.
+    out.append(_fenced("\n".join(f"step {s['step']}: {s['line']}" + (" (shown below)" if s.get("decisive") else "")
+                                 for s in poc["steps"]), "text"))
+    for shown in poc.get("shown") or []:
+        out += ["", f"Step {shown['step']}, request:", "", _fenced(shown["request"]), "",
+                "Response:", "", _fenced(shown["response"])]
+    for ev in r.get("evidence") or []:
+        if ev.get("kind") == "screenshot" and ev.get("path"):
+            out += ["", f"![Screenshot {ev['path']}]({ev['path']})"]
+    return out
 
 
 def build_annotations(doc: dict, *, verification_report: str) -> dict:
@@ -120,9 +159,9 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
             "rationale": r.get("rationale"),
             "verified_at": meta.get("generated"),
             "result_ref": r.get("result_id"),
-            # Screenshots can show target data and stay out of the export (VER-022).
+            # Screenshots and recorded responses can show target data and stay out of the export (VER-022).
             "evidence_ref": next((e.get("path") for e in r.get("evidence") or []
-                                  if e.get("kind") != "screenshot"), None),
+                                  if e.get("kind") not in ("screenshot", "har")), None),
         })
     return {
         "meta": {

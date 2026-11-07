@@ -28,6 +28,7 @@ class ProbeResult:
     evidence: list[dict] = field(default_factory=list)
     target_location: dict | None = None
     limits_hit: str | None = None
+    poc: dict | None = None            # proof of concept recorded by the code (VER-034, verify/poc.py)
 
 
 @dataclass

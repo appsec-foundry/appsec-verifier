@@ -23,7 +23,7 @@ if os.environ.get("APPSEC_VERIFIER_BROWSER_TESTS") != "1":
 from appsec_verifier.limits import Limits, RunBudget  # noqa: E402
 from appsec_verifier.scope import ScopeGuard  # noqa: E402
 from appsec_verifier.tools import GuardedHttpClient  # noqa: E402
-from appsec_verifier.tools.browser import ProofBrowser, marker_expression  # noqa: E402
+from appsec_verifier.tools.browser import SCREENSHOT_NOTE, ProofBrowser, marker_expression  # noqa: E402
 
 SCOPE = {"base_url": "https://shop.example.com", "hosts": ["shop.example.com"], "ports": [443],
          "schemes": ["https"], "path_prefixes": ["/"]}
@@ -131,3 +131,45 @@ def test_udp_from_the_page_never_leaves_chrome(browser):
     finally:
         sock.close()
     assert received == 0
+
+
+def test_screenshot_marks_the_payload_and_names_the_proof(browser):
+    """VER-035: a caption and an outline on the element that carries the payload."""
+    import json
+
+    b, _, tmp = browser
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+    result = b.check(BASE + "/reflect?q=" + quote(payload, safe=""), identity_headers={}, target_base=BASE,
+                     marker=MARKER, finding_id="T-1", wait_ms=300, safe=True, role="customer-a")
+    kinds = {e["kind"]: e for e in result["evidence"]}
+    event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
+    assert event["marked_elements"] == 1
+    pages = [x for x in result["_exchanges"] if x["navigation"]]
+    assert len(pages) == 1 and pages[0]["status"] == 200 and b"Results for" in pages[0]["content"]
+
+
+def test_screenshots_can_be_turned_off_without_losing_the_proof(tmp_path):
+    target = Target()
+    http = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target)
+    b = ProofBrowser(http, tmp_path / "evidence", screenshots=())
+    try:
+        payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+        result = _check(b, "/reflect?q=" + quote(payload, safe=""))
+    finally:
+        b.close()
+    assert result["executed"] is True
+    assert [e["kind"] for e in result["evidence"]] == ["browser-event"]
+    assert not list((tmp_path / "evidence").glob("*.png"))
+
+
+def test_render_draws_a_recorded_page_without_contacting_the_target(browser):
+    """VER-035: an access-control screenshot comes from the record; its images and scripts are never fetched."""
+    b, target, tmp = browser
+    html = ('<html><body><h1>Basket of bob@shop.test</h1><img src="/logo.png">'
+            '<script src="https://shop.example.com/app.js"></script></body></html>')
+    [shot] = b.render(url=BASE + "/basket/2", status=200, content_type="text/html", html=html, finding_id="T-2",
+                      caption=["AppSec Verifier · T-2 · access control"], highlight=["bob@shop.test"])
+    assert target.seen == []
+    assert shot["marked"] == 1 and shot["note"] == SCREENSHOT_NOTE
+    path = tmp / shot["path"]
+    assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" and stat.S_IMODE(path.stat().st_mode) == 0o600

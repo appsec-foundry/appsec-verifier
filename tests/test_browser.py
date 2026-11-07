@@ -7,6 +7,7 @@ see test_browser_live.py."""
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,7 +16,7 @@ import pytest
 
 from appsec_verifier.agent import AgentProbe, AgentTools, ToolError
 from appsec_verifier.agent.prompts import _system
-from appsec_verifier.cli import _proof_browser
+from appsec_verifier.cli import _proof_browser, screenshot_option
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
@@ -289,8 +290,9 @@ def _sel(cls):
 
 
 def test_browser_is_prepared_only_for_xss_and_reports_when_unavailable(monkeypatch, tmp_path):
-    args = SimpleNamespace(output=str(tmp_path), headful=False)
+    args = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="xss")
     assert _proof_browser(args, None, _sel("access-control")) == (None, None)
+    assert _proof_browser(args, None, _sel("injection")) == (None, None)
 
     def missing():
         raise BrowserUnavailable("install appsec-verifier[browser] (Playwright) and Google Chrome")
@@ -300,7 +302,46 @@ def test_browser_is_prepared_only_for_xss_and_reports_when_unavailable(monkeypat
     assert browser is None and "cannot be confirmed" in note
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
     browser, note = _proof_browser(args, None, _sel("xss"))
-    assert isinstance(browser, ProofBrowser) and "first use" in note
+    assert isinstance(browser, ProofBrowser) and "first use" in note and "screenshots: xss" in note
+    assert browser.screenshots == {"xss"}
+
+
+def test_access_control_screenshots_need_the_browser_only_when_on(monkeypatch, tmp_path):
+    def missing():
+        raise BrowserUnavailable("no chrome")
+
+    monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(missing))
+    on = SimpleNamespace(output=str(tmp_path), headful=False, screenshots=None)     # the default: both classes
+    browser, note = _proof_browser(on, None, _sel("access-control"))
+    assert browser is None and "get no screenshot" in note
+    monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
+    browser, note = _proof_browser(on, None, _sel("access-control"))
+    assert browser.screenshots == {"xss", "access-control"} and "screenshots: xss, access-control" in note
+    off = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="none")
+    assert _proof_browser(off, None, _sel("access-control")) == (None, None)
+    browser, note = _proof_browser(off, None, _sel("xss"))      # XSS still needs the browser for its proof
+    assert browser.screenshots == frozenset() and "screenshots: none" in note
+
+
+@pytest.mark.parametrize("value, parsed", [("xss", "xss"), ("access-control, XSS", "xss,access-control"),
+                                           ("none", "none")])
+def test_screenshot_option_accepts_known_classes(value, parsed):
+    assert screenshot_option(value) == parsed
+
+
+@pytest.mark.parametrize("value", ["", "sqli", "xss,none", "xss,open-redirect"])
+def test_screenshot_option_refuses_anything_else(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        screenshot_option(value)
+
+
+def test_answer_hands_back_the_exchange_for_the_proof_of_concept():
+    t = Transport([SimpleNamespace(status_code=200, headers={"content-type": "text/html"}, content=b"<p>x</p>")])
+    out = _answer(t, headers={"accept": "text/html"}, identity={"Authorization": "Bearer AAA"})
+    assert out.exchange["method"] == "GET" and out.exchange["status"] == 200
+    assert out.exchange["content"] == b"<p>x</p>"
+    assert ("Authorization", "Bearer AAA") in out.exchange["headers"]   # raw; redacted when AgentTools records it
+    assert "AAA" not in repr(out)                                           # never in a printed Fulfil
 
 
 def test_launch_failure_leaves_xss_unproven(tmp_path):

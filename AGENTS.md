@@ -6,7 +6,7 @@ whether the weakness reproduces. It is an active security test tool, so its
 safety controls are part of the product, not optional hardening.
 
 User-facing overview: `README.md`. Command reference: `docs/cli.md`.
-Requirements (VER-001 … VER-033): `requirements.md`.
+Requirements (VER-001 … VER-035): `requirements.md`.
 
 ## Setup and checks
 
@@ -64,7 +64,7 @@ summary instead.
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/sessions.py` | sessions per test identity; secrets come from env vars |
 | `agent/` | agent loop and narrow tool set; model profiles (`profiles.py`), the shared action schemas and prompts (`prompts.py`), the step contract (`steps.py`), `HostPlanner` (`hosts.py`) with one `host_*.py` per CLI/API |
-| `verify/` | runner (injectable, offline-testable), probes, report/export/annotate |
+| `verify/` | runner (injectable, offline-testable), probes, proof of concept per finding (`poc.py`), report/export/annotate |
 | `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`, `model-catalog.yaml`, `anthropic-model-catalog.yaml`) |
 | `examples/` | sample scope and identities files |
 
@@ -96,7 +96,9 @@ needs an explicit decision from the maintainer, not a workaround.
   `codex-cli`), it is a breach that stops all later model calls. Keep the
   isolation flags in line with AppSec Analyzer's adapters.
 - The proof browser (`tools/browser.py`) never connects by itself: every page
-  request goes through `answer()` and the `GuardedHttpClient`, or is aborted.
+  request goes through `answer()` and the `GuardedHttpClient`, is answered from
+  a recorded response (`render`, access-control screenshots, scripts off), or
+  is aborted.
   Chrome runs in a network namespace without network access
   (`unshare --user --net`); without it the browser does not start.
 - The SSRF callback listener (`tools/callback.py`) binds only to loopback, is

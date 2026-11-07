@@ -34,6 +34,7 @@ the exchange, for a timing proof of injection (VER-011).
 from __future__ import annotations
 
 import hashlib
+import json as jsonlib
 import re
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
@@ -42,6 +43,7 @@ import httpx
 
 from ..auth.sessions import AuthError
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
+from ..verify import poc
 from .source_reader import SourceAccessError
 
 _BODY_EXCERPT = 600
@@ -124,6 +126,25 @@ class AgentTools:
         self._marker_content = marker_file.get("content") or None
         path = str(marker_file.get("path") or "").replace("\\", "/")
         self._marker_name = PurePosixPath(path).name or None
+        self._exchanges: list[dict] = []
+        self._kept = 0                    # body characters this finding's proof of concept holds so far
+
+    def take_exchanges(self) -> list[dict]:
+        """The redacted exchanges the last tool call sent and received, for the proof of concept (VER-034).
+        They never go into a tool result, so the model does not see them."""
+        out, self._exchanges = self._exchanges, []
+        return out
+
+    def _record(self, raw: dict, role: str | None, identity: dict, *, keep_body: bool = True,
+                navigation: bool = False) -> None:
+        omit = None if keep_body else "body not kept for this resource type"
+        if omit is None and self._kept >= poc.MAX_FINDING_BODY_CHARS:
+            omit = "body not kept: the finding's proof of concept reached its size limit"
+        sessions = self.ctx.sessions
+        e = poc.entry(raw, redact=sessions.redact if sessions is not None else None, identity=identity, role=role,
+                      omit_body=omit, navigation=navigation)
+        self._kept += len(e["response"]["content"].get("text") or "")
+        self._exchanges.append(e)
 
     def call(self, name: str, args: dict) -> dict:
         tool = {"http_request": self.http_request, "read_source": self.read_source,
@@ -168,11 +189,15 @@ class AgentTools:
             raise ToolError("wait_ms must be an integer number of milliseconds")
         try:
             # The browser attaches the identity headers only to requests for `origin` (VER-018).
-            return self.ctx.browser.check(url, identity_headers=headers, target_base=origin,
-                                          marker=self.ctx.marker, finding_id=self.ctx.plan.id, wait_ms=wait_ms,
-                                          safe=self.ctx.safe or self.ctx.read_only)
+            result = self.ctx.browser.check(url, identity_headers=headers, target_base=origin,
+                                            marker=self.ctx.marker, finding_id=self.ctx.plan.id, wait_ms=wait_ms,
+                                            safe=self.ctx.safe or self.ctx.read_only, role=role)
         except BrowserError as exc:
             raise ToolError(str(exc)) from exc
+        for raw in result.pop("_exchanges", None) or []:
+            self._record(raw, role, headers, keep_body=raw.get("keep_body", True),
+                         navigation=raw.get("navigation", False))
+        return result
 
     def _url(self, path) -> str:
         """An absolute http(s) URL as given, anything else appended below the target base URL.
@@ -218,12 +243,14 @@ class AgentTools:
             headers = self._session_headers(role)
         try:
             resp = self._send(m, url, headers, params, json)
+            self._record(self._sent(resp, m, url, headers, params, json), role, headers)
             # VER-028: re-obtain the session once when the target rejects it as unauthenticated (401).
             # A 403 is an authorisation answer, often the very result under test; a new login cannot change it.
             if getattr(resp, "status_code", None) == 401 and role and self.ctx.sessions is not None:
                 self.ctx.sessions.invalidate(role)
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json)
+                self._record(self._sent(resp, m, url, headers, params, json), role, headers)
         except ScopeViolation as exc:
             raise ToolError(f"request refused — out of scope: {exc}") from exc
         except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
@@ -254,6 +281,19 @@ class AgentTools:
         if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:
             out["callback_hit"] = self.ctx.listener.wait_for("".join(self.ctx.marker), _CALLBACK_WAIT_S)
         return out
+
+    @staticmethod
+    def _sent(resp, method, url, headers, params, body) -> dict:
+        """The exchange as sent: the transport's own record when it keeps one, else what this tool passed on."""
+        sent_headers = dict(headers)
+        if body is not None:
+            sent_headers.setdefault("content-type", "application/json")
+        try:
+            full = str(httpx.URL(url, params=params)) if params else url
+        except (TypeError, ValueError, httpx.InvalidURL):
+            full = url
+        return poc.capture(resp, method=method, url=full, headers=sent_headers,
+                           body=None if body is None else jsonlib.dumps(body))
 
     def _send(self, method, url, headers, params, json):
         kwargs = {}

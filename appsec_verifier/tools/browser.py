@@ -17,9 +17,17 @@ available, the browser does not start and XSS stays unproven.
 Only evaluation proves execution: the payload must call alert() with an
 expression that joins the two marker parts at runtime, and only a dialog whose
 message equals the joined marker counts. A page that merely echoes the payload
-text shows the expression, not its value. On execution a banner is drawn, and
-one screenshot plus a JSON event record are saved owner-only under evidence/.
-Screenshots can show target data, so their evidence entry says so.
+text shows the expression, not its value. On execution a banner is drawn and a
+JSON event record is saved owner-only under evidence/, with a screenshot when
+screenshots are on for XSS (VER-035): a caption names finding, URL, identity
+and time, and the elements that carry the payload are outlined. Each request
+the guarded client answered is handed back for the proof of concept (VER-034),
+bodies only for documents, XHR and fetch.
+
+`render` screenshots a recorded HTML response for an access-control proof
+(VER-035): the page is answered from the record, every other request is
+aborted and scripts are off, so it sends nothing to the target. Screenshots can
+show target data, so their evidence entry says so.
 """
 
 from __future__ import annotations
@@ -33,10 +41,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
+from ..verify.poc import BODY_RESOURCE_TYPES, MAX_BROWSER_EXCHANGES, MAX_RAW_BYTES, TARGET_DATA_NOTE, capture
 from .http import ScopeViolation, same_origin
 
 _SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
@@ -51,7 +61,9 @@ _CHROME_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND", "--no-pings", "--disabl
 # A new user and network namespace with the caller's uid: no network but loopback, and
 # Chrome is not root inside it, so its own sandbox still starts.
 _NETNS_ARGS = ("--user", "--net", "--map-current-user")
-SCREENSHOT_NOTE = "may show target data; review before sharing"
+SCREENSHOT_NOTE = TARGET_DATA_NOTE
+SCREENSHOT_CLASSES = ("xss", "access-control")
+_HIGHLIGHT = "#b00020"
 
 
 def _chrome_binary() -> str | None:
@@ -103,6 +115,7 @@ class Fulfil:
     status: int
     headers: dict
     body: bytes
+    exchange: dict | None = field(default=None, repr=False)   # raw capture for the proof of concept
 
 
 @dataclass
@@ -148,7 +161,8 @@ def answer(method: str, url: str, headers: dict, body: bytes | None, *, http, id
             out[name] += ("\n" if name == "set-cookie" else ", ") + str(value)
         else:
             out[name] = str(value)
-    return Fulfil(int(getattr(resp, "status_code", 0) or 0), out, content)
+    return Fulfil(int(getattr(resp, "status_code", 0) or 0), out, content,
+                  capture(resp, method=method, url=url, headers=send, body=body))
 
 
 def _init_script(parts: tuple[str, str]) -> str:
@@ -156,6 +170,7 @@ def _init_script(parts: tuple[str, str]) -> str:
   const marker = __MARKER__;
   const banner = () => { try {
     const d = document.createElement('div');
+    d.id = '__appsec_verifier_banner';
     d.textContent = 'AppSec Verifier: XSS marker ' + marker + ' executed';
     d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b00020;'
       + 'color:#fff;font:bold 16px sans-serif;padding:8px';
@@ -170,6 +185,65 @@ def _init_script(parts: tuple[str, str]) -> str:
     } });
   }
 })();""".replace("__MARKER__", json.dumps(parts[0] + parts[1]))
+
+
+# Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
+# payload, also quoted in the caption), text that equals one of `values` (access control), and a caption.
+# The page moves clear of the banner and the caption, so neither hides a mark. All text is set as text,
+# never parsed as HTML. Returns how many places were marked.
+_MARK_SCRIPT = """({part, values, lines, none, color}) => {
+  const marks = [];
+  const root = document.body || document.documentElement;
+  let carrier = null;
+  const outline = (el) => {
+    if (!el || el === root || marks.includes(el) || marks.length >= 20) return;
+    el.style.setProperty('outline', '4px solid ' + color, 'important');
+    el.style.setProperty('outline-offset', '2px', 'important');
+    marks.push(el);
+  };
+  if (part) {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.id === '__appsec_verifier_banner') continue;
+      const inAttr = Array.from(el.attributes || []).some((a) => String(a.value).includes(part));
+      const inScript = el.tagName === 'SCRIPT' && (el.textContent || '').includes(part);
+      if (!inAttr && !inScript) continue;
+      if (carrier === null) carrier = el.outerHTML;
+      outline(el.tagName === 'SCRIPT' ? el.parentElement : el);
+    }
+  }
+  if (values && values.length) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      for (const value of values) {
+        const at = node.nodeValue.indexOf(value);
+        if (at < 0 || marks.length >= 20) continue;
+        const hit = node.splitText(at);
+        hit.splitText(value.length);
+        const mark = document.createElement('mark');
+        mark.style.cssText = 'background:#ffeb3b;color:#000;outline:3px solid ' + color;
+        hit.parentNode.replaceChild(mark, hit);
+        mark.appendChild(hit);
+        marks.push(mark);
+        break;
+      }
+    }
+  }
+  const box = document.createElement('div');
+  const extra = carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]);
+  box.textContent = lines.concat(extra).join('\\n');
+  box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;white-space:pre-wrap;'
+    + 'word-break:break-all;background:rgba(17,17,17,.92);color:#fff;font:13px/1.4 monospace;'
+    + 'padding:8px 10px;border-top:3px solid ' + color;
+  root.appendChild(box);
+  const banner = document.getElementById('__appsec_verifier_banner');
+  const top = banner ? banner.getBoundingClientRect().height : 0;
+  root.style.setProperty('margin-top', (top + 8) + 'px', 'important');
+  root.style.setProperty('margin-bottom', (box.getBoundingClientRect().height + 8) + 'px', 'important');
+  if (marks[0] && marks[0].scrollIntoView) marks[0].scrollIntoView({block: 'center'});
+  return marks.length;
+}"""
 
 
 def _launch_chrome(headless: bool):
@@ -200,8 +274,10 @@ def _launch_chrome(headless: bool):
 class ProofBrowser:
     """One Chrome per run, started on first use; a fresh browser context per check."""
 
-    def __init__(self, http, evidence_dir: Path, *, headless: bool = True, launcher=_launch_chrome):
+    def __init__(self, http, evidence_dir: Path, *, headless: bool = True, launcher=_launch_chrome,
+                 screenshots=SCREENSHOT_CLASSES):
         self._http, self._dir, self._headless, self._launcher = http, Path(evidence_dir), headless, launcher
+        self.screenshots = frozenset(screenshots)     # the classes that get screenshots (VER-035)
         self._playwright = self._browser = None
         self._counts: dict[str, int] = {}
 
@@ -233,13 +309,27 @@ class ProofBrowser:
         self._browser = self._playwright = None
 
     def check(self, url: str, *, identity_headers: dict, target_base: str, marker: tuple[str, str],
-              finding_id: str, wait_ms: int, safe: bool) -> dict:
+              finding_id: str, wait_ms: int, safe: bool, role: str | None = None) -> dict:
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
         events: list[tuple[str, str]] = []
         blocked: list[dict] = []
         limits: list[Exception] = []
+        exchanges: list[dict] = []
+
+        def keep(request, outcome: Fulfil) -> None:
+            if outcome.exchange is None or len(exchanges) >= MAX_BROWSER_EXCHANGES:
+                return
+            try:
+                kind = request.resource_type
+                navigation = request.is_navigation_request() and request.frame.parent_frame is None
+            except Exception:  # noqa: BLE001 - e.g. a request without a frame; recorded without a body
+                kind, navigation = "other", False
+            body = outcome.exchange["content"]
+            kept = kind in BODY_RESOURCE_TYPES
+            exchanges.append({**outcome.exchange, "content": body[:MAX_RAW_BYTES] if kept else b"",
+                              "content_size": len(body), "navigation": navigation, "keep_body": kept})
 
         def on_route(route, request):
             from ..limits import LimitExceeded
@@ -257,6 +347,7 @@ class ProofBrowser:
                 blocked.append({"url": request.url[:300], "reason": outcome.reason})
                 route.abort("blockedbyclient")
             else:
+                keep(request, outcome)
                 route.fulfill(status=outcome.status, headers=outcome.headers, body=outcome.body)
 
         context = browser.new_context(service_workers="block", accept_downloads=False)
@@ -282,32 +373,90 @@ class ProofBrowser:
             executed = any(message == joined for _, message in events)
             result = {"executed": executed, "status": status, "final_url": page.url[:300],
                       "dialogs": [{"kind": k, "is_marker": m == joined} for k, m in events][:20],
-                      "blocked": blocked[:20]}
+                      "blocked": blocked[:20], "_exchanges": exchanges}
             if error:
                 result["error"] = error
             if executed:
-                result["evidence"] = self._save(page, finding_id, url, status, events, joined)
+                result["evidence"] = self._save(page, finding_id, url, status, events, marker, role)
             return result
         finally:
             context.close()
 
-    def _save(self, page, finding_id: str, url: str, status, events, joined: str) -> list[dict]:
+    def _stem(self, finding_id: str, kind: str) -> str:
+        n = self._counts[(finding_id, kind)] = self._counts.get((finding_id, kind), 0) + 1
+        return f"{re.sub(r'[^A-Za-z0-9_.-]', '_', finding_id)}-{kind}-{n}"
+
+    @staticmethod
+    def _mark(page, lines: list[str], *, part: str = "", values=(), none: str | None = None) -> int | None:
+        """Caption and highlights drawn over the page before its screenshot; None if the page refused them."""
+        try:
+            return int(page.evaluate(_MARK_SCRIPT, {"part": part, "values": list(values), "lines": lines,
+                                                    "none": none, "color": _HIGHLIGHT}))
+        except Exception:  # noqa: BLE001 - the screenshot is still taken, unmarked
+            return None
+
+    @staticmethod
+    def _entry(path: Path, kind: str, **extra) -> dict:
+        path.chmod(0o600)
+        return {"kind": kind, "path": f"evidence/{path.name}",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **extra}
+
+    def _save(self, page, finding_id: str, url: str, status, events, marker: tuple[str, str],
+              role: str | None) -> list[dict]:
         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        n = self._counts[finding_id] = self._counts.get(finding_id, 0) + 1
-        stem = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', finding_id)}-xss-{n}"
-        shot, record = self._dir / f"{stem}.png", self._dir / f"{stem}.json"
-        page.screenshot(path=str(shot))
-        record.write_text(json.dumps({
-            "finding_id": finding_id, "url": url, "status": status, "marker": joined,
-            "executed_via": sorted({k for k, m in events if m == joined}),
-            "captured": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        }, indent=2), encoding="utf-8")
-        entries = []
-        for path, kind in ((record, "browser-event"), (shot, "screenshot")):
-            path.chmod(0o600)
-            entry = {"kind": kind, "path": f"evidence/{path.name}",
-                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-            if kind == "screenshot":
-                entry.update(redacted=False, note=SCREENSHOT_NOTE)
-            entries.append(entry)
+        joined = marker[0] + marker[1]
+        stem = self._stem(finding_id, "xss")
+        record = self._dir / f"{stem}.json"
+        captured = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        via = sorted({k for k, m in events if m == joined})
+        data = {"finding_id": finding_id, "url": url, "status": status, "marker": joined, "executed_via": via,
+                "captured": captured}
+        shot = None
+        if "xss" in self.screenshots:
+            data["marked_elements"] = self._mark(
+                page, [f"AppSec Verifier · {finding_id} · XSS marker {joined} executed via {', '.join(via)}",
+                       f"{unquote(url)[:300]} as {role or 'anonymous'} → {status}", f"captured {captured}"],
+                part=marker[0], none="(the element that carries the payload was not found in the page)")
+            shot = self._dir / f"{stem}.png"
+            page.screenshot(path=str(shot))
+        record.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        entries = [self._entry(record, "browser-event")]
+        if shot is not None:
+            entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE))
         return entries
+
+    def render(self, *, url: str, status: int, content_type: str, html: str, finding_id: str,
+               caption: list[str], highlight=()) -> list[dict]:
+        """A screenshot of a recorded HTML response (VER-035). Only the page itself is answered, from the
+        record; every other request is aborted and scripts are off, so nothing reaches the target."""
+        from playwright.sync_api import Error as PlaywrightError
+
+        browser = self._ensure()
+        served: list[bool] = []
+
+        def on_route(route, request):
+            if not served and request.is_navigation_request():
+                served.append(True)
+                route.fulfill(status=status if 200 <= int(status or 0) < 600 else 200,
+                              headers={"content-type": content_type or "text/html"},
+                              body=html.encode("utf-8"))
+            else:
+                route.abort("blockedbyclient")
+
+        context = browser.new_context(service_workers="block", accept_downloads=False, java_script_enabled=False)
+        try:
+            context.route_web_socket(re.compile(".*"), lambda ws: ws.close())
+            context.route("**/*", on_route)
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
+            except PlaywrightError:
+                return []
+            marked = self._mark(page, caption, values=highlight,
+                                none="(no highlighted value was found in the page)" if highlight else None)
+            self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shot = self._dir / f"{self._stem(finding_id, 'access-control')}.png"
+            page.screenshot(path=str(shot))
+            return [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE, marked=marked)]
+        finally:
+            context.close()

@@ -65,8 +65,12 @@ def _tool_defs() -> list[dict]:
         },
         {
             "name": "submit_verdict",
-            "description": "Submit the final verdict for this finding and end the probe. A confirmed verdict "
-                           "lists in proof_steps the numbers of the steps that prove it; the Verifier checks them.",
+            "description": "Submit the final verdict for this finding and end the probe. List in proof_steps "
+                           "the numbers of the steps the verdict rests on, for every verdict; the report shows "
+                           "them as the proof of concept, and for a confirmed verdict the Verifier checks them. "
+                           "For a confirmed access-control verdict, highlight may name up to three short values "
+                           "copied from a cited response that show data the requesting identity must not see "
+                           "(e.g. the other identity's id or email); the screenshot marks them.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -74,6 +78,8 @@ def _tool_defs() -> list[dict]:
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                     "rationale": {"type": "string"},
                     "proof_steps": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+                    "highlight": {"type": "array", "maxItems": 3,
+                                  "items": {"type": "string", "minLength": 3, "maxLength": 200}},
                     "identities_used": {"type": "array", "items": {"type": "string"}},
                     "proof": {"type": "object"},
                     "evidence": {"type": "array", "items": {"type": "object"}},

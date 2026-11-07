@@ -177,12 +177,16 @@ describes the columns.
 `verify` writes to `--output` (default `./verification`):
 
 - `verification.md`: the report, with verdict, confidence and evidence per
-  finding.
+  finding, and the proof of concept: the requests the verdict rests on, as raw
+  HTTP with the decisive part of the response.
 - `verification.yaml`: the same results as data
   ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
-- `evidence/`: proof records and, for XSS, screenshots. Screenshots can show
-  data of the target; check them before you share them.
+- `evidence/`: per tested finding `<finding>-poc.har` with every request the
+  agent sent and the response to it, the proof records, and screenshots for
+  XSS and for access control on HTML pages (`--screenshots` chooses). Responses
+  and screenshots can show data of the target; check them before you share
+  them.
 
 `--print` also shows the verdicts in the terminal, and `--append` adds to an
 existing report. `--annotate` writes `security-assessment.annotated.yaml`, a
@@ -255,4 +259,4 @@ only tests the findings it is given.
 ## Development
 
 Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements
-VER-001 to VER-033: [`requirements.md`](requirements.md).
+VER-001 to VER-035: [`requirements.md`](requirements.md).

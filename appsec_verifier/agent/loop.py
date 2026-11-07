@@ -13,6 +13,9 @@ submits ends inconclusive, not refuted (VER-024). A confirmed verdict stands
 only if the code finds the proof its class requires (proof.py). Every step —
 tool call and outcome, refused proposal, stopping limit, verdict — goes to
 `ctx.log`, the run's action log (VER-017), and to `ctx.progress`, the console.
+What each step sent to the target and got back is kept apart from the history
+the planner sees and becomes the finding's proof of concept, whatever the
+verdict and also when a limit stops it (verify/poc.py, VER-034).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from ..limits import LimitExceeded
+from ..verify import poc
 from ..verify.probes import ProbeContext, ProbeResult
 from .proof import check_proof
 from .steps import check_action
@@ -54,7 +58,7 @@ def _result_from_verdict(v: dict) -> ProbeResult:
         state_changes=v.get("state_changes", []),
         deviation=v.get("deviation"),
         observations=v.get("observations", []),
-        evidence=v.get("evidence", []),
+        # The model's own account of evidence is not taken over: the code records it (VER-034).
     )
 
 
@@ -89,6 +93,13 @@ class AgentProbe:
         planner = self._planner_factory()
         tools = AgentTools(ctx)
         history: list[dict] = []
+        sent: list[dict] = []          # per step what went to the target and came back, never shown to the planner
+
+        def keep(step: int, name: str) -> None:
+            entries = tools.take_exchanges()
+            if entries:
+                sent.append({"step": step, "tool": name, "entries": entries})
+
         for step in range(1, self._max_steps + 1):
             try:
                 ctx.budget.check_time()
@@ -97,15 +108,16 @@ class AgentProbe:
                     ctx.progress.activity(step, self._max_steps)
                 proposal = planner.next_step(ctx, history)
             except LimitExceeded as exc:
-                return _stopped(ctx, step, exc)
+                return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
             action = check_action(proposal)   # VER-019: no unchecked arguments
             if "verdict" in action:
                 if action != proposal:        # the step contract refused what the planner proposed (VER-017)
                     _log(ctx, step, refused=action["verdict"]["rationale"],
                          proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP])
                 verdict = action["verdict"]
-                return _finish(ctx, step, check_proof(ctx, history, _result_from_verdict(verdict),
-                                                      verdict.get("proof_steps")))
+                result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
+                result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
+                return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
             if ctx.progress is not None:
                 ctx.progress.activity(step, self._max_steps, name, args)
@@ -114,10 +126,13 @@ class AgentProbe:
             except ToolError as exc:
                 result = {"error": str(exc)}
             except LimitExceeded as exc:
-                return _stopped(ctx, step, exc, tool=name, args=args)
+                keep(step, name)
+                return poc.attach(ctx, history, sent, _stopped(ctx, step, exc, tool=name, args=args), None)
+            keep(step, name)
             if ctx.sessions is not None:
                 result = ctx.sessions.redact(result)       # VER-016: no credential value reaches the planner
             _log(ctx, step, tool=name, args=args, result={k: result[k] for k in _LOGGED_RESULT if k in result})
             history.append({"tool": name, "args": args, "result": result})
-        return _finish(ctx, self._max_steps, ProbeResult(
-            verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"))
+        return _finish(ctx, self._max_steps, poc.attach(ctx, history, sent, ProbeResult(
+            verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"),
+            None))

@@ -281,8 +281,9 @@ properties:
         evidence:
           type: array
           description: |
-            Self-contained artefacts behind the verdict, redacted of credentials
-            and sensitive target data (VER-022).
+            Self-contained artefacts behind the verdict, recorded by the code and
+            redacted of credentials (VER-022, VER-034). Recorded responses (`har`)
+            and screenshots can show target data and carry a `note` saying so.
           items:
             type: object
             required: [kind, path]
@@ -294,10 +295,42 @@ properties:
                   `exchange` is the code's record of the steps a confirmed
                   access-control or injection verdict cites: request and status,
                   length and body hash of each response, no body (VER-010, VER-011).
+                  `har` holds every request of the finding and its response
+                  (VER-034); `screenshot` is an XSS page or a rendered
+                  access-control response (VER-035).
                 enum: [request, response, har, screenshot, browser-event, callback, note, exchange]
               path:     { type: string, description: Path under evidence/, relative to the report. }
               sha256:   { type: [string, "null"] }
               redacted: { type: [boolean, "null"] }
+              note:     { type: [string, "null"] }
+
+        poc:
+          type: [object, "null"]
+          description: |
+            Proof of concept recorded by the code (VER-034): the HAR file, one
+            line per step, and the steps the verdict rests on as raw HTTP with the
+            decisive part of the response. Null when nothing was sent.
+          additionalProperties: false
+          properties:
+            file: { type: [string, "null"], description: Path of the HAR file under evidence/. }
+            steps:
+              type: array
+              items:
+                type: object
+                required: [step, line, decisive]
+                properties:
+                  step:     { type: integer }
+                  line:     { type: string }
+                  decisive: { type: boolean }
+            shown:
+              type: array
+              items:
+                type: object
+                required: [step, request, response]
+                properties:
+                  step:     { type: integer }
+                  request:  { type: string }
+                  response: { type: string }
 
         timing:
           type: object
