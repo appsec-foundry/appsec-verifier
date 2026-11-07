@@ -192,7 +192,7 @@ def test_profile_selection_builds_a_host_planner(monkeypatch):
         _build_planner_factory(args, environ={})
     factory, info = _build_planner_factory(args, environ={"ANTHROPIC_API_KEY": "sk-test"})
     assert isinstance(factory(), HostPlanner)
-    assert info == {"profile": "anthropic-api", "model": "claude-opus-5-5", "runtime": "Anthropic API",
+    assert info == {"profile": "anthropic-api", "model": "claude-sonnet-5-5", "runtime": "Anthropic API",
                     "auth": "API key", "check": "model metadata accessible"}
 
 

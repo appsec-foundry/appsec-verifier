@@ -106,7 +106,7 @@ def test_max_attempts_bounds_the_agent_steps_per_finding(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: no_network)
     rc = cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope",
                    str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes",
-                   "--max-attempts", "3"])
+                   "--max-attempts", "3", "--test-all"])
     report = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
     assert rc == 3 and len(asked) == 3
     assert report["results"][0]["limits_hit"] == "attempts"
@@ -163,7 +163,7 @@ def test_cli_blocks_on_an_invalid_limit_before_contact(tmp_path, monkeypatch, ca
     rc = cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope",
                    str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes", "--profile",
                    "anthropic-api", flag, value])
-    assert rc == 2 and "invalid limits" in capsys.readouterr().err
+    assert rc == 2 and "Invalid limits" in capsys.readouterr().err
     assert not (tmp_path / "out").exists()
 
 

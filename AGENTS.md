@@ -56,7 +56,7 @@ summary instead.
 | `appsec_verifier/cli.py` | argparse entry point: `scope`, `verify`, `preflight`, `export`, `update`; without a command the guided run (`guided.py`) |
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
-| `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first model call (VER-032) |
+| `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first finding (VER-032) |
 | `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |
 | `term_style.py` | console colour and logo, adapted from AppSec Analyzer; colour only after `printable` |
 | `progress.py` | `RunProgress`: the run's progress grid and live status line during `verify`, as in AppSec Analyzer |

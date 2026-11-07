@@ -10,7 +10,7 @@ and the export never references them (VER-022).
 
 Reports and an annotated assessment are written through a temporary file and a
 rename, so an interrupted write leaves the old file or the new one, never a
-cut-off one. A report read back for `--append` or `export` is checked against
+cut-off one. A report read back for `--resume` or `export` is checked against
 schemas/verification.schema.yaml first.
 """
 
@@ -36,9 +36,32 @@ _VERDICT_LABEL = {
 }
 
 
+# Verdicts a resumed run keeps; a finding with any other result is tested again.
+VERIFIED = ("confirmed", "not-reproducible", "blocked-by-control")
+# Run-wide limits: a finding stopped by one, or not tested because of one, was cut off with the run.
+RUN_LIMITS = ("requests", "cost", "time", "calls", "window")
+
+
+def resume_problems(existing: dict, assessment_sha256: str | None, target: str) -> list[str]:
+    """Why a run cannot continue `existing`: it must come from the same assessment,
+    unchanged, and the same target, so the merged report describes one test."""
+    meta = existing.get("meta") or {}
+    problems = []
+    if not assessment_sha256 or meta.get("source_assessment_sha256") != assessment_sha256:
+        problems.append("it was written for another assessment, or the assessment has changed since")
+    if (meta.get("target") or {}).get("base_url") != target:
+        problems.append("it was written for another target")
+    return problems
+
+
+def verified_findings(existing: dict) -> set[str]:
+    """The findings a resumed run keeps: those with a definite verdict."""
+    return {r["finding_ref"]["id"] for r in existing.get("results") or [] if r.get("verdict") in VERIFIED}
+
+
 def merge_reports(existing: dict, new: dict) -> dict:
-    """Extend a prior report with a new run's results (VER-027, `--append`): a
-    finding verified again replaces its earlier result; findings not re-tested are
+    """Continue a prior report with a new run's results (VER-027, `--resume`): a
+    finding tested again replaces its earlier result; findings not re-tested are
     kept. Result ids are renumbered and the summary recomputed. Meta comes from
     the new run; the earlier generated time is kept as `previous_generated`."""
     by_id: dict[str, dict] = {}

@@ -252,7 +252,7 @@ def _check_url(label, method, done, url, headers, origin, http, scope) -> Check:
 _TEST_RATIONALE = "appsec-verifier connectivity test"
 _TEST_SYSTEM = ("This is a connectivity test of AppSec Verifier, not a verification. The session has no tools. "
                 'Answer with exactly one step: {"action": <name>, "args_json": <the arguments as a JSON object, '
-                "encoded as a string>}.")
+                'encoded as a string>, "note": <a few words>}.')
 _TEST_PROMPT = ('Reply with the action "submit_verdict" and the arguments '
                 f'{{"verdict": "inconclusive", "rationale": "{_TEST_RATIONALE}"}}.')
 _TEST_STEP = {"verdict": {"verdict": "inconclusive", "rationale": _TEST_RATIONALE}}

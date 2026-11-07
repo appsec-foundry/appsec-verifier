@@ -106,7 +106,8 @@ def _verify(tmp_path, monkeypatch, planner, *extra, target=None):
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (planner, dict(INFO)))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
     argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": THREATS})),
-            "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--output", str(tmp_path / "out"),
+            "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--test-all",
+            "--output", str(tmp_path / "out"),
             "--rate", "0", "--screenshots", "none", *extra]
     return cli.main(argv), target
 
@@ -147,29 +148,71 @@ def test_ctrl_c_outside_a_run_ends_with_130_without_a_traceback(monkeypatch, cap
     assert "interrupted." in capsys.readouterr().err
 
 
-# ── --append checks the earlier report before anything is contacted ──────────
+# ── --resume continues a run that did not finish ─────────────────────────────
+
+class InterruptedAtT3:
+    def next_step(self, ctx, history):
+        if ctx.plan.id == "T-3":
+            raise KeyboardInterrupt
+        return {"verdict": {"verdict": "not-reproducible", "rationale": "first run"}}
+
 
 @pytest.mark.parametrize("existing", [
     "results: [\n",
     yaml.safe_dump({"meta": {}, "results": [{"finding_ref": {"id": "X"}, "verdict": "refuted"}]}),
     yaml.safe_dump(["not", "a", "report"]),
 ])
-def test_append_to_an_unusable_report_is_refused_before_any_contact(tmp_path, monkeypatch, capsys, existing):
+def test_resume_of_an_unusable_report_is_refused_before_any_contact(tmp_path, monkeypatch, capsys, existing):
     (tmp_path / "out").mkdir()
     (tmp_path / "out" / "verification.yaml").write_text(existing)
     Checked.asked = []
-    rc, target = _verify(tmp_path, monkeypatch, Checked, "--append")
+    rc, target = _verify(tmp_path, monkeypatch, Checked, "--resume")
     assert rc == cli.EXIT_BLOCKED and Checked.asked == [] and target.calls == []
-    assert "cannot be extended with --append; nothing was contacted" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "cannot be continued with --resume" in err and "Nothing was contacted." in err
     assert (tmp_path / "out" / "verification.yaml").read_text() == existing
 
 
-def test_append_extends_a_report_the_verifier_wrote(tmp_path, monkeypatch):
-    assert _verify(tmp_path, monkeypatch, Checked)[0] == cli.EXIT_OK
-    assert report.read_report(tmp_path / "out" / "verification.yaml")[1] == []
-    assert _verify(tmp_path, monkeypatch, Checked, "--append", "--only", "T-2")[0] == cli.EXIT_OK
+def test_resume_tests_only_the_findings_without_a_verdict_and_keeps_the_rest(tmp_path, monkeypatch, capsys):
+    assert _verify(tmp_path, monkeypatch, InterruptedAtT3)[0] == cli.EXIT_INTERRUPTED
+    Checked.asked = []
+    assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
+    assert Checked.asked == ["T-3", "T-4"]
+    assert "2 findings keep their verdict" in capsys.readouterr().out
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
-    assert [r["finding_ref"]["id"] for r in doc["results"]] == ["T-1", "T-2", "T-3", "T-4"]
+    assert [(r["finding_ref"]["id"], r["rationale"]) for r in doc["results"]] == [
+        ("T-1", "first run"), ("T-2", "first run"), ("T-3", "checked"), ("T-4", "checked")]
+    assert doc["meta"]["interrupted"] is False and doc["meta"]["previous_generated"]
+    log = [json.loads(line) for line in (tmp_path / "out" / "agent-log.jsonl").read_text().splitlines()]
+    assert log[0]["finding"] == "T-1" and log[-1]["finding"] == "T-4"           # both runs in one log
+
+
+def test_resume_with_nothing_left_contacts_nothing(tmp_path, monkeypatch, capsys):
+    assert _verify(tmp_path, monkeypatch, Checked)[0] == cli.EXIT_OK
+    Checked.asked = []
+    rc, target = _verify(tmp_path, monkeypatch, Checked, "--resume")
+    assert rc == cli.EXIT_OK and Checked.asked == [] and target.calls == []
+    assert "nothing to resume" in capsys.readouterr().err
+
+
+def test_resume_refuses_a_report_of_another_assessment_or_target(tmp_path, monkeypatch, capsys):
+    assert _verify(tmp_path, monkeypatch, InterruptedAtT3)[0] == cli.EXIT_INTERRUPTED
+    before = (tmp_path / "out" / "verification.yaml").read_text()
+    monkeypatch.setattr(sys.modules[__name__], "THREATS", [*THREATS[:3]])     # the assessment changed
+    Checked.asked = []
+    rc, target = _verify(tmp_path, monkeypatch, Checked, "--resume")
+    assert rc == cli.EXIT_BLOCKED and Checked.asked == [] and target.calls == []
+    assert "another assessment, or the assessment has changed" in capsys.readouterr().err
+    assert (tmp_path / "out" / "verification.yaml").read_text() == before
+    existing = yaml.safe_load(before)
+    assert report.resume_problems(existing, existing["meta"]["source_assessment_sha256"], "https://other.example") \
+        == ["it was written for another target"]
+
+
+def test_resume_without_a_report_runs_as_usual(tmp_path, monkeypatch):
+    Checked.asked = []
+    assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
+    assert Checked.asked == ["T-1", "T-2", "T-3", "T-4"]
 
 
 # ── unreadable input files block with exit 2 ───────────────────────────────────

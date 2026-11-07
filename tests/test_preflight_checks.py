@@ -501,16 +501,19 @@ def _verify(tmp_path, monkeypatch, target, identities=None):
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, dict(INFO)))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
     argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": [THREAT]})),
-            "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--output", str(tmp_path / "out")]
+            "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--test-all",
+            "--output", str(tmp_path / "out")]
     if identities:
         argv += ["--identities", str(_write(tmp_path / "i.yaml", {"identities": identities}))]
     return cli.main(argv), asked
 
 
 def test_verify_stops_before_any_model_call_when_the_target_does_not_answer(tmp_path, monkeypatch, capsys):
+    tested = []
+    monkeypatch.setattr(cli, "_model_test", lambda factory, budget: tested.append(1))
     rc, asked = _verify(tmp_path, monkeypatch, Target(default=httpx.ConnectTimeout(SECRET)))
-    assert rc == cli.EXIT_BLOCKED and asked == [] and not (tmp_path / "out").exists()
-    assert "no finding was tested and no model was asked" in capsys.readouterr().err
+    assert rc == cli.EXIT_BLOCKED and asked == [] and tested == [] and not (tmp_path / "out").exists()
+    assert "no finding was tested" in capsys.readouterr().err
 
 
 def test_verify_stops_before_any_model_call_when_a_login_is_rejected(tmp_path, monkeypatch):
@@ -521,6 +524,61 @@ def test_verify_stops_before_any_model_call_when_a_login_is_rejected(tmp_path, m
     assert rc == cli.EXIT_BLOCKED and asked == [] and len(target.calls) == 2
 
 
-def test_verify_runs_after_passing_checks(tmp_path, monkeypatch):
+def test_verify_runs_after_passing_checks(tmp_path, monkeypatch, capsys):
     rc, asked = _verify(tmp_path, monkeypatch, Target({("GET", BASE): _resp(200)}))
     assert rc == cli.EXIT_OK and asked == [1]
+    out = capsys.readouterr().out
+    preflight = out[out.index("Preflight"):].splitlines()[1:4]
+    assert [line.split()[1] for line in preflight] == ["Target", "Identities", "Model"]
+    assert "none given; only anonymous requests are possible" in preflight[1]
+
+
+class _Factory:
+    """A planner factory over a fake host, as `_build_planner_factory` returns one."""
+
+    def __init__(self, host, asked):
+        self.host, self.asked = host, asked
+
+    def __call__(self):
+        asked = self.asked
+
+        class Planner:
+            def next_step(self, ctx, history):
+                asked.append(ctx.plan.id)
+                return {"verdict": {"verdict": "inconclusive", "rationale": "x"}}
+
+        return Planner()
+
+
+def _verify_with_host(tmp_path, monkeypatch, host):
+    from conftest import REAL_MODEL_TEST
+
+    asked = []
+    monkeypatch.setattr(cli, "_model_test", REAL_MODEL_TEST)
+    monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (_Factory(host, asked), dict(INFO)))
+    monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: Target({("GET", BASE): _resp(200)}))
+    argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": [THREAT]})),
+            "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--test-all",
+            "--output", str(tmp_path / "out")]
+    return cli.main(argv), asked
+
+
+def test_verify_asks_the_model_one_fixed_prompt_before_the_first_finding(tmp_path, monkeypatch, capsys):
+    host = Host(HostReply(step=VALID, usd=0.002))
+    rc, asked = _verify_with_host(tmp_path, monkeypatch, host)
+    assert rc == cli.EXIT_OK and host.calls == [(_TEST_SYSTEM, _TEST_PROMPT)] and asked == ["T-1"]
+    captured = capsys.readouterr().out
+    assert "✓ Model test   m answered with a valid step · $0.0020" in captured
+    assert " · 1 model call · " in captured                               # the test counts against the run
+
+
+@pytest.mark.parametrize("reply, cause", [
+    (HostReply(error="quota_exhausted (exit 1)"), "the call failed: quota_exhausted"),
+    (HostReply(breach="the session offered tools ['Bash']"), "confinement check failed"),
+    (HostReply(step={"action": "http_request", "args_json": json.dumps({"path": "/"})}), "not the requested step"),
+])
+def test_verify_does_not_test_any_finding_when_the_model_test_fails(tmp_path, monkeypatch, capsys, reply, cause):
+    rc, asked = _verify_with_host(tmp_path, monkeypatch, Host(reply))
+    assert rc == cli.EXIT_BLOCKED and asked == [] and not (tmp_path / "out" / "verification.yaml").exists()
+    captured = capsys.readouterr()
+    assert cause in captured.out and "no finding was tested" in captured.err

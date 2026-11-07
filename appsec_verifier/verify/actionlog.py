@@ -1,8 +1,9 @@
 """Per-finding action log (VER-017, VER-016).
 
 `verify` writes `agent-log.jsonl` next to the report: one JSON object per line
-for every agent step of every finding — the tool call with its arguments and
-the outcome (status, length, error, the browser's blocked requests), every
+for every agent step of every finding — the tool call with its arguments, the
+agent's note on what it checks, and the outcome (status, length, error, the
+browser's blocked requests), every
 proposal the step contract refused, every limit that stopped a finding, and
 the verdict. Refused actions are thereby logged, not only refused. Response
 bodies and source text are not logged. Each record is redacted of credential

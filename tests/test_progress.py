@@ -78,8 +78,47 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert start.endswith("access-control · Basket of another user readable")
     assert step.endswith("step 1 · GET /rest/basket/2 as alice → 200 · 512 B")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
-    assert done.endswith("confirmed (high) · 2 steps · 1m00s")
+    assert done.endswith("confirmed (high) · proof checked · 2 steps · 1m00s · a read b")
     assert "\x1b" not in out.getvalue()
+
+
+def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_the_finding(monkeypatch):
+    from appsec_verifier.endpoints import Endpoint
+
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={"FORCE_COLOR": "1"}, live=False)
+    st = progress.st
+    plan = _plan()
+    plan.endpoints = (Endpoint("GET", "/rest/basket/:id", True), Endpoint("PUT", "/a", None),
+                      Endpoint("GET", "/b", None))
+    progress.begin([plan])
+    progress.finding(plan)
+    start = SGR.sub("", _rows(out)[-1])
+    assert start.endswith("access-control · GET /rest/basket/:id (login), PUT /a · Basket of another user readable")
+    assert st("1/1 T-1", "bold") in _rows(out)[-1] and st("1/1 T-1", "accent", "bold") not in out.getvalue()
+    for verdict, label, role in (("confirmed", "confirmed", "ok"), ("not-reproducible", "not reproducible", "critical"),
+                                 ("blocked-by-control", "blocked by control", "critical"),
+                                 ("inconclusive", "inconclusive", "warn")):
+        progress.finished(plan, ProbeResult(verdict=verdict))
+        assert st(label, role) in _rows(out)[-1], verdict
+
+
+def test_a_step_line_shows_the_agent_note_the_payload_and_the_model_time(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
+    out, clock = io.StringIO(), Clock()
+    progress = RunProgress(out, model="m", clock=clock, env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.activity(1, 12)
+    clock.now += 14
+    args = {"method": "POST", "path": "/rest/user/login", "params": {"q": "x'--"}, "json": {"email": "a'--"}}
+    progress.activity(1, 12, "http_request", args)
+    progress.step({"step": 1, "tool": "http_request", "args": args, "note": "login bypass with a quote",
+                   "result": {"status": 500, "length": 90}})
+    assert _rows(out)[-1].endswith("step 1 · login bypass with a quote · POST /rest/user/login?q=x'-- "
+                                   '{"email":"a\'--"} → 500 · 90 B · model 14s')
+
 
 
 def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_done_line():
@@ -238,6 +277,31 @@ def test_the_agent_loop_announces_each_call_before_it_runs_and_reports_each_step
                                ("step", 2, "not-reproducible")]
 
 
+def test_the_agent_loop_logs_and_shows_the_planner_note_and_ignores_it_for_a_verdict():
+    out, clock = io.StringIO(), Clock()
+    steps = iter([{"tool": "read_source", "args": {"path": "a.ts"}, "note": f"find the route{HOSTILE}"},
+                  {"verdict": {"verdict": "not-reproducible", "rationale": "checked"}}])
+
+    class Planner:
+        def next_step(self, ctx, history):
+            clock.now += 9
+            return next(steps)
+
+    log = []
+    progress = RunProgress(out, clock=clock, env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    scope = {"base_url": "https://app.example.com", "hosts": ["app.example.com"]}
+    ctx = ProbeContext(plan=_plan(), scope=scope, guard=ScopeGuard(scope), budget=RunBudget(Limits()), http=None,
+                       identities=[], callback={}, progress=progress, log=log.append)
+    AgentProbe("access-control", Planner, max_steps=5).run(ctx)
+    progress.close()
+    assert log[0]["note"] == f"find the route{HOSTILE}"      # JSON-encoded when written, see test_actionlog
+    assert "note" not in log[1]
+    assert " · find the route]0;pwned[2J · source a.ts → error: " in out.getvalue()
+    assert "model 9s" in out.getvalue() and "\x1b" not in out.getvalue()
+
+
 def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_path, monkeypatch, capsys):
     scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "tester"},
              "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
@@ -262,10 +326,10 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, info))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: transport)
     assert cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope",
-                     str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes"]) == 0
+                     str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes", "--test-all"]) == 0
     captured = capsys.readouterr()
     rows = captured.err.splitlines()
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
-    assert rows[-1].split()[3:5] == ["done", "100%"] and "not-reproducible" in rows[-1]
+    assert rows[-1].split()[3:5] == ["done", "100%"] and "not reproducible" in rows[-1]
     assert "Run        : " in captured.out and "2 requests · $0.00 of $10.00" in captured.out

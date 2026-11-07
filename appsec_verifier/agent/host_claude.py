@@ -12,6 +12,7 @@ API-equivalent value, not a charge.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +20,8 @@ import tempfile
 from .hosts import HostReply, HostUnavailable, call_process, check_model_name, classify, host_env, run_process
 from .steps import STEP_SCHEMA
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
+_SUBTYPE = re.compile(r"error_[a-z_]{1,40}")
 _ALLOWED_SESSION_TOOLS = {"StructuredOutput"}   # the tool --json-schema adds; nothing else
 # ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN pass through: like Analyzer, the
 # CLI uses them when set and its own login otherwise.
@@ -99,8 +101,11 @@ class ClaudeHost:
         if breach:
             return HostReply(usd=usd, breach=breach)
         if code != 0 or final is None or final.get("is_error"):
-            detail = " ".join(str(x) for x in ((final or {}).get("subtype"), (final or {}).get("result"), err) if x)
-            return HostReply(usd=usd, error=f"{classify(detail)} (exit {code})")
+            subtype = (final or {}).get("subtype")
+            detail = " ".join(str(x) for x in (subtype, (final or {}).get("result"), err) if x)
+            # The CLI's own error kind (e.g. error_max_turns) says why; a fixed token, never provider prose.
+            kind = f"{subtype}, " if isinstance(subtype, str) and _SUBTYPE.fullmatch(subtype) else ""
+            return HostReply(usd=usd, error=f"{classify(detail)} ({kind}exit {code})")
         if init is None:
             return HostReply(usd=usd, error="session did not report its tool set")
         return HostReply(step=final.get("structured_output"), usd=usd)

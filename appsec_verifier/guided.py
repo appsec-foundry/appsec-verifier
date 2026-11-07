@@ -84,7 +84,12 @@ class Dialog:
 
 
 def _err(message: str) -> None:
-    print(message, file=sys.stderr)
+    """A stop, shown like `verify`'s: the first line marked ✗, the details under it."""
+    st = Style.for_stream(sys.stderr)
+    lead, first = ("\n", message[1:]) if message.startswith("\n") else ("", message)
+    head, _, rest = first.partition("\n")
+    print(lead + st(f"✗ {head[:1].upper()}{head[1:]}", "critical", "bold") + (f"\n{rest}" if rest else ""),
+          file=sys.stderr)
 
 
 def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) -> int:
@@ -133,7 +138,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         if _ask_identities(d, args, guard, environ, assessment, cwd) is None:
             return cli.EXIT_BLOCKED
         _ask_mode(d, args, scope)
-        _ask_output(d, args)
+        _ask_output(args)
     except Cancelled:
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
@@ -142,13 +147,6 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
 
-# What the findings of a class need before the run; without it their proof cannot be made (VER-009 to VER-012).
-_NEEDS = {
-    "access-control": "test identities in identities.yaml",
-    "path-traversal": "marker_file in the scope and on the target",
-    "ssrf": "callback in the scope",
-    "xss": "Google Chrome with appsec-verifier[browser]",
-}
 
 
 def overview(assessment: Path, plans) -> str:
@@ -158,15 +156,15 @@ def overview(assessment: Path, plans) -> str:
     by_class = Counter(p.cls for p in dyn)
     by_sev = Counter(clean(p.severity).lower() or "unknown" for p in dyn)
     order = [*SEVERITY_FLOORS, *sorted(set(by_sev) - set(SEVERITY_FLOORS))]
-    needs = " · ".join(f"{c}: {_NEEDS[c]}" for c in sorted(by_class) if c in _NEEDS)
     st = Style.for_stream(sys.stdout)
+    counts = [f"{len(plans)} total", f"{len(dyn)} testable against the running app",
+              *([f"{static} code-only"] if static else []),
+              *([f"{incomplete} without a code location"] if incomplete else [])]
     return "\n".join([*cli._title(st, "assessment"), *cli._facts(st, [
         ("Assessment", str(assessment)),
-        ("Findings", f"{len(plans)} total · {len(dyn)} dynamically verifiable · {static} static-only · "
-                     f"{incomplete} input-incomplete"),
+        ("Findings", " · ".join(counts)),
         ("By class", " · ".join(f"{c} {n}" for c, n in sorted(by_class.items())) or "—"),
         ("By severity", [(f"{s} {by_sev[s]}", cli._severity_role(s)) for s in order if by_sev[s]] or "—"),
-        *([("Needs", needs)] if needs else []),
     ])])
 
 
@@ -311,26 +309,10 @@ def _ask_mode(d: Dialog, args, scope: dict) -> None:
     args.allow_intrusive = d.yes("Allow intrusive probes?")
 
 
-def _ask_output(d: Dialog, args) -> None:
+def _ask_output(args) -> None:
+    """The report goes to --output or ./verification. A report already there is replaced; the run
+    settings say so before the confirmation. Only --resume continues it."""
     args.output = args.output or DEFAULT_OUTPUT
-    while not args.append and (Path(args.output) / "verification.yaml").exists():
-        answer = d.question(f"A report already exists in {args.output}: [a]ppend to it, [o]verwrite it, "
-                            "or write to a [n]ew directory", "a").lower()
-        if answer in ("a", "append"):
-            args.append = True
-        elif answer in ("o", "overwrite"):
-            return
-        elif answer in ("n", "new"):
-            args.output = d.question("Report directory", _free_dir(Path(args.output)))
-        else:
-            d.out("  answer a, o, or n")
-
-
-def _free_dir(path: Path) -> str:
-    n = 2
-    while (candidate := path.with_name(f"{path.name}-{n}")).exists():
-        n += 1
-    return str(candidate)
 
 
 # ── equivalent invocation ────────────────────────────────────────────────────
@@ -341,9 +323,9 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
                   *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
                   ("screenshots", "--screenshots"))
-_FLAGS = (("print_results", "--print"), ("append", "--append"), ("annotate", "--annotate"),
+_FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("annotate", "--annotate"),
           ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"), ("read_only", "--read-only"),
-          ("dry_run", "--dry-run"), ("headful", "--headful"))
+          ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"))
 
 
 def equivalent_invocation(args) -> str:

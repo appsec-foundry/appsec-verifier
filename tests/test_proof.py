@@ -87,7 +87,7 @@ def test_injection_flip_confirms(history):
 ])
 def test_injection_without_a_flip_is_downgraded(history):
     res = _check("injection", history, [1, 2])
-    assert res.verdict == "inconclusive" and "VER-011" in res.rationale
+    assert res.verdict == "inconclusive" and "response changes with the input" in res.rationale
 
 
 def _timed(q, ms, path="/rest/search", role="alice"):
@@ -120,13 +120,14 @@ def test_injection_timing_difference_confirms(history, tmp_path):
 ])
 def test_injection_without_a_clear_delay_is_downgraded(history):
     res = _check("injection", history, list(range(1, len(history) + 1)))
-    assert res.verdict == "inconclusive" and "VER-011" in res.rationale
+    assert res.verdict == "inconclusive" and "response changes with the input" in res.rationale
 
 
 # ── open redirect (VER-012) ───────────────────────────────────────────────────
 
 MARKER = ("vrf0a1b2c3d", "4e5f6a7b")
 HOST = "vrf0a1b2c3d4e5f6a7b.invalid"
+NO_REDIRECT = "answered with a redirect"
 
 
 def _redirect(location, status=302, path="/redirect"):
@@ -151,14 +152,14 @@ def test_open_redirect_to_the_marker_host_confirms(step):
     ([_redirect(f"https://{HOST}/")], None, "at least one step"),
     ([_redirect(f"https://{HOST}/")], [], "at least one step"),
     ([READ, _redirect(f"https://{HOST}/")], [1], "not an answered http_request"),
-    ([_redirect(f"https://{HOST}/", status=200)], [1], "VER-012"),                    # not a redirect
-    ([_redirect(f"https://{HOST}/", status=304)], [1], "VER-012"),
-    ([_redirect(None)], [1], "VER-012"),                                               # no location
-    ([_redirect(f"https://app.example.com/login?next=https://{HOST}/")], [1], "VER-012"),  # marker only in query
-    ([_redirect(f"/{HOST}/x")], [1], "VER-012"),                                     # relative: stays on target
-    ([_redirect(f"https://{HOST}.evil.example/")], [1], "VER-012"),                  # marker as a subdomain
-    ([_redirect("https://vrf00000000ffffffff.invalid/")], [1], "VER-012"),           # another finding's host
-    ([_redirect("https://[::1/")], [1], "VER-012"),                                  # unparseable location
+    ([_redirect(f"https://{HOST}/", status=200)], [1], NO_REDIRECT),                    # not a redirect
+    ([_redirect(f"https://{HOST}/", status=304)], [1], NO_REDIRECT),
+    ([_redirect(None)], [1], NO_REDIRECT),                                               # no location
+    ([_redirect(f"https://app.example.com/login?next=https://{HOST}/")], [1], NO_REDIRECT),  # marker only in query
+    ([_redirect(f"/{HOST}/x")], [1], NO_REDIRECT),                                     # relative: stays on target
+    ([_redirect(f"https://{HOST}.evil.example/")], [1], NO_REDIRECT),                  # marker as a subdomain
+    ([_redirect("https://vrf00000000ffffffff.invalid/")], [1], NO_REDIRECT),           # another finding's host
+    ([_redirect("https://[::1/")], [1], NO_REDIRECT),                                  # unparseable location
 ])
 def test_open_redirect_without_the_marker_redirect_is_downgraded(history, cited, reason):
     res = _check("open-redirect", history, cited, marker=MARKER, target_base="https://app.example.com")
@@ -183,6 +184,7 @@ def test_open_redirect_evidence_names_the_host_not_the_location(tmp_path):
 
 CONTENT = "vrfMarkerContent0123456789"
 TRAVERSAL_SCOPE = {"marker_file": {"path": "/srv/verifier-marker.txt", "content": CONTENT}}
+NO_READ = "content of the scope's marker file"
 
 
 def _read(marker_read, params=None):
@@ -202,10 +204,10 @@ def test_traversal_that_read_the_marker_file_confirms(tmp_path):
 @pytest.mark.parametrize("history, cited, scope, reason", [
     ([_read(True)], [1], {}, "names no marker file"),
     ([_read(True)], None, TRAVERSAL_SCOPE, "at least one step"),
-    ([_read(False)], [1], TRAVERSAL_SCOPE, "VER-012"),
-    ([_req(None)], [1], TRAVERSAL_SCOPE, "VER-012"),                               # no marker_read at all
-    ([_read(True, params={"q": CONTENT})], [1], TRAVERSAL_SCOPE, "VER-012"),       # an echo, not a read
-    ([_read("yes")], [1], TRAVERSAL_SCOPE, "VER-012"),                              # only True counts
+    ([_read(False)], [1], TRAVERSAL_SCOPE, NO_READ),
+    ([_req(None)], [1], TRAVERSAL_SCOPE, NO_READ),                               # no marker_read at all
+    ([_read(True, params={"q": CONTENT})], [1], TRAVERSAL_SCOPE, NO_READ),       # an echo, not a read
+    ([_read("yes")], [1], TRAVERSAL_SCOPE, NO_READ),                              # only True counts
 ])
 def test_traversal_without_a_read_marker_is_downgraded(history, cited, scope, reason):
     res = _check("path-traversal", history, cited, scope=scope)
@@ -240,7 +242,7 @@ def test_ssrf_confirms_on_a_listener_hit_and_records_it(tmp_path):
 ])
 def test_ssrf_without_a_hit_is_downgraded(listener, marker, reason):
     res = _check("ssrf", [_req(None)], [1], listener=listener, marker=marker)
-    assert res.verdict == "inconclusive" and reason in res.rationale and "VER-012" in res.rationale
+    assert res.verdict == "inconclusive" and reason in res.rationale
 
 
 # ── unknown classes ───────────────────────────────────────────────────────────

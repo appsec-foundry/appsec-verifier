@@ -3,7 +3,9 @@
 Each event is one line in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
 ``start`` and ``done`` for a finding's bounds, ``·`` for an agent step, ``↻`` for a step the step
-contract refused and ``⚠`` for a limit that stopped the finding. PROGRESS counts finished findings,
+contract refused and ``⚠`` for a limit that stopped the finding. A step line gives the agent's note on
+what the step checks, the request with its query and body, the result and how long the model took to
+propose the step; the ``done`` line ends with the agent's rationale. PROGRESS counts finished findings,
 ELAPSED is the run's time. LEFT extrapolates the time the finished findings took, never beyond the
 run's time limit; until the first finding has finished it shows that limit (``≤29m``).
 
@@ -15,6 +17,7 @@ and `printable` before it is shown, so no credential value and no escape sequenc
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -24,10 +27,12 @@ import time
 
 from .preflight import printable
 from .term_style import Style, columns
+from .verify.report import _VERDICT_LABEL
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
-_VERDICT_ROLES = {"confirmed": "critical", "not-reproducible": "ok", "blocked-by-control": "ok",
+# Seen from the finding: green confirmed, red not reproduced or blocked (a likely false positive), yellow undecided.
+_VERDICT_ROLES = {"confirmed": "ok", "not-reproducible": "critical", "blocked-by-control": "critical",
                   "inconclusive": "warn", "not-attempted": "muted"}
 _EVENT_ROLES = {"start": "accent", "↻": "warn", "⚠": "warn"}
 # A redraw begins a synchronized update and hides the cursor, then shows it again; terminals without
@@ -61,9 +66,17 @@ def _clip(text, limit: int = _CLIP) -> str:
 
 
 def _action(tool: str, args: dict) -> str:
-    """What a tool call does, in a few words: ``GET /rest/basket/2 as alice``."""
+    """What a tool call does, in a few words: ``GET /rest/basket/2 as alice``, with the query and the
+    body the agent chose, where an injection's payload sits."""
     if tool == "http_request":
-        text = f"{_clip(args.get('method') or 'GET', 10)} {_clip(args.get('path', ''))}"
+        path = str(args.get("path", ""))
+        text = f"{_clip(args.get('method') or 'GET', 10)} {_clip(path)}"
+        params = args.get("params")
+        if isinstance(params, dict) and params:
+            query = "&".join(f"{key}={value}" for key, value in params.items())
+            text += _clip(("&" if "?" in path else "?") + query, 60)
+        if isinstance(args.get("json"), dict):
+            text += " " + _clip(json.dumps(args["json"], ensure_ascii=False, separators=(",", ":")), 60)
     elif tool == "browser_check":
         text = f"browser {_clip(args.get('path', ''))}"
     elif tool == "read_source":
@@ -145,6 +158,8 @@ class RunProgress:
         self._id_width = 0
         self._steps, self._noted = 0, False
         self._activity, self._activity_at = "", 0.0
+        self._asked: tuple[int, float] | None = None     # (step, when the model call for it began)
+        self._took: tuple[int, float] | None = None      # (step, how long the model took to propose it)
         self.started = self.last = self._finding_at = clock()
 
     # ── events ────────────────────────────────────────────────────────────────
@@ -173,15 +188,24 @@ class RunProgress:
             self.number += 1
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted = 0, "", False
+            self._asked = self._took = None
             self._finding_at = self._clock()
             title = self._text(plan.title or plan.cwe or "")
-            self._record("start", " · ".join(part for part in (_clip(plan.cls or "-", 20), _clip(title)) if part))
+            requests = ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])   # what the assessment names
+            self._record("start", " · ".join(part for part in (_clip(plan.cls or "-", 20),
+                                                               _clip(self._text(requests), 120),
+                                                               _clip(title)) if part))
 
     def activity(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> None:
         """What runs now, for the status line and the heartbeat: a model call or a tool call."""
         what = f"asking {self._model}" if tool is None else _action(tool, self._text(args or {}))
         with self._lock:
-            self._activity, self._activity_at = f"step {step}/{of} · {what}", self._clock()
+            now = self._clock()
+            if tool is None:
+                self._asked = (step, now)
+            elif self._asked is not None and self._asked[0] == step:
+                self._took = (step, now - self._asked[1])
+            self._activity, self._activity_at = f"step {step}/{of} · {what}", now
 
     def step(self, record: dict) -> None:
         """One line per tool call, refused step and stopping limit of the action log (VER-017)."""
@@ -192,27 +216,33 @@ class RunProgress:
             if isinstance(number, int):
                 self._steps = number
             head = f"step {number}"
+            note = _clip(record["note"]) if isinstance(record.get("note"), str) else ""
             args = record.get("args") if isinstance(record.get("args"), dict) else {}
             action = _action(str(record["tool"]), args) if "tool" in record else ""
+            took = f"model {duration(self._took[1])}" if self._took and self._took[0] == number else ""
             self._noted = self._noted or bool(record.get("stopped") or record.get("refused"))
             if record.get("stopped"):
                 reason = f"stopped by limit: {_clip(record.get('reason', ''), 160)}"
-                self._record("⚠", " · ".join(part for part in (head, action, reason) if part))
+                self._record("⚠", " · ".join(part for part in (head, note, action, reason) if part))
             elif record.get("refused"):
                 self._record("↻", f"{head} · refused: {_clip(record['refused'], 160)}")
             elif action:
                 result = record.get("result") if isinstance(record.get("result"), dict) else {}
-                self._record("·", f"{head} · {action} → {_outcome(result)}")
+                outcome = f"{action} → {_outcome(result)}"
+                self._record("·", " · ".join(part for part in (head, note, outcome, took) if part))
 
     def finished(self, plan, result) -> None:
         verdict = printable(result.verdict)
-        parts = [verdict + (f" ({_clip(result.confidence, 10)})" if result.confidence else "")]
+        label = _VERDICT_LABEL.get(verdict, verdict)      # as the report and the results at the end name it
+        parts = [label + (f" ({_clip(result.confidence, 10)})" if result.confidence else "")]
+        if verdict == "confirmed":      # a confirmed verdict reaches this line only with its proof checked (proof.py)
+            parts.append("proof checked")
         if self._steps:
             parts.append(f"{self._steps} step" + ("s" if self._steps != 1 else ""))
         with self._lock:
             parts.append(duration(self._clock() - self._finding_at))
-            # Why it stayed inconclusive, unless a refused step or a limit above already said so.
-            if verdict == "inconclusive" and result.rationale and not self._noted:
+            # Why, unless a refused step or a limit above already said so.
+            if result.rationale and not self._noted:
                 parts.append(_clip(self._text(result.rationale), 160))
             self.done += 1
             self._activity = ""
@@ -278,7 +308,7 @@ class RunProgress:
         stamp = time.strftime("%H:%M:%S", time.localtime(now))
         bar = f"{self._bar()}  " if live else ""
         head = (f"{st(stamp, 'muted')}  "
-                + st(f"{finding:<{self._id_width}}", "accent", *(("bold",) if event in ("start", "done") else ()))
+                + st(f"{finding:<{self._id_width}}", *(("bold",) if event in ("start", "done") else ()))
                 + f"  {st(f'{event:<5}', 'accent' if live else role or _EVENT_ROLES.get(event, 'muted'))}  "
                 + st(f"{share:>8}  {elapsed:>7}  {left:>6}", "muted") + f"  {bar}")
         width = columns() - 1

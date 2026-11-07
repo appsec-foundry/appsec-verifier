@@ -65,7 +65,7 @@ def test_without_a_terminal_the_output_is_plain_with_analyzer_style_facts(assess
     out = _overview(assessment)
     assert "\x1b" not in out and "\x07" not in out
     assert out.startswith("▶ AppSec Verifier · assessment · ")
-    assert "  Findings    : 2 total · 2 dynamically verifiable" in out
+    assert "  Findings    : 2 total · 2 testable against the running app\n" in out
 
 
 def test_force_color_colours_the_overview_but_strips_escapes_from_the_assessment(assessment, monkeypatch):
@@ -87,8 +87,7 @@ def test_results_strip_escapes_from_assessment_and_model_text(capsys):
     doc = {"results": [{"finding_ref": {"id": f"T-1{HOSTILE}", "title": f"xss{HOSTILE}"}, "class": "xss",
                         "verdict": "confirmed", "confidence": f"high{HOSTILE}", "rationale": f"ran{HOSTILE}"}]}
     for st in (Style(False), Style(True)):
-        cli._print_results(st, doc)
-        plain = SGR.sub("", capsys.readouterr().out)
+        plain = SGR.sub("", "\n".join(cli._results(st, doc, [], {}, full=True)))
         assert "\x1b" not in plain and "\x07" not in plain
         assert "confirmed" in plain and "ran]0;pwned[2J" in plain
 

@@ -1,10 +1,12 @@
 """The step contract every host-backed planner shares (VER-017, VER-019).
 
 A host (an agent CLI or a tool-less API) gets no tools of its own. Each call
-answers with one step, {"action": ..., "args_json": ...}, which is decoded and
-validated here before the loop executes it through the confined AgentTools.
-`args_json` is a JSON string so that one wire schema also works under strict
-structured-output modes that reject free-form objects (OpenAI, Codex CLI).
+answers with one step, {"action": ..., "args_json": ..., "note": ...}, which is
+decoded and validated here before the loop executes it through the confined
+AgentTools. `args_json` is a JSON string so that one wire schema also works under
+strict structured-output modes that reject free-form objects (OpenAI, Codex CLI).
+`note` says in a few words what the step checks; it is shown on the console and
+kept in the action log, and nothing acts on it.
 """
 
 from __future__ import annotations
@@ -22,10 +24,12 @@ STEP_SCHEMA = {
     "properties": {
         "action": {"type": "string", "enum": [t["name"] for t in _tool_defs()]},
         "args_json": {"type": "string"},
+        "note": {"type": "string"},
     },
-    "required": ["action", "args_json"],
+    "required": ["action", "args_json", "note"],
     "additionalProperties": False,
 }
+NOTE_CAP = 160
 
 
 def _strict(schema: dict) -> dict:
@@ -38,11 +42,16 @@ _ARG_VALIDATORS = {t["name"]: Draft202012Validator(_strict(t["input_schema"])) f
 
 
 def system_prompt(ctx) -> str:
-    actions = [{k: t[k] for k in ("name", "description", "input_schema")} for t in _tool_defs()]
+    """Without a source checkout read_source is not offered: a call would only return an error."""
+    source = getattr(ctx, "source", None) is not None
+    actions = [{k: t[k] for k in ("name", "description", "input_schema")} for t in _tool_defs()
+               if source or t["name"] != "read_source"]
     return (
         _system(ctx)
+        + ("" if source else "\nThere is no source checkout in this run; work from the finding's description.")
         + "\nThis session has no tools. Answer every message with exactly one step: "
-        '{"action": <name>, "args_json": <the action\'s arguments as a JSON object, encoded as a string>}. '
+        '{"action": <name>, "args_json": <the action\'s arguments as a JSON object, encoded as a string>, '
+        '"note": <what this step checks, in at most 12 words>}. '
         "The actions and their argument schemas are:\n"
         + json.dumps(actions)
         + "\nOmit optional arguments you do not need; never send null. The steps so far arrive as JSON. "
@@ -83,9 +92,11 @@ def strict_json(text: str):
 
 
 def parse_step(step) -> dict:
-    """Turn a host's wire step into a loop action, or an inconclusive verdict."""
-    if not isinstance(step, dict) or set(step) != {"action", "args_json"}:
-        return inconclusive("agent reply is not a single {action, args_json} step")
+    """Turn a host's wire step into a loop action, or an inconclusive verdict.
+    A missing note is accepted (a host without schema enforcement may drop it);
+    a note that is not a string is not."""
+    if not isinstance(step, dict) or set(step) - {"note"} != {"action", "args_json"}:
+        return inconclusive("agent reply is not a single {action, args_json, note} step")
     name, raw = step["action"], step["args_json"]
     validator = _ARG_VALIDATORS.get(name) if isinstance(name, str) else None
     if validator is None:
@@ -94,7 +105,15 @@ def parse_step(step) -> dict:
         args = strict_json(raw) if isinstance(raw, str) else None
     except (ValueError, RecursionError):
         args = None
-    return _validated(name, args)
+    return _with_note(_validated(name, args), step.get("note", ""))
+
+
+def _with_note(action: dict, note) -> dict:
+    """A tool call with its note, trimmed and capped; a verdict keeps only its rationale."""
+    if not isinstance(note, str):
+        return inconclusive("agent sent a note that is not a string")
+    note = " ".join(note.split())[:NOTE_CAP]
+    return {**action, "note": note} if note and "tool" in action else action
 
 
 def _validated(name: str, args) -> dict:
@@ -115,9 +134,9 @@ def check_action(action) -> dict:
     so no planner can pass unchecked arguments to the tools."""
     if isinstance(action, dict) and set(action) == {"verdict"}:
         return _validated("submit_verdict", action["verdict"])
-    if isinstance(action, dict) and "tool" in action and set(action) <= {"tool", "args"}:
+    if isinstance(action, dict) and "tool" in action and set(action) <= {"tool", "args", "note"}:
         name = action["tool"]
         if not isinstance(name, str) or name == "submit_verdict" or name not in _ARG_VALIDATORS:
             return inconclusive(f"agent proposed an unknown action {str(name)[:60]!r}")
-        return _validated(name, action.get("args", {}))
+        return _with_note(_validated(name, action.get("args", {})), action.get("note", ""))
     return inconclusive("planner returned neither a single tool call nor a verdict")

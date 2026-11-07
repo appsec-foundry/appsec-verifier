@@ -103,12 +103,12 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
     proofs = [h["result"] for h in history if h.get("tool") == "browser_check"
               and isinstance(h.get("result"), dict) and h["result"].get("executed") is True]
     if not proofs:
-        return _downgrade(result, "no browser_check saw the marker execute (VER-009)", "indicative, not executed")
+        return _downgrade(result, "no browser_check saw the marker execute", "indicative, not executed")
     joined = "".join(getattr(ctx, "marker", None) or ())
     if joined and any(joined in _decoded(json.dumps(h.get("args") or {}, default=str)) for h in history):
         # A page that shows a parameter with alert() would echo it: only a marker joined at runtime counts.
         return _downgrade(result, "a request carried the already joined marker, so the dialog may be an echo, "
-                                  "not executed script (VER-009)", "indicative, not executed")
+                                  "not executed script", "indicative, not executed")
     result.evidence = [e for p in proofs for e in p.get("evidence") or []]
     return result
 
@@ -168,7 +168,7 @@ def _contrast(ctx, exchanges: list[dict]) -> str | None:
            for a, b in _pairs(exchanges)):
         return None
     return ("the cited steps do not show the same request answered 2xx with content for two different "
-            "identities (VER-010)")
+            "identities")
 
 
 def _flip(ctx, exchanges: list[dict]) -> str | None:
@@ -181,7 +181,7 @@ def _flip(ctx, exchanges: list[dict]) -> str | None:
         return None
     return ("the cited steps do not show one request whose response changes with the input "
             "(same method, path and identity; different input; different status or body, or two answers "
-            "delayed by at least 2 s against two undelayed ones) (VER-011)")
+            "delayed by at least 2 s against two undelayed ones)")
 
 
 def _input(e: dict) -> str:
@@ -210,27 +210,27 @@ def _redirect(ctx, exchanges: list[dict]) -> str | None:
         return "this run has no redirect marker for the finding"
     if any(e["status"] in _REDIRECTS and e.get("location_host") == host for e in exchanges):
         return None
-    return f"no cited step was answered with a redirect (301, 302, 303, 307, 308) to {host} (VER-012)"
+    return f"no cited step was answered with a redirect (301, 302, 303, 307, 308) to {host}"
 
 
 def _traversal(ctx, exchanges: list[dict]) -> str | None:
     content = ((getattr(ctx, "scope", None) or {}).get("marker_file") or {}).get("content")
     if not content:
-        return "the scope names no marker file to read (VER-012)"
+        return "the scope names no marker file to read"
     for e in exchanges:
         sent = json.dumps([e["path"], e["params"], e["json"]], default=str)
         if e.get("marker_read") and content not in sent:     # an echo of the content is not a read
             return None
-    return "no cited step returned the content of the scope's marker file (VER-012)"
+    return "no cited step returned the content of the scope's marker file"
 
 
 def _ssrf(ctx, result: ProbeResult) -> ProbeResult:
     listener, marker = getattr(ctx, "listener", None), "".join(getattr(ctx, "marker", None) or ())
     if listener is None or not marker:
-        return _downgrade(result, "this run has no callback listener for the finding (VER-012)")
+        return _downgrade(result, "this run has no callback listener for the finding")
     hits = listener.hits(marker)
     if not hits:
-        return _downgrade(result, "no request with the finding's marker reached the callback listener (VER-012)")
+        return _downgrade(result, "no request with the finding's marker reached the callback listener")
     result.evidence = _write_record(ctx, "callback_hits", hits, kind="callback")
     return result
 

@@ -13,6 +13,7 @@ stopped a finding, the remaining findings are not tested and say so (VER-015,
 VER-024). Ctrl-C ends the run the same way: the finding under test ends
 inconclusive, the rest are not tested, and the document is still returned with
 `meta.interrupted` set, so the results gathered so far reach the report.
+A finding the run cannot confirm (cli._blocker) is not tested and says why.
 """
 
 from __future__ import annotations
@@ -25,9 +26,9 @@ from pathlib import Path
 from ..limits import LimitExceeded, Limits, RunBudget
 from ..loader import FindingPlan
 from .probes import ProbeContext, ProbeRegistry, ProbeResult
+from .report import RUN_LIMITS as _RUN_LIMITS  # once reached, they stay reached for the run
 
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
-_RUN_LIMITS = ("requests", "cost", "time", "calls", "window")   # once reached, they stay reached for the run
 _PACKAGE = Path(__file__).resolve().parents[1]
 
 
@@ -133,8 +134,12 @@ def run_verification(
     log=None,
     evidence_dir: Path | None = None,
     progress=None,
+    skipped: dict[str, str] | None = None,
 ) -> dict:
+    """`skipped` maps a finding id to why this run cannot confirm it; such a
+    finding is not tested and reports that reason (not-attempted)."""
     now = now or datetime.now(timezone.utc)
+    skipped = skipped or {}
     budget = budget or RunBudget(limits)
     from ..scope import ScopeGuard
     from ..tools.browser import new_marker
@@ -149,14 +154,16 @@ def run_verification(
             evidence_dir=evidence_dir, progress=progress,
         )
 
-    probed = [p.status == "dynamic" and registry.get(p.cls) is not None for p in plans]
+    probed = [p.status == "dynamic" and registry.get(p.cls) is not None and p.id not in skipped for p in plans]
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
     results = []
     stopped: str | None = None        # the run-wide limit that stopped an earlier finding
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
-        if shown and interrupted:
+        if plan.id in skipped:
+            res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[plan.id]}")
+        elif shown and interrupted:
             res = ProbeResult(verdict="not-attempted", rationale="not tested: the run was interrupted")
         elif shown and stopped:
             res = ProbeResult(verdict="not-attempted", limits_hit=stopped,

@@ -24,7 +24,7 @@ from ..version_info import resource_root
 from .hosts import HostReply, HostUnavailable, check_model_name
 from .steps import STEP_SCHEMA, strict_json
 
-DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 MAX_TOKENS = 16_000
 # usage field -> catalog price; cache writes are priced at the 1-hour rate, the higher one
 _PRICED_USAGE = (("input_tokens", "input_usd_per_million"), ("output_tokens", "output_usd_per_million"),

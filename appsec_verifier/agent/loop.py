@@ -11,7 +11,7 @@ before every planner call), and never lets a bad tool call escape
 credential values before the planner sees it (VER-016). A planner that never
 submits ends inconclusive, not refuted (VER-024). A confirmed verdict stands
 only if the code finds the proof its class requires (proof.py). Every step —
-tool call and outcome, refused proposal, stopping limit, verdict — goes to
+tool call with the planner's note and outcome, refused proposal, stopping limit, verdict — goes to
 `ctx.log`, the run's action log (VER-017), and to `ctx.progress`, the console.
 What each step sent to the target and got back is kept apart from the history
 the planner sees and becomes the finding's proof of concept, whatever the
@@ -119,6 +119,7 @@ class AgentProbe:
                 result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
+            call = {"tool": name, "args": args, **({"note": action["note"]} if action.get("note") else {})}
             if ctx.progress is not None:
                 ctx.progress.activity(step, self._max_steps, name, args)
             try:
@@ -127,11 +128,11 @@ class AgentProbe:
                 result = {"error": str(exc)}
             except LimitExceeded as exc:
                 keep(step, name)
-                return poc.attach(ctx, history, sent, _stopped(ctx, step, exc, tool=name, args=args), None)
+                return poc.attach(ctx, history, sent, _stopped(ctx, step, exc, **call), None)
             keep(step, name)
             if ctx.sessions is not None:
                 result = ctx.sessions.redact(result)       # VER-016: no credential value reaches the planner
-            _log(ctx, step, tool=name, args=args, result={k: result[k] for k in _LOGGED_RESULT if k in result})
+            _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})
             history.append({"tool": name, "args": args, "result": result})
         return _finish(ctx, self._max_steps, poc.attach(ctx, history, sent, ProbeResult(
             verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"),

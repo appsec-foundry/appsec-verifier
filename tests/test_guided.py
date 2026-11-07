@@ -85,14 +85,14 @@ def env(tmp_path, monkeypatch):
 def test_with_a_scope_file_nothing_is_asked_and_the_defaults_apply(env):
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
-    assert "4 total · 3 dynamically verifiable · 1 static-only" in out
+    assert "4 total · 3 testable against the running app · 1 code-only\n" in out
     assert "critical 1 · high 1 · medium 1" in out
     assert "→ 2 findings to verify, severity high and above (--min-severity to change)" in out
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
     assert args.scope == str(env.run / "scope.yaml") and f"scope   {env.run / 'scope.yaml'}" in out
     assert args.target is None                                  # verify takes the scope's base_url
     assert args.identities is None and args.output == "./verification"
-    assert not args.allow_intrusive and not args.append and not args.non_interactive and not args.yes
+    assert not args.allow_intrusive and not args.resume and not args.non_interactive and not args.yes
     _, invocation, default_yes = env.calls[0]
     parts = shlex.split(invocation)
     assert "--min-severity high" in invocation and "--profile claude" in invocation and "--cost-limit 5.0" in invocation
@@ -100,17 +100,9 @@ def test_with_a_scope_file_nothing_is_asked_and_the_defaults_apply(env):
     assert default_yes                                          # Enter confirms, also with a scope file
 
 
-def test_the_overview_names_what_the_classes_present_need_before_the_run(env):
+def test_the_overview_leaves_what_findings_need_to_the_test_plan(env):
     _, _, _, out = env.go()
-    needs = next(line for line in out.splitlines() if line.lstrip().startswith("Needs"))
-    assert needs.split(": ", 1)[1] == ("access-control: test identities in identities.yaml · "
-                                       "xss: Google Chrome with appsec-verifier[browser]")
-
-
-def test_the_overview_has_no_needs_line_when_no_class_present_needs_preparation(env):
-    env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[2]]}))     # injection only
-    _, plans, _ = cli._load_assessment(env.assessment)
-    assert "Needs" not in guided.overview(env.assessment, plans)
+    assert "Needs" not in out and "without a code location" not in out       # no zero counts either
 
 
 def test_no_question_asks_for_a_secret(env):
@@ -164,14 +156,14 @@ def test_declining_the_lower_severity_contacts_nothing(env, capsys):
     env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[2]]}))
     rc, _, _, _ = env.go("n")
     assert rc == cli.EXIT_BLOCKED and env.calls == []
-    assert "nothing to verify; nothing was contacted" in capsys.readouterr().err
+    assert "Nothing to verify; nothing was contacted" in capsys.readouterr().err
 
 
 def test_without_a_known_severity_nothing_is_offered(env, capsys):
     env.assessment.write_text(yaml.safe_dump({"threats": [{**THREATS[0], "severity": "info"}]}))
     rc, _, prompts, _ = env.go()
     assert rc == cli.EXIT_BLOCKED and prompts == [] and env.calls == []
-    assert "no finding of a known severity can be verified dynamically" in capsys.readouterr().err
+    assert "No finding of a known severity can be verified dynamically" in capsys.readouterr().err
 
 
 def test_a_floor_given_as_option_is_not_lowered(env):
@@ -294,24 +286,18 @@ def test_intrusive_mode_is_not_offered_without_state_change(env):
     assert not any(p.startswith("Allow intrusive") for p in prompts)
 
 
-@pytest.mark.parametrize("answers, append, output", [
-    (["a"], True, "./verification"),
-    ([""], True, "./verification"),
-    (["o"], False, "./verification"),
-    (["n", ""], False, "verification-2"),
-])
-def test_an_existing_report_is_not_replaced_without_asking(env, answers, append, output):
+def test_an_existing_report_is_replaced_without_a_question(env):
     (env.cwd / "verification").mkdir()
     (env.cwd / "verification" / "verification.yaml").write_text("{}")
-    rc, args, prompts, _ = env.go(*answers)
-    assert rc == 0 and prompts[0].startswith("A report already exists")
-    assert (args.append, args.output) == (append, output)
+    rc, args, prompts, _ = env.go()
+    assert rc == 0 and prompts == [] and (args.resume, args.output) == (False, "./verification")
+    assert "--resume" not in env.calls[0][1]
 
 
 def test_an_invalid_limit_option_blocks_before_any_question(env, capsys):
     rc, _, prompts, _ = env.go(extra=["--cost-limit", "-1"])
     assert rc == cli.EXIT_BLOCKED and prompts == [] and env.calls == []
-    assert "invalid limits" in capsys.readouterr().err
+    assert "Invalid limits" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("extra", [[], ["--profile", "anthropic-api"]])
@@ -324,12 +310,12 @@ def test_an_unavailable_profile_blocks_before_any_question_and_names_the_option(
     rc, _, prompts, _ = env.go(extra=extra)
     err = capsys.readouterr().err
     assert rc == cli.EXIT_BLOCKED and prompts == [] and env.calls == []
-    assert f"model profile unavailable: {(extra or ['', 'claude'])[1]}: not available" in err
+    assert f"Model profile unavailable: {(extra or ['', 'claude'])[1]}: not available" in err
     assert "choose another with --profile (claude, codex-cli" in err
 
 
 @pytest.mark.parametrize("stop", [EOFError, KeyboardInterrupt])
-@pytest.mark.parametrize("question", ["lower severity", "target URL", "identities", "intrusive", "report"])
+@pytest.mark.parametrize("question", ["lower severity", "target URL", "identities", "intrusive"])
 def test_cancelling_at_any_question_contacts_nothing(env, capsys, stop, question):
     if question == "lower severity":
         env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[2]]}))
@@ -337,15 +323,12 @@ def test_cancelling_at_any_question_contacts_nothing(env, capsys, stop, question
         (env.run / "scope.yaml").unlink()
     elif question == "identities":
         (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
-    elif question == "intrusive":
-        (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
     else:
-        (env.cwd / "verification").mkdir()
-        (env.cwd / "verification" / "verification.yaml").write_text("{}")
+        (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
     rc, _, prompts, _ = env.go(stop)
     assert rc == cli.EXIT_BLOCKED and env.calls == [] and len(prompts) == 1
     assert not (env.run / "scope.yaml").exists() or question != "target URL"
-    assert "cancelled; nothing was contacted" in capsys.readouterr().err
+    assert "Cancelled; nothing was contacted" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("with_scope", [True, False])
@@ -361,7 +344,7 @@ def test_the_invocation_runs_the_same_settings(env, with_scope):
     parts = shlex.split(invocation)
     again = cli.build_parser().parse_args(parts[1:])
     for attr in ("assessment", "scope", "target", "identities", "output", "category", "min_severity", "profile",
-                 "cost_limit", "max_calls", "allow_intrusive", "append"):
+                 "cost_limit", "max_calls", "allow_intrusive", "resume"):
         assert getattr(again, attr) == getattr(args, attr), attr
     assert again.non_interactive and again.yes and again.command == "verify"
 
@@ -436,11 +419,11 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
     monkeypatch.setattr(cli, "confirm_authorization", confirm)
     if typed:
         (env.run / "scope.yaml").unlink()
-        rc, _, _, _ = env.go(BASE, extra=["--category", "access-control"])
+        rc, _, _, _ = env.go(BASE, extra=["--category", "access-control", "--test-all"])
     else:
-        rc, _, _, _ = env.go(extra=["--category", "access-control"])
+        rc, _, _, _ = env.go(extra=["--category", "access-control", "--test-all"])
     out = capsys.readouterr()
     assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False, "default_yes": True}]
-    assert "1 dynamic · severity high and above · classes: access-control" in out.out
-    assert "The same run without questions" in out.out and "not authorised to proceed" in out.err
+    assert "Selection  : 1 finding, severity high and above · 1 testable against the running app\n" in out.out
+    assert "The same run without questions" in out.out and "Not authorised to proceed" in out.err
     assert not (env.cwd / "verification").exists()

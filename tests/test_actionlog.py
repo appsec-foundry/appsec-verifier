@@ -74,7 +74,7 @@ def test_verify_writes_the_log_with_the_refused_request(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, info))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: no_network)
     cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope", str(tmp_path / "scope.yaml"),
-              "--output", str(tmp_path / "out"), "--yes"])
+              "--output", str(tmp_path / "out"), "--yes", "--test-all"])
     path = tmp_path / "out" / "agent-log.jsonl"
     first, last = _lines(path)
     assert first["finding"] == "T-1" and first["tool"] == "http_request"

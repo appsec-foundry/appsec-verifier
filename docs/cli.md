@@ -43,13 +43,11 @@ examples are.
 ## Guided run — `appsec-verifier ASSESSMENT` (VER-031)
 
 Called with an assessment and no command, the Verifier reads the assessment
-offline, shows how many findings it holds, how many are dynamically verifiable,
-and their split by class and severity, then asks only for what has no usable
-default. The `Needs` line names what the classes present need before the run:
-test identities in `identities.yaml` for access control, `marker_file` in the
-scope and the file on the target for path traversal, `callback` in the scope
-for SSRF, and Google Chrome with `appsec-verifier[browser]` for XSS. Without it
-their findings cannot be confirmed.
+offline, shows how many findings it holds, how many can be tested against the
+running app and how many are code-only, and their split by class and severity,
+then asks only for what has no usable default. What the selected findings need
+(a test identity, the proof browser, a marker file, a callback) is shown in the
+test plan of `verify`, with how to provide it.
 
 Without options the run tests findings of severity high and above, of every
 class present, with the profile `claude` and the limits of `data/limits.yaml`.
@@ -72,7 +70,7 @@ shown in brackets.
 | Target URL | none; asked only without a scope file (below) | `--url` |
 | Identities file | asked only when `identities.yaml` is found next to the scope, the assessment, or in the working directory; `none` for no identities | `--identities` |
 | Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
-| Existing report in the output directory | append; or overwrite, or a new directory | `--append`, `--output` |
+| Existing report in the output directory | not asked: it is replaced, and the run settings say `Report : replaces …` before the confirmation | `--output`, `--resume` |
 
 Each answer goes through the same check as its option and is asked again when
 invalid: a URL without http or https, with a user name or password, or with an
@@ -134,25 +132,54 @@ appsec-verifier verify \
 Flow: check the assessment's structure, the scope and proxy settings, the
 identities file and the model profile (VER-005, VER-032) → resolve the selection
 and the scope and, interactively, **print both for one explicit confirmation**
-(VER-002, VER-026) → check that the target answers and every identity logs in,
-the pre-flight checks of [`preflight`](#preflight--check-before-a-run-ver-032)
-(VER-003, VER-032; the build/version match of VER-003 is *not implemented yet*)
-→ for each selected finding, run a bounded, scope-confined verification of
-exactly that finding (VER-008, VER-015, VER-017) → write the report or annotate
-the assessment, with evidence artefacts (VER-020, VER-027, VER-022). A failed
-pre-flight check stops the run before the first model call. Its requests count
-against `--max-requests`.
+(VER-002, VER-026) → check that the target answers, that every identity logs
+in, and that the model answers one fixed prompt, the pre-flight checks of
+[`preflight`](#preflight--check-before-a-run-ver-032) (VER-003, VER-032; the
+build/version match of VER-003 is *not implemented yet*) → for each selected
+finding, run a bounded, scope-confined verification of exactly that finding
+(VER-008, VER-015, VER-017) → write the report or annotate the assessment, with
+evidence artefacts (VER-020, VER-027, VER-022). Each check prints one line under
+`Preflight`. A failed check stops the run before the first finding (exit 2).
+Its requests count against `--max-requests`; the model test counts as one model
+call against `--max-calls` and `--cost-limit`.
+
+Before the confirmation, `Test plan` lists the findings the run will test, each
+with its severity, class, the requests the assessment names for it (for example
+`GET /rest/basket/:id (login)`) and its title. The requests come from the
+finding's scenario and attack steps and from the assessment's `attack_surface`:
+an entry point that matches a named request, or whose handler is at the
+finding's location, gives the path template and, with `auth_required: true`, the
+`(login)` mark. `page /#/search` is a browser route. The agent gets these
+requests and the finding's scenario and attack steps; without `--source` it is
+not offered `read_source`.
+
+`Not testable` groups the findings this run cannot confirm by what they need,
+with how to provide it: a test identity (an access-control finding, or one whose
+named requests all need a login), the proof browser (XSS), a marker file
+(path traversal), a callback (SSRF), or intrusive mode (every named request
+writes). They are not tested and appear in the report as `not-attempted` with
+the reason; `--test-all` tests them anyway. When nothing is left to test, the
+run stops with exit 2: nothing is contacted and no report is written.
 
 During the run, `verify` prints one line per event on standard error, in the
 columns `TIME FINDING EVENT PROGRESS ELAPSED LEFT DETAIL`, as AppSec Analyzer
 does. FINDING is the finding under test and its position among the findings
-that get a probe. EVENT is `start` and `done` for a finding, `·` for a request,
-browser check or source read of the agent with its result, `↻` for a step the
-Verifier refused, and `⚠` for a limit that stopped the finding. The `done` line
-gives the verdict, the steps and the time the finding took, and for an
-inconclusive finding the reason. PROGRESS is the share of findings done,
-ELAPSED the run time. LEFT is estimated from the findings done so far and never
-exceeds what `--max-duration` leaves; before the first finding is done it shows
+that get a probe. The `start` line names its class, up to two requests from the
+test plan and its title. EVENT is `start` and `done` for a finding, `·` for a request,
+browser check or source read of the agent, `↻` for a step the Verifier
+refused, and `⚠` for a limit that stopped the finding. A `·` line gives the
+agent's note on what the step checks, the request with its query and JSON body,
+the result, and how long the model took to propose the step (`model 14s`). The
+`done` line gives the verdict, the steps, the time the finding took and the
+agent's rationale; a confirmed verdict also says `proof checked`, because it
+stands only when the Verifier found the proof its class requires. The verdict
+is green when the finding is confirmed, red when it was not reproduced or a
+control blocked it (a likely false positive), and yellow when it stays
+inconclusive; the results at the end use the same colours. When a Claude CLI
+call fails, the reason names the CLI's error kind where it reports one, for
+example `host_error (error_max_turns, exit 1)`. PROGRESS is the share of
+findings done, ELAPSED the run time. LEFT is estimated from the findings done so
+far and never exceeds what `--max-duration` leaves; before the first finding is done it shows
 that remainder (`≤29m`). In a terminal a status line underneath shows a progress
 bar, the running step (the model call or the request) and its age. Without a
 terminal, a line with the running step follows after two minutes without
@@ -226,14 +253,15 @@ far and `meta.interrupted: true`, and the run exits with 130.
 | --- | --- | --- |
 | `--output DIR` | Report and evidence directory (created, owner-readable). Default `./verification`. | VER-020 |
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
-| `--print` | Also print the per-finding verdicts to the console. | VER-013 |
-| `--append` | Extend an existing report in `--output` instead of overwriting: a finding verified again replaces its earlier result, others are kept, ids renumbered. A report that cannot be read or does not match `schemas/verification.schema.yaml` blocks the run (exit 2) before anything is contacted. | VER-027 |
+| `--print` | List every finding in the results at the end, code-only ones included, with the whole reason. | VER-013 |
+| `--resume` | Continue the report in `--output`: findings with the verdict confirmed, not-reproducible or blocked-by-control keep it; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. | VER-027 |
 | `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each finding. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |
 | `--non-interactive` / `--ci` | No prompts: selection, scope confirmation, and cost ceiling all come from the invocation. Recorded in the report. | VER-002/026 |
 | `--allow-intrusive` | Opt out of safe mode (below) for marked state-changing or more thorough probing. Recorded in the report. | VER-030 |
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
 | `--dry-run` | Resolve selection + scope and print the plan; send nothing to the target. | VER-008 |
+| `--test-all` | Also test findings this run cannot confirm (see the test plan below); by default they are not tested and reported `not-attempted` with the reason. | VER-008 |
 | `--headful` | Run the proof browser visibly (local debugging only). | VER-009 |
 | `--screenshots CLASSES` | Classes that get screenshots, comma-separated: `xss`, `access-control`, `injection`, `open-redirect`, `path-traversal`, `ssrf`; or `none`. Default: all. Without screenshots an XSS proof still holds. | VER-035 |
 | `--profile NAME` | Model profile (below), as in AppSec Analyzer. Default `claude`; required with `--non-interactive`. | VER-023 |
@@ -245,11 +273,11 @@ model unknown) stops the run before anything is contacted.
 
 | Profile | Runs | Credentials | Default model | Spend |
 | --- | --- | --- | --- | --- |
-| `claude` | `claude -p` | Claude login, or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | `claude-opus-5-5` | reported USD (API-equivalent on a subscription) |
+| `claude` | `claude -p` | Claude login, or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` | `claude-sonnet-5-5` | reported USD (API-equivalent on a subscription) |
 | `codex-cli` | `codex exec`, 0.163.0+ | ChatGPT login only | `gpt-sol` | not reported |
 | `copilot-cli` | `copilot`, exactly 1.0.101 | Copilot login | `gpt-5.4` | not reported; soft limit of 30 AI credits per call |
 | `codex` | OpenAI Responses API | `OPENAI_API_KEY` | `gpt-sol` | tokens × `data/model-catalog.yaml` prices |
-| `anthropic-api` | Anthropic Messages API via the `anthropic` SDK (`[agent]`, 0.87+) | `ANTHROPIC_API_KEY` | `claude-opus-5-5` | tokens × `data/anthropic-model-catalog.yaml` prices (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1; Haiku 5.5 at its higher rates when a prompt exceeds 100 000 tokens); an unlisted model is refused |
+| `anthropic-api` | Anthropic Messages API via the `anthropic` SDK (`[agent]`, 0.87+) | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` | tokens × `data/anthropic-model-catalog.yaml` prices (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1; Haiku 5.5 at its higher rates when a prompt exceeds 100 000 tokens); an unlisted model is refused |
 
 Whatever the profile, the model only proposes the next step as one JSON
 object. The Verifier checks it against strict schemas and runs it with the same
@@ -439,19 +467,31 @@ The console is laid out like AppSec Analyzer's, with a red logo and red
 accents instead of its turquoise. Before the first request `verify` prints its
 settings as `Key : value` lines: the assessment, the target, the scope and its
 owner (or `no scope file`), the selection with its severity floor, the profile
-and model, the limits and the mode (safe or intrusive), and asks
-`Proceed against this target? [y/N]`, or `[Y/n]` in the guided run. For
-selected classes that need a preparation, one more line names it or says it is
-missing: `Identities` (access control, roles only), `Browser` (XSS), `Callback`
-(SSRF) and `Marker file` (path traversal, its path only). A line that starts
-with `unavailable` means these findings cannot be confirmed in this run. At the
-end it prints `Done` with the number of findings per verdict and the paths of
-the report files. `--print` adds one line per finding with its verdict (`✓`
-confirmed, `✗` not reproducible, `⊘` blocked by a control, `?` inconclusive,
-`·` not attempted) and the rationale.
+and model, the limits and the mode. For selected classes that need a
+preparation and have it, one more line names it: `Identities` (roles only),
+`Browser`, `Callback` and `Marker file` (its path only). Then follows the test
+plan described above, and the question `Proceed against this target? [y/N]`, or
+`[Y/n]` in the guided run.
+
+The `Report` line names where the report goes, `verification.md` (Markdown)
+and `verification.yaml` (YAML, for tools, `--resume` and `export`), and says
+`replaces` when a report is already there.
+
+At the end `Results` lists each finding testable against the app: a mark
+(`✓` confirmed, `✗` not reproducible, `⊘` blocked by a control, `?`
+inconclusive, `·` not tested), id, severity, class, result and title, and under
+it the reason in one line. A finding this run could not test shows what it
+needs as its result (`needs test identity`). Confirmed findings come first.
+`--print` lists every finding, code-only ones included, with the whole reason.
+`Done` then gives the paths of the report, its data, the evidence and the action
+log, the run's usage and the count per result.
+
+When a run cannot start or go on, `verify` says so on standard error in one
+form: a line marked `✗` with what is wrong, the details under it, a line marked
+`→` with what to do, and `Nothing was contacted.` when that is so.
 
 On a terminal the output is in colour and starts with the logo: a confirmed
-finding is red, not reproducible or blocked green, inconclusive yellow, and
+finding is green, not reproducible or blocked red, inconclusive yellow, and
 severities and pre-flight results have their own colours. `NO_COLOR` (any
 value) turns colour off, `FORCE_COLOR=1` turns it on without a terminal, and
 `COLORTERM=truecolor` selects the 24-bit palette. Without a terminal, for
@@ -462,7 +502,7 @@ example in CI or when redirected to a file, the output is plain text.
 | Code | Meaning |
 | --- | --- |
 | `0` | All selected findings were tested, whatever the verdict. A confirmed weakness is a successful run. |
-| `2` | The run was blocked before testing: malformed assessment, unreadable, invalid or expired scope, unset proxy or identity variable, unusable model profile, missing confirmation, unreachable target, rejected login, empty selection, or an `--append` report that cannot be extended. |
+| `2` | The run was blocked before testing: malformed assessment, unreadable, invalid or expired scope, unset proxy or identity variable, unusable model profile, missing confirmation, unreachable target, rejected login, failed model test, empty selection, no selected finding testable in this run, or a `--resume` report that cannot be continued. |
 | `3` | A limit was reached for at least one finding, for example the cost ceiling, the request cap, the steps per finding, or the end of the scope window. |
 | `130` | Interrupted with Ctrl-C. A `verify` run that had started testing writes its report with the results so far. |
 
@@ -475,7 +515,7 @@ appsec-verifier preflight --assessment ./security-assessment.yaml --scope ./scop
   [--test-model (--cost-limit USD | --max-calls 1)]
 ```
 
-Runs the checks `verify` runs before its first model call, and verifies nothing.
+Runs the checks `verify` runs before its first finding, and verifies nothing.
 Each check prints one line: `✓` passed, `⚠` works with a caveat, `✗` failed,
 `·` not checked or not applicable.
 
@@ -488,7 +528,7 @@ Each check prints one line: `✓` passed, `⚠` works with a caveat, `✗` faile
 | Model | The profile resolves (CLI present and logged in, or key set; model known and priced). For `codex` and `anthropic-api` one metadata request shows the key is accepted and the model offered; it generates nothing and proves no quota. | the provider (not with `--offline`) |
 | Target | One GET to the URL through the scope gate and the declared proxy. A redirect is not followed. Any HTTP answer counts as reachable; 5xx warns. A failure names its cause: name resolution, refused connection, timeout, TLS certificate or handshake, proxy refusal or proxy authentication (407), or an address the scope refuses. | the target |
 | per role | One login for `form` and OIDC identities, never retried. With `auth.check_url`, one GET there with the identity's credentials: 2xx accepted, 401/403 rejected, anything else unclear. `bearer` and `basic` without `check_url` are reported as not checked against the target. | target, login endpoints |
-| Model test | Only with `--test-model`: one fixed prompt without target data, findings or credentials. Passes when the host stays confined and replies with exactly the requested step. | the provider |
+| Model test | Only with `--test-model` (`verify` always runs it, within its own limits): one fixed prompt without target data, findings or credentials. Passes when the host stays confined and replies with exactly the requested step. | the provider |
 
 The offline checks run first. If one fails, nothing is contacted. The target and
 login checks run only after one explicit confirmation (VER-002): at the prompt,
@@ -695,7 +735,7 @@ Written to `--output` (default `./verification`):
   type and `at` with the file and line in the Verifier, never the error
   message; the finding under test when the run was interrupted gets
   `interrupted`. It holds no response bodies or source text, credential values are
-  redacted (VER-016), and only the owner can read it. `--append` extends it;
+  redacted (VER-016), and only the owner can read it. `--resume` continues it;
   otherwise each run starts it fresh.
 - `evidence/` — owner-only: `<finding>-poc.har` for every tested finding (see
   proof of concept above), the proof records `<finding>-exchanges.json` and

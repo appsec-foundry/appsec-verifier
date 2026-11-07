@@ -107,8 +107,31 @@ def _wrapper_script(unshare: str, chrome: str) -> str:
     return f'#!/bin/sh\nexec {shlex.quote(unshare)} {" ".join(_NETNS_ARGS)} {shlex.quote(chrome)} "$@"\n'
 
 
+def _playwright_install_command(prefix: str | None = None, root: Path | None = None) -> str:
+    """How to add Playwright to the installation that is running: `pipx inject` for a pipx install;
+    for a source checkout the hash-checked requirements.lock (it pins every runtime part), installed
+    with the Python that runs the Verifier; otherwise that Python's pip with the version the
+    `browser` extra pins."""
+    from importlib.metadata import PackageNotFoundError, requires
+
+    from ..version_info import resource_root
+
+    try:
+        pinned = next((r.split(";")[0].strip() for r in requires("appsec-verifier") or []
+                       if r.startswith("playwright") and "browser" in r), "playwright==1.64.1")
+    except PackageNotFoundError:
+        pinned = "playwright==1.64.1"
+    if (Path(prefix or sys.prefix) / "pipx_metadata.json").is_file():
+        return f"pipx inject appsec-verifier {pinned}"
+    python = shlex.quote(sys.executable or "python3")
+    lockfile = (root or resource_root()) / "requirements.lock"
+    if lockfile.is_file():
+        return f"{python} -m pip install --require-hashes -r {shlex.quote(str(lockfile))}"
+    return f"{python} -m pip install {pinned}"
+
+
 class BrowserUnavailable(Exception):
-    """Playwright is not installed; XSS findings cannot be proven in this run."""
+    """The proof browser cannot run here (what is missing is the message); XSS findings cannot be proven."""
 
 
 class BrowserError(Exception):
@@ -297,10 +320,14 @@ class ProofBrowser:
 
     @staticmethod
     def check_available() -> None:
+        """Raise BrowserUnavailable with what is missing here and how to add it."""
         try:
             import playwright.sync_api  # noqa: F401
         except ImportError as exc:
-            raise BrowserUnavailable("install appsec-verifier[browser] (Playwright) and Google Chrome") from exc
+            chrome = _chrome_binary() is not None
+            raise BrowserUnavailable(("Playwright is" if chrome else "Playwright and Google Chrome are")
+                                     + f" not installed; run `{_playwright_install_command()}`"
+                                     + ("" if chrome else " and install Google Chrome")) from exc
         problem = _isolation_problem()
         if problem:
             raise BrowserUnavailable(problem)

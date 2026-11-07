@@ -292,17 +292,17 @@ def _sel(cls):
 
 def test_browser_is_prepared_only_for_xss_and_reports_when_unavailable(monkeypatch, tmp_path):
     args = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="xss")
-    assert _proof_browser(args, None, _sel("access-control")) == (None, None)
-    assert _proof_browser(args, None, _sel("injection")) == (None, None)
+    assert _proof_browser(args, None, _sel("access-control")) == (None, None, None)
+    assert _proof_browser(args, None, _sel("injection")) == (None, None, None)
 
     def missing():
         raise BrowserUnavailable("install appsec-verifier[browser] (Playwright) and Google Chrome")
 
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(missing))
-    browser, note = _proof_browser(args, None, _sel("xss"))
+    browser, note, _ = _proof_browser(args, None, _sel("xss"))
     assert browser is None and "cannot be confirmed" in note
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
-    browser, note = _proof_browser(args, None, _sel("xss"))
+    browser, note, _ = _proof_browser(args, None, _sel("xss"))
     assert isinstance(browser, ProofBrowser) and "first use" in note and "screenshots: xss" in note
     assert browser.screenshots == {"xss"}
 
@@ -313,19 +313,19 @@ def test_screenshots_need_the_browser_only_for_the_classes_they_are_on_for(monke
 
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(missing))
     on = SimpleNamespace(output=str(tmp_path), headful=False, screenshots=None)     # the default: every class
-    browser, note = _proof_browser(on, None, _sel("injection"))
+    browser, note, _ = _proof_browser(on, None, _sel("injection"))
     assert browser is None and "get no screenshot" in note
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
     for cls in ("access-control", "injection", "open-redirect", "path-traversal", "ssrf"):
-        browser, note = _proof_browser(on, None, _sel(cls))
+        browser, note, _ = _proof_browser(on, None, _sel(cls))
         assert browser.screenshots == set(SCREENSHOT_CLASSES) and "screenshots: all classes" in note
     some = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="xss,ssrf")
-    assert _proof_browser(some, None, _sel("injection")) == (None, None)
-    browser, note = _proof_browser(some, None, _sel("ssrf"))
+    assert _proof_browser(some, None, _sel("injection")) == (None, None, None)
+    browser, note, _ = _proof_browser(some, None, _sel("ssrf"))
     assert browser.screenshots == {"xss", "ssrf"} and "screenshots: xss, ssrf" in note
     off = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="none")
-    assert _proof_browser(off, None, _sel("access-control")) == (None, None)
-    browser, note = _proof_browser(off, None, _sel("xss"))      # XSS still needs the browser for its proof
+    assert _proof_browser(off, None, _sel("access-control")) == (None, None, None)
+    browser, note, _ = _proof_browser(off, None, _sel("xss"))      # XSS still needs the browser for its proof
     assert browser.screenshots == frozenset() and "screenshots: none" in note
 
 
@@ -407,3 +407,38 @@ def test_check_available_refuses_when_chrome_cannot_be_isolated(monkeypatch):
     monkeypatch.setattr(browser_mod, "_isolation_problem", lambda: "cannot create a network namespace")
     with pytest.raises(BrowserUnavailable, match="network namespace"):
         ProofBrowser.check_available()
+
+
+@pytest.mark.parametrize("chrome, expected", [
+    ("/usr/bin/google-chrome", "Playwright is not installed; run `"),
+    (None, "Playwright and Google Chrome are not installed; run `"),
+])
+def test_check_available_names_what_is_missing_and_how_to_add_it(monkeypatch, chrome, expected):
+    import sys as _sys
+
+    import appsec_verifier.tools.browser as browser_mod
+
+    monkeypatch.setitem(_sys.modules, "playwright.sync_api", None)          # import fails
+    monkeypatch.setattr(browser_mod, "_chrome_binary", lambda: chrome)
+    with pytest.raises(BrowserUnavailable) as caught:
+        ProofBrowser.check_available()
+    assert str(caught.value).startswith(expected)
+    assert str(caught.value).endswith("and install Google Chrome") == (chrome is None)
+
+
+def test_the_install_command_fits_the_installation(tmp_path):
+    import shlex
+    import sys as _sys
+
+    from appsec_verifier.tools.browser import _playwright_install_command
+
+    python = shlex.quote(_sys.executable)
+    prefix, checkout = tmp_path / "venv", tmp_path / "checkout"
+    prefix.mkdir()
+    checkout.mkdir()
+    assert _playwright_install_command(str(prefix), checkout).startswith(f"{python} -m pip install playwright==")
+    (checkout / "requirements.lock").write_text("")
+    assert _playwright_install_command(str(prefix), checkout) == (
+        f"{python} -m pip install --require-hashes -r {checkout / 'requirements.lock'}")
+    (prefix / "pipx_metadata.json").write_text("{}")
+    assert _playwright_install_command(str(prefix), checkout).startswith("pipx inject appsec-verifier playwright==")

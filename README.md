@@ -168,11 +168,19 @@ Select findings with `--category` (for example `xss`, `idor`, `sqli`),
 
 ## Output
 
+Before it contacts the target, `verify` shows a test plan: the findings it will
+test with the requests the assessment names, and the findings it cannot test in
+this run, grouped by what they need (a test identity, the proof browser, a
+marker file, a callback, or `--allow-intrusive`) and how to provide it. Those
+are not tested unless you add `--test-all`.
+
 While `verify` runs, it prints its progress on standard error: one line when a
-finding starts, one per request or source read of the agent with its result,
-and one with the verdict. Each line shows the finding, the share of findings
-done, the run time and the time left. In a terminal a status line underneath
-shows the running step and how long it has been running.
+finding starts, one per request or source read of the agent with what it
+checks and its result, and one with the verdict and its reason: green
+confirmed, red not reproduced, yellow inconclusive. Each line shows the
+finding, the share of findings done, the run time and the time left. In a
+terminal a status line underneath shows the running step and how long it has
+been running.
 [`docs/cli.md`](docs/cli.md#verify--verify-findings-against-a-running-target)
 describes the columns.
 
@@ -191,8 +199,10 @@ describes the columns.
   `--screenshots` chooses the classes. Responses and screenshots can show data
   of the target; check them before you share them.
 
-`--print` also shows the verdicts in the terminal, and `--append` adds to an
-existing report. `--annotate` writes `security-assessment.annotated.yaml`, a
+At the end `verify` lists each finding with its result and the reason.
+`--print` adds the code-only findings, and `--resume` continues a
+report whose run did not finish: findings with a verdict keep it, the others
+are tested. `--annotate` writes `security-assessment.annotated.yaml`, a
 copy of the assessment with the verdict of each finding.
 
 ## Install
@@ -201,11 +211,12 @@ copy of the assessment with the verdict of each finding.
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
 ```
 
-Optional parts:
+Install the optional parts right away, so that the Verifier can test every
+class of finding; without the proof browser no XSS finding can be confirmed:
 
 ```sh
-pipx inject appsec-verifier 'anthropic>=0.87,<1'   # for --profile anthropic-api
 pipx inject appsec-verifier playwright==1.64.1    # proof browser for XSS
+pipx inject appsec-verifier 'anthropic>=0.87,<1'   # only for --profile anthropic-api
 ```
 
 The proof browser uses the installed Google Chrome and runs only on Linux with
@@ -221,7 +232,8 @@ install, it takes the newest dependency versions allowed. Details:
 [`docs/cli.md`](docs/cli.md#update--update-the-installed-verifier-ver-033).
 
 To install from a checkout with every package pinned and hash-checked in
-[`requirements.lock`](requirements.lock):
+[`requirements.lock`](requirements.lock), the proof browser and the
+`anthropic` SDK included:
 
 ```sh
 python3 -m venv .venv

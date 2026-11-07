@@ -3,8 +3,8 @@
 `scope` and `export` run offline (no network, no model calls). `verify`
 contacts the target through an agent only when model access is configured;
 otherwise it reports every selected finding not-attempted. Before the first
-model call it runs the pre-flight checks of VER-032; `preflight` runs them alone
-and verifies nothing (preflight.py). Called with an
+finding it runs the pre-flight checks of VER-032, one fixed model test included;
+`preflight` runs them alone and verifies nothing (preflight.py). Called with an
 assessment and no command, it starts the guided run of guided.py (VER-031),
 which asks only for the `verify` settings without a default and then runs `verify`. See docs/cli.md
 for the full design.
@@ -127,10 +127,17 @@ def _load_assessment(path: Path) -> tuple[dict | None, list, list[str]]:
     return doc, plans_from(doc), []
 
 
-def _blocked(header: str, errors: list[str]) -> int:
-    print(header, file=sys.stderr)
-    for e in errors:
-        print(f"  - {printable(e)}", file=sys.stderr)
+def _blocked(headline: str, details=(), fix: str | None = None, *, contacted: bool = False) -> int:
+    """Why a run cannot go on, shown the same way everywhere on standard error: what is wrong, the
+    details, what to do, and, unless something was contacted, that nothing was. Exit 2."""
+    sys.stdout.flush()                  # after the settings and the test plan, also when both go to one log
+    st = Style.for_stream(sys.stderr)
+    lines = ["", st(f"✗ {printable(headline)}", "critical", "bold"), *(f"  - {printable(d)}" for d in details)]
+    if fix:
+        lines.append(f"  → {fix}")
+    if not contacted:
+        lines.append(st("  Nothing was contacted.", "muted"))
+    print("\n".join(lines), file=sys.stderr)
     return EXIT_BLOCKED
 
 
@@ -349,41 +356,39 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     proceeds (VER-002)."""
     assessment = Path(args.assessment)
     if not assessment.is_file():
-        print(f"assessment not found: {assessment}", file=sys.stderr)
-        return EXIT_BLOCKED
+        return _blocked(f"The assessment {assessment} was not found", fix="check the path given with --assessment")
     if args.scope:
         scope_path = Path(args.scope)
         scope, errors = _read_scope(scope_path)
         errors = errors or _check_proxy(scope, os.environ)
         if errors:
-            print("scope file is invalid:", file=sys.stderr)
-            for e in errors:
-                print(f"  - {e}", file=sys.stderr)
-            return EXIT_BLOCKED
+            return _blocked(f"The scope file {scope_path} cannot be used", errors,
+                            f"correct it; `appsec-verifier scope --scope {scope_path}` checks it without a run")
     else:
         scope_path = None
         scope, errors = url_scope(args.target)
         if errors:
-            return _blocked("without --scope, the run needs a valid --url; nothing was contacted:", errors)
+            return _blocked("The target URL cannot be used", errors,
+                            "give --url as http(s)://host[:port], or a scope file with --scope")
 
     guard = ScopeGuard(scope)
     win = guard.within_window()
     if not win.allowed:
-        print(f"authorisation scope is not valid now: {win.reason}", file=sys.stderr)
-        return EXIT_BLOCKED
+        return _blocked("The scope's test window is not open now", [win.reason],
+                        "adjust window.from and window.until in the scope file")
     target = args.target or scope.get("base_url")
     td = guard.authorize(target, "target")
     if not td.allowed:
-        print(f"target out of scope: {td.reason}", file=sys.stderr)
-        return EXIT_BLOCKED
+        return _blocked(f"The target {target} is outside the scope", [td.reason],
+                        "use the scope's base_url, or add the target to the scope file")
 
     doc, plans, errors = _load_assessment(assessment)
     if errors:
-        return _blocked(f"the assessment {assessment} cannot be used; nothing was contacted:", errors)
+        return _blocked(f"The assessment {assessment} cannot be used", errors)
     sel = _select(args, plans)
     if not sel:
-        print("empty selection — nothing to verify (refine --category/--severity/--only).", file=sys.stderr)
-        return EXIT_BLOCKED
+        return _blocked("No finding matches the selection", fix="widen it with --min-severity, --category, "
+                                                                "--class or --only")
 
     try:
         limits = Limits.load({
@@ -392,30 +397,42 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             "rate_rps": args.rate,
         })
     except ValueError as exc:
-        print(f"invalid limits: {exc}", file=sys.stderr)
-        return EXIT_BLOCKED
-    existing = None
+        return _blocked("Invalid limits", [str(exc)], "check --cost-limit, --max-calls, --max-requests, "
+                                                      "--max-attempts, --max-duration and --rate")
+    existing, resumed = None, None
     existing_path = Path(args.output) / "verification.yaml"
-    if args.append and existing_path.is_file():    # checked now: the merge comes after the run
+    if args.resume and existing_path.is_file():    # checked now: the merge comes after the run
+        from .verify.report import resume_problems, verified_findings
+        from .verify.runner import _sha256
+
         existing, errors = read_report(existing_path)
+        errors = errors or resume_problems(existing, _sha256(assessment), target)
         if errors:
-            return _blocked(f"the report {existing_path} cannot be extended with --append; nothing was contacted:",
-                            errors)
+            return _blocked(f"The report {existing_path} cannot be continued with --resume", errors,
+                            "write to a new --output, or start without --resume")
+        kept = verified_findings(existing)
+        todo = [p for p in sel if p.id not in kept]
+        if not any(p.status == "dynamic" for p in todo):
+            print(f"nothing to resume: every selected finding has a verdict in {existing_path}; nothing was "
+                  "contacted.", file=sys.stderr)
+            return EXIT_OK
+        resumed = f"continues {existing_path} · {len(kept)} findings keep their verdict"
+        sel = todo
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
 
     identities, id_errors = _check_identities(args.identities, guard, os.environ)
     if id_errors:
-        print("identities are not usable; nothing was contacted:", file=sys.stderr)
-        for e in id_errors:
-            print(f"  - {e}", file=sys.stderr)
-        return EXIT_BLOCKED
+        return _blocked("The identities cannot be used", id_errors,
+                        "export the variables named above, or start without --identities")
     budget = RunBudget(limits)
     try:
         planner_factory, agent_info = _build_planner_factory(args)
     except ProfileError as exc:
-        print(f"model profile unavailable: {exc}", file=sys.stderr)
-        return EXIT_BLOCKED
+        from .agent import PROFILES
+
+        return _blocked(f"Model profile unavailable: {exc}",
+                        fix=f"choose another with --profile ({', '.join(PROFILES)})")
     from .agent import SourceReader, agent_registry
     from .auth import SessionManager
     from .tools import GuardedHttpClient
@@ -424,16 +441,31 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     sessions = SessionManager(identities, http, env=os.environ)
     source = SourceReader(args.source) if args.source else None
     registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
-    contact = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
-    browser, browser_note = _proof_browser(args, http, sel)
+    browser, browser_note, browser_missing = _proof_browser(args, http, sel)
     listener, listener_note = _callback_listener(scope, sel)
+    probed = [p for p in sel if p.status == "dynamic" and registry.get(p.cls)]
+    blocked = {} if args.test_all else {
+        p.id: need for p in probed
+        if (need := _blocker(p, identities=identities, browser=browser, listener=listener, scope=scope, safe=safe))}
+    skipped = {fid: reason for fid, (_, reason) in blocked.items()}
+    contact = any(p.id not in skipped for p in probed)
 
     summary = _assessment_summary(doc)
     st = Style.for_stream(sys.stdout)
-    notes = (("Identities", _identities_note(identities, sel)), ("Browser", browser_note),
+    out = Path(args.output)
+    report_note = resumed or (("replaces " if existing_path.is_file() else "")
+                              + f"{out / 'verification.md'} (Markdown, and verification.yaml for tools)")
+    notes = (("Report", report_note), ("Identities", _identities_note(identities, sel)), ("Browser", browser_note),
              ("Callback", listener_note), ("Marker file", _marker_note(scope, sel)))
+    if not args.test_all:       # what is missing is said once, in the test plan
+        notes = tuple((k, v) for k, v in notes if not (v and v.startswith("unavailable")
+                                                         and v.endswith("cannot be confirmed")))
     print("\n".join(_verify_settings(st, f"{assessment} · {summary}" if summary else assessment, target, scope, sel,
                                      limits, safe, read_only, contact, agent_info, notes, floor=args.min_severity)))
+    print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing))))
+    if probed and not contact:
+        return _blocked("Nothing to test in this run; no report was written",
+                        fix="provide what the findings above need, or use --test-all to try them anyway")
     if invocation:
         print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
@@ -441,27 +473,37 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes,
                                      default_yes=default_yes)
         if not conf.confirmed:
-            print(f"\nnot authorised to proceed: {conf.reason}", file=sys.stderr)
-            return EXIT_BLOCKED
+            return _blocked("Not authorised to proceed", [conf.reason],
+                            "confirm at the prompt, or pass --yes in a non-interactive run")
         authorization = {"confirmed": True, "mode": conf.mode,
                          "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
     else:
         print("\n" + st("No target-contacting probe is available yet — emitting a report with every "
                         "selected finding as not-attempted. Nothing was contacted.", "warn"))
+    if not contact:
         authorization = {"confirmed": False, "mode": "ci-flag" if args.non_interactive else "interactive", "at": None}
 
     if args.dry_run:
         print("\n" + st("--dry-run: selection and scope resolved; no report written, nothing contacted.", "muted"))
         return EXIT_OK
 
-    if contact:   # VER-032: reachability and logins before the first model call
-        checks = [check_target(http, target, proxy=proxy_for(scope, target))]
+    if contact:   # VER-032: reachability, logins and the model before the first finding
+        print("\n" + st("Preflight", "bold"), flush=True)
+        checks: list[Check] = []
+
+        def add(*items: Check) -> None:
+            checks.extend(items)
+            print(render(list(items), st), flush=True)
+
+        add(check_target(http, target, proxy=proxy_for(scope, target)))
         if not failed(checks):
-            checks += check_identities(sessions, identities, http, target, scope=scope)
-        print("\n" + st("Preflight", "bold") + "\n" + render(checks, st))
+            add(*(check_identities(sessions, identities, http, target, scope=scope) if identities else
+                  [Check("Identities", "info", "none given; only anonymous requests are possible")]))
+        if not failed(checks):
+            add(_model_test(planner_factory, budget))
         if failed(checks):
-            print("\na pre-flight check failed: no finding was tested and no model was asked.", file=sys.stderr)
-            return EXIT_BLOCKED
+            return _blocked("A pre-flight check failed; no finding was tested", fix="see the ✗ line under Preflight",
+                            contacted=True)
 
     out_dir = Path(args.output)
     action_log = progress = None
@@ -469,7 +511,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     if contact:
         from .verify.actionlog import ActionLog
         out_dir.mkdir(parents=True, exist_ok=True)
-        action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=args.append)
+        action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=existing is not None)
         progress = RunProgress(model=agent_info.get("model"), redact=sessions.redact,
                                remaining_time=budget.remaining_time)
     try:
@@ -487,7 +529,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             verifier_version=version_string(), target_base=target, authorization=authorization,
             safe=safe, read_only=read_only, contacted=contact, agent=agent_info, browser=browser,
             listener=listener if contact else None, log=action_log, evidence_dir=out_dir / "evidence",
-            progress=progress,
+            progress=progress, skipped=skipped,
         )
     finally:
         if progress is not None:
@@ -515,8 +557,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
         extra.append(("Annotated", f"{dest}" + (" (in place)" if args.in_place else "")))
 
-    if args.print_results:
-        _print_results(st, doc)
+    print("\n".join(_results(st, doc, plans, blocked, full=args.print_results)))
     print("\n".join(_verify_summary(st, doc, paths, extra)))
     if doc["meta"].get("interrupted"):
         print("\ninterrupted: the report holds the results so far; the findings not tested are marked "
@@ -652,6 +693,12 @@ def _proxy_check(scope: dict, target: str) -> Check:
     return Check("Proxy", "ok", f"{via} · {creds}")
 
 
+def _model_test(planner_factory, budget: RunBudget) -> Check:
+    """VER-032 in `verify`: one fixed prompt without target data, findings or
+    credentials, counted against the run's own limits, before the first finding."""
+    return generation_test(planner_factory.host, budget)
+
+
 def _generation_budget(args, profile: str) -> tuple[RunBudget | None, str | None]:
     """The separate limit of --test-model: one call, and for a priced profile an
     explicit cost limit of at least USD 0.01, as in AppSec Analyzer."""
@@ -709,24 +756,25 @@ def _screenshot_classes(args) -> frozenset:
 def _proof_browser(args, http, sel):
     """The proof browser when an XSS finding is selected (VER-009), or a finding
     of a class with screenshots on (VER-035), else None; with a line for the run
-    settings. Without it XSS findings stay unconfirmed and nothing gets a screenshot."""
+    settings and, when it is unavailable, what is missing and how to add it.
+    Without it XSS findings stay unconfirmed and nothing gets a screenshot."""
     shots = _screenshot_classes(args)
     xss = any(p.status == "dynamic" and p.cls == "xss" for p in sel)
     shown = any(p.status == "dynamic" and p.cls in shots for p in sel)
     if not (xss or shown):
-        return None, None
+        return None, None, None
     from .tools.browser import SCREENSHOT_CLASSES, BrowserUnavailable, ProofBrowser
 
     try:
         ProofBrowser.check_available()
     except BrowserUnavailable as exc:
         lost = "XSS findings cannot be confirmed" if xss else "findings get no screenshot"
-        return None, f"unavailable ({exc}); {lost}"
+        return None, f"unavailable ({exc}); {lost}", str(exc)
     browser = ProofBrowser(http, Path(args.output) / "evidence", headless=not args.headful, screenshots=shots)
     listed = ("all classes" if shots == set(SCREENSHOT_CLASSES)
               else ", ".join(c for c in SCREENSHOT_CLASSES if c in shots) or "none")
     return browser, ("Google Chrome via Playwright" + (", visible" if args.headful else "")
-                     + f", started on first use · screenshots: {listed}")
+                     + f", started on first use · screenshots: {listed}"), None
 
 
 def _callback_listener(scope, sel):
@@ -765,51 +813,195 @@ def _identities_note(identities, sel):
     return ", ".join(str(i["role"]) for i in identities)
 
 
+# What a finding this run cannot test needs: its name in the test plan, and how the operator provides it.
+# The browser's and the identity's lines are replaced by ones that fit this run (_run_hints).
+_NEEDS = {
+    "identity": ("test identity", ["create an identities file with two test accounts and pass it with "
+                                   "--identities FILE (docs/cli.md, Identities file)"]),
+    "browser": ("proof browser", ["install Playwright and Google Chrome"]),
+    "marker": ("marker file", ["place a file holding a random token (16 to 128 of A-Z a-z 0-9 _ -) on the "
+                               "target and add to a scope file (--scope):",
+                               "marker_file: {path: /path/on/the/target/marker.txt, content: TOKEN}",
+                               "(docs/cli.md, Scope file)"]),
+    "callback": ("callback", ["add to a scope file (--scope):",
+                              'callback: {host: 127.0.0.1, port: 8099, base_url: "http://127.0.0.1:8099"}',
+                              "(docs/cli.md, Scope file)"]),
+    "intrusive": ("intrusive mode", ["run with --allow-intrusive; the scope file needs allow_state_change: true"]),
+}
+
+
+_EXAMPLE_IDENTITIES = "https://github.com/appsec-foundry/appsec-verifier/blob/main/examples/juice-shop/identities.yaml"
+
+
+def _run_hints(doc: dict, target: str, browser_missing: str | None) -> dict[str, list[str]]:
+    """How-tos that fit this run: what the proof browser actually lacks, and for test identities
+    the login the assessment names and where an example file is."""
+    from .endpoints import login_endpoint
+
+    example = resource_root() / "examples" / "juice-shop" / "identities.yaml"
+    login = login_endpoint(doc.get("attack_surface"))
+    identity = ["create an identities file with two test accounts and pass it with --identities FILE; it names "
+                "the environment variables for user name and password, never the values",
+                *([f"login the assessment names: POST {target.rstrip('/')}{login}"] if login else []),
+                f"example: {example if example.is_file() else _EXAMPLE_IDENTITIES} (docs/cli.md, Identities file)"]
+    return {"identity": identity, **({"browser": [browser_missing]} if browser_missing else {})}
+
+
+def _blocker(plan, *, identities, browser, listener, scope, safe) -> tuple[str, str] | None:
+    """What this run lacks to confirm `plan` (a _NEEDS key and the reason for the
+    report), or None when it can try: first what its class's proof needs (VER-009
+    to VER-012), then the requests the assessment names (endpoints.py), when all
+    of them write in safe mode or all need a login and there is no test identity.
+    A finding that names no request is tried."""
+    from .endpoints import WRITE_METHODS
+
+    if plan.cls == "access-control" and not identities:
+        return "identity", "no test identity; the proof compares two identities"
+    if plan.cls == "xss" and browser is None:
+        return "browser", "no proof browser; XSS counts only when the payload executes"
+    if plan.cls == "path-traversal" and not (scope.get("marker_file") or {}).get("path"):
+        return "marker", "no marker_file in the scope"
+    if plan.cls == "ssrf" and listener is None:
+        return "callback", "no callback in the scope"
+    requests = [e for e in plan.endpoints if e.method != "PAGE"]
+    if requests and safe and all(e.method in WRITE_METHODS for e in requests):
+        return "intrusive", "safe mode; every request the assessment names writes"
+    if requests and not identities and all(e.login for e in requests):
+        return "identity", "no test identity; every request the assessment names requires a login"
+    return None
+
+
+def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None) -> list[str]:
+    """The test plan before the confirmation: each finding the run tests with the requests the
+    assessment names, then those it cannot test, grouped by what they need and how to provide it.
+    `hints` replaces a need's how-to with what is actually missing (the browser's cause)."""
+    if not plans:
+        return []
+    tested = [p for p in plans if p.id not in blocked]
+    head = (f"{len(tested)} of {_count(len(plans), 'finding')} will be tested" if tested
+            else "this run can test none of them" if len(plans) > 1 else "this run cannot test it")
+    lines = ["", f"{st('Test plan', 'bold')}     {head}"]
+    width = max(len(printable(p.id)) for p in plans)
+    for p in tested:
+        what = " · ".join(printable(x) for x in (", ".join(map(str, p.endpoints[:2])), p.title or p.cwe) if x)
+        lines.append(f"  {printable(p.id):<{width}}  {st(f'{printable(p.severity).lower():<8}', 'muted')}  "
+                     f"{printable(p.cls or ''):<14}  {what}")
+    if not blocked:
+        return lines
+    groups: dict[str, list[str]] = {}
+    for p in plans:
+        if p.id in blocked:
+            groups.setdefault(blocked[p.id][0], []).append(printable(p.id))
+    lines += ["", f"{st('Not testable', 'bold')}  {_count(len(blocked), 'finding')} "
+                  f"{'needs' if len(blocked) == 1 else 'need'} what this run does not have (--test-all tries anyway)"]
+    label_width = max(len(_NEEDS[key][0]) for key in groups)
+    indent = 2 + label_width + 2 + 2 + 2
+    room = max(columns() - 1 - indent, 30)
+    for key, ids in sorted(groups.items(), key=lambda group: -len(group[1])):
+        label, how = _NEEDS[key]
+        how = [printable(text) for text in (hints or {}).get(key) or how]
+        wrapped = textwrap.wrap(", ".join(ids), room) or [""]
+        lines.append(f"  {st(f'{label:<{label_width}}', 'warn')}  {len(ids):>2}  {wrapped[0]}")
+        lines += [" " * indent + piece for piece in wrapped[1:]]
+        for n, text in enumerate(how):     # a line to copy stays whole; prose wraps
+            pieces = [text] if text.startswith(("marker_file:", "callback:")) else textwrap.wrap(text, room - 2)
+            lines += [" " * indent + st(("→ " if n == 0 and i == 0 else "  ") + piece, "muted")
+                      for i, piece in enumerate(pieces)]
+    return lines
+
+
 def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
                      notes=(), floor=None) -> list[str]:
     dyn = sum(1 for p in sel if p.status == "dynamic")
-    classes = sorted({p.cls for p in sel if p.cls})
     from .agent import SUBSCRIPTION_PROFILES
 
-    cost = ("cost: subscription, not reported" if agent_info["profile"] in SUBSCRIPTION_PROFILES
-            else f"cost ≤ ${limits.cost_limit_usd:.2f}")
+    cost = ("cost not reported (subscription)" if agent_info["profile"] in SUBSCRIPTION_PROFILES
+            else f"≤ ${limits.cost_limit_usd:.2f}")
+    seconds = int(limits.max_duration_s)
+    rate = f"{limits.rate_rps:g} requests/s" if limits.rate_rps else "no rate limit"
     rows = [
         ("Assessment", str(assessment)),
         ("Target", f"{target} ({'will contact' if contact else 'not contacted yet'})"),
         ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"
          if "owner" in scope else f"no scope file: only {target}'s host and port, read-only"),
-        ("Selection", f"{len(sel)} findings · {dyn} dynamic{f' · severity {floor} and above' if floor else ''} · "
-                      f"classes: {', '.join(classes) or '—'}"),
-        ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth", "check"))
-                               if v)),
-        ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} req · "
-                   f"≤ {int(limits.max_duration_s)}s · {limits.rate_rps} rps"),
-        ("Mode", f"{'safe' if safe else 'intrusive'} · {'read-only' if read_only else 'state-changing'}",
-         "ok" if safe else "warn"),
+        ("Selection", " · ".join([_count(len(sel), "finding") + (f", severity {floor} and above" if floor else ""),
+                                  f"{dyn} testable against the running app",
+                                  *([f"{len(sel) - dyn} code-only"] if len(sel) > dyn else [])])),
+        # The profile's own check is not repeated: the pre-flight model test shows whether the model answers.
+        ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth")) if v)),
+        ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} requests · ≤ "
+                   + (f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds} s") + f" · {rate}"),
+        ("Mode", "safe: only GET, HEAD and OPTIONS" if safe else
+         f"intrusive · {'read-only' if read_only else 'state-changing'}", "ok" if safe else "warn"),
     ]
     for key, note in notes:
         if note:
-            rows.append((key, note, "warn" if note.startswith("unavailable") else None))
+            rows.append((key, note, "warn" if note.startswith(("unavailable", "replaces")) else None))
     return [*_title(st, "verify"), *_facts(st, rows)]
 
 
-_VERDICT_MARK = {"confirmed": ("✓", "critical"), "not-reproducible": ("✗", "ok"), "blocked-by-control": ("⊘", "ok"),
-                 "inconclusive": ("?", "warn"), "not-attempted": ("·", "muted")}
+# Seen from the finding: green when the run confirmed it, red when it could not reproduce it or a control
+# blocked it (a likely false positive), yellow when the run could not decide.
+_VERDICT_MARK = {"confirmed": ("✓", "ok"), "not-reproducible": ("✗", "critical"),
+                 "blocked-by-control": ("⊘", "critical"), "inconclusive": ("?", "warn"),
+                 "not-attempted": ("·", "muted")}
 
 
-def _print_results(st: Style, doc) -> None:
-    """Render per-finding verdicts to the console (VER-013). Text from the
-    assessment and the model passes `printable` before it is coloured (VER-005)."""
-    print("\n" + st("Results", "bold"))
-    for r in doc["results"]:
-        fr = r.get("finding_ref", {})
-        mark, role = _VERDICT_MARK.get(r["verdict"], (" ", "muted"))
-        conf = f" ({printable(r['confidence'])})" if r.get("confidence") else ""
+_VERDICT_ORDER = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
+
+
+def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full: bool = False) -> list[str]:
+    """The overview at the end (VER-013): per finding its id, severity, class, result and title, and
+    under it the reason, confirmed first. A finding this run could not test shows what it needs as
+    its result. Only findings testable against the app, unless `full` (--print) lists every finding
+    with its whole reason. Text from the assessment and the model passes `printable` before it is
+    coloured (VER-005); on a terminal a line is cut to fit."""
+    from .loader import _SEVERITY_RANK
+    from .verify.report import _VERDICT_LABEL
+
+    severity = {p.id: printable(p.severity).lower() for p in plans}
+    rows = [r for r in doc["results"] if full or (r.get("eligibility") or {}).get("status") == "dynamic"]
+    if not rows:
+        return []
+    rows.sort(key=lambda r: (_VERDICT_ORDER.index(r["verdict"]),
+                             -_SEVERITY_RANK.get(severity.get(r["finding_ref"].get("id"), ""), 0)))
+
+    def result(r) -> str:
+        fid = r["finding_ref"].get("id")
+        if r["verdict"] == "not-attempted" and fid in blocked:
+            return f"needs {_NEEDS[blocked[fid][0]][0]}"
+        return _VERDICT_LABEL[r["verdict"]] + (f" ({printable(r['confidence'])})" if r.get("confidence") else "")
+
+    room = columns() - 1 if st.enabled else 10_000
+    id_width = max(len(printable(r["finding_ref"].get("id"))) for r in rows)
+    result_width = max(len(result(r)) for r in rows)
+    indent = 4                     # the reason starts under the id
+    lines = ["", st("Results", "bold")]
+    for r in rows:
+        fr = r["finding_ref"]
+        mark, role = _VERDICT_MARK[r["verdict"]]
+        cells = (f"{printable(fr.get('id')):<{id_width}}  {severity.get(fr.get('id'), ''):<8}  "
+                 f"{printable(r.get('class') or '-'):<14}  ")
         title = printable(fr.get("title") or fr.get("cwe") or "")
-        fid, cls = printable(fr.get("id")), printable(r.get("class") or "-")
-        print(f"  {st(mark, role)} {st(f'{fid:<8}', 'bold')} {cls:<15} {st(r['verdict'], role)}{conf}  {title}")
-        if r.get("rationale"):
-            print("      " + st(printable(r["rationale"]), "muted"))
+        used = 4 + len(cells) + result_width + 2
+        lines.append(f"  {st(mark, role)} {cells}{st(f'{result(r):<{result_width}}', role)}  "
+                     + _fit(title, room - used))
+        reason = " ".join(printable(r.get("rationale") or "").split())
+        if reason and fr.get("id") not in blocked:
+            pieces = (textwrap.wrap(reason, max(room - indent, 30)) if full else [_fit(reason, room - indent)])
+            lines += [" " * indent + st(piece, "muted") for piece in pieces]
+    hidden = len(doc["results"]) - len(rows)
+    if hidden:
+        lines.append(st(f"  {_count(hidden, 'code-only finding')} not listed (--print lists them)", "muted"))
+    return lines
+
+
+def _fit(text: str, room: int) -> str:
+    return text if len(text) <= room else text[: max(room - 1, 10)] + "…"
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")
 
 
 def _run_usage(budget: RunBudget, seconds: float, profile: str) -> str:
@@ -826,15 +1018,17 @@ def _run_usage(budget: RunBudget, seconds: float, profile: str) -> str:
 
 def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list[str]:
     s = doc["meta"]["summary"]
-    verdicts = ((s["confirmed"], "confirmed", "critical"), (s["not_reproducible"], "not-repro", "ok"),
-                (s["blocked"], "blocked", "ok"), (s["inconclusive"], "inconclusive", "warn"),
-                (s["not_attempted"], "not-attempted", "muted"))
+    code_only = sum(1 for r in doc["results"] if (r.get("eligibility") or {}).get("status") != "dynamic")
+    verdicts = ((s["confirmed"], "confirmed", "ok"), (s["not_reproducible"], "not reproducible", "critical"),
+                (s["blocked"], "blocked by control", "critical"), (s["inconclusive"], "inconclusive", "warn"),
+                (s["not_attempted"] - code_only, "not tested", "muted"), (code_only, "code-only", "muted"))
+    evidence = Path(paths["evidence"])
     rows = [
-        ("Verified", f"{s['total']} findings"),
-        ("Verdicts", [(f"{n} {label}", role if n else "muted") for n, label, role in verdicts]),
-        ("Report", str(paths["md"])),
-        ("Data", str(paths["yaml"])),
+        ("Report", f"{paths['md']} (Markdown)", "bold"),
+        ("Data", f"{paths['yaml']} (YAML, for --resume and export)"),
+        *([("Evidence", f"{evidence}/")] if evidence.is_dir() and any(evidence.iterdir()) else []),
         *extra,
+        ("Verdicts", [(f"{n} {label}", role) for n, label, role in verdicts if n] or [("none", "muted")]),
     ]
     return ["", st("Done", "bold"), *_facts(st, rows)]
 
@@ -842,7 +1036,7 @@ def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list
 def cmd_export(args: argparse.Namespace) -> int:
     doc, errors = read_report(Path(args.verification))
     if errors:
-        return _blocked(f"the report {args.verification} cannot be exported:", errors)
+        return _blocked(f"The report {args.verification} cannot be exported", errors)
     ann = build_annotations(doc, verification_report=str(args.verification))
     out = Path(args.output or "analyzer-verification.json")
     if args.fmt == "yaml":
@@ -1056,6 +1250,9 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     mode.add_argument("--yes", action="store_true", help="confirm the test without a prompt; the report records it")
     mode.add_argument("--dry-run", action="store_true",
                       help="resolve selection and scope, then stop: writes nothing, contacts nothing")
+    mode.add_argument("--test-all", action="store_true",
+                      help="also test findings this run cannot confirm (e.g. a login is needed but no test "
+                           "identity is given); by default they are listed and not tested")
     mode.add_argument("--headful", action="store_true", help="show the proof browser (local debugging)")
 
     out = vf.add_argument_group("output")
@@ -1064,8 +1261,9 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     out.add_argument("--report", action="store_true", help="standalone report (default)")
     out.add_argument("--print", dest="print_results", action="store_true",
                      help="also print the verdict of each finding")
-    out.add_argument("--append", action="store_true",
-                     help="add to an existing report in the output directory instead of replacing it")
+    out.add_argument("--resume", action="store_true",
+                     help="continue the report in the output directory: findings with a verdict keep it, the others "
+                          "are tested")
     out.add_argument("--annotate", action="store_true",
                      help="also write a copy of the assessment with the verdict of each finding")
     out.add_argument("--in-place", action="store_true", help="with --annotate: write the verdicts into the "

@@ -2,8 +2,9 @@
 for verification planning (VER-005, VER-006, VER-026). The assessment is checked
 against schemas/assessment.schema.yaml, which covers only the fields read here,
 and its finding ids must be unique (VER-032). Error messages name the place and
-the rule; the only value they quote is a repeated id, escaped by repr. Offline:
-no network, no model calls.
+the rule; the only value they quote is a repeated id, escaped by repr. Each plan
+also carries the requests the finding names and its scenario (endpoints.py).
+Offline: no network, no model calls.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 import yaml
 from jsonschema.validators import validator_for
 
+from .endpoints import Endpoint, finding_brief, finding_endpoints
 from .matchkey import match_key
 from .version_info import resource_root
 
@@ -58,6 +60,8 @@ class FindingPlan:
     cls: str | None                 # weakness class when dynamic
     reason: str
     technique: str | None = None    # finer category (e.g. idor, sqli) when dynamic
+    endpoints: tuple[Endpoint, ...] = ()    # requests the finding names (endpoints.py)
+    brief: str = ""                 # its scenario and attack steps, for the agent
 
 
 def _first_location(threat: dict) -> str | None:
@@ -76,7 +80,7 @@ def _first_location(threat: dict) -> str | None:
     return None
 
 
-def classify(threat: dict, catalog: dict[str, dict]) -> FindingPlan:
+def classify(threat: dict, catalog: dict[str, dict], surface=None) -> FindingPlan:
     cwe = (threat.get("cwe") or "").strip().upper()
     mk = match_key(threat)
     loc = _first_location(threat)
@@ -98,6 +102,8 @@ def classify(threat: dict, catalog: dict[str, dict]) -> FindingPlan:
         cls=cls,
         reason=reason,
         technique=(entry.get("technique") if entry else None),
+        endpoints=finding_endpoints(threat, surface),
+        brief=finding_brief(threat),
     )
 
 
@@ -146,7 +152,7 @@ def read_assessment(assessment_path: Path) -> dict:
 
 def plans_from(doc: dict) -> list[FindingPlan]:
     catalog = load_verifiable_cwes()
-    return [classify(t, catalog) for t in doc["threats"]]
+    return [classify(t, catalog, doc.get("attack_surface")) for t in doc["threats"]]
 
 
 def load_plans(assessment_path: Path) -> list[FindingPlan]:

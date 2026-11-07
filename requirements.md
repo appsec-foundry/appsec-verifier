@@ -109,7 +109,12 @@ optional hardening.
   follow-on weaknesses. If the named location is unreachable or the probe must
   deviate (for example a required login step), the deviation is recorded with the
   result. Anything the Verifier happens to notice outside the finding is reported
-  as an unverified observation and is not pursued.
+  as an unverified observation and is not pursued. Before contacting the target it
+  shows which findings it will test and with which requests, as far as the
+  assessment names them. A finding the run cannot confirm, because its proof needs
+  what the run lacks (VER-009 to VER-012) or every request it names writes in safe
+  mode or needs a login without a test identity, is not tested unless the operator
+  asks; the plan names what is missing, the report the reason.
 
 - **VER-009: Require real execution as proof of XSS.** An XSS finding counts as
   confirmed only when a unique, harmless marker payload actually executes in a
@@ -337,8 +342,9 @@ optional hardening.
     stops the run before any question.
   - **Mode and output** (VER-030, VER-020, VER-027): safe mode and the
     standalone report by default. Intrusive mode is offered only where the scope
-    allows state change and needs its own explicit yes. An existing report is
-    not replaced without asking.
+    allows state change and needs its own explicit yes. An existing report in
+    the output directory is replaced; the run settings say so before the
+    confirmation.
 
   Answers are validated like the matching options and allow nothing an option
   could not; settings already given as options are not asked again. The guided
@@ -354,17 +360,18 @@ optional hardening.
   scope or URL, profile, or confirmation blocks the run and names what is
   missing.
 
-- **VER-032: Check inputs and access before the first model call.** Before a run
-  asks a model for a step, it checks the assessment's structure (VER-005), that
-  the target answers through the declared proxy (VER-003, VER-029), that every
+- **VER-032: Check inputs and access before the first finding.** Before a run
+  tests a finding, it checks the assessment's structure (VER-005), that the
+  target answers through the declared proxy (VER-003, VER-029), that every
   identity obtains a session and, where it names a check URL, is accepted there
-  (VER-028), and that the model profile is usable, for an API profile by one
-  metadata request. A failed check blocks the run and names its cause, never a
-  secret or raw error (VER-016); what a check cannot prove is said. Checks that
-  contact the target follow the confirmation of VER-002, and each login is tried
-  once. A separate command runs the same checks without verifying, offline if
-  asked; only there, on explicit request and with its own limit, one fixed
-  prompt without target data tests the model's answer.
+  (VER-028), that the model profile is usable, for an API profile by one
+  metadata request, and that the model answers one fixed prompt without target
+  data, findings or credentials with a valid step, within the run's limits. A
+  failed check blocks the run and names its cause, never a secret or raw error
+  (VER-016); what a check cannot prove is said. Checks that contact the target
+  follow the confirmation of VER-002, and each login is tried once. A separate
+  command runs the same checks without verifying, offline if asked; there the
+  fixed prompt runs only on explicit request and with its own limit.
 
 - **VER-033: Update its own installation on request.** A separate command
   reinstalls a pipx installation of the Verifier from the source it was

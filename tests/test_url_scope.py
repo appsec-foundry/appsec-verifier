@@ -50,7 +50,8 @@ def _verify(tmp_path, monkeypatch, *extra):
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, dict(INFO)))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
     (tmp_path / "a.yaml").write_text(yaml.safe_dump({"threats": [THREAT]}))
-    argv = ["verify", "--assessment", str(tmp_path / "a.yaml"), "--yes", "--output", str(tmp_path / "out"), *extra]
+    argv = ["verify", "--assessment", str(tmp_path / "a.yaml"), "--yes", "--test-all", "--output",
+            str(tmp_path / "out"), *extra]
     return cli.main(argv), target, asked
 
 
@@ -109,7 +110,7 @@ def test_verify_without_a_scope_file_and_a_valid_url_blocks_before_any_contact(t
     rc, target, asked = _verify(tmp_path, monkeypatch, *extra)
     err = capsys.readouterr().err
     assert rc == cli.EXIT_BLOCKED and target.calls == [] and asked == []
-    assert expected in err and "nothing was contacted" in err and "pw@" not in err
+    assert expected in err and "Nothing was contacted." in err and "pw@" not in err
     assert not (tmp_path / "out").exists()
 
 
