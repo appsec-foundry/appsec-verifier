@@ -1,108 +1,81 @@
 # AppSec Verifier
 
-AppSec Verifier tests the findings of a static security assessment against the
-running application. It reads the `security-assessment.yaml` written by
-[AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer), sends
-requests to a target you are authorised to test, and records for each selected
-finding whether the weakness can be reproduced. It does not repeat the static
-analysis and does not change severities.
+AppSec Verifier checks whether the findings of a static security assessment can
+be reproduced in the running application. It reads the
+`security-assessment.yaml` written by
+[AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer), tests the
+selected findings against a target you are authorised to test, and reports for
+each finding whether the weakness is real.
 
-## Status
+An AI model plans each test step. The Verifier sends every request itself, only
+inside the scope you define, and accepts a finding as confirmed only when the
+proof holds up in a check in code. It does not repeat the static analysis and
+does not change severities.
 
-Early version.
+This is an early version; see [Limitations](#limitations).
 
-- `plan`, `scope` and `export` work offline.
-- `verify` runs an AI agent per finding. The agent reads the finding and, with
-  `--source`, the relevant source code, then sends HTTP requests within the
-  scope. It has no other tools. It cannot read `.env` files, private keys,
-  credential stores or `.git/` from the checkout.
-- The model comes from a profile, chosen as in AppSec Analyzer (`--profile`):
+## Quick start
 
-  | Profile | Uses | Bounded by |
-  | --- | --- | --- |
-  | `claude` (default) | Claude CLI with its login or `ANTHROPIC_API_KEY` | USD, calls, time |
-  | `codex-cli` | Codex CLI 0.163.0+ with a ChatGPT login | calls, time |
-  | `copilot-cli` | GitHub Copilot CLI 1.0.101 with its login | calls, time |
-  | `codex` | OpenAI Responses API with `OPENAI_API_KEY` | USD, calls, time |
-  | `anthropic-api` | Anthropic API with `ANTHROPIC_API_KEY`, no CLI needed | USD, calls, time |
+You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an
+assessment from AppSec Analyzer, and the Claude CLI (`claude`), installed and
+logged in. Other models are listed under [Model profiles](#model-profiles).
 
-  Every CLI runs without tools, MCP servers, settings or session history and
-  only proposes the next step; the Verifier checks it and executes it within the
-  scope. `--non-interactive` requires an explicit `--profile`. Codex CLI and
-  Copilot CLI have no live end-to-end test yet. Subscription use follows the
-  provider's terms for that plan.
-- XSS findings are confirmed only in a headless proof browser (Google Chrome
-  through Playwright, `appsec-verifier[browser]`): the payload must evaluate a
-  per-finding marker, and a screenshot is saved when it does. Every request the
-  browser makes goes through the scope check, and Chrome itself runs in a network
-  namespace without network access. That needs Linux with `unshare` (util-linux)
-  and unprivileged user namespaces; elsewhere the browser does not start. Without
-  the browser, XSS findings cannot be confirmed. The browser has only been tested
-  offline so far; see `tests/test_browser_live.py` to run it against real Chrome.
-- The code checks the proof of every `confirmed` verdict; the model's word is
-  not enough. The model names the steps that prove it, and a verdict whose
-  proof does not hold ends `inconclusive`.
-- The agent's HTTP requests do not follow redirects. A 3xx answer comes back
-  with its `Location`, and any next hop is a request of its own.
-- Path traversal and SSRF are aimed only at harmless markers. For path
-  traversal the operator places a file with a random token on the target and
-  names it in the scope (`marker_file`); the agent is told where the file lies,
-  not what it contains, and a parameter that names any other file is refused.
-  For SSRF the Verifier runs a listener on loopback (`callback`), and a URL in a
-  parameter must point there. A target on another machine reaches the listener
-  only through a TLS-terminating proxy or tunnel the operator runs. These checks
-  decode percent-encoding but do not know every encoding a target accepts; the
-  agent is told the same rule.
+1. Install the Verifier:
 
-## Usage
+   ```sh
+   pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
+   ```
+
+2. Write a scope file. It is your authorisation: the Verifier contacts nothing
+   outside it. For a test instance on your own machine:
+
+   ```yaml
+   # scope.yaml
+   schema_version: 1
+   base_url: http://localhost:3000
+   schemes: [http]        # only https is allowed unless you list http
+   window: {from: "2026-11-01T00:00:00Z", until: "2026-11-30T23:59:59Z"}  # your test period
+   owner: {name: Your Name}   # who is responsible for the test
+   ```
+
+   If you skip this step, the guided run writes a template for you to fill in.
+
+3. Optional: add test accounts in `identities.yaml`. Access-control findings
+   need two of them. The file names environment variables, never the passwords
+   themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml).
+
+4. Start the guided run with the assessment:
+
+   ```sh
+   appsec-verifier ./out/security-assessment.yaml
+   ```
+
+   It shows how many findings can be tested, asks for the settings (Enter keeps
+   the default), and asks once more before it sends the first request.
+
+5. Read the report in `./verification/verification.md`.
+
+To try it on a deliberately vulnerable application, run OWASP Juice Shop
+locally (`docker run --rm -p 3000:3000 bkimminich/juice-shop`) and use the files
+in [`examples/juice-shop/`](examples/juice-shop/).
+
+## Run without questions (CI)
+
+The guided run prints the matching `verify` command before it asks for the
+confirmation. Without a terminal, or with `--non-interactive`, nothing is
+asked; `--yes` gives the confirmation and `--profile` is required:
 
 ```sh
-appsec-analyzer assess --repo … --output ./out        # writes security-assessment.yaml
-
-appsec-verifier ./out/security-assessment.yaml         # guided: asks for the settings
-
-appsec-verifier verify --profile claude \
+appsec-verifier verify --non-interactive --yes --profile claude \
   --assessment ./out/security-assessment.yaml \
   --scope ./scope.yaml --identities ./identities.yaml \
-  --url https://localhost:3000 \
-  --category xss,access-control --min-severity high \
-  --cost-limit 5 --output ./verification
+  --min-severity high --cost-limit 5 --output ./verification
 ```
 
-Called with only the assessment, the Verifier shows what it holds and asks for
-the settings of the run, each with a default: classes, severity (High and
-Critical), scope file and URL, identities, model profile, limits, and intrusive
-mode where the scope allows it. A `scope.yaml` or `identities.yaml` next to the
-assessment or in the working directory is proposed. Without a scope file it
-writes a template to fill in and stops. Options given on the command line are not
-asked. Before the confirmation it prints the equivalent `verify` command for CI.
-With `--non-interactive`, or without a terminal, nothing is asked.
-
-`--scope` defines what may be contacted. `--identities` adds test accounts;
-access-control checks need at least two. Select findings with `--category`,
-`--severity`, `--min-severity` or `--only <id>`. `appsec-verifier plan` shows
-what a selection contains without contacting anything.
-
-Before the first request, `verify` prints the plan and asks for confirmation. In
-CI, pass `--non-interactive --yes`. `--dry-run` prints the plan and stops.
-
-Before it asks the model for anything, `verify` checks its inputs and access:
-the assessment's structure, the scope and proxy settings, the model profile
-(for `codex` and `anthropic-api` with one metadata request that generates
-nothing), and, after the confirmation, that the target answers and every test
-identity can log in. A failed check stops the run with exit code 2. To run these
-checks alone, for example before a CI run:
-
-```sh
-appsec-verifier preflight --profile claude \
-  --assessment ./out/security-assessment.yaml \
-  --scope ./scope.yaml --identities ./identities.yaml
-```
-
-`--offline` contacts nothing, `--json` prints the result for CI, and
-`--test-model --cost-limit 0.10` adds one call with a fixed prompt to see the
-model answer. A static token or basic credentials are checked against the target
-only when the identity names a `check_url`.
+`appsec-verifier preflight`, with `--assessment`, `--scope`, `--identities` and
+`--profile`, checks the assessment, scope, target, logins and model without
+testing any finding. `appsec-verifier plan`
+shows which findings can be tested, without contacting anything.
 
 ## What it verifies
 
@@ -110,97 +83,130 @@ A finding counts as confirmed only with the proof in the right column.
 
 | Class | CWEs | Confirmed when |
 | --- | --- | --- |
-| Cross-site scripting | CWE-79 | the marker payload executes in a browser, joining two marker parts at runtime; reflection alone is not enough, and a request that sent the joined marker voids the proof |
-| Broken access control / IDOR | CWE-639, 862, 863 | the same request, sent as two different identities (or one and none), is answered 2xx with content for both |
-| SQL / NoSQL injection | CWE-89, 943 | the same request with a different input gets a different status or body, or at least two answers with a bounded delay payload are each 2 s or more slower than at least two without; no data is extracted |
-| Path traversal | CWE-22 | the target returns the content of the marker file the operator placed (scope `marker_file`); the Verifier recognises it, the model never sees it |
-| Open redirect | CWE-601 | the target answers with a redirect to `<marker>.invalid`, a host chosen per finding that never resolves; the redirect is observed, not followed |
-| SSRF | CWE-918 | a request with the finding's marker reaches the Verifier's callback listener (scope `callback`) |
+| Cross-site scripting | CWE-79 | a marker script runs in a real browser; text that is only reflected does not count |
+| Broken access control / IDOR | CWE-639, 862, 863 | the same request succeeds with content for two different identities, or for one identity and without login |
+| SQL / NoSQL injection | CWE-89, 943 | a different input changes the answer, or a delay input slows it by at least 2 seconds, measured twice; no data is extracted |
+| Path traversal | CWE-22 | the target returns a marker file you placed on it |
+| Open redirect | CWE-601 | the target redirects to a marker host that does not exist; the redirect is not followed |
+| SSRF | CWE-918 | the target calls a listener the Verifier runs on your machine |
 
-Findings that cannot be tested against a running system, such as a weak random
-number generator or a hard-coded secret, are reported `not-attempted` with a
-reason. The list of testable CWEs is in
-[`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
+XSS needs the proof browser (see [Install](#install)), path traversal a marker
+file named in the scope (`marker_file`), and SSRF a listener the target can
+reach (`callback`). Details: [`docs/cli.md`](docs/cli.md).
 
-Possible verdicts: `confirmed`, `not-reproducible`, `blocked-by-control` (a
-protection the static analysis could not see stops the attack), `inconclusive`,
-`not-attempted`. If a request fails during the run, for example because the
-target stops answering or a login is rejected, that finding ends `inconclusive`
-and the run continues.
+Each finding ends with one of these verdicts:
+
+| Verdict | Meaning |
+| --- | --- |
+| `confirmed` | The weakness was reproduced and the proof checked. |
+| `not-reproducible` | Tested, but the weakness did not show. |
+| `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
+| `inconclusive` | No decision, for example because a request failed, a limit was reached, or the proof did not hold. |
+| `not-attempted` | The finding cannot be tested against a running system, such as a weak random number generator or a hard-coded secret. |
+
+The testable CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
 
 ## Safety
 
-`verify` performs an active security test, so it only does what the operator
-explicitly allows. The controls follow the
-[AI Secure Coding Baseline](https://github.com/appsec-foundry/aiscb).
+`verify` is an active security test. It does only what you allow, and these
+rules are enforced in code, outside the model:
 
-- The scope file lists the hosts, ports and paths that may be contacted, the
-  time window, the responsible owner, and any proxy and login (SSO) hosts.
-  Requests outside it are refused. A path that a server could resolve to a
-  different resource (`..`, `//`, `;`, `\` or an encoded separator such as
-  `%2f`) is refused, and `deny_paths` match regardless of case and percent
-  encoding. Proxy settings from the environment (`HTTPS_PROXY` and the like)
-  are ignored; only the scope's proxy is used.
-- The address a host name resolves to is checked when the connection is made.
-  Cloud metadata and other link-local addresses are never contacted. Loopback
-  and private addresses need the scope's `networks` list, unless the scope
-  names the host as an IP address or as `localhost`. Behind a proxy only the
-  proxy's address is checked; hosts in `proxy.no_proxy` are reached directly
-  and checked like without a proxy.
-- Passwords, tokens and client secrets are read from environment variables. They
-  do not appear in logs or the report, and the agent only sees role names. If the
-  target echoes one back, it is replaced by `[redacted]` before the model or the
-  report sees it. The
-  identities file is checked before the first request: a missing variable, or a
-  login endpoint or `target_origin` outside the scope, stops the run. Logins use
-  only the schemes the scope allows (default `https`). An
-  identity's credentials are sent only to its own origin (`target_origin`, by
-  default the target URL). The HTTP client keeps no cookies, so one identity's
-  session never travels with another identity's or an anonymous request.
-- Requests, attempts per finding, model calls, request rate, run time and model
-  spend are capped. Defaults are in [`data/limits.yaml`](data/limits.yaml).
-  Reaching a limit stops the work it affects. Spend is counted for `claude`,
-  `codex` and `anthropic-api`; `codex-cli` and `copilot-cli` report no cost and reject
-  `--cost-limit`.
-- Safe mode is the default. The agent can then only send GET, HEAD and OPTIONS
-  requests, uses one harmless payload per test and keeps the request count low.
-  Write requests (needed for stored XSS and some IDOR cases) require
-  `--allow-intrusive` and `allow_state_change: true` in the scope.
-- Intrusive mode adds POST, PUT and PATCH. DELETE and every other method are
-  never sent. Use intrusive mode only against a disposable test instance.
-- Every step the model proposes is checked against a strict schema before it
-  runs, whichever profile produced it; an invalid step ends the finding
-  `inconclusive`.
+- Only the hosts, ports, paths and schemes in the scope file are contacted, and
+  only within its time window. Private and loopback addresses must be listed in
+  the scope (`networks`), unless the scope names the host as `localhost` or as
+  an IP address. Cloud metadata addresses are never contacted.
+- The Verifier shows the plan and asks before the first request. In CI, `--yes`
+  gives this confirmation.
+- By default it sends only GET, HEAD and OPTIONS requests, with one harmless
+  payload per test. Writing requests (POST, PUT, PATCH), needed for stored XSS
+  and some access-control cases, require `--allow-intrusive` and
+  `allow_state_change: true` in the scope. Use them only against a test
+  instance you can reset. DELETE is never sent.
+- Requests, request rate, model calls, model cost and run time are capped; the
+  defaults are in [`data/limits.yaml`](data/limits.yaml). A limit that is
+  reached stops the finding or the run it applies to.
+- Passwords and tokens are read from environment variables. They are kept out
+  of the model's input, the logs and the report; the model only sees role
+  names.
+- The model proposes one step at a time, and the Verifier checks each step
+  before it runs it. The model has no shell and no file access. With
+  `--source` it can read the target's source code, but not `.env` files, keys
+  or `.git/`.
+
+## Model profiles
+
+Choose the model with `--profile`, as in AppSec Analyzer.
+
+| Profile | Uses | Limited by |
+| --- | --- | --- |
+| `claude` (default) | Claude CLI with its login or `ANTHROPIC_API_KEY` | cost, calls, time |
+| `codex-cli` | Codex CLI 0.163.0 or later with a ChatGPT login | calls, time |
+| `copilot-cli` | GitHub Copilot CLI 1.0.101 with its login | calls, time |
+| `codex` | OpenAI API with `OPENAI_API_KEY` | cost, calls, time |
+| `anthropic-api` | Anthropic API with `ANTHROPIC_API_KEY`, no CLI needed | cost, calls, time |
+
+The CLIs run without tools, MCP servers, settings or session history. Use of a
+subscription is subject to the provider's terms for that plan.
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `appsec-verifier ASSESSMENT` | Guided run: asks for the settings, then runs `verify`. |
+| `verify` | Tests the selected findings against the target. |
+| `preflight` | Checks assessment, scope, target, logins and model; tests no finding. `--offline` contacts nothing. |
+| `plan` | Lists which findings can be tested. Offline. |
+| `scope` | Validates a scope file and shows whether a URL is inside it. Offline. |
+| `export` | Converts a `verification.yaml` into a file AppSec Analyzer can read. |
+| `update` | Updates a pipx installation after you confirm. |
+
+Select findings with `--category` (for example `xss`, `idor`, `sqli`),
+`--severity`, `--min-severity` or `--only <id>`. All options:
+[`docs/cli.md`](docs/cli.md) or `appsec-verifier <command> --help`.
+
+## Output
+
+`verify` writes to `--output` (default `./verification`):
+
+- `verification.md`: the report, with verdict, confidence and evidence per
+  finding.
+- `verification.yaml`: the same results as data
+  ([schema](schemas/verification.schema.yaml)).
+- `agent-log.jsonl`: every step of the agent, refused steps included.
+- `evidence/`: proof records and, for XSS, screenshots. Screenshots can show
+  data of the target; check them before you share them.
+
+`--print` also shows the verdicts in the terminal, and `--append` adds to an
+existing report. `--annotate` writes `security-assessment.annotated.yaml`, a
+copy of the assessment with the verdict of each finding.
 
 ## Install
 
-Python 3.10 or later, with [pipx](https://pipx.pypa.io/stable/):
-
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-pipx inject appsec-verifier 'anthropic>=0.87,<1'   # only for --profile anthropic-api
-pipx inject appsec-verifier playwright==1.64.1   # XSS proof browser; uses the installed Google Chrome
 ```
 
-For the CLI profiles, install the agent CLI and log in (`claude`, `codex login`,
-`copilot login`).
-
-To update a pipx installation later:
+Optional parts:
 
 ```sh
-appsec-verifier update
+pipx inject appsec-verifier 'anthropic>=0.87,<1'   # for --profile anthropic-api
+pipx inject appsec-verifier playwright==1.64.1    # proof browser for XSS
 ```
 
-It shows the installed version and the source pipx recorded (GitHub or a local
-checkout), asks `[Y/n]`, and then runs
-`pipx upgrade --pip-args=--force-reinstall appsec-verifier`, which you can also
-run yourself. Like a new `pipx install`, it takes the newest dependency versions
-`setup.py` allows, not the pins of `requirements.lock`. Details:
+The proof browser uses the installed Google Chrome and runs only on Linux with
+`unshare` (util-linux) and unprivileged user namespaces, because Chrome is
+started without network access. Elsewhere XSS findings cannot be confirmed.
+
+For the CLI profiles, install the CLI and log in (`claude`, `codex login`,
+`copilot login`).
+
+To update later, run `appsec-verifier update`. It shows the installed version
+and asks before it reinstalls from the source you installed from. Like a new
+install, it takes the newest dependency versions allowed. Details:
 [`docs/cli.md`](docs/cli.md#update--update-the-installed-verifier-ver-033).
 
-Reproducible install from a checkout, with every package pinned and
-hash-checked ([`requirements.lock`](requirements.lock), generated for Python
-3.10):
+To install from a checkout with every package pinned and hash-checked in
+[`requirements.lock`](requirements.lock):
 
 ```sh
 python3 -m venv .venv
@@ -208,49 +214,29 @@ python3 -m venv .venv
 .venv/bin/pip install --no-deps --no-build-isolation .
 ```
 
-Dependency versions are raised only on purpose, never automatically; see
-`AGENTS.md`.
-
-## Commands
-
-Details in [`docs/cli.md`](docs/cli.md).
-
-- `plan` lists which findings of an assessment can be tested dynamically. Offline.
-- `scope` validates a scope file and checks whether a URL falls inside it. Offline.
-- `verify` tests the selected findings against the target.
-- `preflight` checks the assessment, scope, proxy, target, logins and model
-  profile without verifying anything; `--offline` contacts nothing.
-- `appsec-verifier ASSESSMENT`, without a command, asks for the `verify` settings
-  and then runs `verify`.
-- `export` converts a `verification.yaml` into a file AppSec Analyzer can read.
-
 ## Configuration
 
 - Scope file: [`schemas/scope.schema.yaml`](schemas/scope.schema.yaml)
-- Identities file: [`schemas/identities.schema.yaml`](schemas/identities.schema.yaml).
-  Test accounts by role, with `bearer`, `basic`, `form` or OIDC login. Secrets
-  only as names of environment variables.
+- Test accounts: [`schemas/identities.schema.yaml`](schemas/identities.schema.yaml),
+  with `bearer`, `basic`, `form` or OIDC login
 - Default limits: [`data/limits.yaml`](data/limits.yaml)
-- OpenAI models and prices for `codex` and `codex-cli`:
-  [`data/model-catalog.yaml`](data/model-catalog.yaml)
-- Claude models and prices for `anthropic-api`:
-  [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml)
+- Models and prices: [`data/model-catalog.yaml`](data/model-catalog.yaml)
+  (OpenAI), [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml)
+  (Anthropic API)
 
 Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form
 login) and [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a
-corporate proxy, login via OIDC).
+company proxy, OIDC login).
 
-## Output
+## Limitations
 
-`verify` writes `verification.md` and `verification.yaml`
-([schema](schemas/verification.schema.yaml)) to `--output`, with verdict,
-confidence and evidence per finding. When the target is contacted, it also writes
-`agent-log.jsonl`, a log of every agent step with its outcome, refused actions
-included. `--print` also shows the verdicts in the
-console, and `--append` adds to an existing report. `--annotate` also writes
-`security-assessment.annotated.yaml`, a copy of the assessment with the
-verification status per finding; `--in-place` changes the original instead.
-Findings and severities stay as they are.
+- The proof browser has only been tested against a local fake target, and the
+  `codex-cli` and `copilot-cli` profiles only with simulated answers.
+- The path-traversal and SSRF checks decode percent-encoding, but no other
+  encodings a target might accept.
+- Not implemented yet: the check that the target runs the assessed build
+  (`expected_build`), the `--proxy` option (set `proxy.url` in the scope), and
+  the `oidc-authorization-code` login.
 
 ## Non-goals
 
@@ -258,14 +244,7 @@ The Verifier is not a scanner and not a pentest agent. It does not search for
 new weaknesses, chain exploits, extract real data or escalate privileges. It
 only tests the findings it is given.
 
-## Repository layout
+## Development
 
-```
-appsec_verifier/    package: CLI, loader, scope guard, limits, HTTP client, auth, agent, verify
-schemas/            JSON schemas (as YAML) for scope, identities, verification, analyzer annotations
-data/               verifiable-cwes.yaml, limits.yaml
-docs/cli.md         command reference
-requirements.md     requirements VER-001 … VER-033
-examples/           sample scope and identities files
-tests/
-```
+Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements
+VER-001 to VER-033: [`requirements.md`](requirements.md).

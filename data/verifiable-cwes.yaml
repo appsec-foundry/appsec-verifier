@@ -29,7 +29,7 @@ verifiable_cwes:
     class: xss
     technique: xss
     proof_method: browser-execution
-    may_require_state_change: true    # stored XSS needs a marked, cleaned-up write
+    may_require_state_change: true    # stored XSS needs a marked write
     notes: Reflected, stored, and DOM-based. Confirmed only on real execution.
 
   # --- Broken access control / IDOR ------------------------------------

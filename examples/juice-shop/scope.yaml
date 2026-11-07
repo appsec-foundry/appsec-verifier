@@ -33,10 +33,10 @@ owner:
 environment: local
 
 expected_build:
-  commit: null                # EDIT: set to the commit the assessment was run against
+  commit: null                # commit the assessment was run against; not checked yet (VER-003)
   version: null
 
-allow_state_change: true      # disposable target: marked, cleaned-up writes allowed (VER-014)
+allow_state_change: true      # disposable target: marked writes allowed, not cleaned up; reset it after a run (VER-014)
 
 # SSRF proof (VER-012). The listener binds to loopback only. A Juice Shop
 # container reaches the host's loopback only with `--network host` (Linux);

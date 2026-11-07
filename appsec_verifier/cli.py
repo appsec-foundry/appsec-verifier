@@ -695,8 +695,7 @@ def _banner() -> str:
         "  scope      resolve and validate an authorisation scope file\n"
         "  export     re-emit verdicts for AppSec Analyzer\n"
         "  update     update a pipx installation of the Verifier, after your yes\n\n"
-        "No probe contacts a target yet; see requirements.md and docs/cli.md. "
-        "Run a command with --help."
+        "Quick start: README.md. All options: docs/cli.md, or run a command with --help."
     )
 
 

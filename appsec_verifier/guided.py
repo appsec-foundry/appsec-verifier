@@ -362,8 +362,8 @@ def _ask_limits(d: Dialog, args) -> None:
 def _ask_mode(d: Dialog, args, scope: dict) -> None:
     if args.allow_intrusive or args.read_only or not scope.get("allow_state_change"):
         return
-    d.out("The scope allows state change. Intrusive mode adds marked, cleaned-up write requests "
-          "(POST, PUT, PATCH); use it only against a disposable test instance (VER-014, VER-030).")
+    d.out("The scope allows state change. Intrusive mode adds marked write requests (POST, PUT, PATCH) "
+          "that are not cleaned up; use it only against a disposable test instance (VER-014, VER-030).")
     args.allow_intrusive = d.yes("Allow intrusive probes?")
 
 

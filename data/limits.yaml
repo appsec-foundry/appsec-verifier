@@ -14,8 +14,7 @@ version: 1
 
 limits:
   # Model-spend ceiling for the whole run, in USD. When a run would exceed it,
-  # it stops; an interactive run may ask to raise it, a non-interactive run
-  # stops with exit 3 (VER-015). Not available with the subscription profiles
+  # it stops with exit 3 (VER-015). Not available with the subscription profiles
   # codex-cli and copilot-cli, which report no cost; max_calls bounds them.
   cost_limit_usd: 10.0
 
