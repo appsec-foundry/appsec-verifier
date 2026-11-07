@@ -90,6 +90,39 @@ def test_injection_without_a_flip_is_downgraded(history):
     assert res.verdict == "inconclusive" and "VER-011" in res.rationale
 
 
+def _timed(q, ms, path="/rest/search", role="alice"):
+    step = _req(role, path=path, params={"q": q}, sha="same")                 # same status and body throughout
+    step["result"]["elapsed_ms"] = ms
+    return step
+
+
+@pytest.mark.parametrize("history", [
+    [_timed("a", 80), _timed("a' AND SLEEP(3)--", 3100), _timed("b", 95), _timed("b' AND SLEEP(3)--", 3050)],
+    [_timed("a", 80), _timed("a", 120), _timed("x' OR SLEEP(3)--", 3200), _timed("x' OR SLEEP(3)--", 3150)],
+])
+def test_injection_timing_difference_confirms(history, tmp_path):
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence"), history,
+                      ProbeResult(verdict="confirmed"), list(range(1, len(history) + 1)))
+    record = json.loads((tmp_path / "evidence" / "T-1-exchanges.json").read_text())
+    assert res.verdict == "confirmed" and sorted(e["elapsed_ms"] for e in record["exchanges"])[-1] >= 3050
+
+
+@pytest.mark.parametrize("history", [
+    [_timed("a", 80), _timed("a' SLEEP", 3100)],                                    # one of each
+    [_timed("a", 80), _timed("b", 90), _timed("a' SLEEP", 3100)],                   # one delayed
+    [_timed("a", 80), _timed("b", 90), _timed("c", 1500), _timed("d", 2000)],       # under 2 s apart
+    [_timed("a", 80), _timed("b", 1500), _timed("c", 3100), _timed("d", 3200)],     # a slow undelayed one
+    [_timed("a", 80), _timed("b", 90), _timed("a", 3100), _timed("b", 3200)],       # same input, slow once
+    [_timed("a", 80), _timed("b", 90), _timed("c", 3100, role="bob"), _timed("d", 3200, role="bob")],
+    [_timed("a", 80), _timed("b", 90), _timed("c", 3100, path="/x"), _timed("d", 3200, path="/x")],
+    [_req(params={"q": "a"}, sha="s"), _req(params={"q": "b"}, sha="s"),            # no timing at all
+     _req(params={"q": "c"}, sha="s"), _req(params={"q": "d"}, sha="s")],
+])
+def test_injection_without_a_clear_delay_is_downgraded(history):
+    res = _check("injection", history, list(range(1, len(history) + 1)))
+    assert res.verdict == "inconclusive" and "VER-011" in res.rationale
+
+
 # ── open redirect (VER-012) ───────────────────────────────────────────────────
 
 MARKER = ("vrf0a1b2c3d", "4e5f6a7b")

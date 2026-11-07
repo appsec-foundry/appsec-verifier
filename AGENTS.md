@@ -77,7 +77,8 @@ needs an explicit decision from the maintainer, not a workaround.
 - A confirmed verdict needs the proof its class requires, checked in code
   against the cited steps (`agent/proof.py`): XSS a `browser_check` with
   `executed: true`, access control a two-identity contrast, injection a
-  response that flips with the input, open redirect a 3xx to the finding's
+  response that flips with the input or a 2 s delay seen twice against two
+  undelayed answers, open redirect a 3xx to the finding's
   `<marker>.invalid` host, path traversal a read of the marker file, SSRF a
   hit on the listener. The model's verdict alone never
   suffices (VER-009 to VER-013).

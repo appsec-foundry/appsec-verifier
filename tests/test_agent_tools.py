@@ -96,6 +96,32 @@ def test_redirects_are_reported_not_followed(tmp_path):
     assert out["status"] == 302 and out["location"] == "https://evil.example/landing?t=[redacted]"
 
 
+def test_elapsed_time_is_reported_when_the_transport_measured_it(tmp_path):
+    from datetime import timedelta
+
+    def transport(m, u, h, **k):
+        resp = Resp(200, "{}")
+        resp.elapsed = timedelta(seconds=3.2104)
+        return resp
+
+    assert AgentTools(_ctx(tmp_path, transport)).http_request(path="/x")["elapsed_ms"] == 3210
+    assert "elapsed_ms" not in AgentTools(_ctx(tmp_path, lambda m, u, h, **k: Resp())).http_request(path="/x")
+
+
+def test_elapsed_time_comes_from_httpx(tmp_path):
+    import httpx
+
+    from appsec_verifier.tools.httpx_transport import HttpxTransport
+
+    class Stream(httpx.SyncByteStream):          # streamed like a real transport's body, so httpx times it
+        def __iter__(self):
+            yield b"ok"
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Stream())))
+    ctx = _ctx(tmp_path, HttpxTransport(client=client))
+    assert isinstance(AgentTools(ctx).http_request(path="/x")["elapsed_ms"], int)
+
+
 def test_location_is_reported_only_for_redirects(tmp_path):
     def transport(m, u, h, **k):
         resp = Resp(201, "{}")

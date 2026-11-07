@@ -158,7 +158,13 @@ steps that prove it in `proof_steps` (step numbers as in the prompt and in
 same method, path, params and body, sent as two different identities (no role
 counts as the anonymous one), both answered 2xx with a non-empty body.
 Injection: two cited steps with the same method, path and identity but a
-different input, answered with a different status or body. XSS: a
+different input, answered with a different status or body; or, by timing,
+cited steps with the same method, path and identity that split into at least
+two undelayed and two delayed answers, every delayed one at least 2 s slower
+than every undelayed one and sent with another input. `http_request` reports
+`elapsed_ms`, the time httpx measured for the exchange (the wait for `--rate`
+is not part of it); the agent is told to keep delays between 2 and 5 seconds.
+XSS: a
 `browser_check` in which the marker executed (below). Open redirect: a cited
 `http_request` answered 301, 302, 303, 307 or 308 whose `Location` leads to
 `<marker>.invalid`, a host drawn at random per finding and given to the agent;

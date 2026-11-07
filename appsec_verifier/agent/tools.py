@@ -27,7 +27,8 @@ parser of every encoding; the prompt states the same rule. The marker file's
 content never reaches the model: it is replaced by "[marker-file]" in every
 tool result, and http_request reports `marker_read` instead. An SSRF probe's
 http_request reports `callback_hit` once the listener has seen the finding's
-marker.
+marker. Every http_request reports `elapsed_ms`, the time httpx measured for
+the exchange, for a timing proof of injection (VER-011).
 """
 
 from __future__ import annotations
@@ -61,6 +62,15 @@ def _body_text(resp) -> str:
         content = getattr(resp, "content", b"") or b""
         text = content.decode("utf-8", "replace") if isinstance(content, bytes) else str(content)
     return text
+
+
+def _elapsed_ms(resp) -> int | None:
+    """How long the answer took, from sending the request to reading the body, as httpx measures it."""
+    try:
+        elapsed = getattr(resp, "elapsed", None)
+        return round(elapsed.total_seconds() * 1000) if elapsed is not None else None
+    except (AttributeError, RuntimeError):      # httpx raises RuntimeError before the body is read
+        return None
 
 
 def _strings(value):
@@ -236,6 +246,9 @@ class AgentTools:
             location = str(location)
             location = self.ctx.sessions.redact(location) if self.ctx.sessions is not None else location
             out["location"] = _hide(location, self._marker_content)[:_LOCATION_CAP]
+        elapsed = _elapsed_ms(resp)
+        if elapsed is not None:
+            out["elapsed_ms"] = elapsed                  # transport time, without the rate limit's wait (VER-011)
         if self.ctx.plan.cls == "path-traversal" and self._marker_content:
             out["marker_read"] = self._marker_content in text           # the raw body, checked in code
         if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:

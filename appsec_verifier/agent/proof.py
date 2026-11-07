@@ -13,7 +13,11 @@ against what the tools actually returned:
   anonymous identity), both answered 2xx with a non-empty body.
 - injection (VER-011): two cited http_request steps with the same method, path
   and identity but different params or body, whose answers differ in status or
-  body, so the input flipped the response. Timing proofs are not supported.
+  body, so the input flipped the response. Or a timing difference: among cited
+  steps with the same method, path and identity, at least two delayed and two
+  undelayed answers, every delayed one at least 2 s slower (`elapsed_ms`) than
+  every undelayed one, and no delayed step sent the same input as an
+  undelayed one. Two of each keep one slow moment of the target from counting.
 - open-redirect (VER-012): a cited http_request answered 301, 302, 303, 307 or
   308 whose `location` leads to the finding's redirect host,
   `<marker>.invalid`. The marker is random per finding, so only a target that
@@ -53,6 +57,7 @@ from urllib.parse import urljoin, urlsplit
 from ..verify.probes import ProbeResult
 
 _REDIRECTS = (301, 302, 303, 307, 308)
+_DELAY_MS = 2000
 
 
 def redirect_host(marker) -> str | None:
@@ -131,6 +136,8 @@ def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[lis
             exchange["location_host"] = _location_host(ctx, res["location"])
         if "marker_read" in res:
             exchange["marker_read"] = res["marker_read"] is True
+        if isinstance(res.get("elapsed_ms"), int) and not isinstance(res["elapsed_ms"], bool):
+            exchange["elapsed_ms"] = res["elapsed_ms"]
         exchanges.append(exchange)
     return exchanges, None
 
@@ -161,8 +168,31 @@ def _flip(ctx, exchanges: list[dict]) -> str | None:
            and (a["status"], a["body_sha256"]) != (b["status"], b["body_sha256"])
            for a, b in _pairs(exchanges)):
         return None
+    if _delayed(exchanges):
+        return None
     return ("the cited steps do not show one request whose response changes with the input "
-            "(same method, path and identity; different input; different status or body) (VER-011)")
+            "(same method, path and identity; different input; different status or body, or two answers "
+            "delayed by at least 2 s against two undelayed ones) (VER-011)")
+
+
+def _input(e: dict) -> str:
+    return json.dumps([e["params"], e["json"]], sort_keys=True, default=str)
+
+
+def _delayed(exchanges: list[dict]) -> bool:
+    """A gap of at least 2 s between the undelayed and the delayed answers to one request, two on each side."""
+    groups: dict[tuple, list[dict]] = {}
+    for e in exchanges:
+        if "elapsed_ms" in e:
+            groups.setdefault((e["method"], e["path"], e["role"]), []).append(e)
+    for group in groups.values():
+        group.sort(key=lambda e: e["elapsed_ms"])
+        for i in range(2, len(group) - 1):
+            fast, slow = group[:i], group[i:]
+            if (slow[0]["elapsed_ms"] - fast[-1]["elapsed_ms"] >= _DELAY_MS
+                    and not {_input(e) for e in slow} & {_input(e) for e in fast}):
+                return True
+    return False
 
 
 def _redirect(ctx, exchanges: list[dict]) -> str | None:

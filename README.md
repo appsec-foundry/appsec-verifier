@@ -83,7 +83,7 @@ A finding counts as confirmed only with the proof in the right column.
 | --- | --- | --- |
 | Cross-site scripting | CWE-79 | the marker payload executes in a browser; reflection alone is not enough |
 | Broken access control / IDOR | CWE-639, 862, 863 | the same request, sent as two different identities (or one and none), is answered 2xx with content for both |
-| SQL / NoSQL injection | CWE-89, 943 | the same request with a different input gets a different status or body; no data is extracted. Timing differences are not accepted yet |
+| SQL / NoSQL injection | CWE-89, 943 | the same request with a different input gets a different status or body, or at least two answers with a bounded delay payload are each 2 s or more slower than at least two without; no data is extracted |
 | Path traversal | CWE-22 | the target returns the content of the marker file the operator placed (scope `marker_file`); the Verifier recognises it, the model never sees it |
 | Open redirect | CWE-601 | the target answers with a redirect to `<marker>.invalid`, a host chosen per finding that never resolves; the redirect is observed, not followed |
 | SSRF | CWE-918 | a request with the finding's marker reaches the Verifier's callback listener (scope `callback`) |
