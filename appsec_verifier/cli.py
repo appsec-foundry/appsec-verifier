@@ -2,8 +2,10 @@
 
 `scope`, `plan` and `export` run offline (no network, no model calls). `verify`
 contacts the target through an agent only when model access is configured;
-otherwise it reports every selected finding not-attempted. See docs/cli.md for
-the full design.
+otherwise it reports every selected finding not-attempted. Called with an
+assessment and no command, it starts the guided run of guided.py (VER-031),
+which asks for the `verify` settings and then runs `verify`. See docs/cli.md
+for the full design.
 """
 
 from __future__ import annotations
@@ -32,6 +34,19 @@ def _csv(value: str | None) -> set[str] | None:
     return {v.strip() for v in value.split(",") if v.strip()}
 
 
+def _select(args: argparse.Namespace, plans):
+    """Apply the selection options of `args` (VER-026)."""
+    return select(
+        plans,
+        categories=_csv(args.category),
+        classes=_csv(args.cls),
+        severities=_csv(args.severity),
+        min_severity=args.min_severity,
+        cwes={c.upper() for c in (_csv(args.cwe) or set())} or None,
+        ids=_csv(args.only),
+    )
+
+
 def _box(title: str, rows: list[tuple[str, str]]) -> str:
     label_w = max((len(k) for k, _ in rows), default=0)
     width = max(len(title) + 4, max((label_w + 3 + len(v) for _, v in rows), default=0) + 2, 58)
@@ -45,15 +60,7 @@ def _box(title: str, rows: list[tuple[str, str]]) -> str:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     plans = load_plans(Path(args.assessment))
-    sel = select(
-        plans,
-        categories=_csv(args.category),
-        classes=_csv(args.cls),
-        severities=_csv(args.severity),
-        min_severity=args.min_severity,
-        cwes={c.upper() for c in (_csv(args.cwe) or set())} or None,
-        ids=_csv(args.only),
-    )
+    sel = _select(args, plans)
     dyn = [p for p in sel if p.status == "dynamic"]
     static = [p for p in sel if p.status == "static-only"]
     incomplete = [p for p in sel if p.status == "input-incomplete"]
@@ -201,7 +208,9 @@ def _build_planner_factory(args, environ=None):
         raise ProfileError(f"{profile}: {exc}") from exc
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
+def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
+    """Verify the selected findings. `invocation`, from the guided run, is the
+    equivalent non-interactive command line, shown before the confirmation."""
     assessment = Path(args.assessment)
     if not assessment.is_file():
         print(f"assessment not found: {assessment}", file=sys.stderr)
@@ -227,12 +236,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return EXIT_BLOCKED
 
     plans = load_plans(assessment)
-    sel = select(
-        plans, categories=_csv(args.category), classes=_csv(args.cls),
-        severities=_csv(args.severity), min_severity=args.min_severity,
-        cwes={c.upper() for c in (_csv(args.cwe) or set())} or None,
-        ids=_csv(args.only),
-    )
+    sel = _select(args, plans)
     if not sel:
         print("empty selection — nothing to verify (refine --category/--severity/--only).", file=sys.stderr)
         return EXIT_BLOCKED
@@ -275,6 +279,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
                                 browser_note, listener_note))
+    if invocation:
+        print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
     if contact:
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
@@ -442,6 +448,8 @@ def _banner() -> str:
     return (
         f"AppSec Verifier {version_string()} — verify static assessment findings "
         f"against a running app.\n\n"
+        "Guided run:\n"
+        "  appsec-verifier ASSESSMENT   asks for the settings with defaults, then verifies\n\n"
         "Commands:\n"
         "  verify   verify selected findings against a target (safe mode by default)\n"
         "  plan     list dynamically verifiable findings, offline\n"
@@ -454,7 +462,9 @@ def _banner() -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="appsec-verifier", add_help=True,
-                                description="Dynamic verification of static security-assessment findings.")
+                                description="Dynamic verification of static security-assessment findings.",
+                                epilog="Guided run: appsec-verifier ASSESSMENT [verify options] asks for the "
+                                       "settings with defaults (VER-031).")
     p.add_argument("--version", action="store_true", help="print version and exit")
     sub = p.add_subparsers(dest="command")
 
@@ -472,13 +482,43 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--target", help="check whether this URL falls inside the scope")
 
     vf = sub.add_parser("verify", help="verify selected findings against a target (safe mode by default)")
-    vf.add_argument("--assessment", required=True, help="security-assessment.yaml to verify")
-    vf.add_argument("--scope", required=True, help="authorisation scope file")
+    _add_run_options(vf, guided=False)
+
+    ex = sub.add_parser("export", help="re-emit a verification.yaml for AppSec Analyzer")
+    ex.add_argument("--verification", required=True, help="verification.yaml to export")
+    ex.add_argument("--output", help="output path (default: analyzer-verification.json)")
+    ex.add_argument("--format", dest="fmt", choices=["json", "yaml"], default="json")
+
+    return p
+
+
+def build_guided_parser() -> argparse.ArgumentParser:
+    """`appsec-verifier ASSESSMENT [options]`: the guided run (VER-031). It takes
+    the `verify` options; those given are not asked."""
+    p = argparse.ArgumentParser(
+        prog="appsec-verifier", usage="appsec-verifier ASSESSMENT [verify options]",
+        description="Guided run: reads the assessment, asks for the settings of the run with defaults, "
+                    "then verifies after one confirmation. Options given here are not asked. Without a "
+                    "terminal, or with --non-interactive, nothing is asked.")
+    _add_run_options(p, guided=True)
+    return p
+
+
+def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
+    """The options of `verify`, shared with the guided run. The guided run takes
+    the assessment as its argument and asks for the scope when it is missing."""
+    if guided:
+        vf.add_argument("assessment", help="security-assessment.yaml to verify")
+        vf.add_argument("--scope", help="authorisation scope file (asked when missing)")
+    else:
+        vf.add_argument("--assessment", required=True, help="security-assessment.yaml to verify")
+        vf.add_argument("--scope", required=True, help="authorisation scope file")
     vf.add_argument("--url", "--target", dest="target",
                     help="start/base URL to test (default: scope base_url); must be in scope")
     vf.add_argument("--identities", help="identities.yaml (roles + env-var credential refs)")
     vf.add_argument("--source", help="read-only checkout of the target repo, to ground the agent (VER-017)")
-    vf.add_argument("--output", default="./verification", help="report/evidence directory")
+    vf.add_argument("--output", default=None if guided else "./verification",
+                    help="report/evidence directory (default: ./verification)")
     # selection (VER-026)
     vf.add_argument("--category", help="categories, comma-separated: class or technique "
                                        "(e.g. 'idor', 'access-control', 'sqli', 'xss')")
@@ -517,15 +557,20 @@ def build_parser() -> argparse.ArgumentParser:
                          "Required with --non-interactive")
     vf.add_argument("--model", help="model for the selected profile (default: the profile's model)")
 
-    ex = sub.add_parser("export", help="re-emit a verification.yaml for AppSec Analyzer")
-    ex.add_argument("--verification", required=True, help="verification.yaml to export")
-    ex.add_argument("--output", help="output path (default: analyzer-verification.json)")
-    ex.add_argument("--format", dest="fmt", choices=["json", "yaml"], default="json")
 
-    return p
+COMMANDS = ("plan", "scope", "verify", "export")
+
+
+def _stdin_is_terminal() -> bool:
+    return sys.stdin is not None and sys.stdin.isatty()
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and not argv[0].startswith("-") and argv[0] not in COMMANDS:
+        from .guided import run_guided
+        args = build_guided_parser().parse_args(argv)
+        return run_guided(args, interactive=not args.non_interactive and _stdin_is_terminal())
     args = build_parser().parse_args(argv)
     if args.version:
         print(version_string())

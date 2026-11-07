@@ -7,7 +7,7 @@
 target, verifies findings one at a time against the live application, and writes
 a verification report. It never re-runs or re-scores the static assessment.
 
-Design maps to `requirements.md` (VER-001 … VER-025); the relevant IDs are cited
+Design maps to `requirements.md` (VER-001 … VER-031); the relevant IDs are cited
 per command and flag.
 
 ---
@@ -20,6 +20,8 @@ per command and flag.
 **Act against a target** (makes model calls and network requests)
 
 - `verify` — verify findings of an assessment against a running target.
+- `appsec-verifier ASSESSMENT` (no command) — the guided run: asks for the
+  `verify` settings with defaults, then runs `verify` (VER-031).
 
 **Inspect without touching the target** (no network, no model calls)
 
@@ -33,6 +35,61 @@ per command and flag.
 
 - `export` — re-emit the verdicts of a finished `verification.yaml` in a form
   AppSec Analyzer can read back; no re-verification (VER-021, VER-015).
+
+---
+
+## Guided run — `appsec-verifier ASSESSMENT` (VER-031)
+
+Called with an assessment and no command, the Verifier reads the assessment
+offline, shows how many findings it holds, how many are dynamically verifiable,
+and their split by class and severity, then asks for the settings of the run.
+Enter accepts the default shown in brackets.
+
+| Question | Default | Same as |
+| --- | --- | --- |
+| Classes to verify | all verifiable classes present | `--category` |
+| Lowest severity | `high` (High and Critical); `all` for no floor | `--min-severity` |
+| Scope file | `scope.yaml` next to the assessment, else in the working directory | `--scope` |
+| Target URL | the scope's `base_url` | `--url` |
+| Identities file | `identities.yaml` next to the scope, the assessment, or in the working directory; else `none` | `--identities` |
+| Model profile | `claude` | `--profile` |
+| Change the run limits? | no: `data/limits.yaml`; yes asks each limit | `--cost-limit`, `--max-calls`, `--max-requests`, `--max-attempts`, `--max-duration`, `--rate` |
+| Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
+| Existing report in the output directory | append; or overwrite, or a new directory | `--append`, `--output` |
+
+Each answer goes through the same check as its option and is asked again when
+invalid: a scope that is unreadable, schema-invalid or outside its window, a URL
+outside the scope, an identities file with unset variables (named, never their
+values), a profile that is not available, a limit that is not a positive number.
+Options given on the command line are used as given and not asked, e.g.
+`appsec-verifier ./security-assessment.yaml --scope ./scope.yaml`. No question
+asks for a password, token, or other secret; credentials stay in environment
+variables.
+
+Without a scope file, Enter at the scope question writes a template to
+`./scope.yaml` (never over an existing file) and stops with exit 2. The template
+is invalid until its target, window and owner are filled in, so the next guided
+run proposes it but refuses it until it is edited. The guided run never uses a
+scope it wrote and never widens one.
+
+After the questions the run shows the `verify` pre-flight box and the equivalent
+non-interactive command line, e.g.
+
+```
+appsec-verifier verify --assessment ./security-assessment.yaml --scope ./scope.yaml \
+  --url http://localhost:3000 --output ./verification --min-severity high \
+  --profile claude --non-interactive --yes
+```
+
+and then asks the one confirmation of VER-002; answering the questions does not
+confirm. Ctrl-C or end of input at any question stops with exit 2 and contacts
+nothing.
+
+`--non-interactive` (`--ci`), or standard input that is not a terminal, turns the
+questions off: `appsec-verifier ASSESSMENT --ci --scope … --profile … --yes`
+behaves like `verify` with the same options. A missing `--scope` or `--profile`
+blocks the run with exit 2 and names both; a missing `--yes` blocks it at the
+confirmation as in `verify`.
 
 ---
 
@@ -254,7 +311,7 @@ same way. Combine with a severity floor, e.g. `--category idor --min-severity hi
 - **Interactive** (default, a TTY): the run prints the pre-flight box and waits
   for one confirmation before the first request (VER-002); if the cost ceiling
   would be hit it may ask to raise it (VER-015). This is the mode you use by hand
-  right after an assessment.
+  right after an assessment; the guided run (above) asks for the settings first.
 - **Non-interactive** (`--non-interactive` / `--ci`, or no TTY): no prompts. The
   selection, the scope confirmation, and the cost ceiling must all be supplied on
   the command line; a missing confirmation or an exceeded ceiling stops the run

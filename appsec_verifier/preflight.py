@@ -32,7 +32,7 @@ def confirm_authorization(*, non_interactive: bool, assume_yes: bool, prompt=inp
         return Confirmation(False, "ci-flag", "non-interactive run without --yes: not confirmed")
     try:
         answer = prompt("Proceed against this target? [y/N] ").strip().lower()
-    except EOFError:
+    except (EOFError, KeyboardInterrupt):
         return Confirmation(False, "interactive", "no input available: not confirmed")
     if answer in ("y", "yes"):
         return Confirmation(True, "interactive", "confirmed at the prompt")

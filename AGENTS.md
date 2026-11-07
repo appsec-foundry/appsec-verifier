@@ -46,7 +46,7 @@ the `[browser]` extra; still no network).
 
 | Path | Role |
 | --- | --- |
-| `appsec_verifier/cli.py` | argparse entry point: `plan`, `scope`, `verify`, `export` |
+| `appsec_verifier/cli.py` | argparse entry point: `plan`, `scope`, `verify`, `export`; without a command the guided run (`guided.py`) |
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
 | `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |

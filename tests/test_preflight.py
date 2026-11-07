@@ -23,6 +23,13 @@ def test_interactive_eof_declines():
     assert not c.confirmed
 
 
+def test_interactive_ctrl_c_declines():
+    def interrupt(_):
+        raise KeyboardInterrupt
+    c = confirm_authorization(non_interactive=False, assume_yes=False, prompt=interrupt)
+    assert not c.confirmed
+
+
 def test_non_interactive_without_flag_not_confirmed():
     c = confirm_authorization(non_interactive=True, assume_yes=False)
     assert not c.confirmed and c.mode == "ci-flag"

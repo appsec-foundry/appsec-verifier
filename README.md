@@ -59,6 +59,8 @@ Early version.
 ```sh
 appsec-analyzer assess --repo … --output ./out        # writes security-assessment.yaml
 
+appsec-verifier ./out/security-assessment.yaml         # guided: asks for the settings
+
 appsec-verifier verify --profile claude \
   --assessment ./out/security-assessment.yaml \
   --scope ./scope.yaml --identities ./identities.yaml \
@@ -66,6 +68,15 @@ appsec-verifier verify --profile claude \
   --category xss,access-control --min-severity high \
   --cost-limit 5 --output ./verification
 ```
+
+Called with only the assessment, the Verifier shows what it holds and asks for
+the settings of the run, each with a default: classes, severity (High and
+Critical), scope file and URL, identities, model profile, limits, and intrusive
+mode where the scope allows it. A `scope.yaml` or `identities.yaml` next to the
+assessment or in the working directory is proposed. Without a scope file it
+writes a template to fill in and stops. Options given on the command line are not
+asked. Before the confirmation it prints the equivalent `verify` command for CI.
+With `--non-interactive`, or without a terminal, nothing is asked.
 
 `--scope` defines what may be contacted. `--identities` adds test accounts;
 access-control checks need at least two. Select findings with `--category`,
@@ -176,6 +187,8 @@ Details in [`docs/cli.md`](docs/cli.md).
 - `plan` lists which findings of an assessment can be tested dynamically. Offline.
 - `scope` validates a scope file and checks whether a URL falls inside it. Offline.
 - `verify` tests the selected findings against the target.
+- `appsec-verifier ASSESSMENT`, without a command, asks for the `verify` settings
+  and then runs `verify`.
 - `export` converts a `verification.yaml` into a file AppSec Analyzer can read.
 
 ## Configuration
@@ -219,7 +232,7 @@ appsec_verifier/    package: CLI, loader, scope guard, limits, HTTP client, auth
 schemas/            JSON schemas (as YAML) for scope, identities, verification, analyzer annotations
 data/               verifiable-cwes.yaml, limits.yaml
 docs/cli.md         command reference
-requirements.md     requirements VER-001 … VER-030
+requirements.md     requirements VER-001 … VER-031
 examples/           sample scope and identities files
 tests/
 ```
