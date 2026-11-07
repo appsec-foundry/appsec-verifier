@@ -20,9 +20,17 @@ Archive (HAR 1.2, `evidence/<finding>-poc.har`) and puts a summary into the
 result: one line per step, and for each step the verdict rests on the request
 and the decisive part of its response as raw HTTP. Those steps are the ones
 the proof check relied on for a confirmed verdict (VER-009 to VER-012), else
-the ones the verdict cites. For a confirmed access-control finding whose
-response is an HTML page, the proof browser renders that recorded response
-without a new request and marks the values the verdict names (VER-035).
+the ones the verdict cites.
+
+Screenshots (VER-035), for the classes the run enables: XSS keeps the page in
+which its marker executed (tools/browser.py). For a confirmed access-control
+finding whose response is an HTML page, the proof browser renders that
+recorded response without a new request and marks the values the verdict
+names. Every other finding with decisive steps gets an image of those
+exchanges, request and response side by side, built here as escaped HTML with
+what the code can locate marked: the identity, the XSS or SSRF marker, the
+redirect host and Location header, the marker file and its content, the input
+and answer that differ between injection requests, the time of each answer.
 Response bodies and screenshots can show target data and are marked for
 review before sharing (VER-022).
 """
@@ -30,13 +38,14 @@ review before sharing (VER-022).
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -272,10 +281,7 @@ def _focus(ctx, shown: list[dict], e: dict) -> int:
 def _raw_request(e: dict) -> str:
     req = e["request"]
     parts = urlsplit(req["url"])
-    target = parts.path or "/"
-    if parts.query:
-        target += "?" + parts.query
-    lines = [f"{req['method']} {target} HTTP/1.1"]
+    lines = [f"{req['method']} {_target(req['url'])} HTTP/1.1"]
     if not any(h["name"].lower() == "host" for h in req["headers"]):
         lines.append(f"Host: {parts.netloc}")
     lines += [f"{h['name']}: {h['value']}" for h in req["headers"]]
@@ -338,11 +344,15 @@ def _write_har(ctx, steps: list[dict]) -> list[dict]:
              "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "note": TARGET_DATA_NOTE}]
 
 
-def _screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
+def _values(highlight, text: str) -> list[str]:
+    """The values the model named that really occur in `text`; only those are marked."""
+    return [v for v in (highlight if isinstance(highlight, list) else [])[:_MAX_HIGHLIGHTS]
+            if isinstance(v, str) and 3 <= len(v) <= 200 and v in text]
+
+
+def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
     """Access control (VER-035): each decisive response that is an HTML page, rendered without a new request."""
-    browser = getattr(ctx, "browser", None)
-    if browser is None or "access-control" not in getattr(browser, "screenshots", ()):
-        return []
+    browser = ctx.browser
     out = []
     for step in steps:
         e = _shown_entry(step)
@@ -351,8 +361,7 @@ def _screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
         text = _text(e)
         if not text:
             continue
-        values = [v for v in (highlight if isinstance(highlight, list) else [])[:_MAX_HIGHLIGHTS]
-                  if isinstance(v, str) and 3 <= len(v) <= 200 and v in text]
+        values = _values(highlight, text)
         caption = [f"AppSec Verifier · {ctx.plan.id} · access control · step {step['step']}",
                    f"{e['request']['method']} {e['request']['url'][:300]} as {e.get('_role') or 'anonymous'} "
                    f"→ {e['response']['status']}",
@@ -364,6 +373,184 @@ def _screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             continue
     return out
+
+
+# ── the exchange image (VER-035) ─────────────────────────────────────────────
+
+_TOKEN_START = set(" \n&?=\"':,{[")
+_TOKEN_END = set(" \n&\"',;}]")
+
+
+def _diff_token(a: str, b: str, region: str) -> tuple[str, str, str] | None:
+    """The token of `a` around its first difference from `b`, e.g. the value of the changed parameter, as
+    (region, the text before it, token): marked once, where it stands, not wherever it recurs."""
+    i = len(os.path.commonprefix([a, b]))
+    if i >= len(a):
+        return None
+    start, end = i, i
+    while start > 0 and a[start - 1] not in _TOKEN_START:
+        start -= 1
+    while end < len(a) and a[end] not in _TOKEN_END:
+        end += 1
+    token = (a[start:end] or a[i:i + 40])[:200]
+    return (region, a[max(0, start - 24):start], token) if token.strip() else None
+
+
+def _target(url: str) -> str:
+    parts = urlsplit(url)
+    return (parts.path or "/") + ("?" + parts.query if parts.query else "")
+
+
+def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
+    """`text` as escaped HTML with what `needles` and `lines` name in <mark>: a string at each occurrence,
+    a (region, context, token) from `_diff_token` once in the request line or the body, and each line
+    starting with one of `lines`. Nothing of `text` is ever parsed as markup."""
+    spans = []
+    blank = text.find("\n\n")
+    body_start = blank + 2 if blank >= 0 else len(text)
+    first_line_end = text.find("\n") if "\n" in text else len(text)
+    for needle in needles:
+        if isinstance(needle, tuple):
+            region, context, token = needle
+            lo, hi = (0, first_line_end) if region == "line" else (body_start, len(text))
+            i = text.find(context + token, lo, hi)
+            if i >= 0:
+                spans.append((i + len(context), i + len(context) + len(token)))
+            elif (i := text.find(token, lo, hi)) >= 0:
+                spans.append((i, i + len(token)))
+            continue
+        start = 0
+        while needle and len(spans) < 50 and (i := text.find(needle, start)) >= 0:
+            spans.append((i, i + len(needle)))
+            start = i + len(needle)
+    prefixes = tuple(p.lower() for p in lines)
+    pos = 0
+    for line in text.split("\n"):
+        if prefixes and line.lower().startswith(prefixes):
+            spans.append((pos, pos + len(line)))
+        pos += len(line) + 1
+    merged: list[list[int]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    out, last = [], 0
+    for a, b in merged:
+        out += [html.escape(text[last:a]), f"<mark>{html.escape(text[a:b])}</mark>"]
+        last = b
+    out.append(html.escape(text[last:]))
+    return "".join(out), len(merged)
+
+
+def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]],
+                    highlight) -> tuple[list[str], list[str], list[str], list[tuple[str, bool]]]:
+    """What the image of step `n` marks, as the code can locate it: needles in the request, needles and
+    line prefixes in the response, and facts about the step with whether they decide."""
+    from ..agent.proof import redirect_host
+
+    cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
+    res = (history[n - 1].get("result") or {}) if n <= len(history) else {}
+    req_marks, res_marks, res_lines = [], [], []
+    facts: list[tuple[str, bool]] = []
+    times = [o.get("time") or 0 for _, o in shown]
+    timing = cls == "injection" and max(times) - min(times) >= 2000        # a timing proof rests on the times
+    if e.get("time"):
+        facts.append((f"answered in {e['time']} ms", timing))
+    if e.get("_role"):
+        req_marks.append(f"[identity {e['_role']}]")
+    if cls == "xss" and marker[0]:
+        req_marks.append(marker[0])
+        res_marks.append(marker[0])
+        if "executed" in res:
+            facts.append((f"marker executed in the browser: {'yes' if res['executed'] is True else 'no'}", True))
+    elif cls == "open-redirect":
+        host = redirect_host(marker)
+        if host:
+            req_marks.append(host)
+        res_lines.append("location:")
+    elif cls == "path-traversal":
+        marker_file = (getattr(ctx, "scope", None) or {}).get("marker_file") or {}
+        name = str(marker_file.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        req_marks += [name] if name else []
+        res_marks += [marker_file["content"]] if marker_file.get("content") else []
+        if "marker_read" in res:
+            facts.append((f"marker file read: {'yes' if res['marker_read'] is True else 'no'}", True))
+    elif cls == "ssrf":
+        joined = "".join(marker)
+        req_marks += [joined] if joined else []
+        if "callback_hit" in res:
+            facts.append((f"callback listener received the marker: {'yes' if res['callback_hit'] is True else 'no'}",
+                          True))
+    elif cls == "injection":
+        path = e["request"]["url"].split("?")[0]
+        for _, o in shown:
+            if o is e or o["request"]["url"].split("?")[0] != path:
+                continue
+            a_url, b_url = _target(e["request"]["url"]), _target(o["request"]["url"])
+            a_body = (e["request"].get("postData") or {}).get("text") or ""
+            b_body = (o["request"].get("postData") or {}).get("text") or ""
+            token = (_diff_token(a_url, b_url, "line") if a_url != b_url
+                     else _diff_token(a_body, b_body, "body"))
+            if token:
+                req_marks.append(token)
+                if unquote(token[2]) != token[2]:
+                    facts.append((f"input, decoded: {unquote(token[2])}", True))
+            token = _diff_token(_text(e), _text(o), "body")
+            res_marks += [token] if token else []
+            if e["response"]["status"] != o["response"]["status"]:
+                res_lines.append("HTTP/1.1 ")
+    elif cls == "access-control":
+        res_marks += _values(highlight, _text(e))
+    return req_marks, res_marks, res_lines, facts
+
+
+_EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #b00020;white-space:pre-wrap}
+header b{font-size:15px}section{margin:14px;border:1px solid #ccc}
+h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:13px;border-bottom:1px solid #ccc}
+.facts{padding:4px 10px;border-bottom:1px solid #ccc}.cols{display:flex}.cols>div{flex:1;min-width:0}
+.cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:12px;color:#555}
+pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;word-break:break-all}
+mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}"""
+
+
+def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
+                      highlight=None) -> tuple[str, int]:
+    """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): request and
+    response side by side per step, what the verdict rests on marked. Returns the page and the number of
+    marks. Every recorded value is escaped; the page has no script."""
+    cls = getattr(ctx.plan, "cls", None) or "finding"
+    captured = shown[0][1].get("startedDateTime", "") if shown else ""
+    head = (f"<b>AppSec Verifier · {html.escape(str(ctx.plan.id))} · {html.escape(cls)} · "
+            f"{html.escape(verdict)}</b>\nRecorded, redacted exchanges"
+            f"{' from ' + html.escape(har_path) if har_path else ''}; no new request. "
+            f"First captured {html.escape(captured)}.\nMarked: what the verdict rests on, as the code locates it.")
+    parts, total = [f"<header>{head}</header>"], 0
+    for n, e in shown[:6]:
+        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, shown, highlight)
+        req_html, a = _marked(_raw_request(e), req_marks)
+        res_html, b = _marked(_raw_response(e, _focus(ctx, [o for _, o in shown], e), har_path), res_marks, res_lines)
+        fact_html = " · ".join(f"<mark>{html.escape(t)}</mark>" if decides else html.escape(t) for t, decides in facts)
+        total += a + b + sum(1 for _, decides in facts if decides)
+        who = html.escape(e.get("_role") or "anonymous")
+        parts.append(f"<section><h2>Step {n} · {html.escape(e['request']['method'])} as {who} → "
+                     f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"
+                     + (f"<div class=facts>{fact_html}</div>" if facts else "")
+                     + f"<div class=cols><div><h3>Request</h3><pre>{req_html}</pre></div>"
+                     f"<div><h3>Response</h3><pre>{res_html}</pre></div></div></section>")
+    page = (f"<!doctype html><html><head><meta charset=utf-8><style>{_EXCHANGE_CSS}</style></head>"
+            f"<body>{''.join(parts)}</body></html>")
+    return page, total
+
+
+def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
+                         highlight) -> list[dict]:
+    page, marked = exchange_document(ctx, history, shown, verdict, har_path, highlight)
+    try:
+        return ctx.browser.render_exchanges(html=page, finding_id=ctx.plan.id, marked=marked)
+    except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
+        return []
 
 
 def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
@@ -381,11 +568,17 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
     result.poc = {
         "file": har_path,
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
-        "shown": [{"step": n, "request": _raw_request(e), "response": _raw_response(e, _focus(ctx, others, e),
-                                                                                     har_path)}
+        "shown": [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
+                   "response": _raw_response(e, _focus(ctx, others, e), har_path)}
                   for n, e in shown_entries],
     }
-    shots = _screenshots(ctx, steps, highlight) if result.verdict == "confirmed" and \
-        getattr(ctx.plan, "cls", None) == "access-control" else []
+    shots: list[dict] = []
+    cls, browser = getattr(ctx.plan, "cls", None), getattr(ctx, "browser", None)
+    if browser is not None and cls in getattr(browser, "screenshots", ()):
+        if result.verdict == "confirmed" and cls == "access-control":
+            shots = _page_screenshots(ctx, steps, highlight)
+        page_shot = shots or any(e.get("kind") == "screenshot" for e in result.evidence or [])
+        if not page_shot and shown_entries:      # no page shows the proof: an image of the exchanges does
+            shots = _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight)
     result.evidence = [*(result.evidence or []), *har, *shots]
     return result

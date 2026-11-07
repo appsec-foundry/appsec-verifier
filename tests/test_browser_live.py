@@ -173,3 +173,26 @@ def test_render_draws_a_recorded_page_without_contacting_the_target(browser):
     assert shot["marked"] == 1 and shot["note"] == SCREENSHOT_NOTE
     path = tmp / shot["path"]
     assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" and stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_render_exchanges_draws_the_recorded_exchanges_without_contacting_the_target(browser):
+    """VER-035: the image of a finding's exchanges, with what decides marked, from the record only."""
+    from appsec_verifier.verify import poc
+
+    b, target, tmp = browser
+
+    def exchange(query, body):
+        return poc.entry({"method": "GET", "url": BASE + "/search?q=" + query, "body": None, "status": 200,
+                          "headers": [("Accept", "application/json")], "elapsed_ms": 40,
+                          "response_headers": [("Content-Type", "application/json")], "content": body.encode(),
+                          "time": "2026-11-07T12:00:00Z"})
+
+    shown = [(1, exchange("x%27%20OR%201%3D1--", '{"items":[1,2,3]}')),
+             (2, exchange("x%27%20OR%201%3D2--", '{"items":[]}'))]
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-3", cls="injection"), marker=("vrfa", "b"), scope={})
+    page, marked = poc.exchange_document(ctx, [{}, {}], shown, "confirmed", "evidence/T-3-poc.har")
+    [shot] = b.render_exchanges(html=page, finding_id="T-3", marked=marked)
+    assert target.seen == [] and shot["marked"] == marked == 6 and shot["note"] == SCREENSHOT_NOTE
+    path = tmp / shot["path"]
+    assert path.name == "T-3-exchange-1.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

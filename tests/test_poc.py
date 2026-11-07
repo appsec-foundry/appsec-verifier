@@ -19,6 +19,7 @@ from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.tools import GuardedHttpClient
+from appsec_verifier.tools.browser import SCREENSHOT_CLASSES
 from appsec_verifier.verify import poc
 from appsec_verifier.verify.probes import ProbeContext
 from appsec_verifier.verify.report import build_annotations, to_markdown
@@ -224,12 +225,16 @@ def test_browser_exchanges_are_redacted_and_kept_out_of_the_tool_result(tmp_path
 # ── access-control screenshots (VER-035) ─────────────────────────────────────
 
 class RenderBrowser:
-    def __init__(self, screenshots=("xss", "access-control")):
-        self.screenshots, self.calls = frozenset(screenshots), []
+    def __init__(self, screenshots=SCREENSHOT_CLASSES):
+        self.screenshots, self.calls, self.exchanges = frozenset(screenshots), [], []
 
     def render(self, **kw):
         self.calls.append(kw)
         return [{"kind": "screenshot", "path": f"evidence/T-001-access-control-{len(self.calls)}.png"}]
+
+    def render_exchanges(self, **kw):
+        self.exchanges.append(kw)
+        return [{"kind": "screenshot", "path": "evidence/T-001-exchange-1.png", "marked": kw["marked"]}]
 
 
 def _html(m, u, h, **k):
@@ -237,26 +242,127 @@ def _html(m, u, h, **k):
                 {"content-type": "text/html; charset=utf-8"})
 
 
-@pytest.mark.parametrize("transport, screenshots, verdict, renders", [
-    (_html, ("xss", "access-control"), "confirmed", 2),
-    (lambda m, u, h, **k: Resp(), ("xss", "access-control"), "confirmed", 0),       # JSON: nothing to render
-    (_html, ("xss",), "confirmed", 0),                                               # turned off for the class
-    (_html, ("xss", "access-control"), "not-reproducible", 0),                       # only a confirmed proof
+@pytest.mark.parametrize("transport, screenshots, verdict, pages, exchanges", [
+    (_html, SCREENSHOT_CLASSES, "confirmed", 2, 0),                     # the pages show the proof
+    (lambda m, u, h, **k: Resp(), SCREENSHOT_CLASSES, "confirmed", 0, 1),   # JSON: the exchanges instead
+    (_html, ("xss",), "confirmed", 0, 0),                               # turned off for the class
+    (_html, SCREENSHOT_CLASSES, "not-reproducible", 0, 1),              # no page proof: the exchanges
 ])
-def test_access_control_screenshots_render_recorded_html_only(tmp_path, transport, screenshots, verdict, renders):
+def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, pages, exchanges):
     browser = RenderBrowser(screenshots)
     sent = []
     ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or transport(m, u, h, **k), browser=browser)
     result, _ = _run(ctx, [_get("customer-a"), _get("customer-b"),
                            {"verdict": {"verdict": verdict, "rationale": "r", "proof_steps": [1, 2],
                                         "highlight": ["bob@shop.test", "not on the page"]}}])
-    assert len(browser.calls) == renders and len(sent) == 2       # rendering sends nothing to the target
-    if renders:
+    assert (len(browser.calls), len(browser.exchanges)) == (pages, exchanges)
+    assert len(sent) == 2                                          # rendering sends nothing to the target
+    if pages:
         call = browser.calls[0]
         assert call["highlight"] == ["bob@shop.test"]              # only values found in the response
         assert "<h1>Basket of bob@shop.test</h1>" in call["html"]
         assert "customer-a" in call["caption"][1] and "no new request" in call["caption"][2]
         assert sum(e["kind"] == "screenshot" for e in result.evidence) == 2
+    if exchanges:
+        page = browser.exchanges[0]["html"]
+        assert "<mark>[identity customer-a]</mark>" in page and "<mark>[identity customer-b]</mark>" in page
+        assert "<mark>bob@shop.test</mark>" in page and "not on the page" not in page
+
+
+# ── the exchange image (VER-035) ─────────────────────────────────────────────
+
+def _shot(tmp_path, cls, transport, steps, scope=None, listener=None):
+    browser = RenderBrowser()
+    ctx = _ctx(tmp_path, transport, cls=cls, browser=browser, scope=scope)
+    ctx.listener = listener
+    result, _ = _run(ctx, steps)
+    return result, (browser.exchanges[0] if browser.exchanges else None)
+
+
+def test_exchange_image_marks_the_redirect(tmp_path):
+    host = "vrfaa11bb22.invalid"
+    result, shot = _shot(tmp_path, "open-redirect",
+                         lambda m, u, h, **k: Resp(302, "", {"location": f"https://{host}/"}),
+                         [_get(None, "/go", to=f"https://{host}/"),
+                          {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}])
+    assert result.verdict == "confirmed"
+    assert f"<mark>location: https://{host}/</mark>" in shot["html"] and f"<mark>{host}</mark>" in shot["html"]
+    assert shot["marked"] >= 2 and shot["finding_id"] == "T-001"
+
+
+def test_exchange_image_marks_the_marker_file(tmp_path):
+    content = "verifier-marker-7f3a9c"
+    scope = {**SCOPE, "marker_file": {"path": "/srv/verifier-marker.txt", "content": content}}
+    _, shot = _shot(tmp_path, "path-traversal", lambda m, u, h, **k: Resp(200, f"a {content} b",
+                                                                        {"content-type": "text/plain"}),
+                    [_get(None, "/download", file="../../srv/verifier-marker.txt"),
+                     {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}], scope=scope)
+    assert f"<mark>{content}</mark>" in shot["html"] and "<mark>verifier-marker.txt</mark>" in shot["html"]
+    assert "<mark>marker file read: yes</mark>" in shot["html"]
+
+
+def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
+    def transport(m, u, h, **k):
+        return Resp(200, '{"items":[1,2,3]}' if "1=1" in str(k.get("params")) else '{"items":[]}')
+
+    _, shot = _shot(tmp_path, "injection", transport,
+                    [_get(None, "/search", q="x' OR 1=1--"), _get(None, "/search", q="x' OR 1=2--"),
+                     {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2]}}])
+    page = shot["html"]
+    assert "<mark>x%27%20OR%201%3D1--</mark>" in page and "<mark>x%27%20OR%201%3D2--</mark>" in page
+    assert "<mark>1</mark>,2,3]}" in page and "<mark>]}</mark>" in page      # where the two answers part
+    assert page.count("<mark>") == 6 and "HTTP/<mark>" not in page             # once, not wherever "1" recurs
+    assert "<mark>input, decoded: x&#x27; OR 1=1--</mark>" in page
+    assert "answered in" not in page                                           # no time: not a timing proof
+
+
+def test_exchange_image_marks_the_times_of_a_timing_proof(tmp_path):
+    from datetime import timedelta
+
+    def transport(m, u, h, **k):
+        slow = "SLEEP" in str(k.get("params"))
+        resp = Resp(200, '{"items":[]}')
+        resp.elapsed = timedelta(milliseconds=2600 if slow else 40)
+        return resp
+
+    _, shot = _shot(tmp_path, "injection", transport,
+                    [_get(None, "/search", q="x"), _get(None, "/search", q="x' AND SLEEP(2)--"),
+                     {"verdict": {"verdict": "not-reproducible", "rationale": "r", "proof_steps": [1, 2]}}])
+    assert "<mark>answered in 40 ms</mark>" in shot["html"] and "<mark>answered in 2600 ms</mark>" in shot["html"]
+
+
+def test_exchange_image_marks_the_callback_marker(tmp_path):
+    listener = SimpleNamespace(base_url="http://127.0.0.1:4444", wait_for=lambda marker, timeout: True,
+                               hits=lambda marker: [{"time": "t", "method": "GET", "source": "127.0.0.1"}])
+    _, shot = _shot(tmp_path, "ssrf", lambda m, u, h, **k: Resp(200, "{}"),
+                    [_get(None, "/fetch", url="http://127.0.0.1:4444/vrfaa11bb22"),
+                     {"verdict": {"verdict": "confirmed", "rationale": "r"}}], listener=listener)
+    assert "<mark>vrfaa11bb22</mark>" in shot["html"]
+    assert "<mark>callback listener received the marker: yes</mark>" in shot["html"]
+
+
+def test_exchange_image_escapes_everything_the_target_sent(tmp_path):
+    _, shot = _shot(tmp_path, "access-control",
+                    lambda m, u, h, **k: Resp(403, "<script>alert(1)</script><img src=x>",
+                                              {"content-type": "application/json", "x-evil": "<b>"}),
+                    [_get("customer-a"), {"verdict": {"verdict": "blocked-by-control", "rationale": "r",
+                                                      "proof_steps": [1]}}])
+    page = shot["html"]
+    assert "<script" not in page and "<img" not in page and "<b>" not in page.split("</header>", 1)[1]
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+
+
+def test_no_exchange_image_without_decisive_steps_or_when_a_page_shows_the_proof(tmp_path):
+    _, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
+                    [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
+    assert shot is None
+    page = {"executed": True, "evidence": [{"kind": "screenshot", "path": "evidence/T-001-xss-1.png"}]}
+    browser = RenderBrowser()
+    browser.check = lambda url, **kw: dict(page)
+    ctx = _ctx(tmp_path, None, cls="xss", browser=browser)
+    result, _ = _run(ctx, [{"tool": "browser_check", "args": {"path": "/s?q=x"}},
+                           {"verdict": {"verdict": "confirmed", "rationale": "r"}}])
+    assert result.verdict == "confirmed" and browser.exchanges == []
 
 
 # ── report and export ────────────────────────────────────────────────────────

@@ -296,8 +296,9 @@ properties:
                   access-control or injection verdict cites: request and status,
                   length and body hash of each response, no body (VER-010, VER-011).
                   `har` holds every request of the finding and its response
-                  (VER-034); `screenshot` is an XSS page or a rendered
-                  access-control response (VER-035).
+                  (VER-034); `screenshot` is an XSS page, a rendered
+                  access-control response or an image of the decisive
+                  exchanges (VER-035).
                 enum: [request, response, har, screenshot, browser-event, callback, note, exchange]
               path:     { type: string, description: Path under evidence/, relative to the report. }
               sha256:   { type: [string, "null"] }
@@ -328,9 +329,10 @@ properties:
                 type: object
                 required: [step, request, response]
                 properties:
-                  step:     { type: integer }
-                  request:  { type: string }
-                  response: { type: string }
+                  step:       { type: integer }
+                  request:    { type: string }
+                  response:   { type: string }
+                  elapsed_ms: { type: [integer, "null"], description: How long the answer took. }
 
         timing:
           type: object

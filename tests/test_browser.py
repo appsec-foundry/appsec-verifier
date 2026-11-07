@@ -22,6 +22,7 @@ from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.tools import GuardedHttpClient
 from appsec_verifier.tools.browser import (
+    SCREENSHOT_CLASSES,
     SCREENSHOT_NOTE,
     Abort,
     BrowserError,
@@ -306,17 +307,22 @@ def test_browser_is_prepared_only_for_xss_and_reports_when_unavailable(monkeypat
     assert browser.screenshots == {"xss"}
 
 
-def test_access_control_screenshots_need_the_browser_only_when_on(monkeypatch, tmp_path):
+def test_screenshots_need_the_browser_only_for_the_classes_they_are_on_for(monkeypatch, tmp_path):
     def missing():
         raise BrowserUnavailable("no chrome")
 
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(missing))
-    on = SimpleNamespace(output=str(tmp_path), headful=False, screenshots=None)     # the default: both classes
-    browser, note = _proof_browser(on, None, _sel("access-control"))
+    on = SimpleNamespace(output=str(tmp_path), headful=False, screenshots=None)     # the default: every class
+    browser, note = _proof_browser(on, None, _sel("injection"))
     assert browser is None and "get no screenshot" in note
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
-    browser, note = _proof_browser(on, None, _sel("access-control"))
-    assert browser.screenshots == {"xss", "access-control"} and "screenshots: xss, access-control" in note
+    for cls in ("access-control", "injection", "open-redirect", "path-traversal", "ssrf"):
+        browser, note = _proof_browser(on, None, _sel(cls))
+        assert browser.screenshots == set(SCREENSHOT_CLASSES) and "screenshots: all classes" in note
+    some = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="xss,ssrf")
+    assert _proof_browser(some, None, _sel("injection")) == (None, None)
+    browser, note = _proof_browser(some, None, _sel("ssrf"))
+    assert browser.screenshots == {"xss", "ssrf"} and "screenshots: xss, ssrf" in note
     off = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="none")
     assert _proof_browser(off, None, _sel("access-control")) == (None, None)
     browser, note = _proof_browser(off, None, _sel("xss"))      # XSS still needs the browser for its proof
@@ -324,12 +330,12 @@ def test_access_control_screenshots_need_the_browser_only_when_on(monkeypatch, t
 
 
 @pytest.mark.parametrize("value, parsed", [("xss", "xss"), ("access-control, XSS", "xss,access-control"),
-                                           ("none", "none")])
+                                           ("ssrf,open-redirect", "open-redirect,ssrf"), ("none", "none")])
 def test_screenshot_option_accepts_known_classes(value, parsed):
     assert screenshot_option(value) == parsed
 
 
-@pytest.mark.parametrize("value", ["", "sqli", "xss,none", "xss,open-redirect"])
+@pytest.mark.parametrize("value", ["", "sqli", "xss,none", "xss,csrf"])
 def test_screenshot_option_refuses_anything_else(value):
     with pytest.raises(argparse.ArgumentTypeError):
         screenshot_option(value)

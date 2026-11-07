@@ -24,10 +24,12 @@ and time, and the elements that carry the payload are outlined. Each request
 the guarded client answered is handed back for the proof of concept (VER-034),
 bodies only for documents, XHR and fetch.
 
-`render` screenshots a recorded HTML response for an access-control proof
-(VER-035): the page is answered from the record, every other request is
-aborted and scripts are off, so it sends nothing to the target. Screenshots can
-show target data, so their evidence entry says so.
+`render` screenshots a recorded HTML response for an access-control proof,
+`render_exchanges` the page verify/poc.py builds from a finding's recorded
+exchanges for every other screenshot (VER-035). Either page is answered from
+the record, every other request is aborted and scripts are off, so they send
+nothing to the target. Screenshots can show target data, so their evidence
+entry says so.
 """
 
 from __future__ import annotations
@@ -62,7 +64,8 @@ _CHROME_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND", "--no-pings", "--disabl
 # Chrome is not root inside it, so its own sandbox still starts.
 _NETNS_ARGS = ("--user", "--net", "--map-current-user")
 SCREENSHOT_NOTE = TARGET_DATA_NOTE
-SCREENSHOT_CLASSES = ("xss", "access-control")
+SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf")
+_EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves; answered from the record
 _HIGHLIGHT = "#b00020"
 
 
@@ -425,10 +428,10 @@ class ProofBrowser:
             entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE))
         return entries
 
-    def render(self, *, url: str, status: int, content_type: str, html: str, finding_id: str,
-               caption: list[str], highlight=()) -> list[dict]:
-        """A screenshot of a recorded HTML response (VER-035). Only the page itself is answered, from the
-        record; every other request is aborted and scripts are off, so nothing reaches the target."""
+    def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, finding_id: str,
+                        kind: str, mark=None, full_page: bool = False):
+        """Screenshot of a page answered from a record: the navigation gets `body`, every other request is
+        aborted and scripts are off, so nothing reaches the target. Returns (path, marks) or (None, None)."""
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -438,8 +441,7 @@ class ProofBrowser:
             if not served and request.is_navigation_request():
                 served.append(True)
                 route.fulfill(status=status if 200 <= int(status or 0) < 600 else 200,
-                              headers={"content-type": content_type or "text/html"},
-                              body=html.encode("utf-8"))
+                              headers={"content-type": content_type or "text/html"}, body=body.encode("utf-8"))
             else:
                 route.abort("blockedbyclient")
 
@@ -451,12 +453,28 @@ class ProofBrowser:
             try:
                 page.goto(url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
             except PlaywrightError:
-                return []
-            marked = self._mark(page, caption, values=highlight,
-                                none="(no highlighted value was found in the page)" if highlight else None)
+                return None, None
+            marked = mark(page) if mark is not None else None
             self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            shot = self._dir / f"{self._stem(finding_id, 'access-control')}.png"
-            page.screenshot(path=str(shot))
-            return [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE, marked=marked)]
+            shot = self._dir / f"{self._stem(finding_id, kind)}.png"
+            page.screenshot(path=str(shot), full_page=full_page)
+            return shot, marked
         finally:
             context.close()
+
+    def render(self, *, url: str, status: int, content_type: str, html: str, finding_id: str,
+               caption: list[str], highlight=()) -> list[dict]:
+        """A screenshot of a recorded HTML response for an access-control proof (VER-035)."""
+        none = "(no highlighted value was found in the page)" if highlight else None
+        shot, marked = self._shoot_recorded(
+            url=url, status=status, content_type=content_type, body=html, finding_id=finding_id,
+            kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none))
+        return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
+                                                    marked=marked)]
+
+    def render_exchanges(self, *, html: str, finding_id: str, marked: int) -> list[dict]:
+        """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035)."""
+        shot, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200, content_type="text/html; charset=utf-8",
+                                       body=html, finding_id=finding_id, kind="exchange", full_page=True)
+        return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
+                                                    marked=marked)]

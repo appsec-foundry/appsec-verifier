@@ -677,23 +677,24 @@ def _screenshot_classes(args) -> frozenset:
 
 
 def _proof_browser(args, http, sel):
-    """The proof browser when an XSS finding is selected (VER-009), or an
-    access-control finding with screenshots on for it (VER-035), else None; with
-    a line for the run settings. Without it XSS findings stay unconfirmed."""
+    """The proof browser when an XSS finding is selected (VER-009), or a finding
+    of a class with screenshots on (VER-035), else None; with a line for the run
+    settings. Without it XSS findings stay unconfirmed and nothing gets a screenshot."""
     shots = _screenshot_classes(args)
     xss = any(p.status == "dynamic" and p.cls == "xss" for p in sel)
-    access = "access-control" in shots and any(p.status == "dynamic" and p.cls == "access-control" for p in sel)
-    if not (xss or access):
+    shown = any(p.status == "dynamic" and p.cls in shots for p in sel)
+    if not (xss or shown):
         return None, None
     from .tools.browser import SCREENSHOT_CLASSES, BrowserUnavailable, ProofBrowser
 
     try:
         ProofBrowser.check_available()
     except BrowserUnavailable as exc:
-        lost = "XSS findings cannot be confirmed" if xss else "access-control findings get no screenshot"
+        lost = "XSS findings cannot be confirmed" if xss else "findings get no screenshot"
         return None, f"unavailable ({exc}); {lost}"
     browser = ProofBrowser(http, Path(args.output) / "evidence", headless=not args.headful, screenshots=shots)
-    listed = ", ".join(c for c in SCREENSHOT_CLASSES if c in shots) or "none"
+    listed = ("all classes" if shots == set(SCREENSHOT_CLASSES)
+              else ", ".join(c for c in SCREENSHOT_CLASSES if c in shots) or "none")
     return browser, ("Google Chrome via Playwright" + (", visible" if args.headful else "")
                      + f", started on first use · screenshots: {listed}")
 
@@ -931,8 +932,8 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     vf.add_argument("--dry-run", action="store_true", help="resolve selection + scope, write nothing, contact nothing")
     vf.add_argument("--headful", action="store_true", help="run the proof browser visibly (local debugging)")
     vf.add_argument("--screenshots", type=screenshot_option, metavar="CLASSES",
-                    help="classes that get screenshots, comma-separated: xss, access-control; or 'none' "
-                         "(default: xss,access-control)")
+                    help="classes that get screenshots, comma-separated: xss, access-control, injection, "
+                         "open-redirect, path-traversal, ssrf; or 'none' (default: all)")
     vf.add_argument("--profile", choices=_PROFILE_CHOICES,
                     help="model profile, as in AppSec Analyzer: claude (Claude CLI, login or key; default when "
                          "interactive), codex-cli (ChatGPT login), copilot-cli (Copilot login), codex "

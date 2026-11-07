@@ -135,7 +135,8 @@ def _poc_markdown(r: dict) -> list[str]:
     out.append(_fenced("\n".join(f"step {s['step']}: {s['line']}" + (" (shown below)" if s.get("decisive") else "")
                                  for s in poc["steps"]), "text"))
     for shown in poc.get("shown") or []:
-        out += ["", f"Step {shown['step']}, request:", "", _fenced(shown["request"]), "",
+        took = f" (answered in {shown['elapsed_ms']} ms)" if shown.get("elapsed_ms") else ""
+        out += ["", f"Step {shown['step']}{took}, request:", "", _fenced(shown["request"]), "",
                 "Response:", "", _fenced(shown["response"])]
     for ev in r.get("evidence") or []:
         if ev.get("kind") == "screenshot" and ev.get("path"):

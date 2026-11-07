@@ -199,7 +199,7 @@ retried; the only resend is one new login after the target answers 401.
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
 | `--dry-run` | Resolve selection + scope and print the plan; send nothing to the target. | VER-008 |
 | `--headful` | Run the proof browser visibly (local debugging only). | VER-009 |
-| `--screenshots CLASSES` | Classes that get screenshots, comma-separated: `xss`, `access-control`; or `none`. Default `xss,access-control`. Without screenshots an XSS proof still holds. | VER-035 |
+| `--screenshots CLASSES` | Classes that get screenshots, comma-separated: `xss`, `access-control`, `injection`, `open-redirect`, `path-traversal`, `ssrf`; or `none`. Default: all. Without screenshots an XSS proof still holds. | VER-035 |
 | `--profile NAME` | Model profile (below), as in AppSec Analyzer. Default `claude`; required with `--non-interactive`. | VER-023 |
 | `--model NAME` | Model for the selected profile; default is the profile's model. | — |
 
@@ -278,8 +278,9 @@ and `_decisive` marks the steps the verdict rests on: for a confirmed verdict
 the steps its proof check used, for XSS also the `browser_check` in which the
 marker executed and for SSRF the request that reached the listener; for any
 other verdict the steps it cites in `proof_steps`. The report lists every step
-in one line and shows the decisive ones as raw HTTP: the request in full, and
-of the response the status, the headers and 1,500 characters of the body around
+in one line and shows the decisive ones as raw HTTP with the time of the
+answer: the request in full, and of the response the status, the headers and
+1,500 characters of the body around
 the part that decides (the marker file's content, the XSS marker, the first
 difference between two injection answers, otherwise the start). The model sees
 none of this beyond its own tool results.
@@ -350,12 +351,27 @@ classes that get screenshots.
 finding, each decisive response that is an HTML page is rendered in the proof
 browser from the recorded, redacted response. Only the page itself is answered;
 images, styles and scripts are aborted and scripts are off, so nothing is sent
-to the target and the page may look unstyled. A JSON or other response gets no
-screenshot; its proof is in the HAR file. The caption names finding, step,
-request, identity, status and time. Up to three values the model names in
-`highlight`, such as the other identity's email, are marked in yellow when
-they occur in the response. The browser starts for this only when an
-access-control finding is selected and `--screenshots` includes the class.
+to the target and the page may look unstyled. A JSON or other response gets
+the exchange screenshot below. The caption names finding, step, request,
+identity, status and time. Up to three values the model names in `highlight`,
+such as the other identity's email, are marked in yellow when they occur in
+the response.
+
+**Exchange screenshots (VER-035).** Every other tested finding whose verdict
+rests on steps (see proof of concept above) gets
+`evidence/<finding>-exchange-<n>.png` when `--screenshots` includes its class:
+open redirect, path traversal, injection and SSRF always, XSS without an
+executed marker, access control without an HTML page. It shows the decisive
+steps, request and response side by side as recorded and redacted, built as a
+page without scripts and rendered in the proof browser without a new request.
+Marked is what the code can locate: the identity, the XSS or SSRF marker, the
+redirect host and the `Location` header, the marker file's name and content,
+the input and the part of the answer that differ between two injection
+requests (the input also decoded), a different status, and the answer times
+when they differ by 2 s or more. For SSRF the image also says whether the
+listener received the marker, for XSS whether it executed. The proof browser
+starts for screenshots only when a finding of an included class is selected;
+without Playwright or Chrome no screenshot is taken and the verdicts stand.
 
 **Safe mode (default, VER-030).** Without `--allow-intrusive` the run stays
 read-only, even when the scope permits state change. It sends the most harmless
@@ -638,8 +654,9 @@ Written to `--output` (default `./verification`):
 - `evidence/` — owner-only: `<finding>-poc.har` for every tested finding (see
   proof of concept above), the proof records `<finding>-exchanges.json` and
   `<finding>-callback-hits.json` (see proof per class above), for an XSS marker
-  that executed `<finding>-xss-<n>.json` with a screenshot `.png`, and
-  `<finding>-access-control-<n>.png`. XSS screenshots are not redacted.
+  that executed `<finding>-xss-<n>.json` with a screenshot `.png`,
+  `<finding>-access-control-<n>.png` and `<finding>-exchange-<n>.png`. XSS
+  screenshots are not redacted.
   Responses and screenshots are marked for review before sharing (VER-022).
 - `security-assessment.annotated.yaml` — only with `--annotate`; with
   `--in-place` the assessment itself is changed instead (VER-027).

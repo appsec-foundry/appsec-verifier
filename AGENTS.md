@@ -97,8 +97,8 @@ needs an explicit decision from the maintainer, not a workaround.
   isolation flags in line with AppSec Analyzer's adapters.
 - The proof browser (`tools/browser.py`) never connects by itself: every page
   request goes through `answer()` and the `GuardedHttpClient`, is answered from
-  a recorded response (`render`, access-control screenshots, scripts off), or
-  is aborted.
+  a recorded response (`render`, `render_exchanges`, scripts off), or is
+  aborted.
   Chrome runs in a network namespace without network access
   (`unshare --user --net`); without it the browser does not start.
 - The SSRF callback listener (`tools/callback.py`) binds only to loopback, is

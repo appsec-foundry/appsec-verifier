@@ -183,10 +183,11 @@ describes the columns.
   ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `evidence/`: per tested finding `<finding>-poc.har` with every request the
-  agent sent and the response to it, the proof records, and screenshots for
-  XSS and for access control on HTML pages (`--screenshots` chooses). Responses
-  and screenshots can show data of the target; check them before you share
-  them.
+  agent sent and the response to it, the proof records, and a screenshot: the
+  page in which an XSS payload ran, an access-control HTML page, or else an
+  image of the decisive requests and responses with what decides marked.
+  `--screenshots` chooses the classes. Responses and screenshots can show data
+  of the target; check them before you share them.
 
 `--print` also shows the verdicts in the terminal, and `--append` adds to an
 existing report. `--annotate` writes `security-assessment.annotated.yaml`, a

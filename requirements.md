@@ -158,20 +158,22 @@ optional hardening.
   are the steps its proof check relied on (VER-009 to VER-012), for SSRF also
   the request that triggered the callback; for any other verdict the steps it
   cites, such as the refused request behind *blocked by a control*.
-  Screenshots add to it where a browser shows the proof (VER-035).
+  Screenshots show it (VER-035).
 
-- **VER-035: Take screenshots where a browser shows the proof.** A screenshot
-  is taken of the page in which an XSS marker executed (VER-009), and of a
-  confirmed access-control finding's contested response when that is an HTML
-  page, rendered from the recorded response without a new request (VER-010).
-  Redirect, traversal, injection and SSRF proofs lie in status, headers, body,
-  timing or the callback hit and get none. The operator chooses per run
-  whether and for which of these classes screenshots are taken, by default for
-  both. Each screenshot shows what the proof rests on: a caption names the
-  finding, URL, identity and time, and the element that holds the executed
-  payload or the contested data is marked where the code can locate it. Marks
-  are drawn over the page and leave the recorded exchange unchanged. A
-  screenshot illustrates the proof; no verdict depends on it.
+- **VER-035: Show the proof in a screenshot.** A screenshot is taken of the
+  page in which an XSS marker executed (VER-009), and of a confirmed
+  access-control finding's contested response when that is an HTML page,
+  rendered from the recorded response without a new request (VER-010). Every
+  other finding with steps its verdict rests on (VER-034) gets an image of
+  those exchanges instead, request and response side by side, also rendered
+  from the record. The operator chooses per run whether and for which classes
+  screenshots are taken, by default for all. Each screenshot shows what the
+  proof rests on: a caption names the finding, URL, identity and time, and
+  what the code can locate is marked, such as the executed payload, the
+  contested data, the redirect target, the marker file's content, the input
+  and answer that differ, or the answer times. Marks leave the recorded
+  exchange unchanged. A screenshot illustrates the proof; no verdict depends
+  on it.
 
 ## Stay safe and in scope
 
