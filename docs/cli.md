@@ -435,11 +435,11 @@ data, so use intrusive mode only against a disposable test instance.
 
 ### Console output
 
-The console looks like AppSec Analyzer's. Before the first request `verify`
-prints its settings as `Key : value` lines: the assessment, the target, the
-scope and its owner (or `no scope file`), the selection with its severity
-floor, the profile and model, the limits and the mode (safe or intrusive), and
-asks
+The console is laid out like AppSec Analyzer's, with a red logo and red
+accents instead of its turquoise. Before the first request `verify` prints its
+settings as `Key : value` lines: the assessment, the target, the scope and its
+owner (or `no scope file`), the selection with its severity floor, the profile
+and model, the limits and the mode (safe or intrusive), and asks
 `Proceed against this target? [y/N]`, or `[Y/n]` in the guided run. For
 selected classes that need a preparation, one more line names it or says it is
 missing: `Identities` (access control, roles only), `Browser` (XSS), `Callback`

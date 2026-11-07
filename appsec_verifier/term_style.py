@@ -1,8 +1,9 @@
-"""Terminal colour and logo in the look of AppSec Analyzer.
+"""Terminal colour and logo, laid out like AppSec Analyzer's.
 
 Adapted from AppSec Analyzer's ``scripts/renderers/term_style.py``: the same
-palette, roles and logo, so both tools look alike. One rule decides whether a
-stream gets colour:
+roles and logo shape, but the logo and the accents are red where the Analyzer's
+are turquoise, so the two tools are told apart at a glance. Status and severity
+keep the Analyzer's colours. One rule decides whether a stream gets colour:
 
 1. ``NO_COLOR`` (any non-empty value) disables colour.
 2. ``FORCE_COLOR`` (non-empty, not ``0``) enables it.
@@ -29,11 +30,12 @@ from typing import IO
 RESET = "\033[0m"
 TAGLINE = "Verifies assessment findings against a running app"
 
-# role -> (24-bit RGB, base-16 SGR), as in AppSec Analyzer. Muted, Nord-like
-# tones: status and severity carry colour, everything else stays grey.
+# role -> (24-bit RGB, base-16 SGR). Status and severity as in AppSec Analyzer;
+# accent, agent and the logo in red and rose tones instead of its turquoise and
+# lavender. The accent is a light rose, so it is not read as critical.
 _PALETTE: dict[str, tuple[tuple[int, int, int], str]] = {
-    "accent": ((124, 196, 228), "36"),
-    "agent": ((180, 162, 240), "35"),
+    "accent": ((238, 150, 172), "95"),
+    "agent": ((206, 150, 214), "35"),
     "ok": ((143, 209, 158), "32"),
     "warn": ((240, 198, 110), "33"),
     "critical": ((236, 109, 118), "31"),
@@ -41,10 +43,10 @@ _PALETTE: dict[str, tuple[tuple[int, int, int], str]] = {
     "medium": ((240, 198, 110), "33"),
     "low": ((124, 196, 228), "36"),
     "muted": ((109, 118, 134), "90"),
-    "iris_rim": ((20, 52, 76), "36"),
-    "iris": ((66, 128, 162), "36"),
-    "iris_core": ((140, 196, 222), "96"),
-    "iris_bracket": ((116, 100, 172), "35"),
+    "iris_rim": ((86, 22, 34), "31"),
+    "iris": ((184, 52, 70), "31"),
+    "iris_core": ((246, 150, 150), "91"),
+    "iris_bracket": ((198, 108, 150), "35"),
 }
 _ATTRS = {"bold": "1"}
 
@@ -112,7 +114,7 @@ class Style:
 
 
 def logo(st: Style, detail: str, width: int | None = None) -> list[str]:
-    """The three-line logo of AppSec Analyzer with the Verifier's name, tagline and ``detail``.
+    """The three-line logo of AppSec Analyzer, in red, with the Verifier's name, tagline and ``detail``.
 
     Shown only on a terminal. With ``width``, a ``detail`` too long for that many
     columns continues on further lines under its own column.

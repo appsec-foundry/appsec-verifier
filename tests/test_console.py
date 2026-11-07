@@ -98,7 +98,7 @@ def test_facts_strip_escapes_and_colour_by_role():
                                      ("Verdicts", [("1 confirmed", "critical"), (f"0 blocked{HOSTILE}", "muted")])])
     plain = SGR.sub("", "\n".join(lines))
     assert "\x1b" not in plain and "\x07" not in plain
-    assert "\x1b[36mhttp://a]0;pwned[2J\x1b[0m\x1b[90m (will contact)\x1b[0m" in lines[0]
+    assert "\x1b[95mhttp://a]0;pwned[2J\x1b[0m\x1b[90m (will contact)\x1b[0m" in lines[0]
     assert "\x1b[32msafe\x1b[0m" in lines[1] and "\x1b[31m1 confirmed\x1b[0m" in lines[2]
     assert [SGR.sub("", line) for line in lines][:2] == ["  Target     : http://a]0;pwned[2J (will contact)",
                                                           "  Mode       : safe"]
