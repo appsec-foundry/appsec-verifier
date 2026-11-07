@@ -5,6 +5,7 @@ asked, cancel contacts nothing, and without a terminal nothing is asked."""
 from __future__ import annotations
 
 import shlex
+from datetime import datetime, timezone
 
 import pytest
 import yaml
@@ -23,6 +24,8 @@ THREATS = [
 ]
 # classes, severity, scope, URL, identities, profile, change limits
 DEFAULTS = ["", "", "", "", "", "", ""]
+# classes, severity, and Enter at the scope question when no scope file exists
+NEW_SCOPE = ["", "", ""]
 
 
 class Script:
@@ -130,29 +133,78 @@ def test_an_empty_selection_is_asked_again(env):
     assert args.category is None
 
 
-def test_without_a_scope_a_template_is_written_and_the_run_stops(env, capsys):
+def test_without_a_scope_one_is_written_from_the_answers_and_used(env):
     (env.run / "scope.yaml").unlink()
-    rc, _, prompts, _ = env.go("", "", "")
-    template = env.cwd / "scope.yaml"
-    assert rc == cli.EXIT_BLOCKED and template.is_file() and env.calls == []
-    assert "wrote a scope template" in capsys.readouterr().err
-    errors = cli._validate_scope(yaml.safe_load(template.read_text()))
-    assert any(e.startswith("base_url") for e in errors) and any(e.startswith("window") for e in errors)
-    assert any(e.startswith("owner") for e in errors)
+    rc, args, prompts, out = env.go(*NEW_SCOPE, "http://localhost:3000", "2099-12-31", "Tess Tester", "T-42",
+                                    "", "", "")
+    path = env.run / "scope.yaml"
+    assert rc == 0 and len(prompts) == 10 and path.is_file()
+    assert prompts[2].startswith("Scope file, or Enter to write one next to the assessment")
+    assert [p.split(" ")[0] for p in prompts[3:7]] == ["Target", "Authorisation", "Owner,", "Reference,"]
+    assert not any(word in p.lower() for p in prompts for word in ("password", "token", "secret", "key"))
+    scope = yaml.safe_load(path.read_text())
+    assert set(scope) == {"schema_version", "base_url", "schemes", "window", "owner", "allow_state_change"}
+    assert scope["base_url"] == "http://localhost:3000" and scope["schemes"] == ["http"]
+    assert scope["window"]["until"] == "2099-12-31T23:59:59Z" and scope["allow_state_change"] is False
+    assert scope["owner"] == {"name": "Tess Tester", "contact": None, "reference": "T-42"}
+    assert (args.scope, args.target) == (str(path), "http://localhost:3000") and f"wrote {path}" in out
+    assert not any(p.startswith("Target URL [") for p in prompts)       # the URL is not asked twice
+    assert str(path) in shlex.split(env.calls[0][1])
 
 
-def test_an_unedited_template_is_refused_on_the_next_run(env):
+def test_the_window_of_a_new_scope_ends_today_by_default(env):
     (env.run / "scope.yaml").unlink()
-    assert guided.write_scope_template(env.cwd / "scope.yaml")
-    rc, _, prompts, out = env.go("", "", "")      # accepts the proposed template, then input ends
-    assert rc == cli.EXIT_BLOCKED and env.calls == []
-    assert prompts[2].startswith("Scope file [") and "base_url" in out
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rc, _, prompts, _ = env.go(*NEW_SCOPE, BASE, "", "Tess", "", "", "", "")
+    scope = yaml.safe_load((env.run / "scope.yaml").read_text())
+    assert rc == 0 and prompts[4].endswith(f"[{today}T23:59:59Z]: ")
+    assert scope["window"]["until"] == f"{today}T23:59:59Z" and scope["schemes"] == ["https"]
+    assert scope["owner"]["reference"] is None
 
 
-def test_the_template_never_overwrites_a_file(tmp_path):
-    path = tmp_path / "scope.yaml"
-    path.write_text("mine")
-    assert not guided.write_scope_template(path) and path.read_text() == "mine"
+def test_invalid_answers_for_a_new_scope_are_asked_again(env):
+    (env.run / "scope.yaml").unlink()
+    rc, _, _, out = env.go(
+        *NEW_SCOPE,
+        "",                                       # no target
+        "localhost:3000",                         # no scheme
+        "ftp://files.example.com",                # not http(s)
+        "http://admin:pw@localhost:3000",         # credentials in the URL
+        "http://localhost:3000/a/../b",           # ambiguous path
+        "http://localhost:3000",
+        "2020-01-01", "tomorrow", "2099-01-01T12:00:00+02:00",   # past, unparseable, then valid
+        "", "Tess",                               # no owner, then one
+        "", "", "", "")
+    scope_text = (env.run / "scope.yaml").read_text()
+    assert rc == 0 and "admin:pw" not in scope_text
+    assert "a target URL is required" in out and out.count("absolute http or https URL") == 2
+    assert "leave credentials out of the URL" in out and "is ambiguous" in out
+    assert out.count("enter a future date or time") == 2 and "the owner is required" in out
+    assert yaml.safe_load(scope_text)["window"]["until"] == "2099-01-01T10:00:00Z"
+
+
+def test_a_new_scope_never_replaces_a_file_or_follows_a_link(env, tmp_path, capsys):
+    elsewhere = tmp_path / "elsewhere.yaml"
+    (env.run / "scope.yaml").unlink()
+    (env.run / "scope.yaml").symlink_to(elsewhere)        # dangling: not proposed, and not written through
+    rc, _, _, _ = env.go(*NEW_SCOPE, BASE, "", "Tess", "")
+    assert rc == cli.EXIT_BLOCKED and env.calls == [] and not elsewhere.exists()
+    assert "already exists and was left unchanged" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("at", range(4))
+def test_cancelling_a_new_scope_writes_and_contacts_nothing(env, capsys, at):
+    (env.run / "scope.yaml").unlink()
+    rc, _, _, _ = env.go(*NEW_SCOPE, *[BASE, "", "Tess", ""][:at], KeyboardInterrupt)
+    assert rc == cli.EXIT_BLOCKED and env.calls == [] and not (env.run / "scope.yaml").exists()
+    assert "cancelled; nothing was contacted" in capsys.readouterr().err
+
+
+def test_an_invalid_scope_file_is_refused_and_asked_again(env):
+    (env.run / "scope.yaml").write_text(yaml.safe_dump({"schema_version": 1, "base_url": None}))
+    rc, _, prompts, out = env.go("", "", "")      # accepts the proposed file, then input ends
+    assert rc == cli.EXIT_BLOCKED and env.calls == [] and "base_url" in out
+    assert prompts[2].startswith("Scope file [") and prompts[3].startswith("Scope file [")
 
 
 def test_missing_credentials_are_named_and_asked_again(env):
@@ -270,8 +322,10 @@ def test_unreadable_or_unverifiable_assessments_block(env, capsys):
 
 
 def test_non_interactive_names_what_is_missing(env, capsys):
+    (env.run / "scope.yaml").unlink()
     rc, _, prompts, _ = env.go(interactive=False)
     assert rc == cli.EXIT_BLOCKED and prompts == [] and env.calls == []
+    assert not (env.run / "scope.yaml").exists() and not (env.cwd / "scope.yaml").exists()
     assert "needs --scope and --profile" in capsys.readouterr().err
 
 

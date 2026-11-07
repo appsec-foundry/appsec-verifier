@@ -8,9 +8,10 @@ options already given are used as given. The settings are then handed to
 invocation, and asks for the one confirmation of VER-002.
 
 The dialog contacts nothing, never asks for a secret value (credentials stay in
-environment variables, VER-016), and never uses or widens a scope it created:
-without a scope file it writes a template that is invalid until edited, and
-stops (VER-001, VER-004). Text from the assessment is untrusted (VER-005) and is
+environment variables, VER-016), and never widens a scope. Without a scope file
+it asks for the target, the end of the window, the owner and a reference, and
+writes a scope next to the assessment that holds only these answers, never over
+an existing file (VER-001, VER-004). Text from the assessment is untrusted (VER-005) and is
 shown without control characters. Without a terminal, or with
 --non-interactive, nothing is asked: the run takes its settings from the
 invocation and blocks on a missing scope or profile.
@@ -19,10 +20,13 @@ invocation and blocks on a missing scope or profile.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -32,8 +36,8 @@ from .limits import Limits
 from .loader import list_categories
 from .preflight import printable as clean
 from .scope import ScopeGuard
+from .scope.guard import _parse_iso
 from .term_style import Style
-from .version_info import resource_root
 
 SEVERITY_FLOORS = ("critical", "high", "medium", "low")
 DEFAULT_FLOOR = "high"
@@ -223,15 +227,101 @@ def load_scope(path) -> tuple[dict | None, ScopeGuard | None, list[str]]:
     return scope, guard, []
 
 
-def write_scope_template(path: Path) -> bool:
-    """Write the scope template to `path`; never over an existing file."""
-    template = (resource_root() / "data" / "scope-template.yaml").read_text(encoding="utf-8")
+_SCOPE_HEADER = """\
+# Authorisation scope for AppSec Verifier (VER-001), written by the guided run
+# from your answers. The Verifier contacts nothing outside it and never widens it.
+
+"""
+
+_SCOPE_MORE = """
+# More settings, described under "Scope file" in docs/cli.md of
+# https://github.com/appsec-foundry/appsec-verifier:
+# hosts: [app.test.example.com, api.test.example.com]   all target hosts; replaces the host of base_url
+# ports: [443, 8443]              all target ports; replaces the port of base_url
+# path_prefixes: [/api/]          default: the whole host
+# deny_paths: [/admin/]           paths that are never contacted
+# networks: [10.0.0.0/8]          private networks the host names may resolve to
+# Set allow_state_change to true only for a disposable instance: it allows
+# marked write requests, together with --allow-intrusive.
+"""
+
+
+def _target_problem(url: str) -> str | None:
+    """Why `url` cannot be the target of a new scope, or None."""
+    if not url:
+        return "a target URL is required; it is never taken from the assessment"
+    if clean(url) != url or any(c.isspace() for c in url):
+        return "the URL contains spaces or control characters"
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https") or not parts.hostname:
+        return "enter an absolute http or https URL with a host, e.g. https://app.test.example.com"
+    if parts.username is not None or parts.password is not None:
+        return "leave credentials out of the URL; test identities take theirs from environment variables"
+    decision = ScopeGuard({"base_url": url, "schemes": [scheme]}).authorize(url, "target")
+    return None if decision.allowed else clean(decision.reason)
+
+
+def _window_end(answer: str) -> datetime | None:
+    """The answer as a time in UTC; a date alone means the end of that day."""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", answer):
+        answer += "T23:59:59Z"
+    end = _parse_iso(answer)
+    return end.astimezone(timezone.utc) if end else None
+
+
+def _utc(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _create_scope(d: Dialog, args, path: Path):
+    """Ask for the target, the end of the window, the owner and a reference, and
+    write them as the scope at `path`, never over an existing file. Only the end
+    of the window has a default, so the scope holds what the operator entered and
+    nothing from the assessment (VER-001, VER-004, VER-031)."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    while True:
+        url = d.question("Target URL you are authorised to test")
+        problem = _target_problem(url)
+        if problem is None:
+            break
+        d.out(f"  {problem}")
+    while True:
+        until = _window_end(d.question("Authorisation window ends (UTC)", now.strftime("%Y-%m-%dT23:59:59Z")))
+        if until and until > now:
+            break
+        d.out("  enter a future date or time, e.g. 2026-11-30 or 2026-11-30T18:00:00Z")
+    while not (owner := clean(d.question("Owner, the person responsible for this test")).strip()):
+        d.out("  the owner is required; the report records it")
+    reference = clean(d.question("Reference, e.g. ticket or approval (optional)")).strip() or None
+    scope = {"schema_version": 1, "base_url": url, "schemes": [urlsplit(url).scheme.lower()],
+             "window": {"from": _utc(now), "until": _utc(until)},
+             "owner": {"name": owner, "contact": None, "reference": reference},
+             "allow_state_change": False}
+    errors = cli._validate_scope(scope)
+    if errors:
+        _err("the answers do not make a valid scope; nothing was written or contacted:\n"
+             + "\n".join(f"  - {clean(e)}" for e in errors))
+        return None
     try:
         with open(path, "x", encoding="utf-8") as fh:
-            fh.write(template)
+            fh.write(_SCOPE_HEADER + yaml.safe_dump(scope, sort_keys=False, allow_unicode=True) + _SCOPE_MORE)
     except FileExistsError:
-        return False
-    return True
+        _err(f"\n{path} already exists and was left unchanged. Nothing was contacted.")
+        return None
+    except OSError as exc:
+        _err(f"\ncannot write {path}: {type(exc).__name__}. Nothing was contacted.")
+        return None
+    scope, guard, errors = load_scope(path)
+    if errors:
+        _err(f"\n{path} cannot be used:\n" + "\n".join(f"  - {clean(e)}" for e in errors))
+        return None
+    args.scope, args.target = str(path), url
+    d.out(f"  wrote {path}\n"
+          f"    target  {url} (whole host, read-only)\n"
+          f"    window  {scope['window']['from']} → {scope['window']['until']}\n"
+          f"    owner   {owner}")
+    return scope, guard
 
 
 def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
@@ -249,15 +339,9 @@ def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
         if found:
             answer = d.question("Scope file", str(found[0]))
         else:
-            answer = d.question("Scope file (Enter writes a template to ./scope.yaml and stops)")
+            answer = d.question("Scope file, or Enter to write one next to the assessment")
         if not answer:
-            path = cwd / "scope.yaml"
-            if write_scope_template(path):
-                _err(f"\nwrote a scope template to {path}. Fill in the target, window and owner of a test "
-                     "you are authorised to run, then start again. Nothing was contacted.")
-            else:
-                _err(f"\n{path} already exists and was left unchanged. Nothing was contacted.")
-            return None
+            return _create_scope(d, args, assessment.parent / "scope.yaml")
         scope, guard, errors = load_scope(answer)
         if not errors:
             args.scope = answer

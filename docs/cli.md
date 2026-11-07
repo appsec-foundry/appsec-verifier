@@ -51,7 +51,7 @@ Enter accepts the default shown in brackets.
 | --- | --- | --- |
 | Classes to verify | all verifiable classes present | `--category` |
 | Lowest severity | `high` (High and Critical); `all` for no floor | `--min-severity` |
-| Scope file | `scope.yaml` next to the assessment, else in the working directory | `--scope` |
+| Scope file | `scope.yaml` next to the assessment, else in the working directory; without one, Enter writes one from your answers (below) | `--scope` |
 | Target URL | the scope's `base_url` | `--url` |
 | Identities file | `identities.yaml` next to the scope, the assessment, or in the working directory; else `none` | `--identities` |
 | Model profile | `claude` | `--profile` |
@@ -68,11 +68,18 @@ Options given on the command line are used as given and not asked, e.g.
 asks for a password, token, or other secret; credentials stay in environment
 variables.
 
-Without a scope file, Enter at the scope question writes a template to
-`./scope.yaml` (never over an existing file) and stops with exit 2. The template
-is invalid until its target, window and owner are filled in, so the next guided
-run proposes it but refuses it until it is edited. The guided run never uses a
-scope it wrote and never widens one.
+Without a scope file, Enter at the scope question asks for the target URL, the
+end of the test window, the owner and an optional reference such as a ticket.
+Target and owner have no default, and the target is never taken from the
+assessment. A URL without http or https, with a user name or password, or with
+an ambiguous path is asked again. The window ends at 23:59:59 UTC of the current
+day unless you enter a date or time; a date alone means the end of that day.
+The answers are written to `scope.yaml` next to the assessment, never over an
+existing file: the target's host, port and scheme, the whole host as path, a
+window starting now, and `allow_state_change: false`. The run then uses this
+scope and does not ask for the target URL again. Further keys (`hosts`,
+`deny_paths`, `networks`, `allow_state_change` and the others below) are added
+by editing the file; the guided run never widens a scope.
 
 After the questions the run shows the `verify` settings and the equivalent
 non-interactive command line, e.g.

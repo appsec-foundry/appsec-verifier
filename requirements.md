@@ -320,8 +320,9 @@ optional hardening.
     class present, and a severity floor, by default high.
   - **Target** (VER-001, VER-004): the scope file and the URL, by default the
     scope's base URL. Neither is taken from the assessment. Without a scope file
-    the run offers a template and stops; an unedited template is not a valid
-    scope, and the guided run never uses a scope it created or widens one.
+    the run asks for target, window end, owner and reference and writes a scope
+    from these answers only; target and owner have no default, and the guided
+    run never widens a scope.
   - **Identities** (VER-016, VER-028): the test identities to use. Missing
     credentials are pointed out, and so are access-control findings that cannot
     be confirmed for lack of two identities (VER-010).

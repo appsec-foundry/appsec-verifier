@@ -38,7 +38,8 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    owner: {name: Your Name}   # who is responsible for the test
    ```
 
-   If you skip this step, the guided run writes a template for you to fill in.
+   If you skip this step, the guided run asks for the target, the end of the
+   test window and your name, and writes `scope.yaml` next to the assessment.
 
 3. Optional: add test accounts in `identities.yaml`. Access-control findings
    need two of them. The file names environment variables, never the passwords
