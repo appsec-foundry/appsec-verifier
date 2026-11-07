@@ -9,7 +9,9 @@ therefore applies the call cap, the cost check before the call, the timeout
 every other profile. The SDK gets that timeout and no retries, so a call never
 outlasts its bound. The cost is computed from the reported usage at the prices
 in data/anthropic-model-catalog.yaml and charged against the USD ceiling; a
-model without a price there is refused. SDK errors become fixed reason codes,
+model without a price there is refused. A model priced by prompt length
+(Claude Haiku 5.5) has a second rate card, used for a response whose prompt,
+cache reads and writes included, is longer than its threshold. SDK errors become fixed reason codes,
 so no provider prose reaches the report.
 """
 
@@ -80,6 +82,20 @@ class AnthropicHost:
         prices = catalog_prices(model)
         return cls(model=model, prices=prices, client=(client_factory or _default_client)(environ))
 
+    def _cost(self, usage) -> float:
+        """USD for one response. A prompt (input, cache writes and cache reads) longer than the
+        catalog's `long_prompt.threshold_tokens` is priced at the long-prompt rates."""
+        tokens = {}
+        for field, _ in _PRICED_USAGE:
+            count = getattr(usage, field, None) or 0
+            if type(count) is not int or count < 0:
+                raise ValueError("invalid usage")
+            tokens[field] = count
+        prompt = tokens["input_tokens"] + tokens["cache_creation_input_tokens"] + tokens["cache_read_input_tokens"]
+        long = self.prices.get("long_prompt")
+        prices = long if long is not None and prompt > long["threshold_tokens"] else self.prices
+        return sum(tokens[field] * prices[price] for field, price in _PRICED_USAGE) / 1_000_000
+
     def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
         try:
             resp = self._client.with_options(timeout=timeout, max_retries=0).messages.create(
@@ -90,12 +106,7 @@ class AnthropicHost:
         except Exception as exc:  # noqa: BLE001 - any SDK failure ends this finding with a fixed reason code
             return HostReply(error=_reason(exc))
         try:
-            usd = 0.0
-            for field, price in _PRICED_USAGE:
-                tokens = getattr(resp.usage, field, None) or 0
-                if type(tokens) is not int or tokens < 0:
-                    raise ValueError("invalid usage")
-                usd += tokens * self.prices[price] / 1_000_000
+            usd = self._cost(resp.usage)
         except (AttributeError, KeyError, TypeError, ValueError):
             return HostReply(error="invalid_response")
         if resp.stop_reason != "end_turn":

@@ -123,6 +123,42 @@ def test_failures_end_the_finding_with_a_fixed_reason(answer, expected):
     assert "prose" not in reply.error
 
 
+HAIKU = {"input_usd_per_million": 0.10, "output_usd_per_million": 0.50, "cache_write_usd_per_million": 0.20,
+         "cache_read_usd_per_million": 0.01,
+         "long_prompt": {"threshold_tokens": 100_000, "input_usd_per_million": 0.50, "output_usd_per_million": 2.50,
+                         "cache_write_usd_per_million": 1.00, "cache_read_usd_per_million": 0.05}}
+
+
+@pytest.mark.parametrize("usage, rates", [
+    ((100_000, 500, None, None), (0.10, 0.50, 0.20, 0.01)),            # exactly at the threshold: short rates
+    ((100_001, 500, None, None), (0.50, 2.50, 1.00, 0.05)),            # over it: long rates for every token
+    ((1_000, 500, 40_000, 60_000), (0.50, 2.50, 1.00, 0.05)),          # cache reads and writes count
+    ((1_000, 500, 39_000, 60_000), (0.10, 0.50, 0.20, 0.01)),
+])
+def test_a_long_prompt_is_priced_at_the_long_prompt_rates(usage, rates):
+    host = AnthropicHost(model="claude-haiku-5-5", prices=HAIKU,
+                         client=FakeClient([_msg(_wire("http_request", path="/x"), usage=usage)]))
+    reply = host.call("s", "p", 10, _ctx().budget)
+    tokens = [t or 0 for t in usage]
+    assert reply.usd == pytest.approx(sum(t * r for t, r in zip(tokens, rates, strict=True)) / 1_000_000)
+
+
+def test_every_catalog_model_has_complete_prices():
+    import yaml
+
+    from appsec_verifier.version_info import resource_root
+
+    keys = {"input_usd_per_million", "output_usd_per_million", "cache_write_usd_per_million",
+            "cache_read_usd_per_million"}
+    models = yaml.safe_load((resource_root() / "data" / "anthropic-model-catalog.yaml").read_text())["models"]
+    assert {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"} <= set(models)
+    for entry in models.values():
+        assert keys <= set(entry) and all(entry[k] > 0 for k in keys)
+        if "long_prompt" in entry:
+            assert set(entry["long_prompt"]) == keys | {"threshold_tokens"}
+            assert all(entry["long_prompt"][k] >= entry[k] for k in keys)
+
+
 def test_profile_needs_a_key_a_priced_model_and_the_sdk(monkeypatch):
     env = {"ANTHROPIC_API_KEY": "sk-test"}
     with pytest.raises(HostUnavailable):

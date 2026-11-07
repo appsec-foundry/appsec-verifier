@@ -9,6 +9,10 @@
 # inference_geo, so the 1.1x data-residency multiplier does not apply.
 # Separate from model-catalog.yaml, which lists only OpenAI models and is kept
 # in step with AppSec Analyzer.
+#
+# `long_prompt` holds a second rate card for a request whose prompt is longer
+# than `threshold_tokens`. The prompt counts all input tokens of the request,
+# cache reads and cache writes included, and each request is priced on its own.
 
 schema_version: 1
 price_revision: anthropic-standard-2026-11-07
@@ -28,3 +32,14 @@ models:
     output_usd_per_million: 50.0
     cache_write_usd_per_million: 20.0
     cache_read_usd_per_million: 0.25
+  claude-haiku-5-5:
+    input_usd_per_million: 0.10
+    output_usd_per_million: 0.50
+    cache_write_usd_per_million: 0.20
+    cache_read_usd_per_million: 0.01
+    long_prompt:
+      threshold_tokens: 100000
+      input_usd_per_million: 0.50
+      output_usd_per_million: 2.50
+      cache_write_usd_per_million: 1.00
+      cache_read_usd_per_million: 0.05
