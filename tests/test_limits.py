@@ -92,8 +92,14 @@ def test_max_attempts_bounds_the_agent_steps_per_finding(tmp_path, monkeypatch):
             asked.append(1)
             return {"tool": "read_source", "args": {"path": "routes/basket.ts"}}
 
+    def no_network(*a, **k):
+        raise AssertionError("the test reached the transport")
+
+    from appsec_verifier.tools import httpx_transport
+
     info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none"}
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, info))
+    monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: no_network)
     rc = cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope",
                    str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes",
                    "--max-attempts", "3"])

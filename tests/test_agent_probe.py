@@ -150,6 +150,40 @@ def test_planner_and_report_never_see_a_credential_value(tmp_path):
     assert doc["results"][0]["rationale"] == "saw token [redacted] echoed"
 
 
+def test_every_step_is_logged_with_its_outcome_and_refusals(tmp_path):
+    """VER-017: tool calls with their outcome, guard refusals, a proposal the step
+    contract refused, and the verdict all reach the log; bodies and source text do not."""
+    records = []
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, '{"basket":"private"}'))
+    ctx.log = records.append
+    planner = ScriptedPlanner([
+        {"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": 1}},
+        {"tool": "http_request", "args": {"role": "customer-a", "path": "/rest/basket/2"}},
+        {"tool": "http_request", "args": {"path": "/rest/%2e%2e/admin"}},
+        {"tool": "http_request", "args": {"path": "/", "headers": {"X-Forwarded-For": "127.0.0.1"}}},
+    ])
+    res = AgentProbe("access-control", lambda: planner, max_steps=10).run(ctx)
+    assert res.verdict == "inconclusive"
+    read, ok, refused_by_guard, refused_proposal, verdict = records
+    assert read["result"] == {"path": "routes/basket.ts", "start_line": 1}
+    assert ok["args"]["role"] == "customer-a" and ok["result"] == {"status": 200, "length": 20}
+    assert "out of scope" in refused_by_guard["result"]["error"]
+    assert "invalid http_request" in refused_proposal["refused"] and "X-Forwarded-For" in refused_proposal["proposal"]
+    assert verdict["verdict"] == "inconclusive" and verdict["step"] == 4
+    assert all(r["finding"] == "T-001" for r in records)
+    assert "private" not in str(records) and "db.basket" not in str(records)
+
+
+def test_a_stopping_limit_is_logged(tmp_path):
+    records = []
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp())
+    ctx.log = records.append
+    ctx.budget = RunBudget(Limits(max_duration_s=1), clock=iter([0, 5]).__next__)
+    res = AgentProbe("access-control", lambda: ScriptedPlanner([]), max_steps=3).run(ctx)
+    assert res.limits_hit == "time"
+    assert records == [{"finding": "T-001", "step": 1, "stopped": "time", "reason": "run time budget 1s exceeded"}]
+
+
 def test_closed_window_stops_the_finding_before_any_model_call(tmp_path):
     from datetime import datetime, timezone
 

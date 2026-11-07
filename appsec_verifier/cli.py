@@ -279,6 +279,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print("\n--dry-run: selection and scope resolved; no report written, nothing contacted.")
         return EXIT_OK
 
+    out_dir = Path(args.output)
+    action_log = None
+    if contact:
+        from .verify.actionlog import ActionLog
+        out_dir.mkdir(parents=True, exist_ok=True)
+        action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=args.append)
     try:
         doc = run_verification(
             assessment_path=assessment, scope=scope, scope_path=scope_path, plans=sel,
@@ -286,19 +292,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
             sessions=sessions, source=source, budget=budget,
             verifier_version=version_string(), target_base=target, authorization=authorization,
             safe=safe, read_only=read_only, contacted=contact, agent=agent_info, browser=browser,
+            log=action_log,
         )
     finally:
+        if action_log is not None:
+            action_log.close()
         if browser is not None:
             browser.close()
 
-    out_dir = Path(args.output)
     if args.append:
         existing_path = out_dir / "verification.yaml"
         if existing_path.is_file():
             from .verify import merge_reports
             doc = merge_reports(_load_yaml(existing_path), doc)
     paths = write_reports(doc, out_dir)
-    extra: list[str] = []
+    extra: list[str] = [f"action log: {action_log.path}"] if action_log is not None else []
     if args.annotate:
         import yaml
         annotated = annotate_assessment(_load_yaml(assessment), doc)

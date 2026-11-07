@@ -46,6 +46,7 @@ class ProbeContext:
     target_base: str = ""              # target base URL the agent's requests are joined to
     browser: object | None = None      # ProofBrowser for XSS (VER-009), or None when unavailable
     marker: tuple[str, str] = ("", "")  # per-finding XSS marker parts; only their runtime join counts
+    log: object | None = None          # callable(record) for the action log (VER-017), or None
 
 
 @runtime_checkable

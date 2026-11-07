@@ -357,6 +357,15 @@ Written under `--output` (default `./verification`):
   evidence + authorisation context.
 - `verification.yaml` — structured results (`schemas/verification.schema.yaml`),
   each entry keyed to the source finding by id + match_key (VER-007, VER-020).
+- `agent-log.jsonl` — action log, written when a probe contacts the target: one
+  JSON object per line for every agent step of every finding, with `time`,
+  `finding`, `step` and either the tool call (`tool`, `args`, `result` with
+  status, body length, error or the browser's blocked requests), a proposal the
+  step contract refused (`refused`, `proposal`), a limit that stopped the
+  finding (`stopped`, `reason`) or the `verdict`. Refused actions are logged, not
+  only refused (VER-017). No response body or source text, credential values
+  redacted (VER-016), owner-only (0600). `--append` extends it; otherwise each
+  run starts it fresh.
 - `evidence/` — request/response traces, browser events, screenshots, and
   callback records, redacted of credentials and sensitive target data (VER-022).
   Today only the proof browser writes here: `<finding>-xss-<n>.json` and `.png`

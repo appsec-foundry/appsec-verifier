@@ -165,7 +165,9 @@ corporate proxy, login via OIDC).
 
 `verify` writes `verification.md` and `verification.yaml`
 ([schema](schemas/verification.schema.yaml)) to `--output`, with verdict,
-confidence and evidence per finding. `--print` also shows the verdicts in the
+confidence and evidence per finding. When the target is contacted, it also writes
+`agent-log.jsonl`, a log of every agent step with its outcome, refused actions
+included. `--print` also shows the verdicts in the
 console, and `--append` adds to an existing report. `--annotate` also writes
 `security-assessment.annotated.yaml`, a copy of the assessment with the
 verification status per finding; `--in-place` changes the original instead.
