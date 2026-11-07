@@ -277,6 +277,40 @@ optional hardening.
   API profile keeps CI runs possible without any agent CLI. Every profile only
   plans, without tools of its own (VER-017).
 
+- **VER-031: Start a guided run from the assessment alone.** Called with an
+  assessment and no command, the Verifier starts a guided interactive run; the
+  `verify` command stays unguided. It reads the assessment offline (VER-005,
+  VER-006), shows how many findings it holds, how many are dynamically
+  verifiable, and how they split by weakness class and severity, and then asks
+  for the settings of the run, each with a default the operator can accept:
+  - **Selection** (VER-026): the weakness classes, by default every verifiable
+    class present, and a severity floor, by default high.
+  - **Target** (VER-001, VER-004): the scope file and the URL, by default the
+    scope's base URL. Neither is taken from the assessment. Without a scope file
+    the run offers a template and stops; an unedited template is not a valid
+    scope, and the guided run never uses a scope it created or widens one.
+  - **Identities** (VER-016, VER-028): the test identities to use. Missing
+    credentials are pointed out, and so are access-control findings that cannot
+    be confirmed for lack of two identities (VER-010).
+  - **Model and budget** (VER-023, VER-015): the profile and the run limits, by
+    default the documented ones.
+  - **Mode and output** (VER-030, VER-020, VER-027): safe mode and the
+    standalone report by default. Intrusive mode is offered only where the scope
+    allows state change and needs its own explicit yes. An existing report is
+    not replaced without asking.
+
+  Answers are validated like the matching options and allow nothing an option
+  could not; settings already given as options are not asked again. The guided
+  run never asks for a secret value. Before anything is contacted it shows the
+  resolved settings with the equivalent non-interactive invocation, then asks
+  for the confirmation of VER-002; answering the setup questions is not that
+  confirmation. Cancelling at any point contacts nothing.
+
+  An explicit flag turns the guided run off for CI, and it is also off when no
+  terminal is attached, so an unattended run never waits for input. All
+  settings then come from the invocation and documented defaults; a missing
+  scope, profile, or confirmation blocks the run and names what is missing.
+
 - **VER-024: Explain what it could and could not do.** When a finding class is
   unsupported, a target is unreachable, a required test identity is missing, or a
   limit was hit, the report says so plainly per finding, so an unverified finding
