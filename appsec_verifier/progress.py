@@ -1,21 +1,26 @@
 """The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-016, VER-017).
 
-Each event is one line in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
+Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
 ``start`` and ``done`` for a finding's bounds, ``·`` for an agent step, ``↻`` for a step the step
-contract refused and ``⚠`` for a limit that stopped the finding. A step line gives the agent's note on
-what the step checks, the request with its query and body, the result and how long the model took to
-propose the step; the ``done`` line ends with the agent's rationale. When the run shows costs (API
-billing, or ``--show-costs`` as in AppSec Analyzer), the ``done`` line also gives the finding's model
-cost and the run's spend against its cost limit. Under it an ``img`` line names each screenshot the
-finding produced, with its path in the output directory. PROGRESS counts finished findings,
-ELAPSED is the run's time. LEFT extrapolates the time the finished findings took, never beyond the
-run's time limit; until the first finding has finished it shows that limit (``≤29m``).
+contract refused and ``⚠`` for a limit that stopped the finding. A blank line sets each finding apart.
+The ``start`` entry gives the finding's title, then its severity, class and the requests the assessment
+names. A step entry gives the agent's note on what the step checks, then the request it tested with its
+query and body, the result and how long the model took to propose the step; the ``done`` entry gives the
+verdict, then the agent's rationale. When the run shows costs (API billing, or ``--show-costs`` as in
+AppSec Analyzer), each step gives its model cost, the ``done`` entry the finding's cost and the run's
+spend against its cost limit, and the status line the run's spend as it grows; on a terminal the amounts
+are highlighted. Under the ``done`` entry an ``img`` line names each screenshot the finding produced, with
+its path in the output directory. PROGRESS counts finished findings, ELAPSED is the run's time. LEFT
+extrapolates the time the finished findings took, never beyond the run's time limit; until the first
+finding has finished it shows that limit (``≤29m``).
 
-On a terminal a status line under the grid is redrawn every ``TICK_SECONDS`` with a spinner, a progress
-bar, the running step and its age. Off a terminal (CI, logs) a line follows after ``HEARTBEAT_SECONDS``
-without output instead. Text from the assessment, the model or the target passes the run's redaction
-and `printable` before it is shown, so no credential value and no escape sequence reaches the console.
+On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
+long row wraps under its column; a status line under the grid is redrawn every ``TICK_SECONDS`` with a
+spinner, a progress bar, the run's spend, the running step and its age. Off a terminal (CI, logs) each
+entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
+assessment, the model or the target passes the run's redaction and `printable` before it is shown, so no
+credential value, line break or escape sequence from it reaches the console.
 """
 
 from __future__ import annotations
@@ -24,7 +29,6 @@ import json
 import os
 import re
 import sys
-import textwrap
 import threading
 import time
 
@@ -38,6 +42,8 @@ _ANSI = re.compile(r"\033\[[0-9;]*m")
 _VERDICT_ROLES = {"confirmed": "ok", "not-reproducible": "critical", "blocked-by-control": "critical",
                   "inconclusive": "warn", "not-attempted": "muted"}
 _EVENT_ROLES = {"start": "accent", "↻": "warn", "⚠": "warn"}
+_SEVERITIES = ("critical", "high", "medium", "low")
+_NBSP = "\xa0"       # keeps the run's spend and the model time whole across a wrap, as in AppSec Analyzer
 # A redraw begins a synchronized update and hides the cursor, then shows it again; terminals without
 # synchronized updates ignore the mode. The cursor stays at the line start, as in AppSec Analyzer.
 _FRAME_OPEN = "\033[?2026h\033[?25l\r"
@@ -59,6 +65,37 @@ def spent_text(cost: float, limit: float, *, api_prices: bool = False) -> str:
     """``$0.42 of $10.00``; ``… at API prices`` when a subscription pays and the amount is only the
     API-equivalent value the Claude CLI reports."""
     return f"${cost:.2f} of ${limit:.2f}" + (" at API prices" if api_prices else "")
+
+
+def _line(*parts) -> list[tuple]:
+    """One row of an entry as segments ``(text, *roles)``: the parts joined by `` · ``, empty ones left
+    out. A part is a string, a segment, or a list of segments."""
+    line: list[tuple] = []
+    for part in parts:
+        segments = [(part,)] if isinstance(part, str) else [part] if isinstance(part, tuple) else part
+        if not any(segment[0] for segment in segments):
+            continue
+        if line:
+            line.append((" · ",))
+        line.extend(segments)
+    return line
+
+
+def _spans(text: str, first: int, rest: int) -> list[tuple[int, int]]:
+    """Where ``text`` breaks into rows of at most ``first``, then ``rest`` characters: at the last space
+    that fits, which is dropped, or inside a word longer than the row."""
+    spans, start, width = [], 0, first
+    while len(text) - start > width:
+        cut = text.rfind(" ", start, start + width + 1)
+        if cut <= start:
+            spans.append((start, start + width))
+            start += width
+        else:
+            spans.append((start, cut))
+            start = cut + 1
+        width = rest
+    spans.append((start, len(text)))
+    return spans
 
 
 def _minutes(seconds: float) -> str:
@@ -159,7 +196,7 @@ class RunProgress:
         self._redact = redact
         self._remaining_time = remaining_time
         self._spent, self._cost_limit, self._api_prices = spent, cost_limit, api_prices   # spent: None hides costs
-        self._spent_at = 0.0
+        self._spent_at = self._step_spent_at = 0.0     # the spend when the finding began and after its last step
         self._clock = clock
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -198,17 +235,20 @@ class RunProgress:
 
     def finding(self, plan) -> None:
         with self._lock:
+            if self.number:
+                self._write("")         # sets the finding apart from the one before
             self.number += 1
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted = 0, "", False
             self._asked = self._took = None
             self._finding_at = self._clock()
-            self._spent_at = self._spent() if self._spent is not None else 0.0
-            title = self._text(plan.title or plan.cwe or "")
+            self._spent_at = self._step_spent_at = self._spent() if self._spent is not None else 0.0
+            title = _clip(self._text(plan.title or plan.cwe or "")) or "-"
+            severity = _clip(self._text(plan.severity or ""), 10).lower()
             requests = ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])   # what the assessment names
-            self._record("start", " · ".join(part for part in (_clip(plan.cls or "-", 20),
-                                                               _clip(self._text(requests), 120),
-                                                               _clip(title)) if part))
+            self._record("start", [(title, "bold")],
+                         _line((severity, severity if severity in _SEVERITIES else "muted"),
+                               _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)))
 
     def activity(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> None:
         """What runs now, for the status line and the heartbeat: a model call or a tool call."""
@@ -233,22 +273,32 @@ class RunProgress:
             note = _clip(record["note"]) if isinstance(record.get("note"), str) else ""
             args = record.get("args") if isinstance(record.get("args"), dict) else {}
             action = _action(str(record["tool"]), args) if "tool" in record else ""
-            took = f"model {duration(self._took[1])}" if self._took and self._took[0] == number else ""
+            took = f"model{_NBSP}{duration(self._took[1])}" if self._took and self._took[0] == number else ""
+            cost = self._step_cost() if record.get("stopped") or record.get("refused") or action else ""
             self._noted = self._noted or bool(record.get("stopped") or record.get("refused"))
             if record.get("stopped"):
                 reason = f"stopped by limit: {_clip(record.get('reason', ''), 160)}"
-                self._record("⚠", " · ".join(part for part in (head, note, action, reason) if part))
+                self._record("⚠", _line(head, note, action, reason, (cost, "accent")))
             elif record.get("refused"):
-                self._record("↻", f"{head} · refused: {_clip(record['refused'], 160)}")
+                self._record("↻", _line(head, f"refused: {_clip(record['refused'], 160)}", (cost, "accent")))
             elif action:
+                # The request tested against the target in its own colour, on its own row under the note when
+                # there is one.
                 result = record.get("result") if isinstance(record.get("result"), dict) else {}
-                outcome = f"{action} → {_outcome(result)}"
-                self._record("·", " · ".join(part for part in (head, note, outcome, took) if part))
+                tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
+                tested = _line([tested, (f" → {_outcome(result)}",)], (took, "muted"), (cost, "accent"))
+                hang = len(head) + 3
+                if note:
+                    self._record("·", _line(head, note), tested, hang=hang)
+                else:
+                    self._record("·", _line(head, tested), hang=hang)
 
     def finished(self, plan, result) -> None:
         verdict = printable(result.verdict)
         label = _VERDICT_LABEL.get(verdict, verdict)      # as the report and the results at the end name it
-        parts = [label + (f" ({_clip(result.confidence, 10)})" if result.confidence else "")]
+        role = _VERDICT_ROLES.get(verdict)
+        label += f" ({_clip(result.confidence, 10)})" if result.confidence else ""
+        parts = [(label, *([role] if role else []))]
         if verdict == "confirmed":      # a confirmed verdict reaches this line only with its proof checked (proof.py)
             parts.append("proof checked")
         if self._steps:
@@ -256,19 +306,16 @@ class RunProgress:
         with self._lock:
             parts.append(duration(self._clock() - self._finding_at))
             if self._spent is not None:
-                total = self._spent()
-                parts.append(f"${total - self._spent_at:.2f} · run "
-                             + spent_text(total, self._cost_limit, api_prices=self._api_prices))
+                parts += [(f"${self._spent() - self._spent_at:.2f}", "accent"), [("run" + _NBSP,), *self._spend()]]
             # Why, unless a refused step or a limit above already said so.
-            if result.rationale and not self._noted:
-                parts.append(_clip(self._text(result.rationale), 160))
+            why = _clip(self._text(result.rationale), 160) if result.rationale and not self._noted else ""
             self.done += 1
             self._activity = ""
-            self._record("done", " · ".join(parts), role=_VERDICT_ROLES.get(verdict))
+            self._record("done", _line(*parts), *([_line(why)] if why else []), role=role)
             for entry in result.evidence or []:
                 if isinstance(entry, dict) and entry.get("kind") == "screenshot" and entry.get("path"):
                     path = os.path.join(self._out_dir, entry["path"]) if self._out_dir else entry["path"]
-                    self._record("img", f"screenshot {printable(path)}")
+                    self._record("img", _line(f"screenshot {printable(path)}"))
 
     def close(self) -> None:
         """Stop the ticker and remove the status line; the run's last message follows on a clean line."""
@@ -302,12 +349,29 @@ class RunProgress:
                 return
             now = self._clock()
             age = duration(now - self._activity_at) if self._activity else ""
-            working = " · ".join(part for part in (self._activity, age) if part)
+            spend = self._spend(qualified=False) if self._spent is not None else []
             if self.live:
                 self._frame += 1
-                self._status(self._row(SPINNER[self._frame % len(SPINNER)], working, now, live=True))
+                self._status(self._row(SPINNER[self._frame % len(SPINNER)], [_line(spend, self._activity, age)],
+                                       now, live=True))
             elif now - self.last >= self.HEARTBEAT_SECONDS:
-                self._record("·", working or "working")
+                self._record("·", _line(spend, self._activity or "working", age))
+
+    def _spend(self, *, qualified: bool = True) -> list[tuple]:
+        """The run's spend against its cost limit, ``$0.42 of $10.00``, the amount highlighted as in AppSec
+        Analyzer; ``qualified`` adds ``at API prices`` where a subscription pays."""
+        amount, _, rest = spent_text(self._spent(), self._cost_limit,
+                                     api_prices=qualified and self._api_prices).partition(" ")
+        return [(amount, "accent"), (_NBSP + rest.replace(" ", _NBSP),)]
+
+    def _step_cost(self) -> str:
+        """What the model calls since the finding's last step cost, ``$0.04``; "" when the run shows no costs
+        or nothing was spent."""
+        if self._spent is None:
+            return ""
+        total = self._spent()
+        cost, self._step_spent_at = total - self._step_spent_at, total
+        return f"${cost:.2f}" if cost > 0 else ""
 
     def _run(self, now: float) -> tuple[str, str, str]:
         """PROGRESS, ELAPSED and LEFT for the whole run."""
@@ -323,7 +387,11 @@ class RunProgress:
             left = "≤" + _minutes(remaining) if remaining is not None else ""
         return share, duration(elapsed), left
 
-    def _row(self, event: str, detail: str, now: float, *, live: bool = False, role: str | None = None) -> str:
+    def _row(self, event: str, lines: list[list[tuple]], now: float, *, live: bool = False,
+             role: str | None = None, hang: int = 0) -> str:
+        """The grid columns, then the entry's ``lines`` of segments. On a terminal each line starts a row of
+        its own and wraps; the rows after the first are indented by ``hang`` more. Off a terminal, and on
+        the status line, the lines are joined into one."""
         st = self.st
         finding = f"{self.number}/{self.total} {self._id}" if self._id else ""
         share, elapsed, left = self._run(now)
@@ -333,25 +401,40 @@ class RunProgress:
                 + st(f"{finding:<{self._id_width}}", *(("bold",) if event in ("start", "done") else ()))
                 + f"  {st(f'{event:<5}', 'accent' if live else role or _EVENT_ROLES.get(event, 'muted'))}  "
                 + st(f"{share:>8}  {elapsed:>7}  {left:>6}", "muted") + f"  {bar}")
-        width = columns() - 1
         indent = len(_ANSI.sub("", head))
-        pieces = [detail]
-        if (st.enabled or self.live) and not live and width - indent >= 30 and len(detail) > width - indent:
-            pieces = textwrap.wrap(detail, width - indent, break_on_hyphens=False) or [detail]
-        if event == "done" and role:
-            first, sep, rest = pieces[0].partition(" · ")
-            pieces[0] = st(first, role) + sep + rest
-        elif event in ("↻", "⚠"):
-            pieces = [st(piece, "warn") for piece in pieces]
-        return "\n".join([head + pieces[0], *(" " * indent + piece for piece in pieces[1:])]).rstrip()
+        if event in ("↻", "⚠"):        # needs attention: all but the highlighted amounts in the warning colour
+            lines = [[segment if len(segment) > 1 else (segment[0], "warn") for segment in line] for line in lines]
+        rows: list[str] = []
+        width = columns() - 1 - indent
+        if (st.enabled or self.live) and not live:
+            for line in lines:
+                text = "".join(segment[0] for segment in line)
+                first = width - (hang if rows else 0)
+                spans = _spans(text, first, width - hang) if width - hang >= 30 else [(0, len(text))]
+                rows += [self._paint(line, start, end) for start, end in spans]
+        else:
+            line = _line(*lines)
+            rows.append(self._paint(line, 0, sum(len(segment[0]) for segment in line)))
+        first, *rest = rows or [""]
+        return "\n".join([head + first, *(" " * (indent + hang) + row for row in rest)]).rstrip()
+
+    def _paint(self, line: list[tuple], start: int, end: int) -> str:
+        """Characters ``start`` to ``end`` of a line of segments, each piece in its segment's roles."""
+        pieces, pos = [], 0
+        for text, *roles in line:
+            a, b = max(start, pos), min(end, pos + len(text))
+            if a < b:
+                pieces.append(self.st(text[a - pos:b - pos].replace(_NBSP, " "), *roles))
+            pos += len(text)
+        return "".join(pieces)
 
     def _bar(self) -> str:
         filled = round(self.BAR_WIDTH * self.done / self.total) if self.total else 0
         return self.st("━" * filled, "accent") + self.st("─" * (self.BAR_WIDTH - filled), "muted")
 
-    def _record(self, event: str, detail: str, *, role: str | None = None) -> None:
+    def _record(self, event: str, *lines: list[tuple], role: str | None = None, hang: int = 0) -> None:
         now = self._clock()
-        self._write(self._row(event, detail, now, role=role))
+        self._write(self._row(event, list(lines), now, role=role, hang=hang))
         self.last = now
 
     def _write(self, line: str) -> None:

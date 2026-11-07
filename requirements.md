@@ -344,8 +344,8 @@ optional hardening.
   - **Mode and output** (VER-030, VER-020, VER-027): safe mode and the
     standalone report by default. Intrusive mode is offered only where the scope
     allows state change and needs its own explicit yes. An existing report in
-    the output directory is replaced; the run settings say so before the
-    confirmation.
+    the output directory is replaced only after its own yes or `--overwrite`;
+    a no stops the run before anything is contacted.
 
   Answers are validated like the matching options and allow nothing an option
   could not; settings already given as options are not asked again. The guided

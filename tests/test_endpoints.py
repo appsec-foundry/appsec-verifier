@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from appsec_verifier import cli
 from appsec_verifier.endpoints import BRIEF_CAP, MAX_ENDPOINTS, Endpoint, finding_brief, finding_endpoints
 from appsec_verifier.loader import FindingPlan, plans_from
@@ -199,10 +201,29 @@ def test_the_identity_hint_names_the_login_the_assessment_lists_and_an_example()
     assert not any(line.startswith("login") for line in cli._run_hints({}, "http://x", None)["identity"])
 
 
-def test_the_settings_name_the_report_and_say_when_it_is_replaced(tmp_path, monkeypatch, capsys):
+def test_the_settings_name_the_report_and_only_overwrite_replaces_it(tmp_path, monkeypatch, capsys):
     _verify(tmp_path, monkeypatch)
     out = capsys.readouterr().out
     assert f"Report     : {tmp_path / 'out' / 'verification.md'} (Markdown, and verification.yaml for tools)" in out
     assert f"Report     : {tmp_path / 'out' / 'verification.md'} (Markdown)\n" in out          # in Done
-    _verify(tmp_path, monkeypatch)
+    before = (tmp_path / "out" / "verification.md").read_text()
+    for removed in (None, "verification.yaml"):                 # the Markdown report alone counts too
+        if removed:
+            (tmp_path / "out" / removed).unlink()
+        rc, asked, sent, _ = _verify(tmp_path, monkeypatch)
+        captured = capsys.readouterr()
+        assert rc == cli.EXIT_BLOCKED and asked == [] and sent == []
+        assert f"There is already a report in {tmp_path / 'out'}" in captured.err
+        assert "replace it with --overwrite, continue it with --resume" in captured.err
+        assert "Nothing was contacted." in captured.err and "Report     :" not in captured.out
+    assert (tmp_path / "out" / "verification.md").read_text() == before
+    rc, asked, _, _ = _verify(tmp_path, monkeypatch, "--overwrite")
+    assert rc == cli.EXIT_OK and asked == ["T-1"]
     assert f"Report     : replaces {tmp_path / 'out' / 'verification.md'}" in capsys.readouterr().out
+
+
+def test_resume_and_overwrite_together_are_a_usage_error(tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["verify", "--assessment", "a.yaml", "--url", "http://x", "--resume", "--overwrite"])
+    assert stop.value.code == cli.EXIT_BLOCKED
+    assert "argument --overwrite: not allowed with argument --resume" in capsys.readouterr().err

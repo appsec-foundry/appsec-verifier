@@ -147,6 +147,28 @@ def test_a_usage_error_shows_the_short_usage_and_where_the_examples_are(argv, ex
     assert exit_.value.code == cli.EXIT_BLOCKED and capsys.readouterr().err.splitlines() == expected
 
 
+@pytest.mark.parametrize("argv, error", [
+    (["a.yaml", "--target", "http://x", "--show-cost"],
+     "appsec-verifier: error: unrecognized arguments: --show-cost; did you mean --show-costs?"),
+    (["verify", "--assessment", "a.yaml", "--url", "http://x", "--min-sev", "low"],
+     "appsec-verifier: error: unrecognized arguments: --min-sev low; did you mean --min-severity?"),
+    (["preflight", "--assessment", "a.yaml", "--url", "http://x", "--test-mod"],
+     "appsec-verifier: error: unrecognized arguments: --test-mod; did you mean --test-model?"),
+])
+def test_an_abbreviated_option_is_an_error_that_names_the_option_meant(argv, error, capsys):
+    """argparse would take `--show-cost` for `--show-costs`; an option counts only as written."""
+    with pytest.raises(SystemExit) as exit_:
+        cli.main(argv)
+    assert exit_.value.code == cli.EXIT_BLOCKED and error in capsys.readouterr().err.splitlines()
+
+
+def test_the_documented_aliases_still_work():
+    args = cli.build_guided_parser().parse_args(["a.yaml", "--target", "http://x", "--ci"])
+    assert (args.target, args.non_interactive) == ("http://x", True)
+    args = cli.build_parser().parse_args(["verify", "--assessment", "a.yaml", "--target", "http://x", "--show-costs"])
+    assert (args.target, args.show_costs) == ("http://x", True)
+
+
 @pytest.mark.parametrize("argv", [["verify", "--help"], ["preflight", "--help"], ["scope", "--help"],
                                   ["export", "--help"], ["security-assessment.yaml", "--help"]])
 def test_help_ends_with_examples_that_fit_a_terminal(argv, capsys, monkeypatch):

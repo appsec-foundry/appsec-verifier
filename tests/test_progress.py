@@ -75,7 +75,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     header, start, step, done = _rows(out)[1:]
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
-    assert start.endswith("access-control · Basket of another user readable")
+    assert start.endswith("Basket of another user readable · high · access-control")
     assert step.endswith("step 1 · GET /rest/basket/2 as alice → 200 · 512 B")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
     assert done.endswith("confirmed (high) · proof checked · 2 steps · 1m00s · a read b")
@@ -94,9 +94,11 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
                       Endpoint("GET", "/b", None))
     progress.begin([plan])
     progress.finding(plan)
-    start = SGR.sub("", _rows(out)[-1])
-    assert start.endswith("access-control · GET /rest/basket/:id (login), PUT /a · Basket of another user readable")
-    assert st("1/1 T-1", "bold") in _rows(out)[-1] and st("1/1 T-1", "accent", "bold") not in out.getvalue()
+    title, facts = _rows(out)[-2:]
+    assert SGR.sub("", title).endswith("  Basket of another user readable") and st(plan.title, "bold") in title
+    assert SGR.sub("", facts).strip() == "high · access-control · GET /rest/basket/:id (login), PUT /a"
+    assert facts.startswith(" " * len(SGR.sub("", title).split("Basket")[0])) and st("high", "high") in facts
+    assert st("1/1 T-1", "bold") in title and st("1/1 T-1", "accent", "bold") not in out.getvalue()
     for verdict, label, role in (("confirmed", "confirmed", "ok"), ("not-reproducible", "not reproducible", "critical"),
                                  ("blocked-by-control", "blocked by control", "critical"),
                                  ("inconclusive", "inconclusive", "warn")):
@@ -176,6 +178,94 @@ def test_with_costs_shown_the_done_line_gives_the_finding_cost_and_the_run_spend
     assert _rows(out)[-1].endswith(f"inconclusive · 0s · $0.42 · {spend} · no answer")
 
 
+def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_spend(monkeypatch):
+    """As in AppSec Analyzer the cost runs along with the run, not only at a finding's end."""
+    monkeypatch.setenv("COLUMNS", "200")
+    out, clock, spent = io.StringIO(), Clock(), [1.20]
+    progress = RunProgress(out, model="m", clock=clock, env={}, spent=lambda: spent[0], cost_limit=10.0)
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.activity(1, 12)
+    spent[0] = 1.25
+    progress.activity(1, 12, "http_request", {"path": "/a"})
+    progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "result": {"status": 200}})
+    assert _rows(out)[-1].endswith("step 1 · GET /a → 200 · model 0s · $0.05")
+    spent[0] = 1.27
+    progress.step({"step": 2, "refused": "unknown action 'x'"})
+    assert _rows(out)[-1].endswith("step 2 · refused: unknown action 'x' · $0.02")
+    progress.step({"step": 3, "tool": "read_source", "args": {"path": "a.ts"}, "result": {}})
+    assert _rows(out)[-1].endswith("step 3 · source a.ts → done")        # nothing spent, no amount
+    progress.activity(4, 12)
+    clock.now += 120
+    progress.tick()
+    assert _rows(out)[-1].endswith("$1.27 of $10.00 · step 4/12 · asking m · 2m00s")
+
+    live = Tty()
+    progress = RunProgress(live, model="m", clock=clock, env={}, spent=lambda: spent[0], cost_limit=10.0,
+                           api_prices=True)
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.activity(1, 12)
+    progress.tick()
+    frame = live.getvalue().rsplit("\n", 1)[1]
+    assert progress.st("$1.27", "accent") + " of $10.00 · step 1/12 · asking m" in frame
+    spent[0] = 1.62
+    progress.finished(_plan(), ProbeResult(verdict="inconclusive"))
+    done = _rows(live)[-1]
+    assert progress.st("$0.35", "accent") in done and progress.st("$1.62", "accent") in done
+    assert SGR.sub("", done).endswith("inconclusive · 0s · $0.35 · run $1.62 of $10.00 at API prices")
+    progress.close()
+
+
+def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "120")
+    out, spent = Tty(), [0.0]
+    progress = RunProgress(out, clock=Clock(), env={}, spent=lambda: spent[0], cost_limit=10.0)
+    st = progress.st
+    progress.begin([_plan(), _plan("T-2")])
+    progress.finding(_plan())
+    long = "/rest/products/search?q=" + "x')) OR 1=1-- " * 8
+    spent[0] = 0.04
+    progress.step({"step": 1, "tool": "http_request", "args": {"path": long}, "note": "boolean injection",
+                   "result": {"status": 500, "length": 942}})
+    progress.finished(_plan(), ProbeResult(verdict="confirmed", confidence="high", rationale="the rows flipped"))
+    progress.finding(_plan("T-2"))
+    progress.close()
+    rows = [SGR.sub("", row) for row in _rows(out)]
+    column = rows[2].index("Basket")                        # where the detail column starts
+    note = next(i for i, row in enumerate(rows) if row.endswith("step 1 · boolean injection"))
+    hang = column + len("step 1 · ")
+    done = next(i for i, row in enumerate(rows) if " done " in row)
+    tested = rows[note + 1:done]
+    assert len(tested) == 2                                                 # the long request wraps
+    assert all(row.startswith(" " * hang) and not row[hang].isspace() for row in tested)   # under the note
+    assert tested[0][hang:].startswith("GET /rest/products/search?q=x'))")
+    assert all(len(row) <= 119 for row in rows)
+    assert tested[-1].endswith("→ 500 · 942 B · $0.04")
+    assert _rows(out)[note + 1].strip() == st(tested[0].strip(), "agent")   # each piece of the request coloured
+    assert st(tested[1][hang:].split(" → ")[0], "agent") in _rows(out)[note + 2]
+    assert st("$0.04", "accent") in out.getvalue()
+    blank = rows.index("", done)                                            # a blank line before the next finding
+    assert " 2/2 T-2  start " in rows[blank + 1]
+    entry = [row[column:] for row in rows[done:blank]]
+    assert all(row[:column].isspace() for row in rows[done + 1:blank]) and entry[-1] == "the rows flipped"
+    assert " ".join(entry[:-1]) == "confirmed (high) · proof checked · 1 step · 0s · $0.04 · run $0.04 of $10.00"
+    assert entry[-2].endswith("run $0.04 of $10.00")                        # the spend stays whole
+
+
+def test_off_a_terminal_a_blank_line_sets_each_finding_apart():
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan(), _plan("T-2")])
+    progress.finding(_plan())
+    progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "note": "n", "result": {"status": 200}})
+    progress.finished(_plan(), ProbeResult(verdict="confirmed", rationale="why"))
+    progress.finding(_plan("T-2"))
+    rows = _rows(out)[2:]
+    assert [row.split()[3] if row else "" for row in rows] == ["start", "·", "done", "", "start"]
+    assert rows[1].endswith("step 1 · n · GET /a → 200") and rows[2].endswith(" · why")
+
+
 def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or_secret():
     out = Tty()
     redact = lambda v: yaml.safe_load(yaml.safe_dump(v).replace("s3cret", "[redacted]"))  # noqa: E731
@@ -208,7 +298,7 @@ def test_on_a_terminal_the_status_line_shows_the_running_step_and_is_cleared_bef
     before = out.getvalue()
     progress.step({"step": 3, "tool": "read_source", "args": {"path": "a.ts", "around_line": 4}, "result": {}})
     added = out.getvalue()[len(before):]
-    assert added.startswith("\r\x1b[K") and added.endswith("step 3 · source a.ts:4 → done\n")   # cleared first
+    assert added.startswith("\r\x1b[K") and SGR.sub("", added).endswith("step 3 · source a.ts:4 → done\n")  # cleared
     progress.tick()
     progress.close()
     assert out.getvalue().endswith("\r\x1b[K")                              # no status line left behind

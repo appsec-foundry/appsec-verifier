@@ -2,7 +2,8 @@
 
 `appsec-verifier <assessment>` reads the assessment offline, shows what it
 holds, and asks only for what has no usable default: the target URL when there
-is no scope file, and an identities file when one is found. The severity floor
+is no scope file, an identities file when one is found, and whether to overwrite
+a report already in the output directory. The severity floor
 is high and the model profile claude unless options say otherwise; the run
 prints the floor, and offers the next lower severity when nothing of high or
 above can be verified. A profile that is not available stops the run before
@@ -138,7 +139,8 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         if _ask_identities(d, args, guard, environ, assessment, cwd) is None:
             return cli.EXIT_BLOCKED
         _ask_mode(d, args, scope)
-        _ask_output(args)
+        if not _ask_output(d, args):
+            return cli.EXIT_BLOCKED
     except Cancelled:
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
@@ -309,10 +311,18 @@ def _ask_mode(d: Dialog, args, scope: dict) -> None:
     args.allow_intrusive = d.yes("Allow intrusive probes?")
 
 
-def _ask_output(args) -> None:
-    """The report goes to --output or ./verification. A report already there is replaced; the run
-    settings say so before the confirmation. Only --resume continues it."""
+def _ask_output(d: Dialog, args) -> bool:
+    """The report goes to --output or ./verification. A report already there is replaced only with
+    --overwrite or a yes here, and --resume continues it; a no stops the run before anything is contacted."""
     args.output = args.output or DEFAULT_OUTPUT
+    if args.resume or args.overwrite or not cli.report_exists(args.output):
+        return True
+    if d.yes(f"There is already a report in {clean(args.output)}. Overwrite it?"):
+        args.overwrite = True
+        return True
+    _err(f"\nthe report in {clean(args.output)} was kept; nothing was contacted.\n"
+         "  --resume continues it, --output DIR writes elsewhere.")
+    return False
 
 
 # ── equivalent invocation ────────────────────────────────────────────────────
@@ -323,9 +333,9 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
                   *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
                   ("screenshots", "--screenshots"))
-_FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("annotate", "--annotate"),
-          ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"), ("read_only", "--read-only"),
-          ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
+_FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "--overwrite"),
+          ("annotate", "--annotate"), ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"),
+          ("read_only", "--read-only"), ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
           ("show_costs", "--show-costs"))
 
 

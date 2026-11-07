@@ -182,13 +182,15 @@ this run, grouped by what they need (a test identity, the proof browser, a
 marker file, a callback, or `--allow-intrusive`) and how to provide it. Those
 are not tested unless you add `--test-all`.
 
-While `verify` runs, it prints its progress on standard error: one line when a
-finding starts, one per request or source read of the agent with what it
-checks and its result, and one with the verdict and its reason: green
-confirmed, red not reproduced, yellow inconclusive. Each line shows the
-finding, the share of findings done, the run time and the time left. In a
-terminal a status line underneath shows the running step and how long it has
-been running.
+While `verify` runs, it prints its progress on standard error, each finding
+set apart by a blank line: its title, one entry per request or source read of
+the agent with what it checks, the request it tested and the result, and one
+with the verdict and its reason: green confirmed, red not reproduced, yellow
+inconclusive. Each entry shows the finding, the share of findings done, the run
+time and the time left. When costs are shown, each step gives its cost and the
+verdict the run's spend. In a terminal the tested request and the amounts are
+highlighted, and a status line underneath shows the run's spend so far, the
+running step and how long it has been running.
 [`docs/cli.md`](docs/cli.md#verify--verify-findings-against-a-running-target)
 describes the columns.
 
@@ -210,7 +212,8 @@ describes the columns.
 At the end `verify` lists each finding with its result and the reason.
 `--print` adds the code-only findings, and `--resume` continues a
 report whose run did not finish: findings with a verdict keep it, the others
-are tested. `--annotate` writes `security-assessment.annotated.yaml`, a
+are tested. A report already in `--output` is replaced only with `--overwrite`;
+otherwise the run stops before anything is contacted, and the guided run asks. `--annotate` writes `security-assessment.annotated.yaml`, a
 copy of the assessment with the verdict of each finding.
 
 ## Install

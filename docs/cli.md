@@ -15,7 +15,9 @@ are cited per command and option.
 examples. `appsec-verifier <command> --help` lists the options of one by group,
 with example calls; `appsec-verifier ASSESSMENT --help` does the same for the
 guided run. A wrong call shows the short usage, the error and where the
-examples are.
+examples are. Options count only as written: an abbreviation such as
+`--show-cost` is an error that names the option meant (`did you mean
+--show-costs?`), and nothing is contacted.
 
 **Act against a target** (makes model calls and network requests)
 
@@ -70,7 +72,7 @@ shown in brackets.
 | Target URL | none; asked only without a scope file (below) | `--url` |
 | Identities file | asked only when `identities.yaml` is found next to the scope, the assessment, or in the working directory; `none` for no identities | `--identities` |
 | Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
-| Existing report in the output directory | not asked: it is replaced, and the run settings say `Report : replaces …` before the confirmation | `--output`, `--resume` |
+| Existing report in the output directory | `There is already a report in ./verification. Overwrite it? [y/N]`; a no stops the run before anything is contacted. Not asked with `--overwrite` or `--resume`, nor without a terminal, where the run stops as `verify` does | `--output`, `--overwrite`, `--resume` |
 
 Each answer goes through the same check as its option and is asked again when
 invalid: a URL without http or https, with a user name or password, or with an
@@ -161,19 +163,24 @@ writes). They are not tested and appear in the report as `not-attempted` with
 the reason; `--test-all` tests them anyway. When nothing is left to test, the
 run stops with exit 2: nothing is contacted and no report is written.
 
-During the run, `verify` prints one line per event on standard error, in the
+During the run, `verify` prints one entry per event on standard error, in the
 columns `TIME FINDING EVENT PROGRESS ELAPSED LEFT DETAIL`, as AppSec Analyzer
-does. FINDING is the finding under test and its position among the findings
-that get a probe. The `start` line names its class, up to two requests from the
-test plan and its title. EVENT is `start` and `done` for a finding, `·` for a request,
+does. A blank line separates the findings. FINDING is the finding under test and
+its position among the findings that get a probe. The `start` entry gives its
+title, then its severity, class and up to two requests from the test plan.
+EVENT is `start` and `done` for a finding, `·` for a request,
 browser check or source read of the agent, `↻` for a step the Verifier
-refused, and `⚠` for a limit that stopped the finding. A `·` line gives the
-agent's note on what the step checks, the request with its query and JSON body,
-the result, and how long the model took to propose the step (`model 14s`). The
-`done` line gives the verdict, the steps, the time the finding took, when costs
+refused, and `⚠` for a limit that stopped the finding. A `·` entry gives the
+agent's note on what the step checks, then the request with its query and JSON body,
+the result, how long the model took to propose the step (`model 14s`) and, when
+costs are shown, what the step's model call cost (`$0.04`). The
+`done` entry gives the verdict, the steps, the time the finding took, when costs
 are shown the finding's model cost and the run's spend (`$0.08 · run $0.42 of
-$10.00`), and the agent's rationale; a confirmed verdict also says `proof checked`, because it
-stands only when the Verifier found the proof its class requires. Under it an
+$10.00`), then the agent's rationale; a confirmed verdict also says `proof checked`, because it
+stands only when the Verifier found the proof its class requires. In a terminal
+these parts stand on rows of their own: the title in bold, the tested request
+in its own colour under the note, the rationale under the verdict, and the
+amounts highlighted. Without a terminal each entry is one line. Under it an
 `img` line names each screenshot the finding produced and where it lies
 (`screenshot verification/evidence/T-036-xss-1.png`). The verdict
 is green when the finding is confirmed, red when it was not reproduced or a
@@ -184,8 +191,9 @@ example `host_error (error_max_turns, exit 1)`. PROGRESS is the share of
 findings done, ELAPSED the run time. LEFT is estimated from the findings done so
 far and never exceeds what `--max-duration` leaves; before the first finding is done it shows
 that remainder (`≤29m`). In a terminal a status line underneath shows a progress
-bar, the running step (the model call or the request) and its age. Without a
-terminal, a line with the running step follows after two minutes without
+bar, when costs are shown the run's spend so far (`$0.42 of $10.00`), the
+running step (the model call or the request) and its age. Without a
+terminal, a line with the same follows after two minutes without
 output. The summary at the end adds a `Run` row: run time, model calls,
 requests and, when costs are shown, the spend against `--cost-limit`. Costs are
 shown with API billing (`codex`, `anthropic-api`, and `claude` with
@@ -263,7 +271,8 @@ far and `meta.interrupted: true`, and the run exits with 130.
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
 | `--print` | List every finding in the results at the end, code-only ones included, with the whole reason. | VER-013 |
 | `--show-costs` | Show model costs on the console also with subscription billing; by default only with API billing (see the `Run` row above). Changes no limit and nothing in the report. | VER-015 |
-| `--resume` | Continue the report in `--output`: findings with the verdict confirmed, not-reproducible or blocked-by-control keep it; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. | VER-027 |
+| `--resume` | Continue the report in `--output`: findings with the verdict confirmed, not-reproducible or blocked-by-control keep it; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. Cannot be combined with `--overwrite`. | VER-027 |
+| `--overwrite` | Replace a report already in `--output` (`verification.md` or `verification.yaml`). Without it, and without `--resume`, such a report stops the run (exit 2) before anything is contacted. | VER-027 |
 | `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each finding. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |
 | `--non-interactive` / `--ci` | No prompts: selection, scope confirmation, and cost ceiling all come from the invocation. Recorded in the report. | VER-002/026 |
@@ -497,7 +506,7 @@ plan described above, and the question `Proceed against this target? [y/N]`, or
 
 The `Report` line names where the report goes, `verification.md` (Markdown)
 and `verification.yaml` (YAML, for tools, `--resume` and `export`), and says
-`replaces` when a report is already there.
+`replaces` when `--overwrite` replaces a report already there.
 
 At the end `Results` lists each finding testable against the app: a mark
 (`✓` confirmed, `✗` not reproducible, `⊘` blocked by a control, `?`
@@ -524,7 +533,7 @@ example in CI or when redirected to a file, the output is plain text.
 | Code | Meaning |
 | --- | --- |
 | `0` | All selected findings were tested, whatever the verdict. A confirmed weakness is a successful run. |
-| `2` | The run was blocked before testing: malformed assessment, unreadable, invalid or expired scope, unset proxy or identity variable, unusable model profile, missing confirmation, unreachable target, rejected login, failed model test, empty selection, no selected finding testable in this run, or a `--resume` report that cannot be continued. |
+| `2` | The run was blocked before testing: malformed assessment, unreadable, invalid or expired scope, unset proxy or identity variable, unusable model profile, missing confirmation, unreachable target, rejected login, failed model test, empty selection, no selected finding testable in this run, a report already in `--output` without `--overwrite` or `--resume`, or a `--resume` report that cannot be continued. |
 | `3` | A limit was reached for at least one finding, for example the cost ceiling, the request cap, the steps per finding, or the end of the scope window. |
 | `130` | Interrupted with Ctrl-C. A `verify` run that had started testing writes its report with the results so far. |
 

@@ -13,6 +13,7 @@ for the full design.
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import sys
 import textwrap
@@ -125,6 +126,11 @@ def _load_assessment(path: Path) -> tuple[dict | None, list, list[str]]:
     except ValueError as exc:                       # not a mapping at the top level
         return None, [], [str(exc)]
     return doc, plans_from(doc), []
+
+
+def report_exists(output) -> bool:
+    """Whether the output directory already holds a report; only --overwrite replaces it."""
+    return any((Path(output) / name).is_file() for name in ("verification.yaml", "verification.md"))
 
 
 def _blocked(headline: str, details=(), fix: str | None = None, *, contacted: bool = False) -> int:
@@ -401,6 +407,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
                                                       "--max-attempts, --max-duration and --rate")
     existing, resumed = None, None
     existing_path = Path(args.output) / "verification.yaml"
+    if not args.resume and not args.overwrite and report_exists(args.output):
+        return _blocked(f"There is already a report in {args.output}",
+                        fix="replace it with --overwrite, continue it with --resume, or write to another --output")
     if args.resume and existing_path.is_file():    # checked now: the merge comes after the run
         from .verify.report import resume_problems, verified_findings
         from .verify.runner import _sha256
@@ -409,7 +418,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         errors = errors or resume_problems(existing, _sha256(assessment), target)
         if errors:
             return _blocked(f"The report {existing_path} cannot be continued with --resume", errors,
-                            "write to a new --output, or start without --resume")
+                            "write to a new --output, or replace it with --overwrite instead of --resume")
         kept = verified_findings(existing)
         todo = [p for p in sel if p.id not in kept]
         if not any(p.status == "dynamic" for p in todo):
@@ -455,7 +464,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     summary = _assessment_summary(doc)
     st = Style.for_stream(sys.stdout)
     out = Path(args.output)
-    report_note = resumed or (("replaces " if existing_path.is_file() else "")
+    report_note = resumed or (("replaces " if report_exists(args.output) else "")
                               + f"{out / 'verification.md'} (Markdown, and verification.yaml for tools)")
     notes = (("Report", report_note), ("Identities", _identities_note(identities, sel)), ("Browser", browser_note),
              ("Callback", listener_note), ("Marker file", _marker_note(scope, sel)))
@@ -1132,15 +1141,33 @@ def _wrap(text: str) -> str:
 
 class _Parser(argparse.ArgumentParser):
     """Help with the description and examples as written. A usage error shows the
-    short usage, the error and where to find the examples, not every option."""
+    short usage, the error and where to find the examples, not every option.
+    Options are taken only as written: an abbreviation such as `--show-cost` is
+    an error that names the option meant, not a silent match."""
 
     def __init__(self, *args, hint: str | None = None, **kwargs):
         kwargs.setdefault("formatter_class", argparse.RawDescriptionHelpFormatter)
+        kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
         self.hint = hint or f"Options and examples: {self.prog} --help"
 
     def error(self, message):
+        if message.startswith("unrecognized arguments: "):
+            known = self._option_names()
+            meant = [match[0] for arg in message.split(": ", 1)[1].split()
+                     if arg.startswith("--") and (match := difflib.get_close_matches(arg.split("=")[0], known, 1))]
+            if meant:
+                message += f"; did you mean {', '.join(meant)}?"
         self.exit(EXIT_BLOCKED, f"{self.format_usage()}{self.prog}: error: {message}\n{self.hint}\n")
+
+    def _option_names(self) -> list[str]:
+        """The long options of this parser and its commands, for the suggestion after an unknown one."""
+        names = []
+        for action in self._actions:
+            names += [name for name in action.option_strings if name.startswith("--")]
+            if isinstance(action, argparse._SubParsersAction):
+                names += [name for sub in action.choices.values() for name in sub._option_names()]
+        return names
 
 
 _PROFILE_CHOICES = ["claude", "codex-cli", "copilot-cli", "codex", "anthropic-api"]
@@ -1317,9 +1344,13 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     out.add_argument("--show-costs", action="store_true",
                      help="show model costs on the console even with subscription billing (default: API billing "
                           "only; a subscription CLI reports none). Changes no limit")
-    out.add_argument("--resume", action="store_true",
-                     help="continue the report in the output directory: findings with a verdict keep it, the others "
-                          "are tested")
+    report = out.add_mutually_exclusive_group()
+    report.add_argument("--resume", action="store_true",
+                        help="continue the report in the output directory: findings with a verdict keep it, the "
+                             "others are tested")
+    report.add_argument("--overwrite", action="store_true",
+                        help="replace a report already in the output directory (without this or --resume, "
+                             "such a report stops the run)")
     out.add_argument("--annotate", action="store_true",
                      help="also write a copy of the assessment with the verdict of each finding")
     out.add_argument("--in-place", action="store_true", help="with --annotate: write the verdicts into the "

@@ -286,12 +286,33 @@ def test_intrusive_mode_is_not_offered_without_state_change(env):
     assert not any(p.startswith("Allow intrusive") for p in prompts)
 
 
-def test_an_existing_report_is_replaced_without_a_question(env):
+def test_an_existing_report_is_replaced_only_after_a_yes(env, capsys):
     (env.cwd / "verification").mkdir()
     (env.cwd / "verification" / "verification.yaml").write_text("{}")
-    rc, args, prompts, _ = env.go()
-    assert rc == 0 and prompts == [] and (args.resume, args.output) == (False, "./verification")
-    assert "--resume" not in env.calls[0][1]
+    rc, args, prompts, _ = env.go("")
+    assert rc == cli.EXIT_BLOCKED and env.calls == [] and not args.overwrite
+    assert prompts == ["There is already a report in ./verification. Overwrite it? [y/N]: "]
+    err = capsys.readouterr().err
+    assert "The report in ./verification was kept; nothing was contacted." in err and "--resume continues it" in err
+    rc, args, prompts, _ = env.go("y")
+    assert rc == 0 and args.overwrite and (args.resume, args.output) == (False, "./verification")
+    assert "--overwrite" in shlex.split(env.calls[0][1]) and "--resume" not in env.calls[0][1]
+
+
+@pytest.mark.parametrize("flag", ["--overwrite", "--resume"])
+def test_an_existing_report_is_not_asked_about_with_overwrite_or_resume(env, flag):
+    (env.cwd / "verification").mkdir()
+    (env.cwd / "verification" / "verification.md").write_text("report")
+    rc, _, prompts, _ = env.go(extra=[flag])
+    assert rc == 0 and prompts == [] and flag in env.calls[0][1]
+
+
+def test_without_a_terminal_an_existing_report_is_left_to_verify(env):
+    """Nothing is asked; `verify` refuses to replace the report without --overwrite (tests/test_endpoints.py)."""
+    (env.cwd / "verification").mkdir()
+    (env.cwd / "verification" / "verification.yaml").write_text("{}")
+    rc, args, prompts, _ = env.go(extra=["--profile", "claude", "--url", BASE], interactive=False)
+    assert rc == 0 and prompts == [] and not args.overwrite and len(env.calls) == 1
 
 
 def test_an_invalid_limit_option_blocks_before_any_question(env, capsys):
@@ -315,9 +336,12 @@ def test_an_unavailable_profile_blocks_before_any_question_and_names_the_option(
 
 
 @pytest.mark.parametrize("stop", [EOFError, KeyboardInterrupt])
-@pytest.mark.parametrize("question", ["lower severity", "target URL", "identities", "intrusive"])
+@pytest.mark.parametrize("question", ["lower severity", "target URL", "identities", "intrusive", "overwrite"])
 def test_cancelling_at_any_question_contacts_nothing(env, capsys, stop, question):
-    if question == "lower severity":
+    if question == "overwrite":
+        (env.cwd / "verification").mkdir()
+        (env.cwd / "verification" / "verification.yaml").write_text("{}")
+    elif question == "lower severity":
         env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[2]]}))
     elif question == "target URL":
         (env.run / "scope.yaml").unlink()
