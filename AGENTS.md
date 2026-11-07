@@ -11,10 +11,29 @@ Requirements (VER-001 … VER-030): `requirements.md`.
 ## Setup and checks
 
 ```sh
-pip install -e '.[dev]'     # pytest + anthropic; Python >= 3.10
+pip install --require-hashes -r requirements-dev.lock   # pinned, hash-checked; Python 3.10
+pip install --no-deps --no-build-isolation -e .
 python -m pytest -q         # must pass
 ruff check .                # must be clean (config in pyproject.toml)
 ```
+
+## Dependencies
+
+`requirements.lock` (runtime: base, `[agent]`, `[browser]`) and
+`requirements-dev.lock` (plus `[dev]`) pin every package, build tools
+included, with hashes. They were generated for Python 3.10 with pip-tools
+7.6.2; the command is in each file's header.
+
+Versions are never raised automatically. Do not run `pip-compile --upgrade`,
+do not merge bot or tool updates unreviewed, and do not install from the
+version ranges in `setup.py` where the lockfiles apply. Regenerating a lockfile
+after a change to `setup.py` keeps the existing pins; check the diff, and
+revert any pin that moved without a reason. Raising a version is a change of
+its own: name the packages, read their changelog, check them for known
+vulnerabilities (OSV), run the tests with the new lockfile, and give the
+reason in the commit. `anthropic` stays below 1 (1.x moved to httpx2;
+`host_anthropic.py` is written against 0.x) until that migration is done.
+`ENGINE_VERSION` is also raised only on purpose, not by tooling.
 
 Tests run offline. Network, model and agent-CLI calls are replaced by fakes
 (`FakeTransport`, `FakeClient`, `FakeRun`, `httpx.MockTransport`). Never let a

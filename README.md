@@ -149,14 +149,25 @@ Python 3.10 or later, with [pipx](https://pipx.pypa.io/stable/):
 
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-pipx inject appsec-verifier 'anthropic>=0.87'   # only for --profile anthropic-api
+pipx inject appsec-verifier 'anthropic>=0.87,<1'   # only for --profile anthropic-api
 pipx inject appsec-verifier playwright==1.64.1   # XSS proof browser; uses the installed Google Chrome
 ```
 
 For the CLI profiles, install the agent CLI and log in (`claude`, `codex login`,
 `copilot login`).
 
-From a local checkout: `pip install -e '.[agent,browser]'`.
+Reproducible install from a checkout, with every package pinned and
+hash-checked ([`requirements.lock`](requirements.lock), generated for Python
+3.10):
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install --require-hashes -r requirements.lock
+.venv/bin/pip install --no-deps --no-build-isolation .
+```
+
+Dependency versions are raised only on purpose, never automatically; see
+`AGENTS.md`.
 
 ## Commands
 

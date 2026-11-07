@@ -57,10 +57,11 @@ setup(
     ],
     extras_require={
         # anthropic-api profile. 0.77 brought output_config; 0.86.x has CVE-2026-34450/-34452 (fixed in 0.87).
-        "agent": ["anthropic>=0.87"],
+        # Below 1: 1.x moved the SDK to httpx2; host_anthropic.py is written against 0.x.
+        "agent": ["anthropic>=0.87,<1"],
         # XSS proof browser (VER-009); drives the installed Google Chrome. Pinned to the reviewed release.
         "browser": ["playwright==1.64.1"],
-        "dev": ["pytest>=7.0", "anthropic>=0.87"],
+        "dev": ["pytest>=7.0", "anthropic>=0.87,<1"],
     },
     entry_points={"console_scripts": ["appsec-verifier=appsec_verifier.cli:main"]},
     cmdclass={"build_py": BuildVerifier},
