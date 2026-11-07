@@ -1,0 +1,112 @@
+"""`anthropic-api` profile: the Anthropic Messages API through the `anthropic`
+SDK with ANTHROPIC_API_KEY, tool-less, as one host behind HostPlanner
+(VER-015, VER-017, VER-023).
+
+Each step is one `messages.create` call without tools and with strict
+structured output for the step schema (`output_config.format`). HostPlanner
+therefore applies the call cap, the cost check before the call, the timeout
+(the remaining run time, at most CALL_TIMEOUT_S) and `parse_step` exactly as for
+every other profile. The SDK gets that timeout and no retries, so a call never
+outlasts its bound. The cost is computed from the reported usage at the prices
+in data/anthropic-model-catalog.yaml and charged against the USD ceiling; a
+model without a price there is refused. SDK errors become fixed reason codes,
+so no provider prose reaches the report.
+"""
+
+from __future__ import annotations
+
+import yaml
+
+from ..version_info import resource_root
+from .hosts import HostReply, HostUnavailable, check_model_name
+from .steps import STEP_SCHEMA, strict_json
+
+DEFAULT_MODEL = "claude-opus-5-5"
+MAX_TOKENS = 16_000
+# usage field -> catalog price; cache writes are priced at the 1-hour rate, the higher one
+_PRICED_USAGE = (("input_tokens", "input_usd_per_million"), ("output_tokens", "output_usd_per_million"),
+                 ("cache_creation_input_tokens", "cache_write_usd_per_million"),
+                 ("cache_read_input_tokens", "cache_read_usd_per_million"))
+_ANSWER_BLOCKS = ("text", "thinking", "redacted_thinking")
+
+
+def catalog_prices(model: str) -> dict:
+    """The model's prices from the installed catalog, or HostUnavailable: a model
+    whose cost cannot be counted is not used."""
+    check_model_name(model)
+    with open(resource_root() / "data" / "anthropic-model-catalog.yaml", encoding="utf-8") as fh:
+        models = (yaml.safe_load(fh) or {}).get("models") or {}
+    entry = models.get(model)
+    if not isinstance(entry, dict):
+        raise HostUnavailable(f"model {model!r} has no price in data/anthropic-model-catalog.yaml "
+                              f"({', '.join(sorted(models))}), so its cost cannot be counted")
+    return entry
+
+
+def _default_client(environ):
+    try:
+        import anthropic
+    except ModuleNotFoundError as exc:
+        raise HostUnavailable("the anthropic-api profile needs the 'anthropic' package; "
+                              "install appsec-verifier[agent]") from exc
+    key = environ.get("ANTHROPIC_API_KEY")
+    return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+
+
+def _reason(exc: Exception) -> str:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        reason = {401: "authentication_failed", 403: "authentication_failed", 429: "rate_limit"}.get(
+            status, "server_error" if status >= 500 else "invalid_request")
+        return f"{reason} (HTTP {status})"
+    name = type(exc).__name__
+    return {"APITimeoutError": "timeout", "APIConnectionError": "connection_failed"}.get(name, f"host_error ({name})")
+
+
+class AnthropicHost:
+    label = "Anthropic API"
+    profile = "anthropic-api"
+
+    def __init__(self, *, model: str, prices: dict, client):
+        self.model, self.prices, self._client = model, prices, client
+        self.version, self.auth = "", "API key"
+        self.broken: str | None = None
+
+    @classmethod
+    def resolve(cls, *, model: str | None, environ, client_factory=None) -> AnthropicHost:
+        if not (environ.get("ANTHROPIC_API_KEY") or environ.get("ANTHROPIC_AUTH_TOKEN")):
+            raise HostUnavailable("the anthropic-api profile needs ANTHROPIC_API_KEY")
+        model = model or DEFAULT_MODEL
+        prices = catalog_prices(model)
+        return cls(model=model, prices=prices, client=(client_factory or _default_client)(environ))
+
+    def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
+        try:
+            resp = self._client.with_options(timeout=timeout, max_retries=0).messages.create(
+                model=self.model, max_tokens=MAX_TOKENS, system=system,
+                messages=[{"role": "user", "content": prompt}],
+                output_config={"format": {"type": "json_schema", "schema": STEP_SCHEMA}},
+            )
+        except Exception as exc:  # noqa: BLE001 - any SDK failure ends this finding with a fixed reason code
+            return HostReply(error=_reason(exc))
+        try:
+            usd = 0.0
+            for field, price in _PRICED_USAGE:
+                tokens = getattr(resp.usage, field, None) or 0
+                if type(tokens) is not int or tokens < 0:
+                    raise ValueError("invalid usage")
+                usd += tokens * self.prices[price] / 1_000_000
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return HostReply(error="invalid_response")
+        if resp.stop_reason != "end_turn":
+            reason = {"refusal": "refused", "max_tokens": "output_truncated"}.get(resp.stop_reason, "invalid_response")
+            return HostReply(usd=usd, error=reason)
+        try:
+            blocks = list(resp.content)
+            texts = [b.text for b in blocks if b.type == "text"]
+            if len(texts) != 1 or any(b.type not in _ANSWER_BLOCKS for b in blocks):
+                raise ValueError("no single text answer")
+            step = strict_json(texts[0])
+        except (AttributeError, TypeError, ValueError):
+            return HostReply(usd=usd, error="invalid_response")
+        return HostReply(step=step, usd=usd)

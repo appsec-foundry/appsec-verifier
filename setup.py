@@ -56,10 +56,11 @@ setup(
         "httpx>=0.25",
     ],
     extras_require={
-        "agent": ["anthropic>=0.40"],   # live agent planner (verify against a target)
+        # anthropic-api profile. 0.77 brought output_config; 0.86.x has CVE-2026-34450/-34452 (fixed in 0.87).
+        "agent": ["anthropic>=0.87"],
         # XSS proof browser (VER-009); drives the installed Google Chrome. Pinned to the reviewed release.
         "browser": ["playwright==1.64.1"],
-        "dev": ["pytest>=7.0", "anthropic>=0.40"],
+        "dev": ["pytest>=7.0", "anthropic>=0.87"],
     },
     entry_points={"console_scripts": ["appsec-verifier=appsec_verifier.cli:main"]},
     cmdclass={"build_py": BuildVerifier},

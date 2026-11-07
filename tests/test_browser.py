@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from appsec_verifier.agent import AgentProbe, AgentTools, ToolError
-from appsec_verifier.agent.planner_anthropic import _system
+from appsec_verifier.agent.prompts import _system
 from appsec_verifier.cli import _proof_browser
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
 from appsec_verifier.loader import FindingPlan

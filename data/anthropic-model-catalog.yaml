@@ -1,0 +1,30 @@
+# Claude models the `anthropic-api` profile may use, with the prices it charges
+# against the run's USD ceiling (VER-015). A model that is not listed here is
+# refused, because its cost could not be counted.
+#
+# Standard first-party Claude API rates in USD per million tokens, from
+# https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-07).
+# Cache writes are charged at the 1-hour rate, the higher of the two; the
+# profile sets no cache_control, so they are normally zero. The profile sets no
+# inference_geo, so the 1.1x data-residency multiplier does not apply.
+# Separate from model-catalog.yaml, which lists only OpenAI models and is kept
+# in step with AppSec Analyzer.
+
+schema_version: 1
+price_revision: anthropic-standard-2026-11-07
+models:
+  claude-opus-5-5:
+    input_usd_per_million: 4.0
+    output_usd_per_million: 20.0
+    cache_write_usd_per_million: 8.0
+    cache_read_usd_per_million: 0.20
+  claude-sonnet-5-5:
+    input_usd_per_million: 2.0
+    output_usd_per_million: 10.0
+    cache_write_usd_per_million: 4.0
+    cache_read_usd_per_million: 0.10
+  claude-fable-5-1:
+    input_usd_per_million: 10.0
+    output_usd_per_million: 50.0
+    cache_write_usd_per_million: 20.0
+    cache_read_usd_per_million: 0.25

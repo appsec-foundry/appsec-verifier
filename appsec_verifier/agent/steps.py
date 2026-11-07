@@ -15,7 +15,7 @@ import math
 
 from jsonschema import Draft202012Validator
 
-from .planner_anthropic import _RESULT_CAP, _seed, _system, _tool_defs
+from .prompts import _RESULT_CAP, _seed, _system, _tool_defs
 
 STEP_SCHEMA = {
     "type": "object",

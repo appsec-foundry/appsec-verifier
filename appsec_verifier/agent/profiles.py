@@ -4,14 +4,15 @@ Named and chosen as in AppSec Analyzer. Without --profile an interactive run
 uses `claude`; a non-interactive run must name its profile so the command shows
 its provider. `codex-cli` and `copilot-cli` use a subscription that reports no
 cost, so they are bounded by calls and time instead of USD. `anthropic-api`
-keeps the direct Anthropic SDK planner for CI without an installed agent CLI.
+serves CI without an installed agent CLI. Every profile is a host behind
+HostPlanner, so the same bounds and the same step contract apply to all.
 """
 
 from __future__ import annotations
 
 import os
 
-from .hosts import HostPlanner, HostUnavailable, check_model_name
+from .hosts import HostPlanner, HostUnavailable
 
 PROFILES = ("claude", "codex-cli", "copilot-cli", "codex", "anthropic-api")
 DEFAULT_PROFILE = "claude"
@@ -24,14 +25,8 @@ def resolve(profile: str, *, model: str | None = None, environ=None):
     one host, so a failed confinement check stops the rest of the run."""
     environ = os.environ if environ is None else environ
     if profile == "anthropic-api":
-        if not (environ.get("ANTHROPIC_API_KEY") or environ.get("ANTHROPIC_AUTH_TOKEN")):
-            raise HostUnavailable("the anthropic-api profile needs ANTHROPIC_API_KEY")
-        from .planner_anthropic import DEFAULT_MODEL, AnthropicPlanner
-
-        model = check_model_name(model or DEFAULT_MODEL)
-        return (lambda: AnthropicPlanner(model=model)), {
-            "profile": profile, "model": model, "runtime": "Anthropic API (SDK)", "auth": "API key"}
-    if profile == "claude":
+        from .host_anthropic import AnthropicHost as host_cls
+    elif profile == "claude":
         from .host_claude import ClaudeHost as host_cls
     elif profile == "codex-cli":
         from .host_codex_cli import CodexCliHost as host_cls

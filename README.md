@@ -23,7 +23,7 @@ Early version.
   | `codex-cli` | Codex CLI 0.163.0+ with a ChatGPT login | calls, time |
   | `copilot-cli` | GitHub Copilot CLI 1.0.101 with its login | calls, time |
   | `codex` | OpenAI Responses API with `OPENAI_API_KEY` | USD, calls, time |
-  | `anthropic-api` | Anthropic API with `ANTHROPIC_API_KEY`, no CLI needed | calls, time |
+  | `anthropic-api` | Anthropic API with `ANTHROPIC_API_KEY`, no CLI needed | USD, calls, time |
 
   Every CLI runs without tools, MCP servers, settings or session history and
   only proposes the next step; the Verifier checks it and executes it within the
@@ -110,8 +110,8 @@ explicitly allows. The controls follow the
   session never travels with another identity's or an anonymous request.
 - Requests, attempts per finding, model calls, request rate, run time and model
   spend are capped. Defaults are in [`data/limits.yaml`](data/limits.yaml).
-  Reaching a limit stops the work it affects. Spend is counted for `claude` and
-  `codex`; `codex-cli` and `copilot-cli` report no cost and reject
+  Reaching a limit stops the work it affects. Spend is counted for `claude`,
+  `codex` and `anthropic-api`; `codex-cli` and `copilot-cli` report no cost and reject
   `--cost-limit`.
 - Safe mode is the default. The agent can then only send GET, HEAD and OPTIONS
   requests, uses one harmless payload per test and keeps the request count low.
@@ -129,7 +129,7 @@ Python 3.10 or later, with [pipx](https://pipx.pypa.io/stable/):
 
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-pipx inject appsec-verifier anthropic      # only for --profile anthropic-api
+pipx inject appsec-verifier 'anthropic>=0.87'   # only for --profile anthropic-api
 pipx inject appsec-verifier playwright==1.64.1   # XSS proof browser; uses the installed Google Chrome
 ```
 
@@ -156,6 +156,8 @@ Details in [`docs/cli.md`](docs/cli.md).
 - Default limits: [`data/limits.yaml`](data/limits.yaml)
 - OpenAI models and prices for `codex` and `codex-cli`:
   [`data/model-catalog.yaml`](data/model-catalog.yaml)
+- Claude models and prices for `anthropic-api`:
+  [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml)
 
 Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form
 login) and [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a

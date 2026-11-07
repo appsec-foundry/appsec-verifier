@@ -33,9 +33,9 @@ the `[browser]` extra; still no network).
 | `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/sessions.py` | sessions per test identity; secrets come from env vars |
-| `agent/` | agent loop and narrow tool set; model profiles (`profiles.py`), the step contract (`steps.py`), `HostPlanner` (`hosts.py`) with one `host_*.py` per CLI/API, the Anthropic SDK planner |
+| `agent/` | agent loop and narrow tool set; model profiles (`profiles.py`), the shared action schemas and prompts (`prompts.py`), the step contract (`steps.py`), `HostPlanner` (`hosts.py`) with one `host_*.py` per CLI/API |
 | `verify/` | runner (injectable, offline-testable), probes, report/export/annotate |
-| `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`, `model-catalog.yaml`) |
+| `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`, `model-catalog.yaml`, `anthropic-model-catalog.yaml`) |
 | `examples/` | sample scope and identities files |
 
 ## Safety invariants (do not weaken)

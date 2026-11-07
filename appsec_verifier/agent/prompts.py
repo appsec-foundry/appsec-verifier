@@ -1,19 +1,14 @@
-"""Anthropic-backed planner: the model that drives an AgentProbe (VER-028).
+"""The action schemas and prompts every model host shares (VER-017, VER-019).
 
-Implements the Planner protocol over the Anthropic Messages API tool-use loop.
-The Anthropic client is injected, so the message threading, tool-schema, and
-response parsing are unit-tested with a fake client; a real client is built
-lazily (requires the optional `anthropic` dependency). The agent is offered only
-the confined tools (http_request, read_source) plus submit_verdict; `tool_choice`
-is auto (forced tool use is rejected on current models).
+`_tool_defs()` lists the only actions a planner may propose — the confined
+tools (http_request, read_source, browser_check) plus submit_verdict — and
+steps.py builds the strict step contract from them. `_system()` and `_seed()`
+describe the task and the run mode; no credential and no target content is
+part of them.
 """
 
 from __future__ import annotations
 
-import json
-
-DEFAULT_MODEL = "claude-opus-5-5"
-_MAX_TOKENS = 8000
 _RESULT_CAP = 4000  # bound tool-result text fed back to the model (tokens/cost)
 
 _VERDICT_ENUM = ["confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted"]
@@ -124,53 +119,3 @@ def _seed(ctx) -> str:
         f"Target base URL: {ctx.target_base}\n"
         "Plan and execute the verification, then submit_verdict."
     )
-
-
-class AnthropicPlanner:
-    def __init__(self, *, model: str = DEFAULT_MODEL, client=None, api_key: str | None = None,
-                 max_tokens: int = _MAX_TOKENS):
-        self._model = model
-        self._max_tokens = max_tokens
-        self._client = client if client is not None else _default_client(api_key)
-        self._messages: list[dict] = []
-        self._started = False
-        self._pending_assistant = None   # assistant content blocks holding the last tool_use
-        self._pending_tool_id = None
-
-    def next_step(self, ctx, history: list[dict]) -> dict:
-        if not self._started:
-            self._messages = [{"role": "user", "content": _seed(ctx)}]
-            self._started = True
-        elif history and self._pending_tool_id is not None:
-            result = history[-1].get("result")
-            self._messages.append({"role": "assistant", "content": self._pending_assistant})
-            self._messages.append({"role": "user", "content": [{
-                "type": "tool_result",
-                "tool_use_id": self._pending_tool_id,
-                "content": json.dumps(result, default=str)[:_RESULT_CAP],
-            }]})
-
-        resp = self._client.messages.create(
-            model=self._model, max_tokens=self._max_tokens, system=_system(ctx),
-            tools=_tool_defs(), tool_choice={"type": "auto"}, messages=self._messages,
-        )
-        tool_use = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
-        if tool_use is None:
-            return {"verdict": {"verdict": "inconclusive",
-                                "rationale": "agent ended without calling submit_verdict"}}
-        self._pending_assistant = resp.content
-        self._pending_tool_id = tool_use.id
-        args = dict(tool_use.input or {})
-        if tool_use.name == "submit_verdict":
-            return {"verdict": args}
-        return {"tool": tool_use.name, "args": args}
-
-
-def _default_client(api_key: str | None):
-    try:
-        import anthropic
-    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without the optional dep
-        raise RuntimeError(
-            "the 'anthropic' package is required for the live agent; install appsec-verifier[agent]"
-        ) from exc
-    return anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
