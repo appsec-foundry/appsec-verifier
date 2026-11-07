@@ -228,7 +228,7 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
         _msg(_wire("http_request", role="customer-a", path="/rest/basket/2")),
         _msg(_wire("http_request", role="customer-b", path="/rest/basket/2")),
         _msg(_wire("submit_verdict", verdict="confirmed", confidence="high", rationale="a read b",
-                   identities_used=["customer-a", "customer-b"])),
+                   identities_used=["customer-a", "customer-b"], proof_steps=[1, 2])),
     ])
     ctx = _full_ctx(tmp_path, transport)
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=8).run(ctx)

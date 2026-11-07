@@ -218,9 +218,9 @@ def test_confirmed_xss_with_executed_marker_keeps_browser_evidence_only():
     assert res.verdict == "confirmed" and res.evidence == proof
 
 
-def test_other_classes_are_not_affected():
+def test_other_classes_need_their_own_proof_not_the_browser():
     res = AgentProbe("access-control", lambda: Scripted([CONFIRM])).run(_ctx(cls="access-control"))
-    assert res.verdict == "confirmed"
+    assert res.verdict == "inconclusive" and "proof_steps" in res.rationale and "browser" not in res.rationale
 
 
 # ── report and export ─────────────────────────────────────────────────────────

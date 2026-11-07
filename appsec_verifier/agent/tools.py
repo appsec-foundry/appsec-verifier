@@ -16,6 +16,7 @@ redacted of every credential value before it is cut to the excerpt (VER-016).
 
 from __future__ import annotations
 
+import hashlib
 from urllib.parse import urljoin
 
 import httpx
@@ -119,12 +120,14 @@ class AgentTools:
         except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
         text = _body_text(resp)
-        excerpt = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
+        redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
         return {
             "role": role,
             "status": getattr(resp, "status_code", None),
             "length": len(text),                         # of the whole body, not of the excerpt
-            "body_excerpt": excerpt[:_BODY_EXCERPT],     # redacted before the cut: no partial token (VER-016)
+            # of the redacted body, so no hash of a credential exists; lets the proof check compare answers
+            "body_sha256": hashlib.sha256(redacted.encode("utf-8", "replace")).hexdigest(),
+            "body_excerpt": redacted[:_BODY_EXCERPT],    # redacted before the cut: no partial token (VER-016)
         }
 
     def _send(self, method, url, headers, params, json):

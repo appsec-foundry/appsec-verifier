@@ -292,7 +292,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             sessions=sessions, source=source, budget=budget,
             verifier_version=version_string(), target_base=target, authorization=authorization,
             safe=safe, read_only=read_only, contacted=contact, agent=agent_info, browser=browser,
-            log=action_log,
+            log=action_log, evidence_dir=out_dir / "evidence",
         )
     finally:
         if action_log is not None:

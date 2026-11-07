@@ -290,7 +290,11 @@ properties:
             properties:
               kind:
                 type: string
-                enum: [request, response, har, screenshot, browser-event, callback, note]
+                description: |
+                  `exchange` is the code's record of the steps a confirmed
+                  access-control or injection verdict cites: request and status,
+                  length and body hash of each response, no body (VER-010, VER-011).
+                enum: [request, response, har, screenshot, browser-event, callback, note, exchange]
               path:     { type: string, description: Path under evidence/, relative to the report. }
               sha256:   { type: [string, "null"] }
               redacted: { type: [boolean, "null"] }

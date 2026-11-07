@@ -38,8 +38,12 @@ Early version.
   and unprivileged user namespaces; elsewhere the browser does not start. Without
   the browser, XSS findings cannot be confirmed. The browser has only been tested
   offline so far; see `tests/test_browser_live.py` to run it against real Chrome.
-- Not built yet: the callback listener for SSRF. Other classes are judged from
-  HTTP responses.
+- The code checks the proof of every `confirmed` verdict; the model's word is
+  not enough. The model names the steps that prove it, and a verdict whose
+  proof does not hold ends `inconclusive`. Not built yet: the marker file for
+  path traversal, observing a redirect for open redirect, and the callback
+  listener for SSRF. Findings of these three classes are therefore never
+  confirmed yet.
 
 ## Usage
 
@@ -69,11 +73,11 @@ A finding counts as confirmed only with the proof in the right column.
 | Class | CWEs | Confirmed when |
 | --- | --- | --- |
 | Cross-site scripting | CWE-79 | the marker payload executes in a browser; reflection alone is not enough |
-| Broken access control / IDOR | CWE-639, 862, 863 | one test identity reads or changes data of another |
-| SQL / NoSQL injection | CWE-89, 943 | a controlled difference in response or timing appears; no data is extracted |
-| Path traversal | CWE-22 | a marker file placed beforehand can be read |
-| Open redirect | CWE-601 | a harmless, controlled redirect works |
-| SSRF | CWE-918 | the target calls a listener run by the Verifier |
+| Broken access control / IDOR | CWE-639, 862, 863 | the same request, sent as two different identities (or one and none), is answered 2xx with content for both |
+| SQL / NoSQL injection | CWE-89, 943 | the same request with a different input gets a different status or body; no data is extracted. Timing differences are not accepted yet |
+| Path traversal | CWE-22 | a marker file placed beforehand can be read (not built yet, never confirmed) |
+| Open redirect | CWE-601 | a harmless, controlled redirect works (not built yet, never confirmed) |
+| SSRF | CWE-918 | the target calls a listener run by the Verifier (not built yet, never confirmed) |
 
 Findings that cannot be tested against a running system, such as a weak random
 number generator or a hard-coded secret, are reported `not-attempted` with a

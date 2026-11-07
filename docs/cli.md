@@ -146,6 +146,24 @@ finding `inconclusive` and stops every later model call of the run. Copilot CLI
 prints only the answer, so its confinement rests on the pinned version and its
 flags. `codex-cli` and `copilot-cli` have only offline tests so far.
 
+**Proof per class (VER-009 to VER-013).** A `confirmed` verdict must list the
+steps that prove it in `proof_steps` (step numbers as in the prompt and in
+`agent-log.jsonl`), and the code checks them against what the tools returned
+(`agent/proof.py`). Access control: two cited `http_request` steps with the
+same method, path, params and body, sent as two different identities (no role
+counts as the anonymous one), both answered 2xx with a non-empty body.
+Injection: two cited steps with the same method, path and identity but a
+different input, answered with a different status or body. XSS: a
+`browser_check` in which the marker executed (below). Path traversal, open
+redirect and SSRF are never confirmed yet, because the marker file, the
+redirect observation and the callback listener they need are not built. A
+`confirmed` verdict that fails its check becomes `inconclusive`
+("indicative, not proven: …") with the model's claim kept in the rationale. A
+passing check replaces the model's evidence with the code's: for access control
+and injection `evidence/<finding>-exchanges.json` (owner-only) with method,
+path, params, body, identity, status, length and a hash of the redacted
+response body per cited step, no response body and no headers.
+
 **XSS proof browser (VER-009, VER-018, VER-022).** For XSS findings the agent
 gets one more tool, `browser_check`, which loads a target page in headless
 Google Chrome (Playwright, `appsec-verifier[browser]`; `--headful` shows it).

@@ -47,6 +47,7 @@ class ProbeContext:
     browser: object | None = None      # ProofBrowser for XSS (VER-009), or None when unavailable
     marker: tuple[str, str] = ("", "")  # per-finding XSS marker parts; only their runtime join counts
     log: object | None = None          # callable(record) for the action log (VER-017), or None
+    evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
 
 
 @runtime_checkable

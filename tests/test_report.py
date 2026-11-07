@@ -60,6 +60,16 @@ def test_verification_doc_is_schema_valid():
         assert doc["results"][0]["result_id"].startswith("VF-")
 
 
+def test_exchange_evidence_is_schema_valid():
+    from jsonschema.validators import validator_for
+
+    doc = _doc()
+    doc["results"][0].update(verdict="confirmed", evidence=[
+        {"kind": "exchange", "path": "evidence/T-037-exchanges.json", "redacted": True, "sha256": "ab" * 32}])
+    schema = yaml.safe_load(SCHEMA.read_text())
+    assert not list(validator_for(schema)(schema).iter_errors(doc))
+
+
 def test_write_reports_roundtrip(tmp_path):
     doc = _doc()
     paths = write_reports(doc, tmp_path)

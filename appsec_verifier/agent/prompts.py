@@ -62,13 +62,15 @@ def _tool_defs() -> list[dict]:
         },
         {
             "name": "submit_verdict",
-            "description": "Submit the final verdict for this finding and end the probe.",
+            "description": "Submit the final verdict for this finding and end the probe. A confirmed verdict "
+                           "lists in proof_steps the numbers of the steps that prove it; the Verifier checks them.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "verdict": {"type": "string", "enum": _VERDICT_ENUM},
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                     "rationale": {"type": "string"},
+                    "proof_steps": {"type": "array", "items": {"type": "integer", "minimum": 1}},
                     "identities_used": {"type": "array", "items": {"type": "string"}},
                     "proof": {"type": "object"},
                     "evidence": {"type": "array", "items": {"type": "object"}},
@@ -88,10 +90,16 @@ def _system(ctx) -> str:
         "You verify ONE static security finding against the running target, and only that finding. "
         "Use only the provided tools; never attempt anything outside them. "
         f"Run mode: {mode}. Available identity roles: {roles}.\n"
-        "For access-control/IDOR: fetch the same resource as two different identities and compare what each "
-        "receives; it is confirmed only if one identity reaches or alters another's resource. "
-        "For XSS: a verdict of confirmed requires evidence the payload executes, not just that it is reflected. "
-        "For injection: rely on an observable response/timing difference, never on exfiltrated data. "
+        "Steps are numbered from 1. A verdict of confirmed must cite the steps that prove it in proof_steps; "
+        "the Verifier checks them and downgrades a confirmed verdict whose proof does not hold.\n"
+        "For access-control/IDOR: send the same request (method, path, params, body) as two different "
+        "identities (or as one identity and with no role) and compare what each receives; it is confirmed only "
+        "if one identity reaches another's resource, and both cited steps must be answered 2xx with content. "
+        "For injection: rely on an observable response difference, never on exfiltrated data; cite two steps "
+        "with the same method, path and identity, different input, and a different status or body. "
+        "For XSS: a verdict of confirmed requires a browser_check in which the payload executed. "
+        "Path traversal, open redirect and SSRF cannot be confirmed in this version; report what you observe "
+        "as inconclusive. "
         "Do not pursue other weaknesses; note anything incidental as an observation. "
         "When you have enough evidence — or cannot get it — call submit_verdict. "
         "If you cannot reproduce it, say not-reproducible or inconclusive; do not guess confirmed."

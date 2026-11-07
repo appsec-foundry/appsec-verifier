@@ -51,8 +51,8 @@ def system_prompt(ctx) -> str:
 
 
 def prompt(ctx, history: list[dict]) -> str:
-    steps = [{"action": h.get("tool"), "args": h.get("args"),
-              "result": json.dumps(h.get("result"), default=str)[:_RESULT_CAP]} for h in history]
+    steps = [{"step": n, "action": h.get("tool"), "args": h.get("args"),
+              "result": json.dumps(h.get("result"), default=str)[:_RESULT_CAP]} for n, h in enumerate(history, 1)]
     return _seed(ctx) + "\n\nSteps so far (JSON):\n" + json.dumps(steps) + "\n\nReply with the next step."
 
 

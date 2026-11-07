@@ -4,6 +4,9 @@ planner never submits (VER-008, VER-010, VER-024)."""
 
 from __future__ import annotations
 
+import json
+import stat
+
 import pytest
 
 from appsec_verifier.agent import AgentProbe, SourceReader
@@ -72,14 +75,23 @@ def test_idor_two_identity_contrast_confirms():
                          "rationale": "customer-a read customer-b's basket",
                          "identities_used": ["customer-a", "customer-b"],
                          "proof": {"identity_a": "customer-a", "identity_b": "customer-b",
-                                   "observed_difference": "a received b's basket (UserId 2)"}}},
+                                   "observed_difference": "a received b's basket (UserId 2)"},
+                         "proof_steps": [2, 3]}},
         ])
+        ctx.evidence_dir = Path(d) / "evidence"
         res = AgentProbe("access-control", lambda: planner, max_steps=10).run(ctx)
+        record = json.loads((Path(d) / "evidence" / "T-001-exchanges.json").read_text())
+        mode = stat.S_IMODE((Path(d) / "evidence" / "T-001-exchanges.json").stat().st_mode)
 
     assert res.verdict == "confirmed" and res.confidence == "high"
     assert res.identities_used == ["customer-a", "customer-b"]
     # the two requests carried the two identities' distinct sessions
     assert [a for _, a in calls] == ["Bearer AAA", "Bearer BBB"]
+    # the code's record of the cited exchanges is the evidence, not the model's word
+    assert res.evidence[0]["kind"] == "exchange" and res.evidence[0]["path"] == "evidence/T-001-exchanges.json"
+    assert [(e["step"], e["role"], e["status"]) for e in record["exchanges"]] == [
+        (2, "customer-a", 200), (3, "customer-b", 200)]
+    assert "UserId" not in json.dumps(record) and mode == 0o600      # no response body in the evidence
 
 
 def test_planner_never_submits_is_inconclusive_not_refuted():

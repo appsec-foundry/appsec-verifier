@@ -1,4 +1,4 @@
-"""The agent loop that drives a probe (VER-001, VER-008, VER-015, VER-017, VER-019).
+"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019).
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
@@ -9,9 +9,10 @@ enforces a step limit, the run budget and the authorisation window (checked
 before every planner call), and never lets a bad tool call escape
 — errors go back to the planner as data. Every tool result is redacted of
 credential values before the planner sees it (VER-016). A planner that never
-submits ends inconclusive, not refuted (VER-024). Every step — tool call and
-outcome, refused proposal, stopping limit, verdict — goes to `ctx.log`, the
-run's action log (VER-017).
+submits ends inconclusive, not refuted (VER-024). A confirmed verdict stands
+only if the code finds the proof its class requires (proof.py). Every step —
+tool call and outcome, refused proposal, stopping limit, verdict — goes to
+`ctx.log`, the run's action log (VER-017).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import Protocol
 
 from ..limits import LimitExceeded
 from ..verify.probes import ProbeContext, ProbeResult
+from .proof import check_proof
 from .steps import check_action
 from .tools import AgentTools, ToolError
 
@@ -53,25 +55,6 @@ def _result_from_verdict(v: dict) -> ProbeResult:
         observations=v.get("observations", []),
         evidence=v.get("evidence", []),
     )
-
-
-def _xss_proof(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
-    """VER-009: an XSS finding is confirmed only when the proof browser saw the
-    marker execute; the model's word is not enough. The browser's evidence, not
-    the model's, then backs the verdict."""
-    if getattr(ctx.plan, "cls", None) != "xss" or result.verdict != "confirmed":
-        return result
-    proofs = [h["result"] for h in history if h.get("tool") == "browser_check"
-              and isinstance(h.get("result"), dict) and h["result"].get("executed") is True]
-    if not proofs:
-        return ProbeResult(
-            verdict="inconclusive", confidence=result.confidence, identities_used=result.identities_used,
-            observations=result.observations,
-            rationale="indicative, not executed: no browser_check saw the marker execute (VER-009). "
-                      f"Agent's claim: {result.rationale or ''}".strip(),
-        )
-    result.evidence = [e for p in proofs for e in p.get("evidence") or []]
-    return result
 
 
 def _log(ctx, step: int, **record) -> None:
@@ -115,7 +98,9 @@ class AgentProbe:
                 if action != proposal:        # the step contract refused what the planner proposed (VER-017)
                     _log(ctx, step, refused=action["verdict"]["rationale"],
                          proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP])
-                return _finish(ctx, step, _xss_proof(ctx, history, _result_from_verdict(action["verdict"])))
+                verdict = action["verdict"]
+                return _finish(ctx, step, check_proof(ctx, history, _result_from_verdict(verdict),
+                                                      verdict.get("proof_steps")))
             name, args = action["tool"], action["args"]
             try:
                 result = tools.call(name, args)
