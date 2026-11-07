@@ -109,11 +109,12 @@ optional hardening.
 
 - **VER-009: Require real execution as proof of XSS.** An XSS finding counts as
   confirmed only when a unique, harmless marker payload actually executes in a
-  real headless browser against the target — proven by the triggered event plus a
-  captured screenshot and request/response trace. A payload merely reflected
-  unencoded in an HTTP response is recorded as *indicative, not executed*, never
-  as confirmed, so DOM handling and sanitisers are not mistaken for exploitable
-  output.
+  real headless browser against the target, proven by the triggered event. The
+  page's requests and responses are recorded with it (VER-034), and a
+  screenshot unless the operator turned it off (VER-035). A payload merely
+  reflected unencoded in an HTTP response is recorded as *indicative, not
+  executed*, never as confirmed, so DOM handling and sanitisers are not mistaken
+  for exploitable output.
 
 - **VER-010: Prove access-control findings by comparison.** An IDOR or missing-
   authorisation finding is confirmed by showing that identity A can perform or
@@ -144,6 +145,33 @@ optional hardening.
   The Verifier distinguishes "I could not reproduce it" from "it is not
   exploitable" and never reports a weakness as confirmed without the evidence
   class its finding type requires.
+
+- **VER-034: Record a proof of concept for every tested finding.** Every
+  finding the Verifier tested carries its proof of concept, whatever the
+  verdict. The code records it from what was sent and received; the model's
+  own account of its evidence is not taken over. Each request to the target is
+  kept with method, URL, headers and body, each response with status, headers
+  and body, redacted as in VER-016 and naming the identity by its role. The
+  report shows the requests the verdict rests on, each with the decisive part
+  of its response, and lists the other requests in one line each; the complete
+  record goes to the evidence files (VER-022). For a confirmed verdict these
+  are the steps its proof check relied on (VER-009 to VER-012), for SSRF also
+  the request that triggered the callback; for any other verdict the steps it
+  cites, such as the refused request behind *blocked by a control*.
+  Screenshots add to it where a browser shows the proof (VER-035).
+
+- **VER-035: Take screenshots where a browser shows the proof.** A screenshot
+  is taken of the page in which an XSS marker executed (VER-009), and of a
+  confirmed access-control finding's contested response when that is an HTML
+  page, rendered from the recorded response without a new request (VER-010).
+  Redirect, traversal, injection and SSRF proofs lie in status, headers, body,
+  timing or the callback hit and get none. The operator chooses per run
+  whether and for which of these classes screenshots are taken, by default for
+  both. Each screenshot shows what the proof rests on: a caption names the
+  finding, URL, identity and time, and the element that holds the executed
+  payload or the contested data is marked where the code can locate it. Marks
+  are drawn over the page and leave the recorded exchange unchanged. A
+  screenshot illustrates the proof; no verdict depends on it.
 
 ## Stay safe and in scope
 
@@ -260,10 +288,13 @@ optional hardening.
   re-scores the assessment itself.
 
 - **VER-022: Make evidence self-contained and safe to share.** Evidence
-  artefacts are stored next to the report, are enough to let a reader confirm a
-  verdict without re-running the test, and contain no real secrets or sensitive
-  target data. Captured requests and responses are redacted of credentials and of
-  any sensitive values the target returned.
+  artefacts are stored next to the report, readable only by the operator, and
+  are enough to let a reader confirm a verdict without re-running the test
+  (VER-034). They contain no real secrets: captured requests and responses are
+  redacted of credentials, cookies and tokens (VER-016). Response bodies,
+  capped in size, and screenshots can show target data a proof needs; they are
+  marked for review before sharing, and the Analyzer export carries neither
+  (VER-021).
 
 ## Run and maintain
 
