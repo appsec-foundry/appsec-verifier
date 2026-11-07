@@ -75,8 +75,9 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 `appsec-verifier preflight`, with `--assessment`, `--scope`, `--identities` and
 `--profile`, checks the assessment, scope, target, logins and model without
-testing any finding. `appsec-verifier plan`
-shows which findings can be tested, without contacting anything.
+testing any finding. `appsec-verifier plan ./out/security-assessment.yaml`
+shows which findings can be tested, without contacting anything. Without a path,
+`plan` reads `security-assessment.yaml` in the current directory.
 
 ## What it verifies
 

@@ -494,13 +494,20 @@ which can hold proxy credentials (VER-016). Exit code `0` when no check failed,
 ## `plan` — what is verifiable, offline
 
 ```
-appsec-verifier plan --assessment ./security-assessment.yaml [--class LIST]
+appsec-verifier plan [ASSESSMENT] [--category LIST] [--severity LIST] [--min-severity LEVEL]
+  [--only ID[,ID]] [--class LIST] [--cwe LIST]
 ```
 
-Reads the assessment and prints, per finding: id, title, CWE, class, and whether
+Reads the assessment and prints, per finding: id, CWE, severity, class, and whether
 it is `dynamic` (verifiable), `static-only` (out of scope for dynamic
 verification, with reason), or `input-incomplete` (missing evidence
 file/line/route). No target contact, no model calls (VER-006, VER-024).
+
+Without `ASSESSMENT`, `plan` reads `security-assessment.yaml` in the current
+directory and stops with exit code 2 if there is none. `--assessment PATH` is
+the same as `ASSESSMENT`. The selectors are those of `verify` (see
+[Select what to verify](#select-what-to-verify-ver-026)), so `plan` shows which
+findings a `verify` with the same selectors would take.
 
 ## `scope` — resolve and check a scope file
 

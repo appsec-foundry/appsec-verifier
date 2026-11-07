@@ -78,6 +78,32 @@ def test_no_color_wins_over_force_color(assessment, capsys, monkeypatch):
     assert "\x1b" not in capsys.readouterr().out
 
 
+def test_plan_takes_the_assessment_as_argument(assessment, capsys):
+    assert cli.main(["plan", str(assessment)]) == 0
+    assert f"  Assessment : {assessment}\n" in capsys.readouterr().out
+
+
+def test_plan_reads_security_assessment_yaml_from_the_current_directory(assessment, capsys, monkeypatch):
+    (assessment.parent / "security-assessment.yaml").write_text(assessment.read_text())
+    monkeypatch.chdir(assessment.parent)
+    assert cli.main(["plan"]) == 0
+    out = capsys.readouterr().out
+    assert "  Assessment : security-assessment.yaml\n" in out and "2 total" in out
+
+
+def test_plan_without_a_path_or_default_file_blocks_and_says_how(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["plan"]) == cli.EXIT_BLOCKED
+    err = capsys.readouterr().err
+    assert "has no security-assessment.yaml" in err and "appsec-verifier plan PATH" in err
+
+
+def test_plan_refuses_the_argument_and_the_option_together(assessment, capsys):
+    with pytest.raises(SystemExit) as exit_:
+        cli.main(["plan", str(assessment), "--assessment", str(assessment)])
+    assert exit_.value.code == 2 and "not allowed with argument" in capsys.readouterr().err
+
+
 def test_results_strip_escapes_from_assessment_and_model_text(capsys):
     doc = {"results": [{"finding_ref": {"id": f"T-1{HOSTILE}", "title": f"xss{HOSTILE}"}, "class": "xss",
                         "verdict": "confirmed", "confidence": f"high{HOSTILE}", "rationale": f"ran{HOSTILE}"}]}

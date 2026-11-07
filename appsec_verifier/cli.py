@@ -143,17 +143,26 @@ def _assessment_summary(doc: dict) -> str:
 _PLAN_MARK = {"dynamic": ("✓", "ok"), "static-only": ("·", "muted"), "input-incomplete": ("!", "warn")}
 
 
+_DEFAULT_ASSESSMENT = "security-assessment.yaml"   # `plan` without a path reads it from the current directory
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
-    _, plans, errors = _load_assessment(Path(args.assessment))
+    given = args.assessment or args.assessment_opt
+    path = Path(given or _DEFAULT_ASSESSMENT)
+    if not given and not path.is_file():
+        print(f"no assessment given, and the current directory has no {_DEFAULT_ASSESSMENT}; "
+              "name the file: appsec-verifier plan PATH", file=sys.stderr)
+        return EXIT_BLOCKED
+    _, plans, errors = _load_assessment(path)
     if errors:
-        return _blocked(f"the assessment {args.assessment} cannot be used:", errors)
+        return _blocked(f"the assessment {path} cannot be used:", errors)
     sel = _select(args, plans)
     dyn = [p for p in sel if p.status == "dynamic"]
     static = [p for p in sel if p.status == "static-only"]
     incomplete = [p for p in sel if p.status == "input-incomplete"]
     st = Style.for_stream(sys.stdout)
     print("\n".join([*_title(st, "plan"), *_facts(st, [
-        ("Assessment", str(args.assessment)),
+        ("Assessment", str(path)),
         ("Findings", f"{len(plans)} total · {len(sel)} selected"),
         ("Verifiable", f"{len(dyn)} dynamic · {len(static)} static-only · {len(incomplete)} input-incomplete"),
     ])]))
@@ -852,7 +861,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command")
 
     pl = sub.add_parser("plan", help="list dynamically verifiable findings (offline)")
-    pl.add_argument("--assessment", required=True, help="security-assessment.yaml to read")
+    src = pl.add_mutually_exclusive_group()
+    src.add_argument("assessment", nargs="?",
+                     help=f"security-assessment.yaml to read (default: ./{_DEFAULT_ASSESSMENT})")
+    src.add_argument("--assessment", dest="assessment_opt", metavar="ASSESSMENT", help="same as ASSESSMENT")
     pl.add_argument("--category", help="filter: categories (class or technique), comma-separated")
     pl.add_argument("--severity", help="filter: exact severities, comma-separated")
     pl.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], help="severity floor")
