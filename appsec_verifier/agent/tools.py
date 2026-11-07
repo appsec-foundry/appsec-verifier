@@ -12,12 +12,15 @@ POST, PUT and PATCH only in intrusive mode; DELETE and every other method are
 never sent (VER-014). A failing identity or transport ends the call as a tool
 error for the agent, never as an exception past the loop. A response body is
 redacted of every credential value before it is cut to the excerpt (VER-016).
+The agent's path is appended to the target base URL as written, without
+resolving dot segments, so the guard decides on the path the agent chose and
+refuses an ambiguous one (VER-018).
 """
 
 from __future__ import annotations
 
 import hashlib
-from urllib.parse import urljoin
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -67,7 +70,7 @@ class AgentTools:
         if role:
             origin = self._bound_origin(role)
             headers = self._session_headers(role)
-        url = urljoin(self.ctx.target_base.rstrip("/") + "/", str(path).lstrip("/"))
+        url = self._url(path)
         if not isinstance(wait_ms, int) or isinstance(wait_ms, bool):
             raise ToolError("wait_ms must be an integer number of milliseconds")
         try:
@@ -77,6 +80,18 @@ class AgentTools:
                                           safe=self.ctx.safe or self.ctx.read_only)
         except BrowserError as exc:
             raise ToolError(str(exc)) from exc
+
+    def _url(self, path) -> str:
+        """An absolute http(s) URL as given, anything else appended below the target base URL.
+        Unlike urljoin, this keeps `..` in the URL, where the guard refuses it (VER-018)."""
+        path = str(path)
+        try:
+            scheme = urlsplit(path).scheme
+        except ValueError as exc:
+            raise ToolError("the path is not a parseable URL path") from exc
+        if scheme in ("http", "https"):
+            return path
+        return self.ctx.target_base.rstrip("/") + "/" + path.lstrip("/")
 
     def _bound_origin(self, role: str) -> str:
         """The origin `role`'s credentials may be sent to (VER-018, VER-028)."""
@@ -99,7 +114,7 @@ class AgentTools:
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive")
         if self.ctx.http is None or not self.ctx.target_base:
             raise ToolError("no HTTP transport is wired for this run")
-        url = urljoin(self.ctx.target_base.rstrip("/") + "/", str(path).lstrip("/"))
+        url = self._url(path)
         headers = {}
         if role:
             origin = self._bound_origin(role)

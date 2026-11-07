@@ -51,6 +51,9 @@ def test_no_identities_file_is_fine():
     ([{"role": "a", "method": "oidc-authorization-code",
        "auth": {"authorize_url": "https://sso.example.com/a", "token_url": "https://sso.example.com/t",
                 "username_env": "U", "password_env": "P"}}], {"U": "u", "P": "p"}, "not implemented"),
+    ([{"role": "a", "method": "form", "auth": {"login_url": "http://sso.example.com/login",   # https-only scope
+                                               "username_env": "U", "password_env": "P"}}],
+     {"U": "u", "P": "p"}, "scheme 'http' not allowed for authentication"),
     ([{"role": "a", "method": "bearer"}], {}, "auth"),                       # schema: auth required
     ([{"role": "a", "method": "magic"}], {}, "magic"),                       # schema: unknown method
 ])

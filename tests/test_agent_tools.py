@@ -56,6 +56,30 @@ def test_http_request_joins_path_and_attaches_identity(tmp_path):
     assert seen == [("GET", "https://app.example.com/rest/basket/2", "Bearer A")]
 
 
+@pytest.mark.parametrize("path", ["/public/../rest/admin", "public/./x", "/a/..", "../../etc/passwd",
+                                  "https://app.example.com/public/../rest/admin"])
+def test_dot_segments_reach_the_guard_and_are_refused(tmp_path, path):
+    """The path is not normalised before the guard sees it, so an ambiguous path is refused (VER-018)."""
+    sent = []
+    tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp()))
+    with pytest.raises(ToolError, match="ambiguous"):
+        tools.http_request(path=path)
+    assert sent == []
+
+
+def test_query_and_base_path_are_kept(tmp_path):
+    sent = []
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp())
+    ctx.target_base = "https://app.example.com/shop/"
+    AgentTools(ctx).http_request(path="search?q=a/../b")
+    assert sent == ["https://app.example.com/shop/search?q=a/../b"]
+
+
+def test_unparseable_path_is_a_tool_error(tmp_path):
+    with pytest.raises(ToolError, match="parseable"):
+        AgentTools(_ctx(tmp_path, lambda m, u, h, **k: Resp())).http_request(path="https://[::1/x")
+
+
 def test_safe_mode_blocks_state_change(tmp_path):
     called = []
     tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: called.append(u) or Resp()))

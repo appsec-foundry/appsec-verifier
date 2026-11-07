@@ -4,6 +4,9 @@ The guard is the single decision point for "may the Verifier contact this URL?".
 It checks the destination at the moment of use — scheme, host, port, path — and
 classifies it by purpose: the target attack surface, an SSO/auth host, the SSRF
 callback listener, or the declared proxy. Anything not covered is refused.
+Target and authentication requests both need a scheme from the scope's
+`schemes` (default https), so credentials never go out over plain http unless
+the scope allows it (VER-016, VER-028).
 
 It fails closed: a scope without a usable host or port allows no target, and a
 URL that cannot be parsed is refused, never raised. A path that a client or
@@ -202,6 +205,8 @@ class ScopeGuard:
             return Decision(True, "target in scope", purpose)
 
         if purpose == "auth":
+            if scheme not in self.schemes:      # credentials travel only over a scheme the scope allows
+                return Decision(False, f"scheme {scheme!r} not allowed for authentication", purpose)
             if self._auth_host_matches(host, port) or self._on_target_host(host, port):
                 return Decision(True, "authentication host allowed", purpose)
             return Decision(False, f"auth host {host}:{port} not declared in auth_hosts", purpose)

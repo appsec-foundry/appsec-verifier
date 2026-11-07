@@ -168,8 +168,9 @@ def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[di
             if key.endswith("_env") and name and not env.get(name):
                 errors.append(f"{role}: environment variable {name} ({key}) is not set")
         for key in _IDENTITY_ENDPOINTS:
-            if auth.get(key) and not guard.authorize(auth[key], "auth").allowed:
-                errors.append(f"{role}: {key} is neither the target nor a scope auth_hosts entry")
+            decision = guard.authorize(auth[key], "auth") if auth.get(key) else None
+            if decision is not None and not decision.allowed:
+                errors.append(f"{role}: {key} is refused for authentication: {decision.reason}")
         if auth.get("target_origin") and not guard.origin_allowed(auth["target_origin"]):
             errors.append(f"{role}: target_origin is outside the scope")
     return identities, errors
@@ -236,11 +237,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print("empty selection — nothing to verify (refine --category/--severity/--only).", file=sys.stderr)
         return EXIT_BLOCKED
 
-    limits = Limits.load({
-        "cost_limit_usd": args.cost_limit, "max_requests": args.max_requests,
-        "max_attempts": args.max_attempts, "max_calls": args.max_calls, "max_duration_s": args.max_duration,
-        "rate_rps": args.rate,
-    })
+    try:
+        limits = Limits.load({
+            "cost_limit_usd": args.cost_limit, "max_requests": args.max_requests,
+            "max_attempts": args.max_attempts, "max_calls": args.max_calls, "max_duration_s": args.max_duration,
+            "rate_rps": args.rate,
+        })
+    except ValueError as exc:
+        print(f"invalid limits: {exc}", file=sys.stderr)
+        return EXIT_BLOCKED
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
 

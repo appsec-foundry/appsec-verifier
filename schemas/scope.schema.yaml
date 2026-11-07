@@ -61,7 +61,9 @@ properties:
 
   schemes:
     type: array
-    description: Allowed URL schemes. Default ["https"].
+    description: |
+      Allowed URL schemes for target and authentication requests (login and
+      token endpoints included). Default ["https"].
     items: { type: string, enum: [http, https] }
     default: [https]
 

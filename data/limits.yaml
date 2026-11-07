@@ -3,7 +3,12 @@
 # --max-attempts, --max-calls, --max-duration, --rate. Reaching any bound stops the affected
 # work rather than pressing on; the run stays cancellable. These bounds protect
 # the target from accidental load, cap the cost of a run, and keep it from
-# drifting beyond the finding under test.
+# drifting beyond the finding under test. Every value must be greater than 0;
+# only rate_rps may be 0, which turns the rate limit off. A key the Verifier
+# does not enforce is an error, not ignored.
+#
+# Retries: a failed request is never retried. The only resend is one new login
+# and one repeat of the request after the target answers 401 (VER-028).
 
 version: 1
 
@@ -27,13 +32,6 @@ limits:
   # Wall-clock ceiling for the whole run, in seconds (default 30 min).
   max_duration_s: 1800
 
-  # Per-finding wall-clock ceiling, in seconds (default 3 min).
-  max_finding_duration_s: 180
-
   # Maximum request rate to the target and its login endpoints, requests per
   # second; requests, the proof browser's included, are spaced 1/rate_rps apart.
   rate_rps: 5
-
-  # Retries for a transient transport error (not for a side-effecting probe with
-  # an unknown outcome — that is reconciled, never blindly retried, VER-014).
-  transport_retries: 2

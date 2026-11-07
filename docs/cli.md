@@ -101,6 +101,11 @@ says so before it starts. Prefer categories and severities over CWEs.
 | `--max-duration S` | Wall-clock cap; cancellable mid-run. |
 | `--rate RPS` | Max request rate to the target and its login endpoints: every request, redirect hops and the proof browser's included, waits until it is 1/RPS seconds after the previous one. `0` turns the rate limit off. |
 
+Every limit must be greater than 0; only `--rate` accepts 0. A negative or zero
+cap blocks the run (exit 2) before anything is contacted, as does a key in
+`data/limits.yaml` that the Verifier does not enforce. A failed request is not
+retried; the only resend is one new login after the target answers 401.
+
 ### Output mode and run mode
 
 | Flag | Meaning | Req. |

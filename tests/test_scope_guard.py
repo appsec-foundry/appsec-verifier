@@ -59,6 +59,16 @@ def test_auth_host_allowed_only_for_auth_purpose():
     assert not g().authorize("https://sso.example.com/token", "target").allowed
 
 
+def test_auth_needs_a_scheme_the_scope_allows():
+    """Credentials never go out over plain http unless the scope's `schemes` allow it."""
+    assert not g().authorize("http://sso.example.com:443/token", "auth").allowed
+    assert not g().authorize("http://app.example.com:443/login", "auth").allowed
+    assert not g().authorize("ftp://sso.example.com:443/token", "auth").allowed
+    local = ScopeGuard({"base_url": "http://localhost:3000", "schemes": ["http"]})
+    assert local.authorize("http://localhost:3000/rest/user/login", "auth").allowed
+    assert not local.authorize("https://localhost:3000/rest/user/login", "auth").allowed
+
+
 def test_callback_requires_declared_host_and_port():
     assert g().authorize("http://cb.example.com:8000/hit", "callback").allowed
     assert not g().authorize("http://cb.example.com:9000/hit", "callback").allowed

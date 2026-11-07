@@ -3,10 +3,15 @@ model calls, wall-clock time and the request rate. Reaching a bound raises
 LimitExceeded so the caller stops the affected work rather than pressing on;
 the rate is kept by waiting, not by refusing. `max_attempts` bounds the agent
 steps per finding and is applied by the agent loop (agent/loop.py).
+
+Every bound must be a finite positive number; only `rate_rps` may be 0, which
+turns the rate limit off. A negative or zero cap, or an unknown key in
+data/limits.yaml, is a ValueError, so no bound is lost to a typo or a sign.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -30,11 +35,25 @@ class Limits:
     max_duration_s: float = 1800
     rate_rps: float = 5
 
+    def __post_init__(self):
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            whole = name in ("max_requests", "max_attempts", "max_calls")
+            if (isinstance(value, bool) or not isinstance(value, int if whole else int | float)
+                    or not math.isfinite(value)):
+                raise ValueError(f"limit {name} must be a{' whole' if whole else ''} number, not {value!r}")
+            if value < 0 or (value == 0 and name != "rate_rps"):
+                raise ValueError(f"limit {name} must be greater than 0, not {value!r}"
+                                 + (" (0 turns only the rate limit off)" if value == 0 else ""))
+
     @classmethod
     def load(cls, overrides: dict | None = None) -> Limits:
         """Defaults from data/limits.yaml, with any provided overrides applied."""
         with open(resource_root() / "data" / "limits.yaml", encoding="utf-8") as fh:
             doc = (yaml.safe_load(fh) or {}).get("limits", {})
+        unknown = sorted(set(doc) - set(cls.__dataclass_fields__))
+        if unknown:
+            raise ValueError(f"data/limits.yaml names limits that are not enforced: {', '.join(unknown)}")
         base = {f: doc[f] for f in cls.__dataclass_fields__ if f in doc}
         base.update({k: v for k, v in (overrides or {}).items() if v is not None})
         return cls(**base)

@@ -51,7 +51,8 @@ needs an explicit decision from the maintainer, not a workaround.
 - Limits are enforced in code, outside the model. Reaching one stops the
   affected work.
 - The agent's tools are only those in `agent/tools.py`: guarded HTTP as a named
-  identity, and read-only source access confined to the repository. No shell,
+  identity, and read-only source access confined to the repository, without
+  `.env` files, keys, credential stores or `.git/`. No shell,
   no raw network, no file writes.
 - Safe mode is the default: only GET, HEAD and OPTIONS. Write requests need
   `--allow-intrusive` and `allow_state_change: true` in the scope.

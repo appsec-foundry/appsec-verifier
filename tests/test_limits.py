@@ -108,6 +108,61 @@ def test_max_attempts_bounds_the_agent_steps_per_finding(tmp_path, monkeypatch):
     assert report["results"][0]["limits_hit"] == "attempts"
 
 
+@pytest.mark.parametrize("field, value", [
+    ("rate_rps", -1), ("max_requests", 0), ("max_requests", -5), ("max_attempts", 0), ("max_calls", 0),
+    ("max_duration_s", 0), ("max_duration_s", -1.0), ("cost_limit_usd", 0), ("cost_limit_usd", float("inf")),
+    ("rate_rps", float("nan")), ("max_requests", 2.5), ("max_requests", True), ("rate_rps", "5"),
+])
+def test_invalid_limits_are_refused(field, value):
+    """No bound is switched off by a sign, a zero cap or a wrong type (VER-015)."""
+    with pytest.raises(ValueError, match=field):
+        Limits(**{field: value})
+
+
+def test_unknown_key_in_limits_file_is_refused(tmp_path, monkeypatch):
+    from appsec_verifier import limits as limits_module
+
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "limits.yaml").write_text("limits:\n  max_request: 10\n")    # typo: the cap would be lost
+    monkeypatch.setattr(limits_module, "resource_root", lambda: tmp_path)
+    with pytest.raises(ValueError, match="max_request"):
+        Limits.load()
+
+
+def test_shipped_limits_file_names_only_enforced_limits():
+    import yaml
+
+    from appsec_verifier.version_info import resource_root
+
+    doc = yaml.safe_load((resource_root() / "data" / "limits.yaml").read_text())["limits"]
+    assert set(doc) == set(Limits.__dataclass_fields__)
+
+
+@pytest.mark.parametrize("flag, value", [("--rate", "-1"), ("--max-requests", "0"), ("--max-duration", "-5")])
+def test_cli_blocks_on_an_invalid_limit_before_contact(tmp_path, monkeypatch, capsys, flag, value):
+    import yaml
+
+    from appsec_verifier import cli
+    from appsec_verifier.tools import httpx_transport
+
+    scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "tester"},
+             "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
+    (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))
+    (tmp_path / "assessment.yaml").write_text(yaml.safe_dump({"threats": [
+        {"id": "T-1", "cwe": "CWE-639", "severity": "high", "title": "idor",
+         "evidence": {"file": "routes/basket.ts", "line": 1}}]}))
+
+    def no_network(*a, **k):
+        raise AssertionError("the test reached the transport")
+
+    monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: no_network)
+    rc = cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope",
+                   str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes", "--profile",
+                   "anthropic-api", flag, value])
+    assert rc == 2 and "invalid limits" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
 def test_overrides_apply():
     lim = Limits.load({"cost_limit_usd": 3.0, "rate_rps": None})
     assert lim.cost_limit_usd == 3.0  # override applied

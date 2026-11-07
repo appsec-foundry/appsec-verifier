@@ -14,7 +14,8 @@ Early version.
 - `plan`, `scope` and `export` work offline.
 - `verify` runs an AI agent per finding. The agent reads the finding and, with
   `--source`, the relevant source code, then sends HTTP requests within the
-  scope. It has no other tools.
+  scope. It has no other tools. It cannot read `.env` files, private keys,
+  credential stores or `.git/` from the checkout.
 - The model comes from a profile, chosen as in AppSec Analyzer (`--profile`):
 
   | Profile | Uses | Bounded by |
@@ -113,7 +114,8 @@ explicitly allows. The controls follow the
   target echoes one back, it is replaced by `[redacted]` before the model or the
   report sees it. The
   identities file is checked before the first request: a missing variable, or a
-  login endpoint or `target_origin` outside the scope, stops the run. An
+  login endpoint or `target_origin` outside the scope, stops the run. Logins use
+  only the schemes the scope allows (default `https`). An
   identity's credentials are sent only to its own origin (`target_origin`, by
   default the target URL). The HTTP client keeps no cookies, so one identity's
   session never travels with another identity's or an anonymous request.
