@@ -103,6 +103,12 @@ def test_facts_strip_escapes_and_colour_by_role():
                                                           "  Mode       : safe"]
 
 
+def test_how_tos_wrap_at_spaces_only_so_paths_and_ids_stay_whole():
+    assert cli._wrap_whole("example: /home/u/appsec-verifier/examples/juice-shop/identities.yaml (docs)", 20) == [
+        "example:", "/home/u/appsec-verifier/examples/juice-shop/identities.yaml", "(docs)"]
+    assert cli._wrap_whole("T-101, T-102, T-103", 8) == ["T-101,", "T-102,", "T-103"]
+
+
 def test_the_logo_appears_once_per_run_then_the_title_line():
     st = Style(True)
     first, second = cli._title(st, "assessment"), cli._title(st, "verify")

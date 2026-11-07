@@ -371,7 +371,8 @@ optional hardening.
   (VER-016); what a check cannot prove is said. Checks that contact the target
   follow the confirmation of VER-002, and each login is tried once. A separate
   command runs the same checks without verifying, offline if asked; there the
-  fixed prompt runs only on explicit request and with its own limit.
+  fixed prompt runs only on explicit request and with its own limit, and it shows
+  the test plan of VER-008 and warns when a finding cannot be tested.
 
 - **VER-033: Update its own installation on request.** A separate command
   reinstalls a pipx installation of the Verifier from the source it was

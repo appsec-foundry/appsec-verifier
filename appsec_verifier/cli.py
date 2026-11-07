@@ -4,7 +4,7 @@
 contacts the target through an agent only when model access is configured;
 otherwise it reports every selected finding not-attempted. Before the first
 finding it runs the pre-flight checks of VER-032, one fixed model test included;
-`preflight` runs them alone and verifies nothing (preflight.py). Called with an
+`preflight` runs them alone, shows the test plan, and verifies nothing (preflight.py). Called with an
 assessment and no command, it starts the guided run of guided.py (VER-031),
 which asks only for the `verify` settings without a default and then runs `verify`. See docs/cli.md
 for the full design.
@@ -625,6 +625,11 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         identities, errors = _check_identities(args.identities, guard, os.environ)
         add(Check("Identities", "fail", "; ".join(errors)) if errors else
             Check("Identities", "ok", f"{', '.join(i['role'] for i in identities)} · environment variables set"))
+    plan: list[str] = []
+    if not failed(checks):
+        plan_check, plan = _preflight_plan(st, doc, plans, scope, identities, target)
+        if plan_check:
+            add(plan_check)
 
     host, test_budget = None, None
     try:
@@ -643,7 +648,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                 add(Check("Model test", "fail", problem))
 
     if failed(checks):
-        return _preflight_result(args, checks, out)
+        return _preflight_result(args, checks, out, plan)
     if args.offline:
         add(Check("Target", "info", "not contacted (--offline): reachability and logins not checked"))
     else:
@@ -671,7 +676,37 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                   + (f"limit ${args.cost_limit:.2f}" if args.cost_limit is not None else "one call of the plan"),
                   file=out)
             add(generation_test(host, test_budget, show_costs=args.show_costs or info.get("api_billing", False)))
-    return _preflight_result(args, checks, out)
+    return _preflight_result(args, checks, out, plan)
+
+
+def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | None, list[str]]:
+    """The test plan `verify` would show for these inputs, for every finding and in safe mode
+    (VER-008, VER-032): a check line that warns when a finding cannot be tested, and the plan
+    itself, which findings it tests and what the others need. Contacts nothing."""
+    from .agent import AGENT_CLASSES
+    from .tools.browser import BrowserUnavailable, ProofBrowser
+
+    probed = [p for p in plans if p.status == "dynamic" and p.cls in AGENT_CLASSES]
+    browser_missing = None
+    if any(p.cls == "xss" for p in probed):
+        try:
+            ProofBrowser.check_available()
+        except BrowserUnavailable as exc:
+            browser_missing = str(exc)
+    listener, _ = _callback_listener(scope, probed)      # validated only; it binds on start()
+    blocked = {p.id: need for p in probed
+               if (need := _blocker(p, identities=identities, browser=None if browser_missing else True,
+                                    listener=listener, scope=scope, safe=True))}
+    lines = _test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing))
+    if not probed:
+        return None, lines
+    if not blocked:
+        return Check("Test plan", "ok", f"{_count(len(probed), 'finding')} can be tested"), lines
+    if len(blocked) == len(probed):
+        return Check("Test plan", "warn", "no finding can be tested; verify stops before contacting the target "
+                                          "unless run with --test-all (see below)"), lines
+    return Check("Test plan", "warn", f"{len(probed) - len(blocked)} of {_count(len(probed), 'finding')} can be "
+                                      "tested; the others need what this run does not have (see below)"), lines
 
 
 def _assessment_check(doc: dict, plans) -> Check:
@@ -722,11 +757,13 @@ def _generation_budget(args, profile: str) -> tuple[RunBudget | None, str | None
         return None, f"invalid limit: {exc}"
 
 
-def _preflight_result(args, checks: list[Check], out) -> int:
+def _preflight_result(args, checks: list[Check], out, plan: list[str]) -> int:
     import json
 
     ok = not failed(checks)
     st = Style.for_stream(out)
+    if plan:
+        print("\n".join(plan), file=out)
     print("\n" + st(f"preflight {'passed' if ok else 'failed'}; nothing was verified.", "ok" if ok else "critical"),
           file=out)
     if args.json:
@@ -876,6 +913,11 @@ def _blocker(plan, *, identities, browser, listener, scope, safe) -> tuple[str, 
     return None
 
 
+def _wrap_whole(text: str, width: int) -> list[str]:
+    """Wrap at spaces only, so a path, command or finding id stays whole and can be copied."""
+    return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False)
+
+
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None) -> list[str]:
     """The test plan before the confirmation: each finding the run tests with the requests the
     assessment names, then those it cannot test, grouped by what they need and how to provide it.
@@ -905,11 +947,11 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     for key, ids in sorted(groups.items(), key=lambda group: -len(group[1])):
         label, how = _NEEDS[key]
         how = [printable(text) for text in (hints or {}).get(key) or how]
-        wrapped = textwrap.wrap(", ".join(ids), room) or [""]
+        wrapped = _wrap_whole(", ".join(ids), room) or [""]
         lines.append(f"  {st(f'{label:<{label_width}}', 'warn')}  {len(ids):>2}  {wrapped[0]}")
         lines += [" " * indent + piece for piece in wrapped[1:]]
         for n, text in enumerate(how):     # a line to copy stays whole; prose wraps
-            pieces = [text] if text.startswith(("marker_file:", "callback:")) else textwrap.wrap(text, room - 2)
+            pieces = [text] if text.startswith(("marker_file:", "callback:")) else _wrap_whole(text, room - 2)
             lines += [" " * indent + st(("→ " if n == 0 and i == 0 else "  ") + piece, "muted")
                       for i, piece in enumerate(pieces)]
     return lines

@@ -33,6 +33,7 @@ from appsec_verifier.preflight import (
 )
 from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.tools import GuardedHttpClient, httpx_transport
+from appsec_verifier.tools.browser import BrowserUnavailable, ProofBrowser
 
 BASE = "https://app.example.com"
 SCOPE = {"schema_version": 1, "base_url": BASE, "owner": {"name": "tester"},
@@ -438,7 +439,8 @@ def test_preflight_passes_and_prints_json_without_secrets(run, capsys):
     out, err = capsys.readouterr()
     result = json.loads(out)
     assert result["ok"] and result["verification"] == "not_run"
-    assert [c["check"] for c in result["checks"]] == ["Assessment", "Scope", "Identities", "Model", "Target", "alice"]
+    assert [c["check"] for c in result["checks"]] == ["Assessment", "Scope", "Identities", "Test plan", "Model",
+                                                      "Target", "alice"]
     assert "shop · 2026-11-01 · 1 findings: 1 dynamic" in result["checks"][0]["message"]
     assert SECRET not in out + err and "T0K3N" not in out + err
     assert [c[0] for c in run.target.calls] == ["GET", "POST"] and run.host.calls == []
@@ -453,6 +455,47 @@ def test_offline_contacts_neither_target_nor_provider(run, capsys):
     assert run.go("--offline", "--non-interactive") == cli.EXIT_OK
     assert run.target.calls == [] and run.access == [False]
     assert "not contacted (--offline)" in capsys.readouterr().out
+
+
+def test_preflight_shows_the_test_plan_and_what_the_others_need(run, monkeypatch, capsys):
+    _write(run.files["assessment"], {"threats": [THREAT, dict(THREAT, id="T-2", cwe="CWE-79"),
+                                                 dict(THREAT, id="T-3", cwe="CWE-918")]})
+
+    def no_playwright():
+        raise BrowserUnavailable("Playwright is not installed; run `pip install …`")
+
+    monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(no_playwright))
+    assert run.go("--offline", "--non-interactive") == cli.EXIT_OK      # what is missing warns, never fails
+    out = capsys.readouterr().out
+    assert "⚠ Test plan    1 of 3 findings can be tested; the others need what this run does not have" in out
+    assert "1 of 3 findings will be tested" in out and "Not testable" in out
+    assert "Playwright is not installed" in out and "callback: {host: 127.0.0.1" in out
+    assert out.index("Not testable") < out.index("preflight passed")
+    assert run.target.calls == [] and run.host.calls == []
+
+
+def test_preflight_warns_when_no_finding_can_be_tested(run, capsys):
+    run.files.pop("identities")
+    assert run.go("--offline", "--json") == cli.EXIT_OK
+    out, err = capsys.readouterr()
+    plan = next(c for c in json.loads(out)["checks"] if c["check"] == "Test plan")
+    assert plan["status"] == "warn" and "verify stops before contacting the target" in plan["message"]
+    assert "test identity" in err and "Not testable" not in out          # the plan goes to stderr with --json
+
+
+def test_with_json_the_test_plan_goes_to_stderr(run, capsys):
+    assert run.go("--offline", "--json") == cli.EXIT_OK
+    out, err = capsys.readouterr()
+    plan = next(c for c in json.loads(out)["checks"] if c["check"] == "Test plan")
+    assert plan == {"check": "Test plan", "status": "ok", "message": "1 finding can be tested"}
+    assert "1 of 1 finding will be tested" in err and "will be tested" not in out
+
+
+def test_no_test_plan_when_an_input_cannot_be_used(run, monkeypatch, capsys):
+    monkeypatch.delenv("AP")
+    assert run.go("--offline") == cli.EXIT_BLOCKED
+    out = capsys.readouterr().out
+    assert "Test plan" not in out and "preflight failed" in out
 
 
 def test_a_malformed_assessment_stops_before_any_contact(run, capsys):

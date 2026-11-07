@@ -532,6 +532,7 @@ Each check prints one line: `✓` passed, `⚠` works with a caveat, `✗` faile
 | Scope | Schema, window, URL inside the scope. | nothing |
 | Proxy | The proxy URL is http(s) without inline credentials, and `username_env`/`password_env` are both set. | nothing |
 | Identities | Schema, every `*_env` variable set, endpoints and `check_url` inside the scope. | nothing |
+| Test plan | The test plan `verify` shows, for every finding and in safe mode: which findings a run tests, and which it cannot test because they need what the run lacks, grouped by that need with what to add. Warns when a finding cannot be tested, never fails. Only when the checks above passed. | nothing |
 | Model | The profile resolves (CLI present and logged in, or key set; model known and priced). For `codex` and `anthropic-api` one metadata request shows the key is accepted and the model offered; it generates nothing and proves no quota. | the provider (not with `--offline`) |
 | Target | One GET to the URL through the scope gate and the declared proxy. A redirect is not followed. Any HTTP answer counts as reachable; 5xx warns. A failure names its cause: name resolution, refused connection, timeout, TLS certificate or handshake, proxy refusal or proxy authentication (407), or an address the scope refuses. | the target |
 | per role | One login for `form` and OIDC identities, never retried. With `auth.check_url`, one GET there with the identity's credentials: 2xx accepted, 401/403 rejected, anything else unclear. `bearer` and `basic` without `check_url` are reported as not checked against the target. | target, login endpoints |
@@ -540,7 +541,8 @@ Each check prints one line: `✓` passed, `⚠` works with a caveat, `✗` faile
 The offline checks run first. If one fails, nothing is contacted. The target and
 login checks run only after one explicit confirmation (VER-002): at the prompt,
 or with `--yes`. `--non-interactive` without `--yes` contacts nothing and fails.
-A failed target check skips the logins.
+A failed target check skips the logins. The test plan itself is printed after
+the checks, before the result.
 
 `--test-model` needs its own limit: `--cost-limit` of at least USD 0.01 for
 `claude`, `codex` and `anthropic-api`, `--max-calls 1` for `codex-cli` and
@@ -549,8 +551,8 @@ checks passed. Its line names the call's cost with API billing, and with
 `--show-costs` in any mode, as `verify` does.
 
 `--json` prints `{"kind": "preflight", "ok": …, "verification": "not_run",
-"checks": [{"check", "status", "message"}]}` on stdout and the progress lines on
-stderr. It never prompts, so contacting the target needs `--yes`.
+"checks": [{"check", "status", "message"}]}` on stdout and the progress lines and
+the test plan on stderr. It never prompts, so contacting the target needs `--yes`.
 
 Messages never contain a secret, a token, a response body or a raw error text,
 which can hold proxy credentials (VER-016). Exit code `0` when no check failed,
