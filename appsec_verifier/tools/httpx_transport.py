@@ -6,7 +6,9 @@ follows them so it can re-authorise each hop and drop cross-origin credentials
 (VER-018). Proxy routing and its credentials come from the scope only; proxy
 variables in the environment (HTTP_PROXY, HTTPS_PROXY, ...) are ignored, and
 proxy credentials are read from the environment variables the scope names,
-never inlined (VER-016, VER-029).
+never inlined (VER-016, VER-029). Hosts in the scope's `proxy.no_proxy` (exact
+names or addresses, any port) are reached directly, with the same address
+check as without a proxy.
 
 The client keeps no cookies. A cookie the target sets is neither stored nor
 sent again, so one identity's session can never ride along on another
@@ -99,17 +101,35 @@ class _NoCookies(http.cookiejar.CookiePolicy):
         return False
 
 
+def _host_pattern(host) -> str:
+    """An httpx mount pattern for one exact host, any scheme and port."""
+    host = str(host).strip().strip("[]").lower()
+    if not host or any(c in host for c in "/*@?#% "):
+        raise ValueError(f"no_proxy entry {host!r} is not a host name or address")
+    return f"all://[{host}]" if ":" in host else f"all://{host}"
+
+
 class HttpxTransport:
-    def __init__(self, *, proxy: str | None = None, verify: bool = True,
+    def __init__(self, *, proxy: str | None = None, no_proxy=None, verify: bool = True,
                  timeout: float = 30.0, client: httpx.Client | None = None, address_check=None,
                  network_backend: httpcore.NetworkBackend | None = None, resolve=socket.getaddrinfo):
         if client is None:
-            # An explicit transport: the proxy is exactly the scope's, never one from the environment.
-            transport = httpx.HTTPTransport(proxy=httpx.Proxy(proxy) if proxy else None, verify=verify)
-            if address_check is not None:
-                _install_backend(transport, AddressCheckingBackend(address_check, inner=network_backend,
-                                                                   resolve=resolve))
-            client = httpx.Client(transport=transport, timeout=timeout, follow_redirects=False, trust_env=False)
+            backend = (AddressCheckingBackend(address_check, inner=network_backend, resolve=resolve)
+                       if address_check is not None else None)
+
+            def checked(transport):
+                if backend is not None:
+                    _install_backend(transport, backend)
+                return transport
+
+            # Explicit transports: the proxy is exactly the scope's, never one from the environment.
+            transport = checked(httpx.HTTPTransport(proxy=httpx.Proxy(proxy) if proxy else None, verify=verify))
+            mounts = {}
+            if proxy and no_proxy:
+                direct = checked(httpx.HTTPTransport(verify=verify))
+                mounts = {_host_pattern(h): direct for h in no_proxy}
+            client = httpx.Client(transport=transport, mounts=mounts, timeout=timeout, follow_redirects=False,
+                                  trust_env=False)
         client.cookies.jar.set_policy(_NoCookies())
         self._client = client
 
@@ -145,5 +165,5 @@ def _proxy_url(scope: dict, env=None) -> str | None:
 
 
 def transport_from_scope(scope: dict, *, verify: bool = True, timeout: float = 30.0, env=None) -> HttpxTransport:
-    return HttpxTransport(proxy=_proxy_url(scope, env=env), verify=verify, timeout=timeout,
-                          address_check=ScopeGuard(scope).address_allowed)
+    return HttpxTransport(proxy=_proxy_url(scope, env=env), no_proxy=(scope.get("proxy") or {}).get("no_proxy"),
+                          verify=verify, timeout=timeout, address_check=ScopeGuard(scope).address_allowed)

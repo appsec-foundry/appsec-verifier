@@ -352,7 +352,9 @@ address or as `localhost`. Link-local addresses (cloud metadata at
 169.254.169.254 included), other known metadata addresses, multicast,
 unspecified and reserved addresses are never contacted. If any address of a
 host is refused, the request is refused. Through a proxy only the proxy's
-address is checked; the proxy resolves the target. The `window` is checked before every
+address is checked; the proxy resolves the target. Hosts in `proxy.no_proxy`
+(exact names or addresses) are reached directly, and their addresses are
+checked as without a proxy. The `window` is checked before every
 request and every planning step, not only at start: once it has closed, the
 current finding ends `inconclusive` with `limits_hit: window`, no further request
 is sent, and the run exits with 3.

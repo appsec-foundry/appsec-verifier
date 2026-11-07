@@ -116,7 +116,8 @@ explicitly allows. The controls follow the
   Cloud metadata and other link-local addresses are never contacted. Loopback
   and private addresses need the scope's `networks` list, unless the scope
   names the host as an IP address or as `localhost`. Behind a proxy only the
-  proxy's address is checked.
+  proxy's address is checked; hosts in `proxy.no_proxy` are reached directly
+  and checked like without a proxy.
 - Passwords, tokens and client secrets are read from environment variables. They
   do not appear in logs or the report, and the agent only sees role names. If the
   target echoes one back, it is replaced by `[redacted]` before the model or the

@@ -147,6 +147,43 @@ def test_through_a_proxy_the_proxy_address_is_checked():
     assert backend.connected == ["10.0.0.5"]
 
 
+def _no_proxy_client(resolver, backend, no_proxy):
+    scope = dict(SCOPE, hosts=["app.example.com", "localhost"], networks=["10.0.0.0/8"],
+                 proxy={"url": "http://proxy.corp.example:8080", "no_proxy": no_proxy})
+    guard = ScopeGuard(scope)
+    transport = HttpxTransport(proxy="http://proxy.corp.example:8080", no_proxy=no_proxy,
+                               address_check=guard.address_allowed, network_backend=backend, resolve=resolver)
+    return GuardedHttpClient(guard, RunBudget(Limits(rate_rps=0)), transport)
+
+
+def test_no_proxy_hosts_are_reached_directly_and_checked():
+    backend, resolver = Backend(), Resolver(["127.0.0.1"], ["10.0.0.5"])
+    http = _no_proxy_client(resolver, backend, ["LOCALHOST", "127.0.0.1"])
+    http.request("GET", "http://localhost/a")                          # direct: the target name is resolved
+    http.request("GET", "http://app.example.com/a")                    # through the proxy
+    assert resolver.asked == ["localhost", "proxy.corp.example"]
+    assert backend.connected == ["127.0.0.1", "10.0.0.5"]
+
+
+def test_a_direct_connection_still_refuses_a_forbidden_address():
+    backend = Backend()
+    http = _no_proxy_client(Resolver(["169.254.169.254"]), backend, ["app.example.com"])
+    with pytest.raises(ScopeViolation, match="never contacted"):
+        http.request("GET", "http://app.example.com/a")
+    assert backend.connected == []
+
+
+@pytest.mark.parametrize("entry, valid", [("localhost", True), ("10.0.0.5", True), ("[::1]", True),
+                                          ("*.corp.example", False), ("corp.example/24", False), ("", False)])
+def test_no_proxy_entries_must_be_exact_hosts(entry, valid):
+    from appsec_verifier.cli import _validate_scope
+
+    scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "x"},
+             "window": {"from": "2026-01-01T00:00:00Z", "until": "2026-12-31T23:59:59Z"},
+             "proxy": {"url": "http://proxy.corp.example:8080", "no_proxy": [entry]}}
+    assert (_validate_scope(scope) == []) is valid
+
+
 def test_an_unusual_address_spelling_resolves_and_is_refused():
     """A host written as a decimal number is the metadata address 169.254.169.254;
     the real resolver turns it into that address without any DNS query."""

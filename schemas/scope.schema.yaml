@@ -200,8 +200,11 @@ properties:
         description: Env var holding the proxy password. Never an inline value.
       no_proxy:
         type: array
-        description: Hosts to reach directly, bypassing the proxy.
-        items: { type: string }
+        description: |
+          Hosts to reach directly, bypassing the proxy: exact host names or
+          addresses, no wildcards, any port. A direct connection gets the same
+          address check as a run without a proxy (see `networks`).
+        items: { type: string, pattern: "^\\[?[A-Za-z0-9._:-]+\\]?$" }
 
   notes:
     type: [string, "null"]
