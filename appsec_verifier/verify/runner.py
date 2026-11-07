@@ -5,11 +5,20 @@ clock are all passed in, so the whole flow is tested offline. An optional
 steps on the console. Returns the
 verification document as a dict shaped for schemas/verification.schema.yaml,
 its results redacted of every credential value the sessions know (VER-016).
+
+A probe that fails ends its finding inconclusive; the action log gets the
+exception type and the place in this package where it passed, never its
+message. Once a run-wide limit (requests, cost, time, model calls, window) has
+stopped a finding, the remaining findings are not tested and say so (VER-015,
+VER-024). Ctrl-C ends the run the same way: the finding under test ends
+inconclusive, the rest are not tested, and the document is still returned with
+`meta.interrupted` set, so the results gathered so far reach the report.
 """
 
 from __future__ import annotations
 
 import hashlib
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +27,19 @@ from ..loader import FindingPlan
 from .probes import ProbeContext, ProbeRegistry, ProbeResult
 
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
+_RUN_LIMITS = ("requests", "cost", "time", "calls", "window")   # once reached, they stay reached for the run
+_PACKAGE = Path(__file__).resolve().parents[1]
+
+
+def _failure_site(exc: BaseException) -> str | None:
+    """`path/in/package.py:line` of the last frame in this package the exception passed through."""
+    site = None
+    for frame in traceback.extract_tb(exc.__traceback__):
+        try:
+            site = f"{Path(frame.filename).resolve().relative_to(_PACKAGE).as_posix()}:{frame.lineno}"
+        except ValueError:
+            continue
+    return site
 
 
 def _sha256(path: Path) -> str | None:
@@ -60,7 +82,7 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
     }
 
 
-def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory) -> ProbeResult:
+def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory, log=None) -> ProbeResult:
     """Decide one finding's outcome. Non-dynamic findings, and dynamic ones with
     no registered probe, are `not-attempted` with a reason — never refuted. A
     probe that fails ends that finding inconclusive; the run and the results
@@ -75,6 +97,8 @@ def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory) -> Prob
     except LimitExceeded as exc:
         return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
     except Exception as exc:  # noqa: BLE001 - one failed probe must not lose the run; only the type is reported
+        if log is not None:     # the message can carry target data or credentials; type and place cannot
+            log({"finding": plan.id, "step": None, "probe_failed": type(exc).__name__, "at": _failure_site(exc)})
         return ProbeResult(verdict="inconclusive", rationale=f"probe failed: {type(exc).__name__}")
     if res.verdict not in _VERDICTS:
         raise ValueError(f"probe for {plan.cls} returned invalid verdict {res.verdict!r}")
@@ -129,12 +153,33 @@ def run_verification(
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
     results = []
+    stopped: str | None = None        # the run-wide limit that stopped an earlier finding
+    interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
-        if shown and progress is not None:
-            progress.finding(plan)
-        res = _verify_one(plan, registry, ctx_factory)
-        if shown and progress is not None:
-            progress.finished(plan, res)
+        if shown and interrupted:
+            res = ProbeResult(verdict="not-attempted", rationale="not tested: the run was interrupted")
+        elif shown and stopped:
+            res = ProbeResult(verdict="not-attempted", limits_hit=stopped,
+                              rationale=f"not tested: the run's {stopped} limit was reached by an earlier finding")
+            if progress is not None:
+                progress.finding(plan)
+                progress.finished(plan, res)
+        else:
+            if shown and progress is not None:
+                progress.finding(plan)
+            try:
+                res = _verify_one(plan, registry, ctx_factory, log)
+            except KeyboardInterrupt:
+                interrupted = True
+                if log is not None:
+                    log({"finding": plan.id, "step": None, "interrupted": True})
+                res = ProbeResult(verdict="inconclusive", rationale="the run was interrupted while this finding "
+                                                                    "was tested")
+            else:
+                if shown and progress is not None:
+                    progress.finished(plan, res)
+            if res.limits_hit in _RUN_LIMITS:
+                stopped = res.limits_hit
         results.append(_result_entry(i, plan, res))
     if sessions is not None:
         results = sessions.redact(results)      # VER-016: model text never carries a credential into the report
@@ -196,5 +241,6 @@ def run_verification(
             "state_changes_cleaned": None if read_only else True,
         },
         "contacted_target": bool(contacted),
+        "interrupted": interrupted,
     }
     return {"meta": meta, "results": results}

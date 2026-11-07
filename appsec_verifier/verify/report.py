@@ -7,15 +7,24 @@ concept (VER-034): one line per step and the decisive steps as raw HTTP, in
 code fences that target content cannot close, and its screenshots (VER-035).
 Recorded responses and screenshots can show target data; the report says so
 and the export never references them (VER-022).
+
+Reports and an annotated assessment are written through a temporary file and a
+rename, so an interrupted write leaves the old file or the new one, never a
+cut-off one. A report read back for `--append` or `export` is checked against
+schemas/verification.schema.yaml first.
 """
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import secrets
 from pathlib import Path
 
 import yaml
 
+from ..version_info import resource_root
 from .poc import TARGET_DATA_NOTE
 
 _VERDICT_LABEL = {
@@ -56,6 +65,56 @@ def merge_reports(existing: dict, new: dict) -> dict:
     return {"meta": meta, "results": merged}
 
 
+_MAX_ERRORS = 5
+
+
+def read_report(path: Path) -> tuple[dict | None, list[str]]:
+    """An earlier verification.yaml, or why it cannot be used. The messages name
+    the place and the rule, never a value from the file."""
+    from jsonschema.validators import validator_for
+
+    from ..loader import _rule
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError) as exc:
+        return None, [f"cannot read it: {type(exc).__name__}"]
+    if not isinstance(doc, dict):
+        return None, ["it is not a verification report (no mapping at the top level)"]
+    with open(resource_root() / "schemas" / "verification.schema.yaml", encoding="utf-8") as fh:
+        schema = yaml.safe_load(fh)
+    found = sorted(validator_for(schema)(schema).iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
+    errors = [f"{'/'.join(map(str, e.absolute_path)) or 'file'}: {_rule(e)}" for e in found]
+    if errors:
+        return None, errors[:_MAX_ERRORS] + ([f"… {len(errors) - _MAX_ERRORS} more"]
+                                             if len(errors) > _MAX_ERRORS else [])
+    return doc, []
+
+
+def write_text_atomically(path: Path, text: str) -> None:
+    """Replace `path` with `text` through a temporary file in the same directory.
+    An existing file keeps its permissions; a new one gets those open() would give it.
+    A symbolic link is followed, as open() would, so the file it points to is replaced."""
+    path = Path(path).resolve()
+    try:
+        mode = path.stat().st_mode & 0o7777
+    except FileNotFoundError:
+        mode = None
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)    # the umask applies, as for open()
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def write_reports(doc: dict, out_dir: Path) -> dict:
     """Write verification.yaml + verification.md (+ an empty evidence/ dir) into
     out_dir. Returns the written paths."""
@@ -63,9 +122,8 @@ def write_reports(doc: dict, out_dir: Path) -> dict:
     (out_dir / "evidence").mkdir(parents=True, exist_ok=True)
     yaml_path = out_dir / "verification.yaml"
     md_path = out_dir / "verification.md"
-    with open(yaml_path, "w", encoding="utf-8") as fh:
-        yaml.safe_dump(doc, fh, sort_keys=False, allow_unicode=True)
-    md_path.write_text(to_markdown(doc), encoding="utf-8")
+    write_text_atomically(yaml_path, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
+    write_text_atomically(md_path, to_markdown(doc))
     return {"yaml": yaml_path, "md": md_path, "evidence": out_dir / "evidence"}
 
 

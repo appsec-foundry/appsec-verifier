@@ -222,6 +222,8 @@ class AgentTools:
             return self.ctx.sessions.headers_for(role)
         except (AuthError, ScopeViolation) as exc:
             raise ToolError(f"identity {role!r} is unavailable: {exc}") from exc
+        except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:     # the message can carry a proxy URL
+            raise ToolError(f"identity {role!r} is unavailable: its login failed ({type(exc).__name__})") from exc
 
     def http_request(self, *, role: str | None = None, method: str = "GET", path: str = "/",
                      params: dict | None = None, json: dict | None = None) -> dict:
@@ -244,13 +246,17 @@ class AgentTools:
         try:
             resp = self._send(m, url, headers, params, json)
             self._record(self._sent(resp, m, url, headers, params, json), role, headers)
-            # VER-028: re-obtain the session once when the target rejects it as unauthenticated (401).
-            # A 403 is an authorisation answer, often the very result under test; a new login cannot change it.
-            if getattr(resp, "status_code", None) == 401 and role and self.ctx.sessions is not None:
-                self.ctx.sessions.invalidate(role)
+            sessions = self.ctx.sessions if role else None
+            if sessions is not None:
+                sessions.answered(role, getattr(resp, "status_code", None))
+            # VER-028: re-obtain the session once when the target rejects it as unauthenticated (401), unless a
+            # new session already met a 401 (sessions.renew). A 403 is an authorisation answer, often the very
+            # result under test; a new login cannot change it.
+            if sessions is not None and getattr(resp, "status_code", None) == 401 and sessions.renew(role):
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json)
                 self._record(self._sent(resp, m, url, headers, params, json), role, headers)
+                sessions.answered(role, getattr(resp, "status_code", None))
         except ScopeViolation as exc:
             raise ToolError(f"request refused — out of scope: {exc}") from exc
         except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:

@@ -7,6 +7,9 @@ steps per finding and is applied by the agent loop (agent/loop.py).
 Every bound must be a finite positive number; only `rate_rps` may be 0, which
 turns the rate limit off. A negative or zero cap, or an unknown key in
 data/limits.yaml, is a ValueError, so no bound is lost to a typo or a sign.
+`requests` counts the requests actually sent; a refused one is not counted. A
+cost that is not a finite number of at least 0 cannot be bounded, so it ends
+every further model call of the run as if the ceiling were reached.
 """
 
 from __future__ import annotations
@@ -71,6 +74,7 @@ class RunBudget:
         self.cost = 0.0
         self.calls = 0
         self._next_request_at: float | None = None
+        self._cost_unknown = False
 
     def pace(self) -> None:
         """Wait until the next request may be sent under `rate_rps`: requests are
@@ -96,11 +100,16 @@ class RunBudget:
         return max(0.0, self.limits.cost_limit_usd - self.cost)
 
     def note_request(self) -> None:
+        if self.limits.max_requests and self.requests >= self.limits.max_requests:
+            raise LimitExceeded("requests", f"request cap {self.limits.max_requests} reached")
         self.requests += 1
-        if self.limits.max_requests and self.requests > self.limits.max_requests:
-            raise LimitExceeded("requests", f"request cap {self.limits.max_requests} exceeded")
 
     def note_cost(self, usd: float) -> None:
+        if self._cost_unknown or isinstance(usd, bool) or not isinstance(usd, int | float) \
+                or not math.isfinite(usd) or usd < 0:
+            self._cost_unknown = True
+            raise LimitExceeded("cost", "a model call reported no usable cost, so the spending can no longer "
+                                        "be bounded")
         self.cost += usd
         if self.limits.cost_limit_usd and self.cost > self.limits.cost_limit_usd:
             raise LimitExceeded("cost", f"cost ceiling ${self.limits.cost_limit_usd:.2f} exceeded")

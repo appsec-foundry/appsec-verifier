@@ -179,8 +179,8 @@ says so before it starts. Prefer categories and severities over CWEs.
 
 | Flag | Meaning |
 | --- | --- |
-| `--cost-limit USD` | Model-spend ceiling for the run. Default from `data/limits.yaml`. Reaching it stops the run (exit 3). Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
-| `--max-requests N` | Hard cap on total requests to the target. |
+| `--cost-limit USD` | Model-spend ceiling for the run. Default from `data/limits.yaml`. Reaching it stops the run (exit 3), and so does a model call that reports no usable cost. Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
+| `--max-requests N` | Hard cap on total requests to the target. Refused requests are not counted. |
 | `--max-attempts N` | Cap on agent steps per finding (each step is one planner call: a tool call or the verdict). Default 12. Reaching it ends the finding `inconclusive` with `limits_hit: attempts`. |
 | `--max-calls N` | Cap on model calls (planning steps) for the run, for every profile. |
 | `--max-duration S` | Wall-clock cap; cancellable mid-run. |
@@ -188,8 +188,26 @@ says so before it starts. Prefer categories and severities over CWEs.
 
 Every limit must be greater than 0; only `--rate` accepts 0. A negative or zero
 cap blocks the run (exit 2) before anything is contacted, as does a key in
-`data/limits.yaml` that the Verifier does not enforce. A failed request is not
-retried; the only resend is one new login after the target answers 401.
+`data/limits.yaml` that the Verifier does not enforce.
+
+Once the cost ceiling, the request cap, the call cap, the run time or the scope
+window is reached, the finding under test ends `inconclusive` and the remaining
+findings are not tested: they appear as `not-attempted` with the limit in
+`limits_hit`, no further model call is made, and the run exits with 3. After
+three failed model calls in a row, for example an exhausted quota or a rejected
+key, the run makes no further model call and the remaining findings end
+`inconclusive` with the reason.
+
+A failed request is not retried; the only resend is one new login after the
+target answers 401. When the request is answered 401 again with the new
+session, that identity is not logged in again until one of its requests is
+accepted. A login the target refuses is not tried again in the run. Each
+answer is read for at most 30 seconds and up to 10 MiB after decompression; a
+slower or larger answer ends that request with an error the agent sees.
+
+Ctrl-C stops the run: the finding under test ends `inconclusive`, the
+remaining ones are `not-attempted`, the report is written with the results so
+far and `meta.interrupted: true`, and the run exits with 130.
 
 ### Output mode and run mode
 
@@ -198,9 +216,9 @@ retried; the only resend is one new login after the target answers 401.
 | `--output DIR` | Report and evidence directory (created, owner-readable). Default `./verification`. | VER-020 |
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
 | `--print` | Also print the per-finding verdicts to the console. | VER-013 |
-| `--append` | Extend an existing report in `--output` instead of overwriting: a finding verified again replaces its earlier result, others are kept, ids renumbered. | VER-027 |
+| `--append` | Extend an existing report in `--output` instead of overwriting: a finding verified again replaces its earlier result, others are kept, ids renumbered. A report that cannot be read or does not match `schemas/verification.schema.yaml` blocks the run (exit 2) before anything is contacted. | VER-027 |
 | `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each finding. Never re-scores or removes a finding. | VER-027 |
-| `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. | VER-027 |
+| `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |
 | `--non-interactive` / `--ci` | No prompts: selection, scope confirmation, and cost ceiling all come from the invocation. Recorded in the report. | VER-002/026 |
 | `--allow-intrusive` | Opt out of safe mode (below) for marked state-changing or more thorough probing. Recorded in the report. | VER-030 |
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
@@ -334,6 +352,8 @@ WebRTC/UDP, cannot leave the machine either. This needs Linux, `unshare` from
 util-linux and unprivileged user namespaces. Chrome runs with its own sandbox.
 Where the namespace or the sandbox is unavailable (other systems, some
 containers), the browser does not start and XSS findings cannot be confirmed.
+If Chrome fails during the run, that check ends with an error the agent sees,
+and the next check starts a new Chrome.
 
 Each finding gets a random two-part marker; the payload must call
 `alert('<part1>'+'<part2>')`, and only a dialog
@@ -425,8 +445,9 @@ example in CI or when redirected to a file, the output is plain text.
 | Code | Meaning |
 | --- | --- |
 | `0` | All selected findings were tested, whatever the verdict. A confirmed weakness is a successful run. |
-| `2` | The run was blocked before testing: malformed assessment, invalid or expired scope, unset proxy or identity variable, unusable model profile, missing confirmation, unreachable target, rejected login, or empty selection. |
+| `2` | The run was blocked before testing: malformed assessment, unreadable, invalid or expired scope, unset proxy or identity variable, unusable model profile, missing confirmation, unreachable target, rejected login, empty selection, or an `--append` report that cannot be extended. |
 | `3` | A limit was reached for at least one finding, for example the cost ceiling, the request cap, the steps per finding, or the end of the scope window. |
+| `130` | Interrupted with Ctrl-C. A `verify` run that had started testing writes its report with the results so far. |
 
 ## `preflight` — check before a run (VER-032)
 
@@ -502,7 +523,9 @@ Converts a finished `verification.yaml` into a set of verdicts keyed by finding
 id and the cross-run `match_key` (VER-007), which AppSec Analyzer reads to mark
 findings with their verification status. It never changes or re-scores the
 assessment (VER-021), contacts nothing and makes no model calls. Default output:
-`analyzer-verification.json` in the working directory, JSON format.
+`analyzer-verification.json` in the working directory, JSON format. A file that
+cannot be read or does not match `schemas/verification.schema.yaml` stops it
+with exit 2.
 
 ## `update` — update the installed Verifier (VER-033)
 
@@ -655,7 +678,10 @@ Written to `--output` (default `./verification`):
   tool call (`tool`, `args`, `result` with status, body length, error or the
   browser's blocked requests), a step that was refused (`refused`, `proposal`),
   a limit that stopped the finding (`stopped`, `reason`) or the `verdict`
-  (VER-017). It holds no response bodies or source text, credential values are
+  (VER-017). A finding whose probe failed gets `probe_failed` with the error
+  type and `at` with the file and line in the Verifier, never the error
+  message; the finding under test when the run was interrupted gets
+  `interrupted`. It holds no response bodies or source text, credential values are
   redacted (VER-016), and only the owner can read it. `--append` extends it;
   otherwise each run starts it fresh.
 - `evidence/` — owner-only: `<finding>-poc.har` for every tested finding (see

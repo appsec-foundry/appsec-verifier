@@ -6,8 +6,12 @@ Credentials and tokens come from environment variables named by the identity
 the request header, or placed in a report (VER-016). Every credential is sent
 only to the endpoint the identity names, and that endpoint is authorised by the
 ScopeGuard (purpose="auth"), so it must be the target or a scope `auth_hosts`
-entry. A token is fetched once per role and reused; `invalidate()` drops it so a
-401 can trigger a transparent refresh.
+entry. A token is fetched once per role and reused. A login the target refused
+is not tried again in the run, so a run cannot lock the test account. After a
+401, `renew()` drops the session so the next request logs in again; when the
+request is answered 401 again with the new session, the 401 is the target's
+answer to that request, not an expired session, and the role is not logged in
+again until one of its requests is accepted.
 
 `redact()` replaces every credential value the run knows (the identities'
 `*_env` values and every header value and token obtained from them, also
@@ -57,6 +61,9 @@ class SessionManager:
         self._env = env
         self._cache: dict[str, dict] = {}
         self._issued: set[str] = set()         # header values and tokens obtained, kept after invalidate()
+        self._refused: dict[str, str] = {}     # role -> why its session could not be obtained
+        self._renewed: set[str] = set()        # roles renewed after a 401 and not accepted since
+        self._no_renewal: set[str] = set()     # roles whose renewal was answered 401 again
 
     def _env_get(self, name: str | None) -> str:
         value = self._env.get(name) if name else None
@@ -71,7 +78,13 @@ class SessionManager:
         ident = self._by_role.get(role)
         if ident is None:
             raise AuthError(f"unknown identity role {role!r}")
-        headers = self._acquire(ident.get("method", "none"), ident.get("auth") or {})
+        if role in self._refused:
+            raise AuthError(f"{self._refused[role]}; not tried again in this run")
+        try:
+            headers = self._acquire(ident.get("method", "none"), ident.get("auth") or {})
+        except AuthError as exc:
+            self._refused[role] = str(exc)
+            raise
         for value in headers.values():
             self._issued.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
         self._cache[role] = headers
@@ -79,6 +92,24 @@ class SessionManager:
 
     def invalidate(self, role: str) -> None:
         self._cache.pop(role, None)
+
+    def renew(self, role: str) -> bool:
+        """After a 401 for `role`: drop its session so the next headers_for() logs in again, and return True;
+        False, keeping the session, while a renewal was already answered 401 and nothing accepted since (VER-028)."""
+        if role in self._no_renewal:
+            return False
+        self.invalidate(role)
+        self._renewed.add(role)
+        return True
+
+    def answered(self, role: str, status) -> None:
+        """Note the target's answer to a request sent with `role`'s session."""
+        if status != 401:
+            self._renewed.discard(role)
+            self._no_renewal.discard(role)
+        elif role in self._renewed:
+            self._renewed.discard(role)
+            self._no_renewal.add(role)
 
     def _secret_forms(self) -> list[str]:
         values = set(self._issued)

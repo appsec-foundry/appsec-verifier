@@ -5,8 +5,9 @@ only inside the target checkout: a path that resolves outside the repository
 root — including via ``..`` or a symlink — is refused, and reads are bounded in
 lines and bytes. Files that hold secrets rather than code (``.env``, private
 keys, credential stores) and VCS internals (``.git/``) are refused too, judged
-on the resolved path, so their content never reaches the model. This tool
-never writes.
+on the resolved path, so their content never reaches the model. A path the
+file system cannot use, or a file it cannot read, is a SourceAccessError, which
+the agent sees as a tool error. This tool never writes.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ class SourceReader:
         self.max_lines = max_lines
 
     def _resolve(self, relpath: str) -> Path:
+        if "\x00" in str(relpath):
+            raise SourceAccessError(f"not a file path: {relpath!r}")
         p = (self.root / relpath).resolve()
         try:
             rel = p.relative_to(self.root)
@@ -48,13 +51,20 @@ class SourceReader:
             raise SourceAccessError(f"path escapes the repository: {relpath!r}") from exc
         if rel.parts and _holds_secrets(rel):
             raise SourceAccessError(f"{relpath!r} holds credentials or VCS data and is not read (VER-016)")
-        if not p.is_file():
+        try:
+            is_file = p.is_file()
+        except OSError:                   # e.g. a name too long for the file system
+            is_file = False
+        if not is_file:
             raise SourceAccessError(f"not a readable file: {relpath!r}")
         return p
 
     def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
         p = self._resolve(relpath)
-        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        try:
+            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            raise SourceAccessError(f"cannot read {relpath!r}: {type(exc).__name__}") from exc
         ctx = self.context_lines if context is None else context
         if around_line:
             lo = max(0, around_line - 1 - ctx)

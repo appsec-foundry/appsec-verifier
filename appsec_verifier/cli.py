@@ -37,11 +37,13 @@ from .progress import RunProgress, duration
 from .scope import ScopeGuard
 from .term_style import Style, columns, logo
 from .verify import build_annotations, run_verification, write_reports
-from .verify.report import annotate_assessment
+from .verify.report import annotate_assessment, read_report, write_text_atomically
 from .version_info import resource_root, version_string
 
 EXIT_OK = 0
 EXIT_BLOCKED = 2            # run could not start (bad input, unconfirmed, etc.)
+EXIT_LIMIT = 3              # a limit stopped at least one finding
+EXIT_INTERRUPTED = 130      # Ctrl-C; a verify run still writes what it found so far
 
 
 def _csv(value: str | None) -> set[str] | None:
@@ -196,9 +198,20 @@ def _validate_scope(scope: dict) -> list[str]:
     return errors
 
 
+def _read_scope(path: Path) -> tuple[dict | None, list[str]]:
+    """The scope file and why it is not valid; a file that cannot be read is an error, not an exception."""
+    import yaml
+    try:
+        scope = _load_yaml(path)
+    except (OSError, yaml.YAMLError) as exc:
+        return None, [f"cannot read it: {type(exc).__name__}"]
+    if not isinstance(scope, dict):
+        return None, ["it is not a mapping"]
+    return scope, _validate_scope(scope)
+
+
 def cmd_scope(args: argparse.Namespace) -> int:
-    scope = _load_yaml(Path(args.scope))
-    errors = _validate_scope(scope)
+    scope, errors = _read_scope(Path(args.scope))
     if errors:
         print("scope file is invalid:", file=sys.stderr)
         for e in errors:
@@ -345,8 +358,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         print(f"assessment not found: {assessment}", file=sys.stderr)
         return EXIT_BLOCKED
     scope_path = Path(args.scope)
-    scope = _load_yaml(scope_path)
-    errors = _validate_scope(scope) or _check_proxy(scope, os.environ)
+    scope, errors = _read_scope(scope_path)
+    errors = errors or _check_proxy(scope, os.environ)
     if errors:
         print("scope file is invalid:", file=sys.stderr)
         for e in errors:
@@ -381,6 +394,13 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
     except ValueError as exc:
         print(f"invalid limits: {exc}", file=sys.stderr)
         return EXIT_BLOCKED
+    existing = None
+    existing_path = Path(args.output) / "verification.yaml"
+    if args.append and existing_path.is_file():    # checked now: the merge comes after the run
+        existing, errors = read_report(existing_path)
+        if errors:
+            return _blocked(f"the report {existing_path} cannot be extended with --append; nothing was contacted:",
+                            errors)
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
 
@@ -476,11 +496,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         if listener is not None:
             listener.close()
 
-    if args.append:
-        existing_path = out_dir / "verification.yaml"
-        if existing_path.is_file():
-            from .verify import merge_reports
-            doc = merge_reports(_load_yaml(existing_path), doc)
+    if existing is not None:
+        from .verify import merge_reports
+        doc = merge_reports(existing, doc)
     paths = write_reports(doc, out_dir)
     extra = []
     if contact:
@@ -491,14 +509,17 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         import yaml
         annotated = annotate_assessment(_load_yaml(assessment), doc)
         dest = assessment if args.in_place else (out_dir / "security-assessment.annotated.yaml")
-        with open(dest, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(annotated, fh, sort_keys=False, allow_unicode=True)
+        write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
         extra.append(("Annotated", f"{dest}" + (" (in place)" if args.in_place else "")))
 
     if args.print_results:
         _print_results(st, doc)
     print("\n".join(_verify_summary(st, doc, paths, extra)))
-    return 3 if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
+    if doc["meta"].get("interrupted"):
+        print("\ninterrupted: the report holds the results so far; the findings not tested are marked "
+              "not-attempted.", file=sys.stderr)
+        return EXIT_INTERRUPTED
+    return EXIT_LIMIT if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
 
 
 # ── preflight (VER-032) ───────────────────────────────────────────────────────
@@ -786,7 +807,9 @@ def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    doc = _load_yaml(Path(args.verification))
+    doc, errors = read_report(Path(args.verification))
+    if errors:
+        return _blocked(f"the report {args.verification} cannot be exported:", errors)
     ann = build_annotations(doc, verification_report=str(args.verification))
     out = Path(args.output or "analyzer-verification.json")
     if args.fmt == "yaml":
@@ -950,6 +973,14 @@ def _stdin_is_terminal() -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:       # a verify run already handles it and writes its report (runner.py)
+        print("\ninterrupted.", file=sys.stderr)
+        return EXIT_INTERRUPTED
+
+
+def _main(argv: list[str] | None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and not argv[0].startswith("-") and argv[0] not in COMMANDS:
         from .guided import run_guided

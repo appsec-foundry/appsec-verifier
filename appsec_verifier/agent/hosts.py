@@ -5,7 +5,10 @@ that only proposes the next step; it never acts itself (VER-017). HostPlanner
 holds what all hosts share. It refuses a call once the run's call or cost bound
 is reached or a confinement check has failed, bounds each call by the remaining
 run time, charges the reported cost (VER-015), and validates the step
-(steps.py, VER-019). A host only sends the request and returns a HostReply.
+(steps.py, VER-019). A failed call ends only its finding, but after
+MAX_FAILED_CALLS failed calls in a row (an exhausted quota, a rejected login, a
+provider that is down) the host makes no further call in the run. A host only
+sends the request and returns a HostReply.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from .steps import inconclusive, parse_step, prompt, system_prompt
 
 CALL_TIMEOUT_S = 300.0
 MAX_OUTPUT_BYTES = 1_048_576
+MAX_FAILED_CALLS = 3
 # Network settings a host may need to reach its provider. Everything else a host
 # receives is listed by that host; API keys of other providers and the
 # identities' secret variables are never passed on (VER-016).
@@ -117,7 +121,12 @@ class HostPlanner:
         if reply.breach:
             return inconclusive(f"{host.label} confinement check failed: {reply.breach}")
         if reply.error:
+            # Kept on the host, not the planner: a planner lives for one finding, the host for the run.
+            host.failed_calls = getattr(host, "failed_calls", 0) + 1
+            if host.failed_calls >= MAX_FAILED_CALLS:
+                host.broken = f"{host.failed_calls} calls in a row failed, the last with {reply.error}"
             return inconclusive(f"{host.label} call failed: {reply.error}")
+        host.failed_calls = 0
         return parse_step(reply.step)
 
 

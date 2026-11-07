@@ -23,6 +23,13 @@ verifies the host name. Through a proxy the connection, and so the check, goes
 to the proxy; the proxy resolves the target. httpx (0.25 to 0.28) offers no
 option for the backend, so it is set on the transport's httpcore pool; if that
 pool is not where it is expected, the transport is not built at all.
+
+An answer is read as a stream and bounded as a whole (VER-015): httpx's own
+timeout applies to each step (connect, each read), so a target that sends a
+byte now and then could hold a request open for ever. Reading stops with
+httpx.ReadTimeout once `timeout` seconds have passed since the request was
+sent, and with ResponseTooLarge once the decoded body exceeds `max_bytes`. Both
+are httpx errors, which the callers already turn into a failed request.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from __future__ import annotations
 import http.cookiejar
 import os
 import socket
+import time
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpcore
@@ -37,6 +45,12 @@ import httpx
 
 from ..scope.guard import ScopeGuard
 from .http import ScopeViolation
+
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+class ResponseTooLarge(httpx.TransportError):
+    """The answer's body exceeded MAX_RESPONSE_BYTES; it was not read further."""
 
 
 class AddressCheckingBackend(httpcore.NetworkBackend):
@@ -112,7 +126,9 @@ def _host_pattern(host) -> str:
 class HttpxTransport:
     def __init__(self, *, proxy: str | None = None, no_proxy=None, verify: bool = True,
                  timeout: float = 30.0, client: httpx.Client | None = None, address_check=None,
-                 network_backend: httpcore.NetworkBackend | None = None, resolve=socket.getaddrinfo):
+                 network_backend: httpcore.NetworkBackend | None = None, resolve=socket.getaddrinfo,
+                 max_bytes: int = MAX_RESPONSE_BYTES):
+        self._timeout, self._max_bytes = timeout, max_bytes
         if client is None:
             backend = (AddressCheckingBackend(address_check, inner=network_backend, resolve=resolve)
                        if address_check is not None else None)
@@ -134,7 +150,23 @@ class HttpxTransport:
         self._client = client
 
     def __call__(self, method: str, url: str, headers: dict, **kwargs) -> httpx.Response:
-        return self._client.request(method, url, headers=headers, **kwargs)
+        deadline = time.monotonic() + self._timeout
+        request = self._client.build_request(method, url, headers=headers, **kwargs)
+        resp = self._client.send(request, stream=True)
+        chunks, size = [], 0
+        try:
+            for chunk in resp.iter_bytes():           # decoded, so a compressed body cannot grow past the bound
+                size += len(chunk)
+                if size > self._max_bytes:
+                    raise ResponseTooLarge(f"the answer exceeds {self._max_bytes} bytes", request=request)
+                if time.monotonic() > deadline:
+                    raise httpx.ReadTimeout(f"the answer was not complete within {self._timeout:g}s",
+                                            request=request)
+                chunks.append(chunk)
+        finally:
+            resp.close()                              # also sets resp.elapsed, the timing proof (VER-011)
+        resp._content = b"".join(chunks)              # where Response.read() keeps the body (httpx 0.25 to 0.28)
+        return resp
 
     def close(self) -> None:
         self._client.close()

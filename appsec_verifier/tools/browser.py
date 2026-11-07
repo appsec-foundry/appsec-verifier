@@ -30,6 +30,9 @@ exchanges for every other screenshot (VER-035). Either page is answered from
 the record, every other request is aborted and scripts are off, so they send
 nothing to the target. Screenshots can show target data, so their evidence
 entry says so.
+
+A Playwright error outside the page load, such as a crashed Chrome, is a
+BrowserError and closes the browser; the next use starts a new one.
 """
 
 from __future__ import annotations
@@ -67,6 +70,14 @@ SCREENSHOT_NOTE = TARGET_DATA_NOTE
 SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf")
 _EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves; answered from the record
 _HIGHLIGHT = "#b00020"
+
+
+def _quietly(close) -> None:
+    """Close a browser context without letting a failure replace the exception already on its way."""
+    try:
+        close()
+    except Exception:  # noqa: BLE001 - the context of a crashed browser cannot be closed; the browser is reset
+        pass
 
 
 def _chrome_binary() -> str | None:
@@ -311,8 +322,24 @@ class ProofBrowser:
                 pass
         self._browser = self._playwright = None
 
-    def check(self, url: str, *, identity_headers: dict, target_base: str, marker: tuple[str, str],
-              finding_id: str, wait_ms: int, safe: bool, role: str | None = None) -> dict:
+    def _guarded(self, run, *args, **kwargs):
+        """`run(...)`, with any Playwright error that escapes it (a crashed Chrome) turned into a BrowserError.
+        The browser is closed, so the next use starts a new one instead of failing again."""
+        from playwright.sync_api import Error as PlaywrightError
+
+        try:
+            return run(*args, **kwargs)
+        except PlaywrightError as exc:
+            self.close()
+            raise BrowserError(f"the proof browser failed ({type(exc).__name__}); it starts again on next use") \
+                from exc
+
+    def check(self, url: str, **kwargs) -> dict:
+        """Load `url` and report whether the marker executed; see `_check` for the arguments."""
+        return self._guarded(self._check, url, **kwargs)
+
+    def _check(self, url: str, *, identity_headers: dict, target_base: str, marker: tuple[str, str],
+               finding_id: str, wait_ms: int, safe: bool, role: str | None = None) -> dict:
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -383,7 +410,7 @@ class ProofBrowser:
                 result["evidence"] = self._save(page, finding_id, url, status, events, marker, role)
             return result
         finally:
-            context.close()
+            _quietly(context.close)
 
     def _stem(self, finding_id: str, kind: str) -> str:
         n = self._counts[(finding_id, kind)] = self._counts.get((finding_id, kind), 0) + 1
@@ -460,13 +487,14 @@ class ProofBrowser:
             page.screenshot(path=str(shot), full_page=full_page)
             return shot, marked
         finally:
-            context.close()
+            _quietly(context.close)
 
     def render(self, *, url: str, status: int, content_type: str, html: str, finding_id: str,
                caption: list[str], highlight=()) -> list[dict]:
         """A screenshot of a recorded HTML response for an access-control proof (VER-035)."""
         none = "(no highlighted value was found in the page)" if highlight else None
-        shot, marked = self._shoot_recorded(
+        shot, marked = self._guarded(
+            self._shoot_recorded,
             url=url, status=status, content_type=content_type, body=html, finding_id=finding_id,
             kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none))
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
@@ -474,7 +502,8 @@ class ProofBrowser:
 
     def render_exchanges(self, *, html: str, finding_id: str, marked: int) -> list[dict]:
         """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035)."""
-        shot, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200, content_type="text/html; charset=utf-8",
-                                       body=html, finding_id=finding_id, kind="exchange", full_page=True)
+        shot, _ = self._guarded(self._shoot_recorded, url=_EXCHANGE_PAGE, status=200,
+                                content_type="text/html; charset=utf-8", body=html, finding_id=finding_id,
+                                kind="exchange", full_page=True)
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
                                                     marked=marked)]

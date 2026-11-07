@@ -177,9 +177,14 @@ _REQUEST_ERRORS = (httpx.HTTPError, ScopeViolation, LimitExceeded)
 def check_target(http, url: str, *, proxy: str | None) -> Check:
     """One GET to the target URL; any HTTP answer means it is reachable (VER-003).
     A redirect is not followed."""
+    from .tools.httpx_transport import MAX_RESPONSE_BYTES, ResponseTooLarge
+
     via = f" via proxy {proxy}" if proxy else ""
     try:
         resp = http.request("GET", url, {}, purpose="target", follow_redirects=False)
+    except ResponseTooLarge:      # an answer all the same; the run reads none larger than this
+        return Check("Target", "warn", f"{url} answers{via} with more than {MAX_RESPONSE_BYTES // 2**20} MiB, "
+                                       "more than the Verifier reads of one answer")
     except _REQUEST_ERRORS as exc:
         return Check("Target", "fail", f"{url}: {_cause(exc, proxy)}")
     status = resp.status_code

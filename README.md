@@ -103,7 +103,7 @@ Each finding ends with one of these verdicts:
 | `not-reproducible` | Tested, but the weakness did not show. |
 | `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
 | `inconclusive` | No decision, for example because a request failed, a limit was reached, or the proof did not hold. |
-| `not-attempted` | The finding cannot be tested against a running system, such as a weak random number generator or a hard-coded secret. |
+| `not-attempted` | The finding cannot be tested against a running system, such as a weak random number generator or a hard-coded secret, or it was not reached because a run limit was hit or the run was interrupted. |
 
 The testable CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
 
@@ -125,7 +125,8 @@ rules are enforced in code, outside the model:
   instance you can reset. DELETE is never sent.
 - Requests, request rate, model calls, model cost and run time are capped; the
   defaults are in [`data/limits.yaml`](data/limits.yaml). A limit that is
-  reached stops the finding or the run it applies to.
+  reached stops the finding or the run it applies to. Ctrl-C stops the run and
+  still writes the report with the results so far.
 - Passwords and tokens are read from environment variables. They are kept out
   of the model's input, the logs and the report; the model only sees role
   names.
