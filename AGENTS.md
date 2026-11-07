@@ -33,7 +33,6 @@ its own: name the packages, read their changelog, check them for known
 vulnerabilities (OSV), run the tests with the new lockfile, and give the
 reason in the commit. `anthropic` stays below 1 (1.x moved to httpx2;
 `host_anthropic.py` is written against 0.x) until that migration is done.
-`ENGINE_VERSION` is also raised only on purpose, not by tooling.
 
 Tests run offline. Network, model and agent-CLI calls are replaced by fakes
 (`FakeTransport`, `FakeClient`, `FakeRun`, `httpx.MockTransport`). Never let a
@@ -41,6 +40,14 @@ test start a real CLI, reach a real host, or need a real API key. The only
 exception is opt-in: `APPSEC_VERIFIER_BROWSER_TESTS=1 python -m pytest
 tests/test_browser_live.py` starts Google Chrome against a fake target (needs
 the `[browser]` extra; still no network).
+
+## Versions and releases
+
+Only the maintainer releases a version. Coding agents do not change
+`ENGINE_VERSION` or `INTERFACE_VERSION`, whatever the change (feature, fix or
+breaking change), and do not create tags or push, unless the maintainer asks
+for exactly that. If a change seems to need a new version, say so in the
+summary instead.
 
 ## Layout
 
