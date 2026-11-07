@@ -333,7 +333,7 @@ def test_cancelling_at_any_question_contacts_nothing(env, capsys, stop, question
 
 @pytest.mark.parametrize("with_scope", [True, False])
 def test_the_invocation_runs_the_same_settings(env, with_scope):
-    options = ["--category", "xss,idor", "--min-severity", "medium", "--profile", "anthropic-api"]
+    options = ["--category", "xss,idor", "--min-severity", "medium", "--profile", "anthropic-api", "--show-costs"]
     if with_scope:
         (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
         env.go("y", extra=[*options, "--cost-limit", "7.5"])
@@ -344,8 +344,9 @@ def test_the_invocation_runs_the_same_settings(env, with_scope):
     parts = shlex.split(invocation)
     again = cli.build_parser().parse_args(parts[1:])
     for attr in ("assessment", "scope", "target", "identities", "output", "category", "min_severity", "profile",
-                 "cost_limit", "max_calls", "allow_intrusive", "resume"):
+                 "cost_limit", "max_calls", "allow_intrusive", "resume", "show_costs"):
         assert getattr(again, attr) == getattr(args, attr), attr
+    assert again.show_costs
     assert again.non_interactive and again.yes and again.command == "verify"
 
 

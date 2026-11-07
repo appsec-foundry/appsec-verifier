@@ -170,8 +170,9 @@ browser check or source read of the agent, `↻` for a step the Verifier
 refused, and `⚠` for a limit that stopped the finding. A `·` line gives the
 agent's note on what the step checks, the request with its query and JSON body,
 the result, and how long the model took to propose the step (`model 14s`). The
-`done` line gives the verdict, the steps, the time the finding took and the
-agent's rationale; a confirmed verdict also says `proof checked`, because it
+`done` line gives the verdict, the steps, the time the finding took, when costs
+are shown the finding's model cost and the run's spend (`$0.08 · run $0.42 of
+$10.00`), and the agent's rationale; a confirmed verdict also says `proof checked`, because it
 stands only when the Verifier found the proof its class requires. The verdict
 is green when the finding is confirmed, red when it was not reproduced or a
 control blocked it (a likely false positive), and yellow when it stays
@@ -184,8 +185,13 @@ that remainder (`≤29m`). In a terminal a status line underneath shows a progre
 bar, the running step (the model call or the request) and its age. Without a
 terminal, a line with the running step follows after two minutes without
 output. The summary at the end adds a `Run` row: run time, model calls,
-requests and, except with `codex-cli` and `copilot-cli`, the spend against
-`--cost-limit`. Text from the assessment, the model or the target is shown
+requests and, when costs are shown, the spend against `--cost-limit`. Costs are
+shown with API billing (`codex`, `anthropic-api`, and `claude` with
+`ANTHROPIC_API_KEY` or a login that bills the API), and with `--show-costs` in
+any mode, as in AppSec Analyzer. With a Claude subscription the amount is what
+the calls would cost at API prices and is marked `at API prices`; with
+`codex-cli` and `copilot-cli` the `Run` row says `cost not reported
+(subscription)`. Text from the assessment, the model or the target is shown
 without control characters and without credential values.
 
 ### Input and target boundary
@@ -254,6 +260,7 @@ far and `meta.interrupted: true`, and the run exits with 130.
 | `--output DIR` | Report and evidence directory (created, owner-readable). Default `./verification`. | VER-020 |
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
 | `--print` | List every finding in the results at the end, code-only ones included, with the whole reason. | VER-013 |
+| `--show-costs` | Show model costs on the console also with subscription billing; by default only with API billing (see the `Run` row above). Changes no limit and nothing in the report. | VER-015 |
 | `--resume` | Continue the report in `--output`: findings with the verdict confirmed, not-reproducible or blocked-by-control keep it; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. | VER-027 |
 | `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each finding. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |
@@ -512,7 +519,7 @@ example in CI or when redirected to a file, the output is plain text.
 appsec-verifier preflight --assessment ./security-assessment.yaml --scope ./scope.yaml \
   [--url URL] [--identities ./identities.yaml] [--profile P] [--model M] \
   [--offline] [--json] [--yes] [--non-interactive] \
-  [--test-model (--cost-limit USD | --max-calls 1)]
+  [--test-model (--cost-limit USD | --max-calls 1) [--show-costs]]
 ```
 
 Runs the checks `verify` runs before its first finding, and verifies nothing.
@@ -538,7 +545,8 @@ A failed target check skips the logins.
 `--test-model` needs its own limit: `--cost-limit` of at least USD 0.01 for
 `claude`, `codex` and `anthropic-api`, `--max-calls 1` for `codex-cli` and
 `copilot-cli`. It cannot be combined with `--offline` and runs only when all other
-checks passed.
+checks passed. Its line names the call's cost with API billing, and with
+`--show-costs` in any mode, as `verify` does.
 
 `--json` prints `{"kind": "preflight", "ok": …, "verification": "not_run",
 "checks": [{"check", "status", "message"}]}` on stdout and the progress lines on

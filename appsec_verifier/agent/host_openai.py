@@ -59,6 +59,7 @@ def _status_reason(status: int) -> str:
 class OpenAIHost:
     label = "OpenAI API"
     profile = "codex"
+    api_billing = True      # costs are shown without --show-costs
 
     def __init__(self, *, model: str, prices: dict, api_key: str, post=_post, get=_get):
         self.model, self.prices, self._key, self._post, self._get = model, prices, api_key, post, get

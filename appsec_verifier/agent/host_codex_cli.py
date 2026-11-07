@@ -36,6 +36,7 @@ _ALLOWED_ITEMS = {"agent_message", "reasoning", "error"}
 class CodexCliHost:
     label = "Codex CLI"
     profile = "codex-cli"
+    api_billing = False     # subscription: no cost is reported
 
     def __init__(self, binary: str, version: str, *, model: str, features: dict, environ, run=run_process):
         self.binary, self.version, self.model, self.features = binary, version, model, features

@@ -33,7 +33,7 @@ from .preflight import (
     proxy_for,
     render,
 )
-from .progress import RunProgress, duration
+from .progress import RunProgress, duration, spent_text
 from .scope import ScopeGuard
 from .term_style import Style, columns, logo
 from .verify import build_annotations, run_verification, write_reports
@@ -433,7 +433,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
 
         return _blocked(f"Model profile unavailable: {exc}",
                         fix=f"choose another with --profile ({', '.join(PROFILES)})")
-    from .agent import SourceReader, agent_registry
+    # As in AppSec Analyzer: costs on the console with API billing, in any mode with --show-costs.
+    show_costs = args.show_costs or agent_info.get("api_billing", False)
+    from .agent import SUBSCRIPTION_PROFILES, SourceReader, agent_registry
     from .auth import SessionManager
     from .tools import GuardedHttpClient
     from .tools.httpx_transport import transport_from_scope
@@ -500,7 +502,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             add(*(check_identities(sessions, identities, http, target, scope=scope) if identities else
                   [Check("Identities", "info", "none given; only anonymous requests are possible")]))
         if not failed(checks):
-            add(_model_test(planner_factory, budget))
+            add(_model_test(planner_factory, budget, show_costs=show_costs))
         if failed(checks):
             return _blocked("A pre-flight check failed; no finding was tested", fix="see the ✗ line under Preflight",
                             contacted=True)
@@ -512,8 +514,11 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         from .verify.actionlog import ActionLog
         out_dir.mkdir(parents=True, exist_ok=True)
         action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=existing is not None)
+        priced = show_costs and agent_info["profile"] not in SUBSCRIPTION_PROFILES   # these report no amount
         progress = RunProgress(model=agent_info.get("model"), redact=sessions.redact,
-                               remaining_time=budget.remaining_time)
+                               remaining_time=budget.remaining_time,
+                               spent=(lambda: budget.cost) if priced else None, cost_limit=limits.cost_limit_usd,
+                               api_prices=not agent_info.get("api_billing", False))
     try:
         if listener is not None and contact:
             try:
@@ -547,7 +552,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     paths = write_reports(doc, out_dir)
     extra = []
     if contact:
-        extra.append(("Run", _run_usage(budget, time.monotonic() - started, agent_info["profile"])))
+        extra.append(("Run", _run_usage(budget, time.monotonic() - started, agent_info, show_costs)))
     if action_log is not None:
         extra.append(("Action log", str(action_log.path)))
     if args.annotate:
@@ -665,7 +670,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             print(f"\nModel test: one fixed prompt to {host.model}, without target data, findings or credentials; "
                   + (f"limit ${args.cost_limit:.2f}" if args.cost_limit is not None else "one call of the plan"),
                   file=out)
-            add(generation_test(host, test_budget))
+            add(generation_test(host, test_budget, show_costs=args.show_costs or info.get("api_billing", False)))
     return _preflight_result(args, checks, out)
 
 
@@ -693,10 +698,10 @@ def _proxy_check(scope: dict, target: str) -> Check:
     return Check("Proxy", "ok", f"{via} · {creds}")
 
 
-def _model_test(planner_factory, budget: RunBudget) -> Check:
+def _model_test(planner_factory, budget: RunBudget, *, show_costs: bool) -> Check:
     """VER-032 in `verify`: one fixed prompt without target data, findings or
     credentials, counted against the run's own limits, before the first finding."""
-    return generation_test(planner_factory.host, budget)
+    return generation_test(planner_factory.host, budget, show_costs=show_costs)
 
 
 def _generation_budget(args, profile: str) -> tuple[RunBudget | None, str | None]:
@@ -1004,15 +1009,18 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" + ("" if n == 1 else "s")
 
 
-def _run_usage(budget: RunBudget, seconds: float, profile: str) -> str:
-    """The run's time and what it used: `4m10s · 23 model calls · 41 requests · $0.42 of $5.00`."""
+def _run_usage(budget: RunBudget, seconds: float, agent_info: dict, show_costs: bool) -> str:
+    """The run's time and what it used: `4m10s · 23 model calls · 41 requests · $0.42 of $5.00`.
+    The spend only when the run shows costs; a profile that reports none says so."""
     from .agent import SUBSCRIPTION_PROFILES
 
     calls = f"{budget.calls} model call" + ("s" if budget.calls != 1 else "")
     requests = f"{budget.requests} request" + ("s" if budget.requests != 1 else "")
     parts = [duration(seconds), calls, requests]
-    if profile not in SUBSCRIPTION_PROFILES:
-        parts.append(f"${budget.cost:.2f} of ${budget.limits.cost_limit_usd:.2f}")
+    if show_costs:
+        parts.append("cost not reported (subscription)" if agent_info["profile"] in SUBSCRIPTION_PROFILES
+                     else spent_text(budget.cost, budget.limits.cost_limit_usd,
+                                     api_prices=not agent_info.get("api_billing", False)))
     return " · ".join(parts)
 
 
@@ -1153,6 +1161,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "codex-cli and copilot-cli")
     pf.add_argument("--cost-limit", type=float, metavar="USD", help="with --test-model: spending limit of the call")
     pf.add_argument("--max-calls", type=int, metavar="N", help="with --test-model: call limit (subscription profiles)")
+    pf.add_argument("--show-costs", action="store_true",
+                    help="with --test-model: show the call's cost even with subscription billing "
+                         "(default: API billing only)")
     pf.add_argument("--non-interactive", "--ci", dest="non_interactive", action="store_true",
                     help="no prompts; contacting the target then needs --yes")
     pf.add_argument("--yes", action="store_true", help="confirm contacting the target without a prompt")
@@ -1261,6 +1272,9 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     out.add_argument("--report", action="store_true", help="standalone report (default)")
     out.add_argument("--print", dest="print_results", action="store_true",
                      help="also print the verdict of each finding")
+    out.add_argument("--show-costs", action="store_true",
+                     help="show model costs on the console even with subscription billing (default: API billing "
+                          "only; a subscription CLI reports none). Changes no limit")
     out.add_argument("--resume", action="store_true",
                      help="continue the report in the output directory: findings with a verdict keep it, the others "
                           "are tested")

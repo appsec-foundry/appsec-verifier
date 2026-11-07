@@ -337,14 +337,14 @@ def test_only_api_hosts_are_asked_and_only_when_requested(monkeypatch):
     from appsec_verifier.agent.host_claude import ClaudeHost
 
     asked = []
-    api = SimpleNamespace(model="m", label="API", version="", auth="API key",
+    api = SimpleNamespace(model="m", label="API", version="", auth="API key", api_billing=True,
                           check_access=lambda timeout: asked.append(timeout))
     monkeypatch.setattr(AnthropicHost, "resolve", classmethod(lambda cls, model, environ: api))
     assert profiles.resolve("anthropic-api", environ={})[1]["check"] == "local configuration checked"
     assert asked == []
     assert profiles.resolve("anthropic-api", environ={}, check_access=True)[1]["check"] == "model metadata accessible"
     assert asked == [profiles.ACCESS_TIMEOUT_S]
-    cli_host = SimpleNamespace(model="m", label="Claude CLI", version="2", auth="login")
+    cli_host = SimpleNamespace(model="m", label="Claude CLI", version="2", auth="login", api_billing=False)
     monkeypatch.setattr(ClaudeHost, "resolve", classmethod(lambda cls, model, environ: cli_host))
     assert profiles.resolve("claude", environ={}, check_access=True)[1]["check"] == "local configuration checked"
 
@@ -375,6 +375,9 @@ def test_the_requested_step_passes_with_a_fixed_prompt_only():
     check = generation_test(host, _budget())
     assert check.status == "ok" and "$0.0010" in check.message
     assert host.calls == [(_TEST_SYSTEM, _TEST_PROMPT)]
+    budget = _budget()      # subscription without --show-costs: no amount shown, the limit still counts it
+    hidden = generation_test(Host(HostReply(step=VALID, usd=0.001)), budget, show_costs=False)
+    assert hidden.status == "ok" and "$" not in hidden.message and budget.cost == 0.001
 
 
 @pytest.mark.parametrize("reply, expected", [
@@ -399,7 +402,7 @@ def test_no_call_beyond_the_one_allowed():
 # ── the preflight command ─────────────────────────────────────────────────────
 
 INFO = {"profile": "anthropic-api", "model": "m", "runtime": "Anthropic API", "auth": "API key",
-        "check": "model metadata accessible"}
+        "check": "model metadata accessible", "api_billing": True}
 
 
 @pytest.fixture

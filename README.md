@@ -151,6 +151,13 @@ Choose the model with `--profile`, as in AppSec Analyzer.
 The CLIs run without tools, MCP servers, settings or session history. Use of a
 subscription is subject to the provider's terms for that plan.
 
+As in AppSec Analyzer, the console shows model costs only with API billing:
+`codex`, `anthropic-api`, and `claude` with `ANTHROPIC_API_KEY` or a login that
+bills the API. `--show-costs` shows them with a subscription too. The Claude CLI
+then reports what the calls would cost at API prices and marks the amount `at
+API prices`; `codex-cli` and `copilot-cli` report no cost. The cost limit
+applies either way.
+
 ## Commands
 
 | Command | Does |

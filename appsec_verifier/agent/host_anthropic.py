@@ -70,6 +70,7 @@ def _reason(exc: Exception) -> str:
 class AnthropicHost:
     label = "Anthropic API"
     profile = "anthropic-api"
+    api_billing = True      # costs are shown without --show-costs
 
     def __init__(self, *, model: str, prices: dict, client):
         self.model, self.prices, self._client = model, prices, client

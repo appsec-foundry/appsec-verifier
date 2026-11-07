@@ -6,7 +6,9 @@ customizations, skills or session persistence, in an empty working directory.
 Every call checks the session's init event: any tool besides StructuredOutput,
 an MCP server, or a permission denial counts as a confinement breach. The cost
 the CLI reports is charged in USD; with a subscription login it is the
-API-equivalent value, not a charge.
+API-equivalent value, not a charge, and the console shows it only with
+--show-costs. As in AppSec Analyzer, the CLI bills the API when
+ANTHROPIC_API_KEY is set or its login reports an API key or a cloud provider.
 """
 
 from __future__ import annotations
@@ -33,8 +35,10 @@ class ClaudeHost:
     label = "Claude CLI"
     profile = "claude"
 
-    def __init__(self, binary: str, version: str, *, model: str, auth: str, environ, run=run_process):
+    def __init__(self, binary: str, version: str, *, model: str, auth: str, environ, run=run_process,
+                 api_billing: bool = False):
         self.binary, self.version, self.model, self.auth = binary, version, model, auth
+        self.api_billing = api_billing
         self.env = host_env(environ, _ENV)
         self.env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         self.run = run
@@ -47,12 +51,13 @@ class ClaudeHost:
         if not binary:
             raise HostUnavailable("Claude CLI (`claude`) was not found on PATH")
         env = host_env(environ, _ENV)
+        api_billing = False
         try:
             with tempfile.TemporaryDirectory(prefix="appsec-verifier-claude-check-") as cwd:
                 code, out, _ = run([binary, "--version"], input="", cwd=cwd, env=env, timeout=30)
                 version = out.strip() if code == 0 else ""
                 if env.get("ANTHROPIC_API_KEY"):
-                    auth = "API key"
+                    auth, api_billing = "API key", True
                 elif env.get("CLAUDE_CODE_OAUTH_TOKEN"):
                     auth = "OAuth token"
                 else:
@@ -61,9 +66,11 @@ class ClaudeHost:
                     if not (isinstance(status, dict) and status.get("loggedIn") is True):
                         raise HostUnavailable("Claude CLI is not logged in; run `claude auth login`")
                     auth = "login"
+                    api_billing = bool(status.get("apiKeySource")) or status.get("apiProvider") not in (
+                        None, "firstParty")
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             raise HostUnavailable(f"could not query Claude CLI: {type(exc).__name__}") from exc
-        return cls(binary, version, model=model, auth=auth, environ=environ, run=run)
+        return cls(binary, version, model=model, auth=auth, environ=environ, run=run, api_billing=api_billing)
 
     def command(self, system: str, max_usd: float | None) -> list[str]:
         return [

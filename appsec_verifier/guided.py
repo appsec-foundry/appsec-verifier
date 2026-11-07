@@ -325,7 +325,8 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("screenshots", "--screenshots"))
 _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("annotate", "--annotate"),
           ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"), ("read_only", "--read-only"),
-          ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"))
+          ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
+          ("show_costs", "--show-costs"))
 
 
 def equivalent_invocation(args) -> str:

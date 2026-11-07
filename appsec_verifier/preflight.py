@@ -258,10 +258,10 @@ _TEST_PROMPT = ('Reply with the action "submit_verdict" and the arguments '
 _TEST_STEP = {"verdict": {"verdict": "inconclusive", "rationale": _TEST_RATIONALE}}
 
 
-def generation_test(host, budget, *, timeout: float = GENERATION_TIMEOUT_S) -> Check:
+def generation_test(host, budget, *, timeout: float = GENERATION_TIMEOUT_S, show_costs: bool = True) -> Check:
     """One call with a fixed prompt, bounded by `budget` (one call, its own cost
     limit). It passes only when the host stays confined and the reply is exactly
-    the requested step."""
+    the requested step. The call's cost is named only with `show_costs`."""
     from .agent.steps import parse_step  # the agent package is loaded only when a model is used
 
     label = "Model test"
@@ -275,7 +275,7 @@ def generation_test(host, budget, *, timeout: float = GENERATION_TIMEOUT_S) -> C
             budget.note_cost(usd)
     except LimitExceeded as exc:
         return Check(label, "fail", f"stopped by the test limit: {exc}")
-    cost = f" · ${usd:.4f}" if usd is not None else ""
+    cost = f" · ${usd:.4f}" if usd is not None and show_costs else ""
     if reply.breach:
         return Check(label, "fail", f"confinement check failed: {reply.breach}{cost}")
     if reply.error:

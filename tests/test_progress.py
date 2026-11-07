@@ -146,6 +146,19 @@ def test_an_inconclusive_finding_says_why_when_nothing_above_did():
     assert _rows(out)[-1].endswith("inconclusive · 0s · claude call failed: no answer")
 
 
+@pytest.mark.parametrize("api_prices, spend", [(False, "run $1.62 of $10.00"),
+                                               (True, "run $1.62 of $10.00 at API prices")])
+def test_with_costs_shown_the_done_line_gives_the_finding_cost_and_the_run_spend(api_prices, spend):
+    out, spent = io.StringIO(), [1.20]
+    progress = RunProgress(out, clock=Clock(), env={}, spent=lambda: spent[0], cost_limit=10.0,
+                           api_prices=api_prices)
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    spent[0] = 1.62
+    progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="no answer"))
+    assert _rows(out)[-1].endswith(f"inconclusive · 0s · $0.42 · {spend} · no answer")
+
+
 def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or_secret():
     out = Tty()
     redact = lambda v: yaml.safe_load(yaml.safe_dump(v).replace("s3cret", "[redacted]"))  # noqa: E731
@@ -302,7 +315,8 @@ def test_the_agent_loop_logs_and_shows_the_planner_note_and_ignores_it_for_a_ver
     assert "model 9s" in out.getvalue() and "\x1b" not in out.getvalue()
 
 
-def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_path, monkeypatch, capsys):
+def _verify_run(tmp_path, monkeypatch, capsys, info, *extra, usd=0.0):
+    """One `verify` run over a fake planner whose every step costs `usd`; returns (stderr rows, stdout)."""
     scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "tester"},
              "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
     (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))
@@ -312,6 +326,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
 
     class Planner:
         def next_step(self, ctx, history):
+            ctx.budget.note_cost(usd)
             if not history:
                 return {"tool": "http_request", "args": {"path": "/rest/basket/2"}}
             return {"verdict": {"verdict": "not-reproducible", "rationale": "owner checked"}}
@@ -322,14 +337,39 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
 
     from appsec_verifier.tools import httpx_transport
 
-    info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none"}
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, info))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: transport)
     assert cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope",
-                     str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes", "--test-all"]) == 0
+                     str(tmp_path / "scope.yaml"), "--output", str(tmp_path / "out"), "--yes", "--test-all",
+                     *extra]) == 0
     captured = capsys.readouterr()
-    rows = captured.err.splitlines()
+    return captured.err.splitlines(), captured.out
+
+
+def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_path, monkeypatch, capsys):
+    info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none", "api_billing": True}
+    rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, usd=0.25)
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
     assert rows[-1].split()[3:5] == ["done", "100%"] and "not reproducible" in rows[-1]
-    assert "Run        : " in captured.out and "2 requests · $0.00 of $10.00" in captured.out
+    assert " · $0.50 · run $0.50 of $10.00 · " in rows[-1]                 # API billing: costs shown
+    assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
+
+
+@pytest.mark.parametrize("profile, show, done, run", [
+    ("claude", False, None, "2 requests\n"),
+    ("claude", True, " · $0.50 · run $0.50 of $10.00 at API prices · ", "2 requests · $0.50 of $10.00 at API prices"),
+    ("codex-cli", False, None, "2 requests\n"),
+    ("codex-cli", True, None, "2 requests · cost not reported (subscription)"),
+])
+def test_a_subscription_run_shows_costs_only_with_show_costs(tmp_path, monkeypatch, capsys, profile, show, done, run):
+    """As in AppSec Analyzer: without API billing the console names no amount unless --show-costs asks for it;
+    a profile that reports no cost says so. The cost limit still applies (VER-015)."""
+    info = {"profile": profile, "model": "m", "runtime": "fake", "auth": "login", "api_billing": False}
+    rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, *(["--show-costs"] if show else []),
+                            usd=0.25 if profile == "claude" else 0.0)
+    if done:
+        assert done in rows[-1]
+    else:
+        assert "$" not in "\n".join(rows)
+    assert run in out

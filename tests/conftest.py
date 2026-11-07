@@ -24,4 +24,5 @@ def _passing_model_test(monkeypatch):
     model test itself restore REAL_MODEL_TEST."""
     from appsec_verifier.preflight import Check
 
-    monkeypatch.setattr(cli, "_model_test", lambda factory, budget: Check("Model test", "ok", "fake model answered"))
+    monkeypatch.setattr(cli, "_model_test",
+                        lambda factory, budget, **_: Check("Model test", "ok", "fake model answered"))

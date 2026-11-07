@@ -5,7 +5,9 @@ FINDING is the finding under test with its position among the findings that get 
 ``start`` and ``done`` for a finding's bounds, ``·`` for an agent step, ``↻`` for a step the step
 contract refused and ``⚠`` for a limit that stopped the finding. A step line gives the agent's note on
 what the step checks, the request with its query and body, the result and how long the model took to
-propose the step; the ``done`` line ends with the agent's rationale. PROGRESS counts finished findings,
+propose the step; the ``done`` line ends with the agent's rationale. When the run shows costs (API
+billing, or ``--show-costs`` as in AppSec Analyzer), the ``done`` line also gives the finding's model
+cost and the run's spend against its cost limit. PROGRESS counts finished findings,
 ELAPSED is the run's time. LEFT extrapolates the time the finished findings took, never beyond the
 run's time limit; until the first finding has finished it shows that limit (``≤29m``).
 
@@ -50,6 +52,12 @@ def duration(seconds: float) -> str:
         return f"{seconds}s"
     minutes, rest = divmod(seconds, 60)
     return f"{minutes}m{rest:02d}s" if minutes < 60 else f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def spent_text(cost: float, limit: float, *, api_prices: bool = False) -> str:
+    """``$0.42 of $10.00``; ``… at API prices`` when a subscription pays and the amount is only the
+    API-equivalent value the Claude CLI reports."""
+    return f"${cost:.2f} of ${limit:.2f}" + (" at API prices" if api_prices else "")
 
 
 def _minutes(seconds: float) -> str:
@@ -134,6 +142,7 @@ class RunProgress:
     BAR_WIDTH = 12
 
     def __init__(self, stream=None, *, model: str | None = None, redact=None, remaining_time=None,
+                 spent=None, cost_limit: float = 0.0, api_prices: bool = False,
                  live: bool | None = None, clock=time.time, env=None):
         self._stream = sys.stderr if stream is None else stream
         env = os.environ if env is None else env
@@ -147,6 +156,8 @@ class RunProgress:
         self._model = _clip(model, 40) if model else "the model"
         self._redact = redact
         self._remaining_time = remaining_time
+        self._spent, self._cost_limit, self._api_prices = spent, cost_limit, api_prices   # spent: None hides costs
+        self._spent_at = 0.0
         self._clock = clock
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -190,6 +201,7 @@ class RunProgress:
             self._steps, self._activity, self._noted = 0, "", False
             self._asked = self._took = None
             self._finding_at = self._clock()
+            self._spent_at = self._spent() if self._spent is not None else 0.0
             title = self._text(plan.title or plan.cwe or "")
             requests = ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])   # what the assessment names
             self._record("start", " · ".join(part for part in (_clip(plan.cls or "-", 20),
@@ -241,6 +253,10 @@ class RunProgress:
             parts.append(f"{self._steps} step" + ("s" if self._steps != 1 else ""))
         with self._lock:
             parts.append(duration(self._clock() - self._finding_at))
+            if self._spent is not None:
+                total = self._spent()
+                parts.append(f"${total - self._spent_at:.2f} · run "
+                             + spent_text(total, self._cost_limit, api_prices=self._api_prices))
             # Why, unless a refused step or a limit above already said so.
             if result.rationale and not self._noted:
                 parts.append(_clip(self._text(result.rationale), 160))

@@ -32,6 +32,7 @@ _ENV = ("PATH", "HOME", "COPILOT_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "D
 class CopilotCliHost:
     label = "Copilot CLI"
     profile = "copilot-cli"
+    api_billing = False     # subscription: no cost is reported
 
     def __init__(self, binary: str, version: str, *, model: str, environ, run=run_process):
         self.binary, self.version, self.model = binary, version, model

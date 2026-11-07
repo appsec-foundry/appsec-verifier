@@ -301,6 +301,22 @@ def test_claude_resolve_uses_login_or_key():
         ClaudeHost.resolve(model="--dangerously-skip-permissions", environ=ENV, which=lambda _: "/c", run=FakeRun([]))
 
 
+@pytest.mark.parametrize("environ, status, billed", [
+    ({"ANTHROPIC_API_KEY": "sk-ant"}, None, True),
+    ({"CLAUDE_CODE_OAUTH_TOKEN": "synthetic-oauth-token"}, None, False),
+    ({}, {"loggedIn": True}, False),
+    ({}, {"loggedIn": True, "apiProvider": "firstParty"}, False),
+    ({}, {"loggedIn": True, "apiKeySource": "ANTHROPIC_API_KEY"}, True),
+    ({}, {"loggedIn": True, "apiProvider": "bedrock"}, True),
+])
+def test_claude_bills_the_api_with_a_key_or_when_its_login_says_so(environ, status, billed):
+    """As in AppSec Analyzer: the console shows costs without --show-costs only when the API is billed."""
+    replies = [(0, "2.1.319\n", ""), *([(0, json.dumps(status), "")] if status else [])]
+    host = ClaudeHost.resolve(model=None, environ={"PATH": "/usr/bin", **environ}, which=lambda _: "/c",
+                              run=FakeRun(replies))
+    assert host.api_billing is billed
+
+
 # ── codex-cli: Codex CLI with ChatGPT login ────────────────────────────────────
 
 CODEX_HELP = ("--ignore-user-config --ignore-rules --strict-config --ephemeral --skip-git-repo-check "
