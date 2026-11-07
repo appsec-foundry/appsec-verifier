@@ -62,8 +62,7 @@ def confirm_authorization(*, non_interactive: bool, assume_yes: bool, default_ye
     - A non-interactive run without ``--yes`` is NOT confirmed (it must not
       prompt and must not assume consent).
     - An interactive run asks once; only an explicit yes confirms, or Enter
-      with ``default_yes``, which the guided run sets only when the operator
-      typed the target URL in it.
+      with ``default_yes``, which only the guided run sets.
     """
     if assume_yes:
         return Confirmation(True, "ci-flag", "authorised by explicit flag")

@@ -82,8 +82,7 @@ the file, or move it away to enter a target URL instead.
 Without a scope file the run asks for the target URL, which has no default and
 is never taken from the assessment. The run then tests only that URL's scheme,
 host and port, read-only, as `verify --url` does without `--scope`, and writes
-no file. Because you typed the target, Enter at the confirmation starts the run
-(`[Y/n]`); with a scope file the confirmation stays `[y/N]`.
+no file.
 
 After the questions the run shows the `verify` settings and the equivalent
 non-interactive command line, e.g.
@@ -94,8 +93,8 @@ appsec-verifier verify --assessment ./security-assessment.yaml \
   --profile claude --non-interactive --yes
 ```
 
-and then asks the one confirmation of VER-002; answering the questions does not
-confirm. Ctrl-C or end of input at any question stops with exit 2 and contacts
+and then asks the one confirmation of VER-002 as `[Y/n]`: Enter starts the run.
+Answering the questions does not confirm. Ctrl-C or end of input at any question stops with exit 2 and contacts
 nothing.
 
 `--non-interactive` (`--ci`), or standard input that is not a terminal, turns the
@@ -432,8 +431,7 @@ The console looks like AppSec Analyzer's. Before the first request `verify`
 prints its settings as `Key : value` lines: the assessment, the target, the
 scope and its owner (or `no scope file`), the selection, the profile and model,
 the limits and the mode (safe or intrusive), and asks
-`Proceed against this target? [y/N]`, or `[Y/n]` in the guided run after you
-typed the target URL. For
+`Proceed against this target? [y/N]`, or `[Y/n]` in the guided run. For
 selected classes that need a preparation, one more line names it or says it is
 missing: `Identities` (access control, roles only), `Browser` (XSS), `Callback`
 (SSRF) and `Marker file` (path traversal, its path only). A line that starts

@@ -41,8 +41,8 @@ optional hardening.
 - **VER-002: Confirm before the first request.** Before it sends anything to the
   target, the Verifier prints the resolved scope (target, ports, path prefixes,
   window, owner) and asks for one explicit confirmation. Silence, a timeout, or
-  an unrelated answer does not count as confirmation; Enter confirms only in a
-  guided run in which the operator typed the target URL (VER-031). In
+  an unrelated answer does not count as confirmation; Enter confirms only in
+  the guided run (VER-031), whose prompt shows yes as the default. In
   non-interactive or CI use, a single explicit flag stands in for the prompt
   and is recorded in the report; nothing else suppresses the question.
 
@@ -342,7 +342,7 @@ optional hardening.
   run never asks for a secret value. Before anything is contacted it shows the
   resolved settings with the equivalent non-interactive invocation, then asks
   for the confirmation of VER-002; answering the setup questions is not that
-  confirmation. Only when the operator typed the target URL does Enter confirm.
+  confirmation. There Enter confirms.
   Cancelling at any point contacts nothing.
 
   An explicit flag turns the guided run off for CI, and it is also off when no

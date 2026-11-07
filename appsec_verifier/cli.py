@@ -345,8 +345,8 @@ def _build_planner_factory(args, environ=None, *, check_access: bool = True):
 def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_yes: bool = False) -> int:
     """Verify the selected findings. `invocation`, from the guided run, is the
     equivalent non-interactive command line, shown before the confirmation;
-    `default_yes` is set by the guided run when the operator typed the target
-    URL in it, so Enter at the confirmation proceeds (VER-002)."""
+    `default_yes` is set by the guided run only, so Enter at its confirmation
+    proceeds (VER-002)."""
     assessment = Path(args.assessment)
     if not assessment.is_file():
         print(f"assessment not found: {assessment}", file=sys.stderr)

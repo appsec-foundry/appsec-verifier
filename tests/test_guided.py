@@ -2,8 +2,8 @@
 default is asked, options are not asked again, invalid answers are asked again,
 a found scope file is used as it is or blocks, without one only the typed URL's
 host is tested and no file is written, no secret is asked, cancel contacts
-nothing, Enter confirms only after a typed URL, and without a terminal nothing
-is asked."""
+nothing, Enter confirms in the guided run but not in a run without questions,
+and without a terminal nothing is asked."""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def test_defaults_lead_to_verify_with_high_and_above(env):
     assert not args.allow_intrusive and not args.append and not args.non_interactive and not args.yes
     _, invocation, default_yes = env.calls[0]
     assert "--min-severity high" in invocation and invocation.endswith("--non-interactive --yes")
-    assert "--url" not in shlex.split(invocation) and not default_yes
+    assert "--url" not in shlex.split(invocation) and default_yes      # Enter confirms, also with a scope file
 
 
 def test_the_overview_names_what_the_classes_present_need_before_the_run(env):
@@ -163,7 +163,7 @@ def test_without_a_scope_file_the_typed_url_is_the_scope_and_nothing_is_written(
     _, invocation, default_yes = env.calls[0]
     parts = shlex.split(invocation)
     assert "--scope" not in parts and parts[parts.index("--url") + 1] == "http://localhost:3000"
-    assert default_yes                                          # Enter confirms after a typed URL
+    assert default_yes
     assert not any(word in p.lower() for p in prompts for word in SECRET_WORDS)
 
 
@@ -185,11 +185,11 @@ def test_an_invalid_target_url_is_asked_again(env):
     assert "admin:pw" not in env.calls[0][1]
 
 
-def test_a_url_given_as_option_is_used_without_asking_and_without_default_yes(env):
+def test_a_url_given_as_option_is_used_without_asking(env):
     (env.run / "scope.yaml").unlink()
     rc, args, prompts, _ = env.go(*DEFAULTS, extra=["--url", BASE])
     assert rc == 0 and not any(p.startswith("Target") for p in prompts)
-    assert (args.scope, args.target) == (None, BASE) and env.calls[0][2] is False
+    assert (args.scope, args.target) == (None, BASE)
 
 
 def test_an_invalid_url_option_blocks_and_contacts_nothing(env, capsys):
@@ -386,7 +386,7 @@ def test_main_keeps_the_commands(env, capsys):
 @pytest.mark.parametrize("typed", [False, True])
 def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, capsys, typed):
     """Answering the setup questions is not the confirmation of VER-002; Enter
-    confirms there only when the target URL was typed in this run."""
+    confirms there, with a scope file as with a typed URL."""
     from appsec_verifier.tools import httpx_transport
 
     monkeypatch.undo()
@@ -415,6 +415,6 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
     else:
         rc, _, _, _ = env.go(*DEFAULTS, extra=["--category", "access-control"])
     out = capsys.readouterr()
-    assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False, "default_yes": typed}]
+    assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False, "default_yes": True}]
     assert "The same run without questions" in out.out and "not authorised to proceed" in out.err
     assert not (env.cwd / "verification").exists()

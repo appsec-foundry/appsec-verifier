@@ -1,6 +1,6 @@
 """Authorisation gate: explicit confirmation required; non-interactive needs the
-CI flag; silence never confirms. Enter confirms only with default_yes, which the
-guided run sets when the operator typed the target URL in it (VER-002)."""
+CI flag; silence never confirms. Enter confirms only with default_yes, which
+only the guided run sets (VER-002)."""
 
 from __future__ import annotations
 

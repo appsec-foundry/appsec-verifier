@@ -116,8 +116,8 @@ needs an explicit decision from the maintainer, not a workaround.
   suffices (VER-009 to VER-013).
 - Missing or invalid scope, identity or confirmation blocks the run. The scope
   is a scope file or, without one, the `--url` alone: its scheme, host and
-  port, read-only (VER-001). Enter confirms only in a guided run in which the
-  operator typed that URL (VER-002).
+  port, read-only (VER-001). Enter confirms only in the guided run, never in
+  `verify` or `preflight` (VER-002).
 
 Changes to these controls need tests that cover the refused case
 (out of scope, over limit, missing secret), not only the allowed one.

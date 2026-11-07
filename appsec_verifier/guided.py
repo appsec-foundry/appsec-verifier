@@ -7,12 +7,12 @@ and the model profile. Answers pass the same checks as the matching `verify`
 options and are re-asked when invalid; options already given are used as
 given. The settings are then handed to `verify`, which shows them with the
 equivalent non-interactive invocation and asks for the one confirmation of
-VER-002.
+VER-002, where Enter proceeds.
 
 A scope file given or found next to the assessment or in the working directory
 is used as it is. Without one the run takes the target URL the operator types,
 and the scope is that URL's host and port, read-only, for this run only
-(VER-001, VER-004); then Enter at the confirmation proceeds. The dialog
+(VER-001, VER-004). The dialog
 contacts nothing, writes no file, never asks for a secret value (credentials
 stay in environment variables, VER-016), and never widens a scope. Text from
 the assessment is untrusted (VER-005) and is shown without control characters.
@@ -125,7 +125,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         found = _ask_scope(d, args, assessment, cwd)
         if found is None:
             return cli.EXIT_BLOCKED
-        scope, guard, typed = found
+        scope, guard = found
         if _ask_identities(d, args, guard, environ, assessment, cwd) is None:
             return cli.EXIT_BLOCKED
         _ask_profile(d, args)
@@ -134,7 +134,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
     except Cancelled:
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
-    return cli.cmd_verify(args, invocation=equivalent_invocation(args), default_yes=typed)
+    return cli.cmd_verify(args, invocation=equivalent_invocation(args), default_yes=True)
 
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
@@ -219,8 +219,8 @@ def load_scope(path) -> tuple[dict | None, ScopeGuard | None, list[str]]:
 
 def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
     """The scope file given or found, used as it is, or else the scope of the
-    target URL the operator types (VER-001, VER-004). Returns the scope, its
-    guard, and whether the URL was typed here; None when a scope file cannot be used."""
+    target URL the operator types (VER-001, VER-004). Returns the scope and its
+    guard; None when a scope file cannot be used."""
     given = bool(args.scope)
     if not given:
         found = _candidates("scope.yaml", assessment.parent, cwd)
@@ -235,13 +235,13 @@ def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
                  + "\ncorrect the file, e.g. its window" + ("." if given else ", or move it away to enter "
                                                                          "a target URL instead."))
             return None
-        return scope, guard, False
+        return scope, guard
     if args.target:
         scope, errors = cli.url_scope(args.target)
         if errors:
             _err(f"--url cannot be used: {clean(errors[0])}; nothing was contacted.")
             return None
-        return scope, ScopeGuard(scope), False
+        return scope, ScopeGuard(scope)
     d.out("No scope.yaml next to the assessment or in the working directory: the run tests only the host "
           "and port of the URL you enter, read-only (VER-001).")
     while True:
@@ -249,7 +249,7 @@ def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
         scope, errors = cli.url_scope(url)
         if not errors:
             args.target = url
-            return scope, ScopeGuard(scope), True
+            return scope, ScopeGuard(scope)
         d.out(f"  {clean(errors[0])}")
 
 
