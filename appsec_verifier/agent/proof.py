@@ -8,6 +8,9 @@ against what the tools actually returned:
 
 - xss (VER-009): a browser_check in which the marker executed. The browser's
   screenshot and event record become the evidence; no proof_steps are needed.
+  If any request of the probe carried the marker already joined (also
+  percent-encoded), the dialog could be a page echoing a parameter through
+  alert(), so it does not count.
 - access-control (VER-010): two cited http_request steps with the same method,
   path, params and body, sent as two different identities (no role is the
   anonymous identity), both answered 2xx with a non-empty body.
@@ -55,6 +58,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from ..verify.probes import ProbeResult
+from .tools import _decoded
 
 _REDIRECTS = (301, 302, 303, 307, 308)
 _DELAY_MS = 2000
@@ -71,7 +75,7 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         return result
     cls = getattr(ctx.plan, "cls", None)
     if cls == "xss":
-        return _xss(history, result)
+        return _xss(ctx, history, result)
     if cls == "ssrf":
         return _ssrf(ctx, result)
     check, minimum = {"access-control": (_contrast, 2), "injection": (_flip, 2),
@@ -95,11 +99,16 @@ def _downgrade(result: ProbeResult, reason: str, label: str = "indicative, not p
     )
 
 
-def _xss(history: list[dict], result: ProbeResult) -> ProbeResult:
+def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
     proofs = [h["result"] for h in history if h.get("tool") == "browser_check"
               and isinstance(h.get("result"), dict) and h["result"].get("executed") is True]
     if not proofs:
         return _downgrade(result, "no browser_check saw the marker execute (VER-009)", "indicative, not executed")
+    joined = "".join(getattr(ctx, "marker", None) or ())
+    if joined and any(joined in _decoded(json.dumps(h.get("args") or {}, default=str)) for h in history):
+        # A page that shows a parameter with alert() would echo it: only a marker joined at runtime counts.
+        return _downgrade(result, "a request carried the already joined marker, so the dialog may be an echo, "
+                                  "not executed script (VER-009)", "indicative, not executed")
     result.evidence = [e for p in proofs for e in p.get("evidence") or []]
     return result
 

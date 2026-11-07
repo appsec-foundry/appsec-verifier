@@ -220,7 +220,10 @@ containers), the browser does not start and XSS findings cannot be confirmed.
 Each finding gets a random two-part
 marker; the payload must call `alert('<part1>'+'<part2>')`, and only a dialog
 showing the joined value counts, so a page that merely echoes the payload text
-is not mistaken for execution. A `confirmed` XSS verdict without such an
+is not mistaken for execution. If any request of the probe carried the joined
+value itself (also percent-encoded), the dialog does not count either: a page
+that shows a parameter through `alert()` by design would display it without
+any injected script. A `confirmed` XSS verdict without such an
 executed marker is downgraded to `inconclusive` ("indicative, not executed"),
 whatever the model says. On execution the browser draws a banner and saves a
 screenshot and a JSON event record under `evidence/` (owner-only). Screenshots

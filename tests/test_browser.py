@@ -235,6 +235,29 @@ def test_confirmed_xss_with_executed_marker_keeps_browser_evidence_only():
     assert res.verdict == "confirmed" and res.evidence == proof
 
 
+@pytest.mark.parametrize("sent", [
+    {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaabb"}},                    # pre-joined in the URL
+    {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaa%2562b"}},                # and encoded
+    {"tool": "http_request", "args": {"method": "POST", "path": "/msg", "json": {"text": "vrfaabb"}}},  # stored
+])
+def test_an_executed_marker_that_was_sent_joined_does_not_confirm(sent):
+    """A page that legitimately shows a parameter with alert() would echo a joined marker (VER-009)."""
+    browser = FakeBrowser({"executed": True, "evidence": [{"kind": "screenshot", "path": "evidence/x.png"}]})
+    http = SimpleNamespace(request=lambda *a, **k: SimpleNamespace(status_code=200, text="", headers={}))
+    planner = Scripted([sent, {"tool": "browser_check", "args": {"path": "/notify"}}, CONFIRM])
+    ctx = _ctx(browser=browser, safe=False)
+    ctx.http = http
+    res = AgentProbe("xss", lambda: planner).run(ctx)
+    assert res.verdict == "inconclusive" and "already joined marker" in res.rationale
+
+
+def test_an_executed_marker_joined_at_runtime_confirms():
+    browser = FakeBrowser({"executed": True, "evidence": []})
+    planner = Scripted([{"tool": "browser_check", "args": {"path": "/s?q=<script>alert('vrfaa'+'bb')</script>"}},
+                        CONFIRM])
+    assert AgentProbe("xss", lambda: planner).run(_ctx(browser=browser)).verdict == "confirmed"
+
+
 def test_other_classes_need_their_own_proof_not_the_browser():
     res = AgentProbe("access-control", lambda: Scripted([CONFIRM])).run(_ctx(cls="access-control"))
     assert res.verdict == "inconclusive" and "proof_steps" in res.rationale and "browser" not in res.rationale

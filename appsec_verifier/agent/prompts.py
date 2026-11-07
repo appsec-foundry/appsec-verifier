@@ -120,7 +120,8 @@ def _marker_hint(ctx) -> str:
         return (
             f"\nXSS proof: your payload must call alert('{marker[0]}'+'{marker[1]}') — the two parts joined at "
             "runtime (quotes may change to fit the context). Only that evaluated value counts as execution, and "
-            "only browser_check observes it; confirmed without an executed marker is downgraded."
+            "only browser_check observes it; confirmed without an executed marker is downgraded. Never send the "
+            "joined value itself: a request that carries it voids the proof, since a page could merely echo it."
         )
     host = redirect_host(marker)
     if cls == "open-redirect" and host:
