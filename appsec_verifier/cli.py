@@ -6,7 +6,7 @@ otherwise it reports every selected finding not-attempted. Before the first
 model call it runs the pre-flight checks of VER-032; `preflight` runs them alone
 and verifies nothing (preflight.py). Called with an
 assessment and no command, it starts the guided run of guided.py (VER-031),
-which asks for the `verify` settings and then runs `verify`. See docs/cli.md
+which asks only for the `verify` settings without a default and then runs `verify`. See docs/cli.md
 for the full design.
 """
 
@@ -433,7 +433,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     notes = (("Identities", _identities_note(identities, sel)), ("Browser", browser_note),
              ("Callback", listener_note), ("Marker file", _marker_note(scope, sel)))
     print("\n".join(_verify_settings(st, f"{assessment} · {summary}" if summary else assessment, target, scope, sel,
-                                     limits, safe, read_only, contact, agent_info, notes)))
+                                     limits, safe, read_only, contact, agent_info, notes, floor=args.min_severity)))
     if invocation:
         print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
@@ -766,7 +766,7 @@ def _identities_note(identities, sel):
 
 
 def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                     notes=()) -> list[str]:
+                     notes=(), floor=None) -> list[str]:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
     from .agent import SUBSCRIPTION_PROFILES
@@ -778,7 +778,8 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
         ("Target", f"{target} ({'will contact' if contact else 'not contacted yet'})"),
         ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"
          if "owner" in scope else f"no scope file: only {target}'s host and port, read-only"),
-        ("Selection", f"{len(sel)} findings · {dyn} dynamic · classes: {', '.join(classes) or '—'}"),
+        ("Selection", f"{len(sel)} findings · {dyn} dynamic{f' · severity {floor} and above' if floor else ''} · "
+                      f"classes: {', '.join(classes) or '—'}"),
         ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth", "check"))
                                if v)),
         ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} req · "
@@ -863,7 +864,7 @@ def _banner(st: Style) -> str:
     return "\n".join(head) + (
         "\n\n"
         "Guided run:\n"
-        "  appsec-verifier ASSESSMENT   asks for the settings with defaults, then verifies\n\n"
+        "  appsec-verifier ASSESSMENT   asks only what has no default, then verifies\n\n"
         "Commands:\n"
         "  verify     verify selected findings against a target (safe mode by default)\n"
         "  preflight  check assessment, scope, target, logins and model; verifies nothing\n"
@@ -981,19 +982,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_guided_parser() -> argparse.ArgumentParser:
     """`appsec-verifier ASSESSMENT [options]`: the guided run (VER-031). It takes
-    the `verify` options; those given are not asked."""
+    the `verify` options; those given replace the defaults and are not asked."""
     p = _Parser(
         prog="appsec-verifier", usage="appsec-verifier ASSESSMENT [options]",
         hint="Options and examples: appsec-verifier ASSESSMENT --help",
-        description=_wrap("Guided run: reads the assessment, asks for the settings of the run with defaults, "
-                          "then verifies after one confirmation. Options given here are not asked. Without a "
-                          "terminal, or with --non-interactive, nothing is asked."),
+        description=_wrap("Guided run: reads the assessment, tests findings of severity high and above with the "
+                          "claude profile, asks for the target URL when there is no scope file, then verifies "
+                          "after one confirmation. Options given here replace the defaults. Without a terminal, "
+                          "or with --non-interactive, nothing is asked."),
         epilog="Examples:\n"
-               "  Ask for every setting:\n"
+               "  Ask for the target URL, everything else by default:\n"
                "    appsec-verifier security-assessment.yaml\n\n"
-               "  Use this scope and these test accounts, ask for the rest:\n"
-               "    appsec-verifier security-assessment.yaml --scope scope.yaml \\\n"
-               "      --identities identities.yaml")
+               "  This target, medium and above, another model; only the confirmation is asked:\n"
+               "    appsec-verifier security-assessment.yaml --target http://localhost:3000 \\\n"
+               "      --min-severity medium --profile codex-cli")
     _add_run_options(p, guided=True)
     return p
 
@@ -1019,8 +1021,8 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     src.add_argument("--source", metavar="DIR", help="checkout of the application's source code, read by the agent")
 
     sel = vf.add_argument_group(
-        "findings to test", "Asked when not given." if guided else "Without these, every finding that can be "
-                                                                   "tested dynamically.")
+        "findings to test", "Without these, findings of severity high and above." if guided
+        else "Without these, every finding that can be tested dynamically.")
     sel.add_argument("--category", metavar="LIST", help="classes or techniques, comma-separated, e.g. xss,idor,sqli")
     sel.add_argument("--severity", metavar="LIST", help="exact severities, comma-separated, e.g. critical,high")
     sel.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], metavar="LEVEL",
@@ -1035,8 +1037,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
                        help=f"{_PROFILE_HELP}; required with --non-interactive")
     model.add_argument("--model", help="model of the profile (default: the profile's model)")
 
-    lim = vf.add_argument_group("limits", "Without these, the values in data/limits.yaml apply"
-                                + ("; the run shows them and asks." if guided else "."))
+    lim = vf.add_argument_group("limits", "Without these, the values in data/limits.yaml apply.")
     lim.add_argument("--cost-limit", type=float, metavar="USD", help="spending limit for model calls")
     lim.add_argument("--max-calls", type=int, metavar="N", help="model calls for the run")
     lim.add_argument("--max-requests", type=int, metavar="N", help="requests to the target for the run")

@@ -51,9 +51,10 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    ```
 
    It shows how many findings can be tested and what they need, such as test
-   accounts or the browser, asks for the few settings without a default (Enter
-   keeps a default shown in brackets), and asks once more before it sends the
-   first request.
+   accounts or the browser, and tests findings of severity high and above with
+   the `claude` profile; `--min-severity` and `--profile` change that. Without a
+   scope file it asks for the target URL, or takes it from `--target`. It asks
+   once more before it sends the first request.
 
 5. Read the report in `./verification/verification.md`.
 

@@ -318,10 +318,12 @@ optional hardening.
   assessment and no command, the Verifier starts a guided interactive run; the
   `verify` command stays unguided. It reads the assessment offline (VER-005,
   VER-006), shows how many findings it holds, how many are dynamically
-  verifiable, and how they split by weakness class and severity, and then asks
-  only for the settings that have no usable default:
-  - **Selection** (VER-026): a severity floor, by default high. Every
-    verifiable class present is tested unless an option narrows them.
+  verifiable, and how they split by weakness class and severity, and then sets
+  up the run, asking only where no usable default exists:
+  - **Selection** (VER-026): findings of severity high and above, of every
+    verifiable class present, unless options change that; the run prints the
+    floor. If nothing of high or above can be verified dynamically, it asks
+    whether to verify the next lower severity that has findings.
   - **Target** (VER-001, VER-004): a scope file given or found next to the
     assessment or in the working directory is used as it is; one that cannot be
     used stops the run. Without one the run asks for the target URL, which has
@@ -330,8 +332,9 @@ optional hardening.
   - **Identities** (VER-016, VER-028): asked only when an identities file is
     found. Missing credentials are pointed out, and so are access-control
     findings that cannot be confirmed for lack of two identities (VER-010).
-  - **Model and budget** (VER-023, VER-015): the profile; the run limits are the
-    documented ones unless options change them.
+  - **Model and budget** (VER-023, VER-015): the profile claude and the
+    documented run limits, unless options change them; an unavailable profile
+    stops the run before any question.
   - **Mode and output** (VER-030, VER-020, VER-027): safe mode and the
     standalone report by default. Intrusive mode is offered only where the scope
     allows state change and needs its own explicit yes. An existing report is

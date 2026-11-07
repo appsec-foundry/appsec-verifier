@@ -49,30 +49,38 @@ default. The `Needs` line names what the classes present need before the run:
 test identities in `identities.yaml` for access control, `marker_file` in the
 scope and the file on the target for path traversal, `callback` in the scope
 for SSRF, and Google Chrome with `appsec-verifier[browser]` for XSS. Without it
-their findings cannot be confirmed. Enter accepts the default shown in brackets.
+their findings cannot be confirmed.
+
+Without options the run tests findings of severity high and above, of every
+class present, with the profile `claude` and the limits of `data/limits.yaml`.
+`--min-severity`, `--category`, `--profile`, `--cost-limit`, `--max-calls`,
+`--max-requests`, `--max-attempts`, `--max-duration` and `--rate` change that.
+The run prints the selection, e.g.
+`→ 24 findings to verify, severity high and above (--min-severity to change)`,
+and shows the floor again in the `Selection` line before the confirmation. If
+no finding of severity high or above can be verified dynamically, it asks
+whether to verify those of the next lower severity that has any, e.g.
+`Verify the 3 of severity medium? [Y/n]`; no ends the run without contact. A
+profile that is not available ends the run before any question and names
+`--profile`.
+
+Questions come only where there is no usable default. Enter accepts the default
+shown in brackets.
 
 | Question | Default | Same as |
 | --- | --- | --- |
-| Lowest severity | `high` (High and Critical); `all` for no floor | `--min-severity` |
 | Target URL | none; asked only without a scope file (below) | `--url` |
 | Identities file | asked only when `identities.yaml` is found next to the scope, the assessment, or in the working directory; `none` for no identities | `--identities` |
-| Model profile | `claude` | `--profile` |
 | Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
 | Existing report in the output directory | append; or overwrite, or a new directory | `--append`, `--output` |
 
-All classes present are tested unless `--category` narrows them, and the limits
-are those of `data/limits.yaml` unless `--cost-limit`, `--max-calls`,
-`--max-requests`, `--max-attempts`, `--max-duration` or `--rate` change them.
-Both are shown with the other settings before the confirmation.
-
 Each answer goes through the same check as its option and is asked again when
 invalid: a URL without http or https, with a user name or password, or with an
-ambiguous path, an identities file with unset variables (named, never their
-values), a profile that is not available. Options given on the command line are
-used as given and not asked, e.g.
-`appsec-verifier ./security-assessment.yaml --scope ./scope.yaml`. No question
-asks for a password, token, or other secret; credentials stay in environment
-variables.
+ambiguous path, or an identities file with unset variables (named, never their
+values). Options given on the command line are used as given and not asked, e.g.
+`appsec-verifier ./security-assessment.yaml --target http://localhost:3000`
+asks nothing but the confirmation. No question asks for a password, token, or
+other secret; credentials stay in environment variables.
 
 A `scope.yaml` next to the assessment, else in the working directory, is used
 without a question; the run prints its path. If it cannot be used, for instance
@@ -94,8 +102,8 @@ appsec-verifier verify --assessment ./security-assessment.yaml \
 ```
 
 and then asks the one confirmation of VER-002 as `[Y/n]`: Enter starts the run.
-Answering the questions does not confirm. Ctrl-C or end of input at any question stops with exit 2 and contacts
-nothing.
+Answering the questions does not confirm. Ctrl-C or end of input at any
+question stops with exit 2 and contacts nothing.
 
 `--non-interactive` (`--ci`), or standard input that is not a terminal, turns the
 questions off: `appsec-verifier ASSESSMENT --ci --scope … --profile … --yes`
@@ -429,8 +437,9 @@ data, so use intrusive mode only against a disposable test instance.
 
 The console looks like AppSec Analyzer's. Before the first request `verify`
 prints its settings as `Key : value` lines: the assessment, the target, the
-scope and its owner (or `no scope file`), the selection, the profile and model,
-the limits and the mode (safe or intrusive), and asks
+scope and its owner (or `no scope file`), the selection with its severity
+floor, the profile and model, the limits and the mode (safe or intrusive), and
+asks
 `Proceed against this target? [y/N]`, or `[Y/n]` in the guided run. For
 selected classes that need a preparation, one more line names it or says it is
 missing: `Identities` (access control, roles only), `Browser` (XSS), `Callback`

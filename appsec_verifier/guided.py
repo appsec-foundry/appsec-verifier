@@ -1,9 +1,12 @@
 """Guided run from the assessment alone (VER-031).
 
 `appsec-verifier <assessment>` reads the assessment offline, shows what it
-holds, and asks only for what has no usable default: the severity floor, the
-target URL when there is no scope file, an identities file when one is found,
-and the model profile. Answers pass the same checks as the matching `verify`
+holds, and asks only for what has no usable default: the target URL when there
+is no scope file, and an identities file when one is found. The severity floor
+is high and the model profile claude unless options say otherwise; the run
+prints the floor, and offers the next lower severity when nothing of high or
+above can be verified. A profile that is not available stops the run before
+any question. Answers pass the same checks as the matching `verify`
 options and are re-asked when invalid; options already given are used as
 given. The settings are then handed to `verify`, which shows them with the
 equivalent non-interactive invocation and asks for the one confirmation of
@@ -108,12 +111,12 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
     except ValueError as exc:
         _err(f"invalid limits: {exc}")
         return cli.EXIT_BLOCKED
-    if args.profile:
-        try:
-            cli._build_planner_factory(args)
-        except cli.ProfileError as exc:
-            _err(f"model profile unavailable: {exc}")
-            return cli.EXIT_BLOCKED
+    args.profile = args.profile or DEFAULT_PROFILE
+    try:
+        cli._build_planner_factory(args)
+    except cli.ProfileError as exc:
+        _err(f"model profile unavailable: {exc}\nchoose another with --profile ({', '.join(PROFILES)}).")
+        return cli.EXIT_BLOCKED
 
     d = Dialog(ask or input, out)
     out(overview(assessment, plans))
@@ -121,14 +124,14 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         _err("\nno finding in this assessment can be verified dynamically; nothing to do.")
         return cli.EXIT_BLOCKED
     try:
-        _ask_selection(d, args, plans)
+        if not _selection(d, args, plans):
+            return cli.EXIT_BLOCKED
         found = _ask_scope(d, args, assessment, cwd)
         if found is None:
             return cli.EXIT_BLOCKED
         scope, guard = found
         if _ask_identities(d, args, guard, environ, assessment, cwd) is None:
             return cli.EXIT_BLOCKED
-        _ask_profile(d, args)
         _ask_mode(d, args, scope)
         _ask_output(d, args)
     except Cancelled:
@@ -167,23 +170,34 @@ def overview(assessment: Path, plans) -> str:
     ])])
 
 
-def _ask_selection(d: Dialog, args, plans) -> None:
-    """Only the severity floor is asked; the classes are all present unless --category or --class says otherwise."""
-    ask_floor = not any((args.severity, args.min_severity, args.only))
-    while True:
-        if ask_floor:
-            while True:
-                answer = d.question(f"Lowest severity to verify ({', '.join(SEVERITY_FLOORS)}, or 'all')",
-                                    DEFAULT_FLOOR).lower()
-                if answer in (*SEVERITY_FLOORS, "all"):
-                    args.min_severity = None if answer == "all" else answer
+def _selection(d: Dialog, args, plans) -> bool:
+    """The severity floor is high unless --min-severity, --severity or --only says
+    otherwise, and every class present is tested unless --category or --class
+    narrows them. When the default floor leaves nothing to verify, the run offers
+    the next lower severity that has findings. False when there is none or the
+    operator declines."""
+    def dynamic() -> int:
+        return sum(1 for p in cli._select(args, plans) if p.status == "dynamic")
+
+    if not any((args.severity, args.min_severity, args.only)):
+        args.min_severity = DEFAULT_FLOOR
+        if not dynamic():
+            for lower in SEVERITY_FLOORS[SEVERITY_FLOORS.index(DEFAULT_FLOOR) + 1:]:
+                args.min_severity = lower
+                if n := dynamic():
                     break
-                d.out("  choose critical, high, medium, low, or all")
-        dyn = sum(1 for p in cli._select(args, plans) if p.status == "dynamic")
-        d.out(f"  → {dyn} finding{'' if dyn == 1 else 's'} to verify")
-        if dyn or not ask_floor:
-            return
-        d.out("  nothing in this selection can be verified dynamically; choose again")
+            else:
+                _err("no finding of a known severity can be verified dynamically in this selection; choose "
+                     "findings with --only or --severity. Nothing was contacted.")
+                return False
+            if not d.yes(f"No finding of severity {DEFAULT_FLOOR} or above can be verified dynamically. "
+                         f"Verify the {n} of severity {lower}?", default=True):
+                _err("nothing to verify; nothing was contacted.")
+                return False
+    dyn = dynamic()
+    floor = f", severity {args.min_severity} and above (--min-severity to change)" if args.min_severity else ""
+    d.out(f"  → {dyn} finding{'' if dyn == 1 else 's'} to verify{floor}")
+    return True
 
 
 # ── target (VER-001, VER-004) ────────────────────────────────────────────────
@@ -283,24 +297,7 @@ def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Pat
         d.out("  set missing variables and start again, or choose another file or 'none'")
 
 
-# ── model, mode, output (VER-015, VER-020, VER-023, VER-027, VER-030) ──
-
-def _ask_profile(d: Dialog, args) -> None:
-    if args.profile:
-        return
-    while True:
-        answer = d.question(f"Model profile ({', '.join(PROFILES)})", DEFAULT_PROFILE)
-        if answer not in PROFILES:
-            d.out(f"  choose one of {', '.join(PROFILES)}")
-            continue
-        args.profile = answer
-        try:
-            cli._build_planner_factory(args)
-            return
-        except cli.ProfileError as exc:
-            args.profile = None
-            d.out(f"  {clean(exc)}")
-
+# ── limits, mode, output (VER-015, VER-020, VER-027, VER-030) ──
 
 def _limit_overrides(args) -> dict:
     return {field: getattr(args, attr) for attr, _, field in _LIMITS}
