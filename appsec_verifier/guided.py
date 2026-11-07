@@ -144,6 +144,15 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
 
+# What the findings of a class need before the run; without it their proof cannot be made (VER-009 to VER-012).
+_NEEDS = {
+    "access-control": "test identities in identities.yaml",
+    "path-traversal": "marker_file in the scope and on the target",
+    "ssrf": "callback in the scope",
+    "xss": "Google Chrome with appsec-verifier[browser]",
+}
+
+
 def overview(assessment: Path, plans) -> str:
     dyn = [p for p in plans if p.status == "dynamic"]
     static = sum(1 for p in plans if p.status == "static-only")
@@ -151,6 +160,7 @@ def overview(assessment: Path, plans) -> str:
     by_class = Counter(p.cls for p in dyn)
     by_sev = Counter(clean(p.severity).lower() or "unknown" for p in dyn)
     order = [*SEVERITY_FLOORS, *sorted(set(by_sev) - set(SEVERITY_FLOORS))]
+    needs = " · ".join(f"{c}: {_NEEDS[c]}" for c in sorted(by_class) if c in _NEEDS)
     st = Style.for_stream(sys.stdout)
     return "\n".join([*cli._title(st, "assessment"), *cli._facts(st, [
         ("Assessment", str(assessment)),
@@ -158,6 +168,7 @@ def overview(assessment: Path, plans) -> str:
                      f"{incomplete} input-incomplete"),
         ("By class", " · ".join(f"{c} {n}" for c, n in sorted(by_class.items())) or "—"),
         ("By severity", [(f"{s} {by_sev[s]}", cli._severity_role(s)) for s in order if by_sev[s]] or "—"),
+        *([("Needs", needs)] if needs else []),
     ])])
 
 

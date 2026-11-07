@@ -93,6 +93,19 @@ def test_defaults_lead_to_verify_with_high_and_above(env):
     assert "--min-severity high" in invocation and invocation.endswith("--non-interactive --yes")
 
 
+def test_the_overview_names_what_the_classes_present_need_before_the_run(env):
+    _, _, _, out = env.go(*DEFAULTS)
+    needs = next(line for line in out.splitlines() if line.lstrip().startswith("Needs"))
+    assert needs.split(": ", 1)[1] == ("access-control: test identities in identities.yaml · "
+                                       "xss: Google Chrome with appsec-verifier[browser]")
+
+
+def test_the_overview_has_no_needs_line_when_no_class_present_needs_preparation(env):
+    env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[2]]}))     # injection only
+    _, plans, _ = cli._load_assessment(env.assessment)
+    assert "Needs" not in guided.overview(env.assessment, plans)
+
+
 def test_no_question_asks_for_a_secret(env):
     _, _, prompts, _ = env.go(*DEFAULTS)
     assert not any(word in p.lower() for p in prompts for word in ("password", "token", "secret", "key"))

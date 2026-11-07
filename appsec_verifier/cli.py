@@ -398,8 +398,10 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
 
     summary = _assessment_summary(doc)
     st = Style.for_stream(sys.stdout)
+    notes = (("Identities", _identities_note(identities, sel)), ("Browser", browser_note),
+             ("Callback", listener_note), ("Marker file", _marker_note(scope, sel)))
     print("\n".join(_verify_settings(st, f"{assessment} · {summary}" if summary else assessment, target, scope, sel,
-                                     limits, safe, read_only, contact, agent_info, browser_note, listener_note)))
+                                     limits, safe, read_only, contact, agent_info, notes)))
     if invocation:
         print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
@@ -702,8 +704,30 @@ def _callback_listener(scope, sel):
     return listener, f"will listen on {listener.host}:{listener.port}, reached as {listener.base_url}"
 
 
+def _marker_note(scope, sel):
+    """A line for the run settings when a path-traversal finding is selected. Without the scope's
+    marker_file no traversal value is sent, so these findings stay unconfirmed (VER-012). It names
+    the path, never the content."""
+    if not any(p.status == "dynamic" and p.cls == "path-traversal" for p in sel):
+        return None
+    path = (scope.get("marker_file") or {}).get("path")
+    if not path:
+        return "unavailable (no marker_file in the scope); path-traversal findings cannot be confirmed"
+    return f"{path} (must exist on the target)"
+
+
+def _identities_note(identities, sel):
+    """A line for the run settings when an access-control finding is selected: its proof contrasts
+    identities, so without a test identity it cannot be made (VER-010). It names roles only."""
+    if not any(p.status == "dynamic" and p.cls == "access-control" for p in sel):
+        return None
+    if not identities:
+        return "unavailable (no test identity); access-control findings cannot be confirmed"
+    return ", ".join(str(i["role"]) for i in identities)
+
+
 def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                     browser_note=None, listener_note=None) -> list[str]:
+                     notes=()) -> list[str]:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
     from .agent import SUBSCRIPTION_PROFILES
@@ -722,7 +746,7 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
         ("Mode", f"{'safe' if safe else 'intrusive'} · {'read-only' if read_only else 'state-changing'}",
          "ok" if safe else "warn"),
     ]
-    for key, note in (("Browser", browser_note), ("Callback", listener_note)):
+    for key, note in notes:
         if note:
             rows.append((key, note, "warn" if note.startswith("unavailable") else None))
     return [*_title(st, "verify"), *_facts(st, rows)]

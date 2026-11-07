@@ -51,8 +51,9 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    appsec-verifier ./out/security-assessment.yaml
    ```
 
-   It shows how many findings can be tested, asks for the settings (Enter keeps
-   the default), and asks once more before it sends the first request.
+   It shows how many findings can be tested and what they need, such as test
+   accounts or the browser, asks for the settings (Enter keeps the default), and
+   asks once more before it sends the first request.
 
 5. Read the report in `./verification/verification.md`.
 

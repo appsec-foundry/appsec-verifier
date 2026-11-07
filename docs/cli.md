@@ -42,7 +42,11 @@ are cited per command and option.
 Called with an assessment and no command, the Verifier reads the assessment
 offline, shows how many findings it holds, how many are dynamically verifiable,
 and their split by class and severity, then asks for the settings of the run.
-Enter accepts the default shown in brackets.
+The `Needs` line names what the classes present need before the run: test
+identities in `identities.yaml` for access control, `marker_file` in the scope
+and the file on the target for path traversal, `callback` in the scope for
+SSRF, and Google Chrome with `appsec-verifier[browser]` for XSS. Without it
+their findings cannot be confirmed. Enter accepts the default shown in brackets.
 
 | Question | Default | Same as |
 | --- | --- | --- |
@@ -424,7 +428,11 @@ data, so use intrusive mode only against a disposable test instance.
 The console looks like AppSec Analyzer's. Before the first request `verify`
 prints its settings as `Key : value` lines: the assessment, the target, the
 scope and its owner, the selection, the profile and model, the limits and the
-mode (safe or intrusive), and asks `Proceed against this target? [y/N]`. At the
+mode (safe or intrusive), and asks `Proceed against this target? [y/N]`. For
+selected classes that need a preparation, one more line names it or says it is
+missing: `Identities` (access control, roles only), `Browser` (XSS), `Callback`
+(SSRF) and `Marker file` (path traversal, its path only). A line that starts
+with `unavailable` means these findings cannot be confirmed in this run. At the
 end it prints `Done` with the number of findings per verdict and the paths of
 the report files. `--print` adds one line per finding with its verdict (`✓`
 confirmed, `✗` not reproducible, `⊘` blocked by a control, `?` inconclusive,

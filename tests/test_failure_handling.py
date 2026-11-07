@@ -484,3 +484,32 @@ def test_a_replaced_file_keeps_its_permissions(tmp_path):
     report.write_text_atomically(path, "new")
     assert path.read_text() == "new" and (path.stat().st_mode & 0o777) == 0o640
     assert [p.name for p in tmp_path.iterdir()] == ["a.yaml"]
+
+
+# ── a missing preparation is named before the run, not found in the report ─────
+
+def _dynamic(cls):
+    return FindingPlan(id="T-1", cwe="CWE-22", severity="High", title="t", match_key="k", instance="a.ts:1",
+                       status="dynamic", cls=cls, reason="r")
+
+
+def test_path_traversal_without_marker_file_is_named_and_the_content_never_shown():
+    sel = [_dynamic("path-traversal")]
+    assert cli._marker_note({}, sel).startswith("unavailable (no marker_file in the scope)")
+    note = cli._marker_note({"marker_file": {"path": "/srv/m.txt", "content": "TOKEN-1234567890ab"}}, sel)
+    assert note.startswith("/srv/m.txt") and "TOKEN" not in note
+    assert cli._marker_note({}, [_dynamic("xss")]) is None
+
+
+def test_access_control_without_a_test_identity_is_named():
+    sel = [_dynamic("access-control")]
+    assert cli._identities_note([], sel).startswith("unavailable (no test identity)")
+    assert cli._identities_note([{"role": "alice"}, {"role": "bob"}], sel) == "alice, bob"
+    assert cli._identities_note([], [_dynamic("xss")]) is None
+
+
+def test_the_run_settings_name_a_missing_identity_before_anything_is_contacted(tmp_path, monkeypatch, capsys):
+    rc, target = _verify(tmp_path, monkeypatch, Checked, "--dry-run")
+    assert rc == cli.EXIT_OK and target.calls == []
+    assert "  Identities : unavailable (no test identity); access-control findings cannot be confirmed" in (
+        capsys.readouterr().out)
