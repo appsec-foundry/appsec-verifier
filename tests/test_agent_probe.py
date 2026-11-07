@@ -4,6 +4,8 @@ planner never submits (VER-008, VER-010, VER-024)."""
 
 from __future__ import annotations
 
+import pytest
+
 from appsec_verifier.agent import AgentProbe, SourceReader
 from appsec_verifier.auth import SessionManager
 from appsec_verifier.limits import Limits, RunBudget
@@ -93,3 +95,22 @@ def test_planner_never_submits_is_inconclusive_not_refuted():
         res = AgentProbe("access-control", LoopPlanner, max_steps=3).run(ctx)
     assert res.verdict == "inconclusive"
     assert res.limits_hit == "attempts"
+
+
+@pytest.mark.parametrize("action", [
+    {"tool": "http_request", "args": {"path": "/", "headers": {"X-Forwarded-For": "127.0.0.1"}}},  # extra arg
+    {"tool": "http_request", "args": {"path": 5}},                                                  # wrong type
+    {"tool": "http_request", "args": {"path": "/", "params": {"q": {"nested": 1}}}},                # nested param
+    {"tool": "http_request", "args": "path=/"},                                                     # not an object
+    {"tool": "shell", "args": {"cmd": "id"}},                                                       # unknown tool
+    {"tool": "submit_verdict", "args": {"verdict": "confirmed", "rationale": "x"}},                 # verdict as tool
+    {"tool": "http_request", "args": {"path": "/"}, "extra": True},                                 # extra key
+    {"verdict": {"verdict": "confirmed", "rationale": "x", "identities_used": "customer-a"}},       # bad verdict
+    "GET /",                                                                                        # not a dict
+])
+def test_every_action_is_schema_checked_whichever_planner_sent_it(tmp_path, action):
+    sent = []
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp())
+    res = AgentProbe("access-control", lambda: ScriptedPlanner([action]), max_steps=3).run(ctx)
+    assert res.verdict == "inconclusive"
+    assert sent == []   # nothing ran

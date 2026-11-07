@@ -86,3 +86,20 @@ def test_identities_expose_role_only_no_secrets():
     doc = _run([_plan("T-1", "xss")])
     ids = doc["meta"]["identities"]
     assert ids == [{"role": "a", "authenticated": True}]
+
+
+def test_a_failing_probe_ends_only_its_finding_inconclusive():
+    class Exploding:
+        cls = "xss"
+
+        def run(self, ctx: ProbeContext) -> ProbeResult:
+            if ctx.plan.id == "T-1":
+                raise RuntimeError("secret-ish detail /internal/path")
+            return ProbeResult(verdict="not-reproducible", rationale="checked")
+
+    reg = ProbeRegistry()
+    reg.register(Exploding())
+    doc = _run([_plan("T-1", "xss"), _plan("T-2", "xss")], registry=reg)
+    first, second = doc["results"]
+    assert first["verdict"] == "inconclusive" and first["rationale"] == "probe failed: RuntimeError"
+    assert second["verdict"] == "not-reproducible"   # the run went on

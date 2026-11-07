@@ -82,3 +82,30 @@ def test_budget_exhaustion_stops_client():
     c.request("GET", "https://app.example.com/a")
     with pytest.raises(LimitExceeded):
         c.request("GET", "https://app.example.com/b")
+
+
+@pytest.mark.parametrize("location", ["https://app.example.com:99999/x", "https://app.example.com/x/../admin",
+                                      "/x/%2e%2e/admin", "https://[::1/x"])
+def test_unusable_redirect_target_is_refused_not_raised(location):
+    sent = []
+
+    def transport(method, url, headers):
+        sent.append(url)
+        return Resp(302, {"Location": location}) if url.endswith("/go") else Resp(200)
+
+    with pytest.raises(ScopeViolation):
+        client(transport).request("GET", "https://app.example.com/go", {"Authorization": "Bearer secret"})
+    assert sent == ["https://app.example.com/go"]   # the redirect target was never contacted
+
+
+@pytest.mark.parametrize("method", ["DELETE", "TRACE", "CONNECT", "PURGE", "delete", None])
+def test_methods_outside_the_allow_list_are_never_sent(method):
+    sent = []
+    with pytest.raises(ScopeViolation):
+        client(lambda m, u, h, **k: sent.append(m) or Resp()).request(method, "https://app.example.com/x")
+    assert sent == []
+
+
+def test_same_origin_is_false_for_unparseable_urls():
+    assert not same_origin("https://app.example.com/x", "https://app.example.com:99999/x")
+    assert not same_origin("not a url", "not a url")

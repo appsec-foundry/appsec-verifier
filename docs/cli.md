@@ -133,7 +133,11 @@ model unknown) stops the run before anything is contacted.
 
 Every host only proposes the next step as one JSON object; the Verifier
 validates it strictly and executes it through the same scope-guarded tools for
-every profile (VER-017, VER-019). The CLIs run in an empty temporary directory
+every profile (VER-017, VER-019). The agent loop checks every step against the
+strict tool schemas again, whichever profile produced it; an invalid step ends
+the finding `inconclusive` and nothing runs. A failing step (target not
+reachable, login rejected, unknown role) goes back to the agent as an error; a
+check that fails entirely ends its finding `inconclusive` and the run goes on. The CLIs run in an empty temporary directory
 with no built-in tools, MCP servers, settings, skills, custom instructions or
 session history, and receive only the environment they need: no identity
 secrets, and no API keys of other providers. `claude` and `codex-cli` also
@@ -147,11 +151,16 @@ gets one more tool, `browser_check`, which loads a target page in headless
 Google Chrome (Playwright, `appsec-verifier[browser]`; `--headful` shows it).
 Chrome opens no connection itself: every request of the page is intercepted and
 sent through the same scope guard, budget and safe mode as the agent's HTTP
-requests, identity headers are added only for the target's origin, redirects go
-back to the browser so each hop is checked, and anything else is aborted
-(WebSockets and service workers included). Chrome runs with its own sandbox;
-where that is unavailable (some containers), the browser does not start and XSS
-findings cannot be confirmed. Each finding gets a random two-part
+requests, identity headers are added only for the identity's origin, redirects
+go back to the browser so each hop is checked, and anything else is aborted
+(WebSockets and service workers included). Chrome itself is started inside a
+network namespace of its own (`unshare --user --net --map-current-user`) that
+has no interface but loopback, so traffic the interception never sees, such as
+WebRTC/UDP, cannot leave the machine either. This needs Linux, `unshare` from
+util-linux and unprivileged user namespaces. Chrome runs with its own sandbox.
+Where the namespace or the sandbox is unavailable (other systems, some
+containers), the browser does not start and XSS findings cannot be confirmed.
+Each finding gets a random two-part
 marker; the payload must call `alert('<part1>'+'<part2>')`, and only a dialog
 showing the joined value counts, so a page that merely echoes the payload text
 is not mistaken for execution. A `confirmed` XSS verdict without such an
@@ -171,9 +180,10 @@ and some IDOR cases — happens only with `--allow-intrusive`, the scope's
 `allow_state_change` true, and `--read-only` unset; such requests use unique
 markers, are logged, and are cleaned up where possible (VER-014). Deletes,
 bulk/destructive operations, DoS, and evasion must never be performed, regardless
-of flags. Today the code enforces this only in safe mode (GET, HEAD and OPTIONS
-only); intrusive mode does not yet block DELETE, so use it only against a
-disposable test instance.
+of flags. The code enforces the methods: safe mode sends only GET, HEAD and
+OPTIONS, intrusive mode adds POST, PUT and PATCH, and DELETE and every other
+method are refused in the HTTP client for every caller. A POST can still change
+or remove data, so use intrusive mode only against a disposable test instance.
 
 **Verifying one category.** The selectors isolate a single category —
 `--category xss`, or `--category idor` for IDOR alone — and safe mode applies the
@@ -275,7 +285,13 @@ proofs. For authenticated targets it also carries `auth_hosts` (SSO / OIDC and
 token endpoints the Verifier may contact only to log in — never probed for
 findings) and `proxy` (an HTTP/HTTPS proxy to route target and auth traffic
 through, with proxy credentials named as env vars). Anything not inside it —
-target, auth host, or proxy — is refused, not attempted.
+target, auth host, or proxy — is refused, not attempted. `base_url` must be an
+absolute http(s) URL with a host; a scope without a usable host or port allows
+nothing. Paths are compared percent-decoded, `deny_paths` also regardless of
+case, and a path a server could resolve to another resource (a `.` or `..`
+segment, `//`, `\`, `;`, or `%2e`, `%2f`, `%5c`, `%3b`, `%25`, `%00`) is always
+refused. Proxy variables in the environment (`HTTPS_PROXY` and the like) are
+ignored; only the scope's `proxy` is used.
 
 ### Identities file — `identities.yaml` (sessions, VER-016/028)
 
@@ -303,7 +319,16 @@ identities:
 ```
 
 Each identity sends its credentials only to the endpoint it names, which must be
-the target or a scope `auth_hosts` entry (VER-028). Credential and token values
+the target or a scope `auth_hosts` entry (VER-028), and attaches the session it
+obtains only to its own origin: `auth.target_origin`, by default the target base
+URL. A request as that role to any other origin is refused (VER-018). Before
+the first request `verify` checks the file against the schema, checks that every
+`*_env` variable it names is set, and that login endpoints and `target_origin`
+lie inside the scope; any failure stops the run with exit 2 and names the
+variable, never a value. `oidc-authorization-code` is not implemented yet and is
+refused there. The HTTP client keeps no cookies: sessions travel only in the
+headers the Verifier attaches, never in a cookie the target set for another
+identity. Credential and token values
 are read from the environment at run time, used only to obtain a session, and
 never written to logs, the report, evidence artefacts, or any model prompt —
 only the role label travels, and captured requests are redacted of Authorization

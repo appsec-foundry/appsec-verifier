@@ -128,10 +128,44 @@ def cmd_scope(args: argparse.Namespace) -> int:
 
 # ── verify ────────────────────────────────────────────────────────────────────
 
-def _load_identities(path: str | None) -> list[dict]:
+_IDENTITY_ENDPOINTS = ("login_url", "token_url", "authorize_url")
+
+
+def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[dict], list[str]]:
+    """Load the identities file and check it before anything is contacted
+    (VER-016, VER-025, VER-028): schema-valid, every `*_env` variable set, each
+    authentication endpoint allowed by the scope for authentication, and each
+    `target_origin` inside the scope. Errors name variables, never values."""
     if not path:
-        return []
-    return _load_yaml(Path(path)).get("identities", []) or []
+        return [], []
+    import yaml
+    from jsonschema.validators import validator_for
+
+    try:
+        doc = _load_yaml(Path(path))
+    except (OSError, yaml.YAMLError) as exc:
+        return [], [f"cannot read the identities file: {type(exc).__name__}"]
+    schema = _load_yaml(resource_root() / "schemas" / "identities.schema.yaml")
+    validator = validator_for(schema)(schema)
+    errors = [f"{'/'.join(map(str, e.path)) or 'file'}: {e.message}" for e in validator.iter_errors(doc)]
+    if errors:
+        return [], errors
+    identities = doc["identities"]
+    roles = [i["role"] for i in identities]
+    errors += [f"role {r!r} is defined more than once" for r in sorted({r for r in roles if roles.count(r) > 1})]
+    for ident in identities:
+        role, auth = ident["role"], ident.get("auth") or {}
+        if ident["method"] == "oidc-authorization-code":
+            errors.append(f"{role}: oidc-authorization-code is not implemented yet")
+        for key, name in auth.items():
+            if key.endswith("_env") and name and not env.get(name):
+                errors.append(f"{role}: environment variable {name} ({key}) is not set")
+        for key in _IDENTITY_ENDPOINTS:
+            if auth.get(key) and not guard.authorize(auth[key], "auth").allowed:
+                errors.append(f"{role}: {key} is neither the target nor a scope auth_hosts entry")
+        if auth.get("target_origin") and not guard.origin_allowed(auth["target_origin"]):
+            errors.append(f"{role}: target_origin is outside the scope")
+    return identities, errors
 
 
 class ProfileError(Exception):
@@ -203,7 +237,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
 
-    identities = _load_identities(args.identities)
+    identities, id_errors = _check_identities(args.identities, guard, os.environ)
+    if id_errors:
+        print("identities are not usable; nothing was contacted:", file=sys.stderr)
+        for e in id_errors:
+            print(f"  - {e}", file=sys.stderr)
+        return EXIT_BLOCKED
     budget = RunBudget(limits)
     try:
         planner_factory, agent_info = _build_planner_factory(args)

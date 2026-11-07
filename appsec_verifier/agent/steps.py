@@ -94,11 +94,30 @@ def parse_step(step) -> dict:
         args = strict_json(raw) if isinstance(raw, str) else None
     except (ValueError, RecursionError):
         args = None
+    return _validated(name, args)
+
+
+def _validated(name: str, args) -> dict:
     if not isinstance(args, dict):
         return inconclusive(f"agent sent {name} arguments that are not a JSON object")
-    error = next(iter(sorted(validator.iter_errors(args), key=str)), None)
+    error = next(iter(sorted(_ARG_VALIDATORS[name].iter_errors(args), key=str)), None)
     if error is not None:
         return inconclusive(f"agent proposed invalid {name} arguments: {error.message}")
     if name == "submit_verdict":
         return {"verdict": args}
     return {"tool": name, "args": args}
+
+
+def check_action(action) -> dict:
+    """Validate a loop action from ANY planner against the strict tool schemas
+    before anything acts on it (VER-017, VER-019): a tool call or a verdict,
+    otherwise an inconclusive verdict. The loop applies this to every action,
+    so no planner can pass unchecked arguments to the tools."""
+    if isinstance(action, dict) and set(action) == {"verdict"}:
+        return _validated("submit_verdict", action["verdict"])
+    if isinstance(action, dict) and "tool" in action and set(action) <= {"tool", "args"}:
+        name = action["tool"]
+        if not isinstance(name, str) or name == "submit_verdict" or name not in _ARG_VALIDATORS:
+            return inconclusive(f"agent proposed an unknown action {str(name)[:60]!r}")
+        return _validated(name, action.get("args", {}))
+    return inconclusive("planner returned neither a single tool call nor a verdict")

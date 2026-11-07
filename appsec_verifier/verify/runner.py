@@ -58,7 +58,9 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
 
 def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory) -> ProbeResult:
     """Decide one finding's outcome. Non-dynamic findings, and dynamic ones with
-    no registered probe, are `not-attempted` with a reason — never refuted."""
+    no registered probe, are `not-attempted` with a reason — never refuted. A
+    probe that fails ends that finding inconclusive; the run and the results
+    already gathered go on to the report."""
     if plan.status != "dynamic":
         return ProbeResult(verdict="not-attempted", rationale=plan.reason)
     probe = registry.get(plan.cls)
@@ -68,6 +70,8 @@ def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory) -> Prob
         res = probe.run(ctx_factory(plan))
     except LimitExceeded as exc:
         return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
+    except Exception as exc:  # noqa: BLE001 - one failed probe must not lose the run; only the type is reported
+        return ProbeResult(verdict="inconclusive", rationale=f"probe failed: {type(exc).__name__}")
     if res.verdict not in _VERDICTS:
         raise ValueError(f"probe for {plan.cls} returned invalid verdict {res.verdict!r}")
     return res

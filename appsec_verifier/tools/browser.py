@@ -6,10 +6,13 @@ expression executed. Chrome opens no connection of its own: every request of
 every page is intercepted and either answered through the GuardedHttpClient,
 so scope, budget, safe mode and identity headers apply exactly as for the
 agent's HTTP requests, or aborted. Redirects go back to the browser, so each
-hop is authorised again. As a second barrier Chrome's own proxy points to a
-closed local port and host resolution is disabled; WebSockets and service
-workers are blocked. Chrome runs with its sandbox on; if it cannot, the browser
-does not start and XSS stays unproven.
+hop is authorised again. Chrome itself runs in a network namespace of its own
+(Linux, `unshare --user --net`) that has no interface but loopback, so nothing
+it sends can leave the machine, including traffic the interception never sees
+such as WebRTC/UDP. Inside it Chrome's own proxy points to a closed local port
+and host resolution is disabled; WebSockets and service workers are blocked.
+Chrome runs with its sandbox on. Where the namespace or the sandbox is not
+available, the browser does not start and XSS stays unproven.
 
 Only evaluation proves execution: the payload must call alert() with an
 expression that joins the two marker parts at runtime, and only a dialog whose
@@ -25,6 +28,11 @@ import hashlib
 import json
 import re
 import secrets
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,7 +48,37 @@ _DROP_RESPONSE_HEADERS = {"content-encoding", "content-length", "transfer-encodi
 _CLOSED_PROXY = "http://127.0.0.1:9"
 _CHROME_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND", "--no-pings", "--disable-background-networking",
                 "--disable-domain-reliability", "--disable-sync"]
+# A new user and network namespace with the caller's uid: no network but loopback, and
+# Chrome is not root inside it, so its own sandbox still starts.
+_NETNS_ARGS = ("--user", "--net", "--map-current-user")
 SCREENSHOT_NOTE = "may show target data; review before sharing"
+
+
+def _chrome_binary() -> str | None:
+    return shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+
+
+def _isolation_problem(run=subprocess.run) -> str | None:
+    """Why Chrome cannot be started without network access here, or None."""
+    if not sys.platform.startswith("linux"):
+        return "the proof browser needs Linux, where Chrome runs in a network namespace without network access"
+    unshare = shutil.which("unshare")
+    if not unshare:
+        return "`unshare` (util-linux) is needed to run Chrome without network access"
+    if _chrome_binary() is None:
+        return "Google Chrome (google-chrome) was not found on PATH"
+    try:
+        probe = run([unshare, *_NETNS_ARGS, "true"], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        probe = None
+    if probe is None or probe.returncode != 0:
+        return "cannot create a network namespace for Chrome (unprivileged user namespaces may be disabled)"
+    return None
+
+
+def _wrapper_script(unshare: str, chrome: str) -> str:
+    """The executable Playwright starts: Chrome inside a namespace without network."""
+    return f'#!/bin/sh\nexec {shlex.quote(unshare)} {" ".join(_NETNS_ARGS)} {shlex.quote(chrome)} "$@"\n'
 
 
 class BrowserUnavailable(Exception):
@@ -137,14 +175,25 @@ def _init_script(parts: tuple[str, str]) -> str:
 def _launch_chrome(headless: bool):
     from playwright.sync_api import sync_playwright
 
+    unshare, chrome = shutil.which("unshare"), _chrome_binary()
+    if not sys.platform.startswith("linux") or not unshare or not chrome:
+        raise BrowserUnavailable("Chrome cannot be isolated from the network here")
     playwright = sync_playwright().start()
+    wrapper_dir = tempfile.mkdtemp(prefix="appsec-verifier-chrome-")   # owner-only
     try:
-        # Target content is untrusted: keep Chrome's own sandbox on (Playwright turns it off by default).
-        browser = playwright.chromium.launch(channel="chrome", headless=headless, chromium_sandbox=True,
-                                             proxy={"server": _CLOSED_PROXY}, args=_CHROME_ARGS)
+        wrapper = Path(wrapper_dir) / "chrome"
+        wrapper.write_text(_wrapper_script(unshare, chrome), encoding="utf-8")
+        wrapper.chmod(0o700)
+        # Target content is untrusted: Chrome gets no network of its own (VER-018) and keeps its
+        # sandbox on (Playwright turns it off by default). Playwright talks to it over a pipe.
+        browser = playwright.chromium.launch(executable_path=str(wrapper), headless=headless,
+                                             chromium_sandbox=True, proxy={"server": _CLOSED_PROXY},
+                                             args=_CHROME_ARGS)
     except Exception:
         playwright.stop()
         raise
+    finally:
+        shutil.rmtree(wrapper_dir, ignore_errors=True)   # Chrome has exec'd; the wrapper is no longer needed
     return playwright, browser
 
 
@@ -162,6 +211,9 @@ class ProofBrowser:
             import playwright.sync_api  # noqa: F401
         except ImportError as exc:
             raise BrowserUnavailable("install appsec-verifier[browser] (Playwright) and Google Chrome") from exc
+        problem = _isolation_problem()
+        if problem:
+            raise BrowserUnavailable(problem)
 
     def _ensure(self):
         if self._browser is None:

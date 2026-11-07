@@ -67,3 +67,32 @@ def test_proxy_url_injects_credentials_from_env():
 
 def test_proxy_url_none_when_unconfigured():
     assert _proxy_url({}, env={}) is None
+
+
+def test_cookies_set_by_the_target_are_never_sent_again():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("cookie"))
+        return httpx.Response(200, headers={"set-cookie": "sid=SESSION_OF_ALICE; Path=/"})
+
+    client = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), HttpxTransport(client=_mock_client(handler)))
+    client.request("GET", "https://app.example.com/login", {"Authorization": "Bearer alice"})
+    client.request("GET", "https://app.example.com/orders/1")             # anonymous
+    assert seen == [None, None]
+
+
+def test_real_client_builds_and_ignores_proxies_from_the_environment(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://undeclared-proxy.example:3128")
+    monkeypatch.setenv("HTTP_PROXY", "http://undeclared-proxy.example:3128")
+    t = HttpxTransport()                                   # no TypeError on any supported httpx
+    assert t._client._mounts == {}                         # no environment proxy routes
+    t.close()
+
+
+def test_scope_proxy_is_used(monkeypatch):
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    t = HttpxTransport(proxy="http://u:p@proxy.corp:8080")
+    pool = t._client._transport._pool
+    assert type(pool).__name__ == "HTTPProxy" and pool._proxy_url.host == b"proxy.corp"
+    t.close()

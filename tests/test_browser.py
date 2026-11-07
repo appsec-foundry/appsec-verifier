@@ -28,6 +28,8 @@ from appsec_verifier.tools.browser import (
     Fulfil,
     ProofBrowser,
     _init_script,
+    _isolation_problem,
+    _wrapper_script,
     answer,
     marker_expression,
     new_marker,
@@ -163,11 +165,21 @@ def _ctx(cls="xss", browser=None, sessions=None, safe=True):
 
 def test_browser_check_passes_identity_marker_and_mode():
     browser = FakeBrowser()
-    sessions = SimpleNamespace(headers_for=lambda role: {"Authorization": f"Bearer {role}"})
+    sessions = SimpleNamespace(headers_for=lambda role: {"Authorization": f"Bearer {role}"},
+                               origin_for=lambda role: None)
     AgentTools(_ctx(browser=browser, sessions=sessions)).call("browser_check", {"path": "/s?q=x", "role": "a"})
     call = browser.calls[0]
     assert call["url"] == BASE + "/s?q=x" and call["identity_headers"] == {"Authorization": "Bearer a"}
     assert call["marker"] == ("vrfaa", "bb") and call["safe"] is True and call["finding_id"] == "T-9"
+    assert call["target_base"] == BASE   # identity headers only for the identity's origin
+
+
+def test_browser_check_attaches_identity_only_to_its_declared_origin():
+    browser = FakeBrowser()
+    sessions = SimpleNamespace(headers_for=lambda role: {"Authorization": "Bearer a"},
+                               origin_for=lambda role: "https://cdn.example.com")
+    AgentTools(_ctx(browser=browser, sessions=sessions)).call("browser_check", {"path": "/s", "role": "a"})
+    assert browser.calls[0]["target_base"] == "https://cdn.example.com"
 
 
 @pytest.mark.parametrize("ctx", [_ctx(cls="access-control", browser=FakeBrowser()), _ctx(browser=None),
@@ -259,3 +271,52 @@ def test_launch_failure_leaves_xss_unproven(tmp_path):
     with pytest.raises(BrowserError):
         browser._ensure()
     browser.close()
+
+
+# ── Chrome gets no network of its own (VER-018) ──────────────────────────────
+
+def test_chrome_is_started_inside_a_network_namespace():
+    script = _wrapper_script("/usr/bin/unshare", "/opt/google chrome/chrome")
+    assert script.startswith("#!/bin/sh\nexec /usr/bin/unshare --user --net --map-current-user ")
+    assert "'/opt/google chrome/chrome' \"$@\"" in script            # quoted, arguments passed through
+
+
+def _which(present):
+    return lambda name: f"/usr/bin/{name}" if name in present else None
+
+
+@pytest.mark.parametrize("platform, present, rc, reason", [
+    ("darwin", {"unshare", "google-chrome"}, 0, "needs Linux"),
+    ("linux", {"google-chrome"}, 0, "unshare"),
+    ("linux", {"unshare"}, 0, "Google Chrome"),
+    ("linux", {"unshare", "google-chrome"}, 1, "network namespace"),
+])
+def test_without_network_isolation_the_browser_is_unavailable(monkeypatch, platform, present, rc, reason):
+    import appsec_verifier.tools.browser as browser_mod
+
+    monkeypatch.setattr(browser_mod.sys, "platform", platform)
+    monkeypatch.setattr(browser_mod.shutil, "which", _which(present))
+    problem = _isolation_problem(run=lambda argv, **kw: SimpleNamespace(returncode=rc))
+    assert problem and reason in problem
+
+
+def test_isolation_probe_runs_unshare_with_the_namespace_flags(monkeypatch):
+    import appsec_verifier.tools.browser as browser_mod
+
+    calls = []
+    monkeypatch.setattr(browser_mod.sys, "platform", "linux")
+    monkeypatch.setattr(browser_mod.shutil, "which", _which({"unshare", "google-chrome"}))
+    assert _isolation_problem(run=lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0)) is None
+    assert calls == [["/usr/bin/unshare", "--user", "--net", "--map-current-user", "true"]]
+
+
+def test_check_available_refuses_when_chrome_cannot_be_isolated(monkeypatch):
+    import sys as _sys
+
+    import appsec_verifier.tools.browser as browser_mod
+
+    monkeypatch.setitem(_sys.modules, "playwright", SimpleNamespace())
+    monkeypatch.setitem(_sys.modules, "playwright.sync_api", SimpleNamespace())
+    monkeypatch.setattr(browser_mod, "_isolation_problem", lambda: "cannot create a network namespace")
+    with pytest.raises(BrowserUnavailable, match="network namespace"):
+        ProofBrowser.check_available()

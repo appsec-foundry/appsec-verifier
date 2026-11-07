@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import os
+import socket
 import stat
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -32,7 +33,8 @@ MARKER = ("vrf1a2b3c4d", "5e6f7a8b")
 
 class Target:
     """A tiny vulnerable app: /reflect echoes q unencoded, /safe encodes it,
-    /echo passes q to alert() as text, /ext loads an out-of-scope script."""
+    /echo passes q to alert() as text, /ext loads an out-of-scope script,
+    /webrtc sends STUN over UDP to 127.0.0.1:<port>."""
 
     def __init__(self):
         self.seen = []
@@ -46,6 +48,10 @@ class Target:
             "/safe": f"<html><body><p>Results for {html.escape(q)}</p></body></html>",
             "/echo": "<html><body><script>alert(new URLSearchParams(location.search).get('q'))</script></body></html>",
             "/ext": '<html><body><script src="https://evil.example.net/x.js"></script></body></html>',
+            "/webrtc": "<html><body><script>const port = new URLSearchParams(location.search).get('port');"
+                       "const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:127.0.0.1:' + port}]});"
+                       "pc.createDataChannel('x'); pc.createOffer().then(o => pc.setLocalDescription(o));"
+                       "</script></body></html>",
         }
         body = pages.get(parsed.path, "not found")
         return SimpleNamespace(status_code=200 if parsed.path in pages else 404,
@@ -102,3 +108,26 @@ def test_out_of_scope_navigation_is_blocked(browser):
     result = b.check("https://evil.example.net/", identity_headers={}, target_base=BASE, marker=MARKER,
                      finding_id="T-1", wait_ms=0, safe=True)
     assert result["executed"] is False and result.get("error") and target.seen == []
+
+
+def test_udp_from_the_page_never_leaves_chrome(browser):
+    """WebRTC/STUN is UDP, which the request interception never sees; only the
+    network namespace keeps it in (VER-018). Without it this listener gets packets."""
+    b, _, _ = browser
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(0.2)
+    received = 0
+    try:
+        result = b.check(BASE + f"/webrtc?port={sock.getsockname()[1]}", identity_headers={}, target_base=BASE,
+                         marker=MARKER, finding_id="T-1", wait_ms=3000, safe=True)
+        assert result["status"] == 200
+        while True:
+            try:
+                sock.recvfrom(2048)
+                received += 1
+            except OSError:          # timeout: nothing (more) arrived
+                break
+    finally:
+        sock.close()
+    assert received == 0

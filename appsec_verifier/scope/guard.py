@@ -4,15 +4,24 @@ The guard is the single decision point for "may the Verifier contact this URL?".
 It checks the destination at the moment of use — scheme, host, port, path — and
 classifies it by purpose: the target attack surface, an SSO/auth host, the SSRF
 callback listener, or the declared proxy. Anything not covered is refused.
+
+It fails closed: a scope without a usable host or port allows no target, and a
+URL that cannot be parsed is refused, never raised. A path that a client or
+server may normalise into a different resource (dot segments, `//`, `\\`, `;`,
+encoded separators) is refused, so `deny_paths` and `path_prefixes` decide on
+the resource that is actually reached; `deny_paths` match case-insensitively
+on the decoded path (VER-018).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlsplit
 
 _PURPOSES = ("target", "auth", "callback", "proxy")
+# Raw path fragments that clients or servers normalise into another resource.
+_AMBIGUOUS_PATH = ("//", "\\", ";", "%2e", "%2f", "%5c", "%3b", "%25", "%00")
 
 
 @dataclass
@@ -36,17 +45,35 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 
 def _dissect(url: str) -> tuple[str, str, int | None, str]:
-    u = urlparse(url)
+    """Scheme, host, port and raw path. Raises ValueError for an unparseable URL
+    (e.g. a port outside 0-65535)."""
+    if not isinstance(url, str):
+        raise ValueError("URL is not a string")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in url):
+        raise ValueError("control character in URL")   # urlsplit would silently drop CR, LF and TAB
+    u = urlsplit(url)
     scheme = (u.scheme or "").lower()
     host = (u.hostname or "").lower()
     port = u.port or {"https": 443, "http": 80}.get(scheme)
     return scheme, host, port, (u.path or "/")
 
 
+def _safe_dissect(url) -> tuple[str, str, int | None, str] | None:
+    try:
+        return _dissect(url)
+    except ValueError:
+        return None
+
+
+def _ambiguous_path(path: str) -> bool:
+    low = path.lower()
+    return any(a in low for a in _AMBIGUOUS_PATH) or any(seg in (".", "..") for seg in path.split("/"))
+
+
 class ScopeGuard:
     def __init__(self, scope: dict):
         self.scope = scope or {}
-        _, bh, bp, _ = _dissect(self.scope.get("base_url") or "")
+        _, bh, bp, _ = _safe_dissect(self.scope.get("base_url") or "") or ("", "", None, "/")
         self.hosts = {h.lower() for h in (self.scope.get("hosts") or ([bh] if bh else []))}
         self.ports = set(self.scope.get("ports") or ([bp] if bp else []))
         self.schemes = set(self.scope.get("schemes") or ["https"])
@@ -78,25 +105,35 @@ class ScopeGuard:
         return False
 
     def _on_target_host(self, host: str, port: int | None) -> bool:
-        return host in self.hosts and (not self.ports or port in self.ports)
+        return host in self.hosts and port in self.ports
+
+    def origin_allowed(self, url: str) -> bool:
+        """Whether scheme, host and port of `url` are a target origin in scope."""
+        parts = _safe_dissect(url)
+        return bool(parts and parts[1]) and parts[0] in self.schemes and self._on_target_host(parts[1], parts[2])
 
     def authorize(self, url: str, purpose: str = "target") -> Decision:
         if purpose not in _PURPOSES:
             return Decision(False, f"unknown purpose {purpose!r}", purpose)
-        scheme, host, port, path = _dissect(url)
-        if not host:
-            return Decision(False, f"unparseable URL: {url!r}", purpose)
+        parts = _safe_dissect(url)
+        if parts is None or not parts[1]:
+            return Decision(False, f"unparseable URL: {str(url)[:200]!r}", purpose)
+        scheme, host, port, path = parts
 
         if purpose == "target":
             if scheme not in self.schemes:
                 return Decision(False, f"scheme {scheme!r} not allowed", purpose)
-            if self.hosts and host not in self.hosts:
+            if not self.hosts or host not in self.hosts:
                 return Decision(False, f"host {host!r} out of scope", purpose)
-            if self.ports and port not in self.ports:
+            if not self.ports or port not in self.ports:
                 return Decision(False, f"port {port} out of scope", purpose)
-            if any(path.startswith(d) for d in self.deny_paths):
+            if _ambiguous_path(path):
+                return Decision(False, f"path {path!r} is ambiguous (dot segment, '//', '\\', ';' or an "
+                                       "encoded separator) and is refused", purpose)
+            decoded = unquote(path)
+            if any(decoded.lower().startswith(str(d).lower()) for d in self.deny_paths):
                 return Decision(False, f"path {path!r} is explicitly denied", purpose)
-            if not any(path.startswith(p) for p in self.path_prefixes):
+            if not any(decoded.startswith(p) for p in self.path_prefixes):
                 return Decision(False, f"path {path!r} outside allowed prefixes", purpose)
             return Decision(True, "target in scope", purpose)
 
@@ -113,7 +150,7 @@ class ScopeGuard:
             return Decision(False, f"callback {host}:{port} is not the declared listener", purpose)
 
         # purpose == "proxy"
-        _, ph, pp, _ = _dissect(self.proxy.get("url") or "")
+        _, ph, pp, _ = _safe_dissect(self.proxy.get("url") or "") or ("", "", None, "/")
         if ph and host == ph and (pp is None or port == pp):
             return Decision(True, "declared proxy allowed", purpose)
         return Decision(False, f"proxy {host}:{port} is not the declared proxy", purpose)

@@ -25,10 +25,11 @@ properties:
 
   base_url:
     type: string
+    pattern: "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#\\s]+"
     description: |
       Canonical base URL of the authorised target, e.g. https://localhost:3000.
-      `--target` must resolve inside this scope; if `--target` is omitted this
-      value is used.
+      It must be an absolute http(s) URL with a host. `--target` must resolve
+      inside this scope; if `--target` is omitted this value is used.
 
   hosts:
     type: array
@@ -54,7 +55,10 @@ properties:
     description: |
       Allowed request path prefixes (e.g. "/", "/api/"). A request whose path
       does not start with one of these is out of scope. When absent, "/" is
-      assumed (whole host in scope).
+      assumed (whole host in scope). Paths are compared percent-decoded; a path
+      with a dot segment, "//", "\", ";" or an encoded separator (%2e, %2f,
+      %5c, %3b, %25, %00) is always refused, because it can be normalised into
+      another resource.
     items: { type: string }
 
   deny_paths:
@@ -62,6 +66,7 @@ properties:
     description: |
       Path prefixes that are never contacted even though they fall under
       path_prefixes — e.g. destructive admin routes. Deny wins over allow.
+      Matched case-insensitively against the percent-decoded path.
     items: { type: string }
 
   window:

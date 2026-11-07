@@ -33,9 +33,11 @@ Early version.
 - XSS findings are confirmed only in a headless proof browser (Google Chrome
   through Playwright, `appsec-verifier[browser]`): the payload must evaluate a
   per-finding marker, and a screenshot is saved when it does. Every request the
-  browser makes goes through the scope check. Without the browser, XSS findings
-  cannot be confirmed. The browser has only been tested offline so far; see
-  `tests/test_browser_live.py` to run it against real Chrome.
+  browser makes goes through the scope check, and Chrome itself runs in a network
+  namespace without network access. That needs Linux with `unshare` (util-linux)
+  and unprivileged user namespaces; elsewhere the browser does not start. Without
+  the browser, XSS findings cannot be confirmed. The browser has only been tested
+  offline so far; see `tests/test_browser_live.py` to run it against real Chrome.
 - Not built yet: the callback listener for SSRF. Other classes are judged from
   HTTP responses.
 
@@ -80,7 +82,9 @@ reason. The list of testable CWEs is in
 
 Possible verdicts: `confirmed`, `not-reproducible`, `blocked-by-control` (a
 protection the static analysis could not see stops the attack), `inconclusive`,
-`not-attempted`.
+`not-attempted`. If a check fails, for example because the target does not
+answer or a login is rejected, that finding ends `inconclusive` and the run
+continues.
 
 ## Safety
 
@@ -90,9 +94,18 @@ explicitly allows. The controls follow the
 
 - The scope file lists the hosts, ports and paths that may be contacted, the
   time window, the responsible owner, and any proxy and login (SSO) hosts.
-  Requests outside it are refused.
+  Requests outside it are refused. A path that a server could resolve to a
+  different resource (`..`, `//`, `;`, `\` or an encoded separator such as
+  `%2f`) is refused, and `deny_paths` match regardless of case and percent
+  encoding. Proxy settings from the environment (`HTTPS_PROXY` and the like)
+  are ignored; only the scope's proxy is used.
 - Passwords, tokens and client secrets are read from environment variables. They
-  do not appear in logs or the report, and the agent only sees role names.
+  do not appear in logs or the report, and the agent only sees role names. The
+  identities file is checked before the first request: a missing variable, or a
+  login endpoint or `target_origin` outside the scope, stops the run. An
+  identity's credentials are sent only to its own origin (`target_origin`, by
+  default the target URL). The HTTP client keeps no cookies, so one identity's
+  session never travels with another identity's or an anonymous request.
 - Requests, attempts per finding, model calls, request rate, run time and model
   spend are capped. Defaults are in [`data/limits.yaml`](data/limits.yaml).
   Reaching a limit stops the work it affects. Spend is counted for `claude` and
@@ -102,8 +115,11 @@ explicitly allows. The controls follow the
   requests, uses one harmless payload per test and keeps the request count low.
   Write requests (needed for stored XSS and some IDOR cases) require
   `--allow-intrusive` and `allow_state_change: true` in the scope.
-- Intrusive mode currently allows every HTTP method, including DELETE. Use it
-  only against a disposable test instance.
+- Intrusive mode adds POST, PUT and PATCH. DELETE and every other method are
+  never sent. Use intrusive mode only against a disposable test instance.
+- Every step the model proposes is checked against a strict schema before it
+  runs, whichever profile produced it; an invalid step ends the finding
+  `inconclusive`.
 
 ## Install
 

@@ -1,11 +1,13 @@
-"""The agent loop that drives a probe (VER-008, VER-015, VER-017).
+"""The agent loop that drives a probe (VER-008, VER-015, VER-017, VER-019).
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
-verdict. The loop executes tool calls through the confined AgentTools, enforces
-a step limit and the run budget, and never lets a bad tool call escape — errors
-go back to the planner as data. A planner that never submits ends inconclusive,
-not refuted (VER-024).
+verdict. Every action is validated against the strict tool schemas here,
+whichever planner produced it; an invalid one ends the finding inconclusive and
+nothing runs. The loop executes tool calls through the confined AgentTools,
+enforces a step limit and the run budget, and never lets a bad tool call escape
+— errors go back to the planner as data. A planner that never submits ends
+inconclusive, not refuted (VER-024).
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Protocol
 
 from ..limits import LimitExceeded
 from ..verify.probes import ProbeContext, ProbeResult
+from .steps import check_action
 from .tools import AgentTools, ToolError
 
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
@@ -82,7 +85,7 @@ class AgentProbe:
                 ctx.budget.check_time()
             except LimitExceeded as exc:
                 return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
-            action = planner.next_step(ctx, history)
+            action = check_action(planner.next_step(ctx, history))   # VER-019: no unchecked arguments
             if "verdict" in action:
                 return _xss_proof(ctx, history, _result_from_verdict(action["verdict"]))
             name, args = action.get("tool"), action.get("args", {})

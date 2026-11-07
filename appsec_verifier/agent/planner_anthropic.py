@@ -24,14 +24,17 @@ def _tool_defs() -> list[dict]:
         {
             "name": "http_request",
             "description": "Send one HTTP request to the target as a test identity. "
-                           "Path is relative to the target base URL. Safe mode allows only GET/HEAD/OPTIONS.",
+                           "Path is relative to the target base URL. Safe mode allows only GET/HEAD/OPTIONS; "
+                           "POST/PUT/PATCH need intrusive mode; other methods are never sent. A role's "
+                           "credentials go only to its own origin.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "role": {"type": "string", "description": "identity role label, or omit for unauthenticated"},
                     "method": {"type": "string", "default": "GET"},
                     "path": {"type": "string"},
-                    "params": {"type": "object"},
+                    "params": {"type": "object",
+                               "additionalProperties": {"type": ["string", "integer", "number", "boolean"]}},
                     "json": {"type": "object"},
                 },
                 "required": ["path"],

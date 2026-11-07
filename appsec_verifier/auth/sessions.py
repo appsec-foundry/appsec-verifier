@@ -65,6 +65,12 @@ class SessionManager:
     def invalidate(self, role: str) -> None:
         self._cache.pop(role, None)
 
+    def origin_for(self, role: str) -> str | None:
+        """The identity's declared `target_origin`, or None for the target base
+        URL. Its credentials are attached only to that origin (VER-018)."""
+        ident = self._by_role.get(role) or {}
+        return (ident.get("auth") or {}).get("target_origin") or None
+
     # ── per-method acquisition ────────────────────────────────────────────────
 
     def _acquire(self, method: str, auth: dict) -> dict:
