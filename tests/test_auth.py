@@ -110,3 +110,36 @@ def test_token_cached_then_refetched_after_invalidate():
     mgr.invalidate("ua")
     mgr.headers_for("ua")
     assert len(tr.calls) == 2          # refetched
+
+
+FORM = {"role": "a", "method": "form", "auth": {"login_url": "https://app.example.com/rest/user/login",
+                                                "username_env": "AU", "password_env": "AP"}}
+BASIC = {"role": "b", "method": "basic", "auth": {"username_env": "BU", "password_env": "BP"}}
+ENV = {"AU": "alice@shop.test", "AP": "pa ss/wörd\"1", "BU": "bob", "BP": "hunter22"}
+
+
+def test_redact_replaces_env_values_and_obtained_tokens_in_every_form():
+    mgr, _ = _mgr([FORM, BASIC], ENV)
+    mgr.headers_for("a")
+    mgr.headers_for("b")
+    basic = base64.b64encode(b"bob:hunter22").decode()
+    text = (f'token FORMTOK user alice@shop.test pw pa ss/wörd"1 json "pa ss/w\\u00f6rd\\"1" '
+            f"url pa%20ss%2Fw%C3%B6rd%221 form pa+ss%2Fw%C3%B6rd%221 basic {basic} hunter22 name bob")
+    out = mgr.redact({"body": text, "list": [text], "n": 3, "flag": True})
+    for secret in ("FORMTOK", "alice@shop.test", "wörd", "w\\u00f6rd", "w%C3%B6rd", basic, "hunter22"):
+        assert secret not in out["body"] and secret not in out["list"][0]
+    assert out["n"] == 3 and out["flag"] is True
+    assert "bob" in out["body"]        # shorter than 4 characters: left alone, it would mask ordinary text
+
+
+def test_redact_keeps_masking_a_token_after_invalidate():
+    mgr, _ = _mgr([FORM], ENV)
+    mgr.headers_for("a")
+    mgr.invalidate("a")
+    assert mgr.redact("old FORMTOK") == "old [redacted]"
+
+
+def test_redact_masks_configured_secrets_before_any_login():
+    mgr, tr = _mgr([FORM], ENV)
+    assert mgr.redact("echo hunter22 alice@shop.test") == "echo hunter22 [redacted]"
+    assert tr.calls == []

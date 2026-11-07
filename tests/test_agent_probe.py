@@ -116,6 +116,40 @@ def test_every_action_is_schema_checked_whichever_planner_sent_it(tmp_path, acti
     assert sent == []   # nothing ran
 
 
+def test_planner_and_report_never_see_a_credential_value(tmp_path):
+    """The target echoes the bearer token; the planner's history and the written
+    results carry "[redacted]" instead, even where the model repeats it (VER-016)."""
+    import json
+    from pathlib import Path as P
+
+    from appsec_verifier.agent import agent_registry
+    from appsec_verifier.verify import run_verification
+
+    seen = []
+
+    class EchoPlanner:
+        def next_step(self, ctx, history):
+            seen.append(json.dumps(history))
+            if not history:
+                return {"tool": "http_request", "args": {"role": "customer-a", "path": "/whoami"}}
+            if len(history) == 1:
+                return {"tool": "http_request", "args": {"role": "customer-a", "path": "/AAA-not-a-secret"}}
+            return {"verdict": {"verdict": "inconclusive", "rationale": "saw token AAA-SECRET-TOKEN echoed",
+                                "observations": ["Bearer AAA-SECRET-TOKEN"]}}
+
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, f'{{"auth":"{h.get("Authorization")}"}}'))
+    ctx.sessions._env = {"TA": "AAA-SECRET-TOKEN", "TB": "BBB-SECRET-TOKEN"}
+    doc = run_verification(
+        assessment_path=P("a.yaml"), scope=SCOPE, scope_path=P("s.yaml"), plans=[ctx.plan], limits=Limits(),
+        identities=ctx.identities, registry=agent_registry(EchoPlanner), verifier_version="t",
+        target_base=SCOPE["base_url"], authorization={"confirmed": True}, http=ctx.http, sessions=ctx.sessions,
+        source=ctx.source)
+    assert seen and all("SECRET-TOKEN" not in h for h in seen)
+    assert "[redacted]" in seen[1]
+    assert "SECRET-TOKEN" not in json.dumps(doc)
+    assert doc["results"][0]["rationale"] == "saw token [redacted] echoed"
+
+
 def test_closed_window_stops_the_finding_before_any_model_call(tmp_path):
     from datetime import datetime, timezone
 

@@ -10,7 +10,8 @@ An identity's credentials go only to the origin it is bound to (its
 scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode; DELETE and every other method are
 never sent (VER-014). A failing identity or transport ends the call as a tool
-error for the agent, never as an exception past the loop.
+error for the agent, never as an exception past the loop. A response body is
+redacted of every credential value before it is cut to the excerpt (VER-016).
 """
 
 from __future__ import annotations
@@ -31,12 +32,12 @@ class ToolError(Exception):
     result, never raised past the loop."""
 
 
-def _body_excerpt(resp) -> str:
+def _body_text(resp) -> str:
     text = getattr(resp, "text", None)
     if text is None:
         content = getattr(resp, "content", b"") or b""
         text = content.decode("utf-8", "replace") if isinstance(content, bytes) else str(content)
-    return text[:_BODY_EXCERPT]
+    return text
 
 
 class AgentTools:
@@ -117,11 +118,13 @@ class AgentTools:
             raise ToolError(f"request refused — out of scope: {exc}") from exc
         except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
+        text = _body_text(resp)
+        excerpt = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
         return {
             "role": role,
             "status": getattr(resp, "status_code", None),
-            "length": len(_body_excerpt(resp)),
-            "body_excerpt": _body_excerpt(resp),
+            "length": len(text),                         # of the whole body, not of the excerpt
+            "body_excerpt": excerpt[:_BODY_EXCERPT],     # redacted before the cut: no partial token (VER-016)
         }
 
     def _send(self, method, url, headers, params, json):

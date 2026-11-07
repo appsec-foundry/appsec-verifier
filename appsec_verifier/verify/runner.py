@@ -1,7 +1,8 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
 VER-020). Pure, injectable logic: the probe registry, HTTP client, budget, and
 clock are all passed in, so the whole flow is tested offline. Returns the
-verification document as a dict shaped for schemas/verification.schema.yaml.
+verification document as a dict shaped for schemas/verification.schema.yaml,
+its results redacted of every credential value the sessions know (VER-016).
 """
 
 from __future__ import annotations
@@ -117,6 +118,8 @@ def run_verification(
         )
 
     results = [_result_entry(i, p, _verify_one(p, registry, ctx_factory)) for i, p in enumerate(plans, start=1)]
+    if sessions is not None:
+        results = sessions.redact(results)      # VER-016: model text never carries a credential into the report
 
     tally = {"confirmed": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0, "not_attempted": 0}
     _key = {

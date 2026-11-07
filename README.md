@@ -100,7 +100,9 @@ explicitly allows. The controls follow the
   encoding. Proxy settings from the environment (`HTTPS_PROXY` and the like)
   are ignored; only the scope's proxy is used.
 - Passwords, tokens and client secrets are read from environment variables. They
-  do not appear in logs or the report, and the agent only sees role names. The
+  do not appear in logs or the report, and the agent only sees role names. If the
+  target echoes one back, it is replaced by `[redacted]` before the model or the
+  report sees it. The
   identities file is checked before the first request: a missing variable, or a
   login endpoint or `target_origin` outside the scope, stops the run. An
   identity's credentials are sent only to its own origin (`target_origin`, by

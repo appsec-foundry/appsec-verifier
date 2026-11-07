@@ -7,8 +7,9 @@ whichever planner produced it; an invalid one ends the finding inconclusive and
 nothing runs. The loop executes tool calls through the confined AgentTools,
 enforces a step limit, the run budget and the authorisation window (checked
 before every planner call), and never lets a bad tool call escape
-— errors go back to the planner as data. A planner that never submits ends
-inconclusive, not refuted (VER-024).
+— errors go back to the planner as data. Every tool result is redacted of
+credential values before the planner sees it (VER-016). A planner that never
+submits ends inconclusive, not refuted (VER-024).
 """
 
 from __future__ import annotations
@@ -97,6 +98,8 @@ class AgentProbe:
                 result = {"error": str(exc)}
             except LimitExceeded as exc:
                 return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
+            if ctx.sessions is not None:
+                result = ctx.sessions.redact(result)       # VER-016: no credential value reaches the planner
             history.append({"tool": name, "args": args, "result": result})
         return ProbeResult(verdict="inconclusive",
                            rationale="step budget exhausted without a verdict", limits_hit="attempts")

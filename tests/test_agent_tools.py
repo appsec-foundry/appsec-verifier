@@ -93,6 +93,18 @@ class LoginResp(Resp):
         return {"token": "session-token"}
 
 
+def test_echoed_token_is_redacted_before_the_excerpt_is_cut(tmp_path):
+    """A token that straddles the 600-character cut must not leave its first
+    characters in the excerpt (VER-016); `length` is the whole body's."""
+    token = "A" * 4 + "0123456789abcdef0123456789"
+    body = "x" * 590 + token + "y" * 50
+    env = {"TA": token}
+    tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: Resp(200, body), env=env))
+    out = tools.http_request(role="customer-a", path="/whoami")
+    assert out["length"] == len(body)
+    assert token[:10] not in out["body_excerpt"] and out["body_excerpt"].startswith("x" * 590 + "[redac")
+
+
 def test_forbidden_answer_never_triggers_a_new_login(tmp_path):
     """403 is an authorisation decision (often the finding's result), not an expired
     session: the session is reused and the target sees no extra login (VER-028)."""

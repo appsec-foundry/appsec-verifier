@@ -8,11 +8,23 @@ only to the endpoint the identity names, and that endpoint is authorised by the
 ScopeGuard (purpose="auth"), so it must be the target or a scope `auth_hosts`
 entry. A token is fetched once per role and reused; `invalidate()` drops it so a
 401 can trigger a transparent refresh.
+
+`redact()` replaces every credential value the run knows (the identities'
+`*_env` values and every header value and token obtained from them, also
+JSON-escaped and URL-encoded) with "[redacted]". The agent loop applies it to
+every tool result before the planner sees it, and the runner to the results
+before the report is written (VER-016). Values shorter than 4 characters are
+not replaced, because they would mask ordinary text.
 """
 
 from __future__ import annotations
 
 import base64
+import json
+from urllib.parse import quote, quote_plus
+
+REDACTED = "[redacted]"
+_MIN_SECRET_LEN = 4
 
 
 class AuthError(Exception):
@@ -44,6 +56,7 @@ class SessionManager:
             env = os.environ
         self._env = env
         self._cache: dict[str, dict] = {}
+        self._issued: set[str] = set()         # header values and tokens obtained, kept after invalidate()
 
     def _env_get(self, name: str | None) -> str:
         value = self._env.get(name) if name else None
@@ -59,11 +72,43 @@ class SessionManager:
         if ident is None:
             raise AuthError(f"unknown identity role {role!r}")
         headers = self._acquire(ident.get("method", "none"), ident.get("auth") or {})
+        for value in headers.values():
+            self._issued.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
         self._cache[role] = headers
         return dict(headers)
 
     def invalidate(self, role: str) -> None:
         self._cache.pop(role, None)
+
+    def _secret_forms(self) -> list[str]:
+        values = set(self._issued)
+        for ident in self._by_role.values():
+            for key, name in (ident.get("auth") or {}).items():
+                if key.endswith("_env") and name and self._env.get(name):
+                    values.add(self._env[name])
+        forms = set()
+        for v in values:
+            if len(v) >= _MIN_SECRET_LEN:
+                forms.update((v, json.dumps(v)[1:-1], quote(v, safe=""), quote_plus(v)))
+        return sorted(forms, key=len, reverse=True)      # longest first, so no fragment of a value is left
+
+    def redact(self, value):
+        """`value` (str, or dicts and lists of them) with every credential value
+        replaced by "[redacted]" (VER-016). Other types pass unchanged."""
+        forms = self._secret_forms()
+
+        def walk(v):
+            if isinstance(v, str):
+                for form in forms:
+                    v = v.replace(form, REDACTED)
+                return v
+            if isinstance(v, dict):
+                return {k: walk(x) for k, x in v.items()}
+            if isinstance(v, list | tuple):
+                return [walk(x) for x in v]
+            return v
+
+        return walk(value)
 
     def origin_for(self, role: str) -> str | None:
         """The identity's declared `target_origin`, or None for the target base

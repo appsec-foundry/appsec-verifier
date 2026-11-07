@@ -335,7 +335,11 @@ identity. Credential and token values
 are read from the environment at run time, used only to obtain a session, and
 never written to logs, the report, evidence artefacts, or any model prompt —
 only the role label travels, and captured requests are redacted of Authorization
-headers, cookies, and token parameters (VER-016, VER-022). Worked examples:
+headers, cookies, and token parameters (VER-016, VER-022). If the target echoes a
+credential, every value the run knows (each `*_env` value and each token
+obtained, also JSON-escaped and URL-encoded) is replaced by `[redacted]` in tool
+results before the model sees them and in the report; values shorter than 4
+characters are not replaced. Screenshots are not redacted. Worked examples:
 `examples/juice-shop/` (form login) and `examples/sso-proxy/` (OIDC + proxy).
 
 ### Limits — `data/limits.yaml`
