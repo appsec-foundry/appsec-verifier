@@ -16,7 +16,7 @@ import httpx
 import pytest
 import yaml
 
-from appsec_verifier import cli
+from appsec_verifier import cli, guided
 from appsec_verifier.agent.host_anthropic import AnthropicHost
 from appsec_verifier.agent.host_openai import MODELS_ENDPOINT, OpenAIHost
 from appsec_verifier.agent.hosts import HostReply, HostUnavailable
@@ -102,9 +102,10 @@ def test_repeated_ids_are_refused_and_quoted_escaped(tmp_path):
     assert "is used 2 times" in str(err.value) and "\x1b" not in str(err.value)
 
 
-def test_plan_blocks_on_a_malformed_assessment(tmp_path, capsys):
+def test_the_guided_run_blocks_on_a_malformed_assessment_before_any_question(tmp_path, capsys):
     path = _write(tmp_path / "a.yaml", {"findings": []})
-    assert cli.main(["plan", "--assessment", str(path)]) == cli.EXIT_BLOCKED
+    args = cli.build_guided_parser().parse_args([str(path)])
+    assert guided.run_guided(args, interactive=True, ask=lambda prompt: pytest.fail(prompt)) == cli.EXIT_BLOCKED
     assert "'threats' is a required property" in capsys.readouterr().err
 
 

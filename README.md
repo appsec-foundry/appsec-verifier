@@ -75,9 +75,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 `appsec-verifier preflight`, with `--assessment`, `--scope`, `--identities` and
 `--profile`, checks the assessment, scope, target, logins and model without
-testing any finding. `appsec-verifier plan ./out/security-assessment.yaml`
-shows which findings can be tested, without contacting anything. Without a path,
-`plan` reads `security-assessment.yaml` in the current directory.
+testing any finding.
 
 ## What it verifies
 
@@ -158,7 +156,6 @@ subscription is subject to the provider's terms for that plan.
 | `appsec-verifier ASSESSMENT` | Guided run: asks for the settings, then runs `verify`. |
 | `verify` | Tests the selected findings against the target. |
 | `preflight` | Checks assessment, scope, target, logins and model; tests no finding. `--offline` contacts nothing. |
-| `plan` | Lists which findings can be tested. Offline. |
 | `scope` | Validates a scope file and shows whether a URL is inside it. Offline. |
 | `export` | Converts a `verification.yaml` into a file AppSec Analyzer can read. |
 | `update` | Updates a pipx installation after you confirm. |

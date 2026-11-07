@@ -349,8 +349,8 @@ def test_main_asks_nothing_without_a_terminal_or_with_the_flag(env, monkeypatch,
 
 
 def test_main_keeps_the_commands(env, capsys):
-    assert cli.main(["plan", "--assessment", str(env.assessment)]) == 0
-    assert "plan only" in capsys.readouterr().out
+    assert cli.main(["scope", "--scope", str(env.run / "scope.yaml")]) == 0
+    assert "· scope ·" in capsys.readouterr().out
 
 
 def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, capsys):

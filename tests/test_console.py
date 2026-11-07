@@ -10,7 +10,7 @@ import re
 import pytest
 import yaml
 
-from appsec_verifier import cli
+from appsec_verifier import cli, guided
 from appsec_verifier.preflight import Check, render
 from appsec_verifier.term_style import Style, color_enabled
 
@@ -44,8 +44,9 @@ def test_truecolor_only_when_the_terminal_says_so():
 @pytest.fixture
 def assessment(tmp_path):
     threats = [
-        {"id": "T-1", "cwe": "CWE-79", "severity": "high", "title": "xss", "evidence": {"file": "a.ts", "line": 1}},
-        {"id": f"T-2{HOSTILE}", "cwe": "CWE-89", "severity": "critical", "title": "sqli",
+        {"id": "T-1", "cwe": "CWE-79", "severity": f"high{HOSTILE}", "title": "xss",
+         "evidence": {"file": "a.ts", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-89", "severity": "critical", "title": "sqli",
          "evidence": {"file": "b.ts", "line": 2}},
     ]
     path = tmp_path / "assessment.yaml"
@@ -53,55 +54,33 @@ def assessment(tmp_path):
     return path
 
 
-def test_without_a_terminal_the_output_is_plain_with_analyzer_style_facts(assessment, capsys):
-    assert cli.main(["plan", "--assessment", str(assessment)]) == 0
-    out = capsys.readouterr().out
+def _overview(path) -> str:
+    """The first screen of the guided run."""
+    _, plans, errors = cli._load_assessment(path)
+    assert errors == []
+    return guided.overview(path, plans)
+
+
+def test_without_a_terminal_the_output_is_plain_with_analyzer_style_facts(assessment):
+    out = _overview(assessment)
     assert "\x1b" not in out and "\x07" not in out
-    assert out.startswith("▶ AppSec Verifier · plan · ")
-    assert "  Findings   : 2 total · 2 selected" in out
+    assert out.startswith("▶ AppSec Verifier · assessment · ")
+    assert "  Findings    : 2 total · 2 dynamically verifiable" in out
 
 
-def test_force_color_colours_plan_but_strips_escapes_from_the_assessment(assessment, capsys, monkeypatch):
+def test_force_color_colours_the_overview_but_strips_escapes_from_the_assessment(assessment, monkeypatch):
     monkeypatch.setenv("FORCE_COLOR", "1")
-    assert cli.main(["plan", "--assessment", str(assessment)]) == 0
-    out = capsys.readouterr().out
+    out = _overview(assessment)
     assert SGR.search(out) and "appsec-verifier" in out                      # the logo
-    assert "\x1b[31mcritical\x1b[0m" in out                                   # severity colour
+    assert "\x1b[31mcritical 1\x1b[0m" in out                                 # severity colour
     plain = SGR.sub("", out)
-    assert "\x1b" not in plain and "\x07" not in plain and "T-2]0;pwned[2J" in plain
+    assert "\x1b" not in plain and "\x07" not in plain and "high]0;pwned[2j 1" in plain
 
 
-def test_no_color_wins_over_force_color(assessment, capsys, monkeypatch):
+def test_no_color_wins_over_force_color(assessment, monkeypatch):
     monkeypatch.setenv("FORCE_COLOR", "1")
     monkeypatch.setenv("NO_COLOR", "1")
-    assert cli.main(["plan", "--assessment", str(assessment)]) == 0
-    assert "\x1b" not in capsys.readouterr().out
-
-
-def test_plan_takes_the_assessment_as_argument(assessment, capsys):
-    assert cli.main(["plan", str(assessment)]) == 0
-    assert f"  Assessment : {assessment}\n" in capsys.readouterr().out
-
-
-def test_plan_reads_security_assessment_yaml_from_the_current_directory(assessment, capsys, monkeypatch):
-    (assessment.parent / "security-assessment.yaml").write_text(assessment.read_text())
-    monkeypatch.chdir(assessment.parent)
-    assert cli.main(["plan"]) == 0
-    out = capsys.readouterr().out
-    assert "  Assessment : security-assessment.yaml\n" in out and "2 total" in out
-
-
-def test_plan_without_a_path_or_default_file_blocks_and_says_how(tmp_path, capsys, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert cli.main(["plan"]) == cli.EXIT_BLOCKED
-    err = capsys.readouterr().err
-    assert "has no security-assessment.yaml" in err and "appsec-verifier plan PATH" in err
-
-
-def test_plan_refuses_the_argument_and_the_option_together(assessment, capsys):
-    with pytest.raises(SystemExit) as exit_:
-        cli.main(["plan", str(assessment), "--assessment", str(assessment)])
-    assert exit_.value.code == 2 and "not allowed with argument" in capsys.readouterr().err
+    assert "\x1b" not in _overview(assessment)
 
 
 def test_results_strip_escapes_from_assessment_and_model_text(capsys):
@@ -130,7 +109,7 @@ def test_the_logo_appears_once_per_run_then_the_title_line():
     first, second = cli._title(st, "assessment"), cli._title(st, "verify")
     assert len(first) == 3 and "appsec-verifier" in first[0] and "assessment" in SGR.sub("", first[2])
     assert [SGR.sub("", line) for line in second] == [f"▶ AppSec Verifier · verify · {cli.version_string()}"]
-    assert cli._title(Style(False), "plan") == [f"▶ AppSec Verifier · plan · {cli.version_string()}"]
+    assert cli._title(Style(False), "scope") == [f"▶ AppSec Verifier · scope · {cli.version_string()}"]
 
 
 def test_preflight_marks_take_the_colour_of_their_status():

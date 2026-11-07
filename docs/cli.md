@@ -24,9 +24,6 @@ are cited per command and option.
 
 **Inspect without touching the target** (no network, no model calls)
 
-- `plan` — list which findings are dynamically verifiable, which are
-  static-only, and which the input cannot support, without contacting the
-  target (VER-006, VER-024).
 - `scope` — resolve and print a scope file, show what is in and out of scope,
   and validate it against the schema (VER-001).
 
@@ -168,7 +165,7 @@ says so before it starts. Prefer categories and severities over CWEs.
 
 | Flag | Meaning |
 | --- | --- |
-| `--category LIST` | Categories, by class or finer technique: `access-control`, `idor`, `sqli`, `nosqli`, `xss`, `path-traversal`, `open-redirect`, `ssrf`, … So `--category idor` verifies IDOR alone; no CWE is needed. (`plan` lists the available categories.) |
+| `--category LIST` | Categories, by class or finer technique: `access-control`, `idor`, `sqli`, `nosqli`, `xss`, `path-traversal`, `open-redirect`, `ssrf`, … So `--category idor` verifies IDOR alone; no CWE is needed. (The guided run names the classes the assessment holds.) |
 | `--severity LIST` | Exact severities, e.g. `critical,high`. |
 | `--min-severity LEVEL` | Severity floor: `low\|medium\|high\|critical`. |
 | `--only ID[,ID]` | Specific finding ids, e.g. `T-037,F-001`. Overrides the other selectors. |
@@ -490,24 +487,6 @@ stderr. It never prompts, so contacting the target needs `--yes`.
 Messages never contain a secret, a token, a response body or a raw error text,
 which can hold proxy credentials (VER-016). Exit code `0` when no check failed,
 `2` otherwise.
-
-## `plan` — what is verifiable, offline
-
-```
-appsec-verifier plan [ASSESSMENT] [--category LIST] [--severity LIST] [--min-severity LEVEL]
-  [--only ID[,ID]] [--class LIST] [--cwe LIST]
-```
-
-Reads the assessment and prints, per finding: id, CWE, severity, class, and whether
-it is `dynamic` (verifiable), `static-only` (out of scope for dynamic
-verification, with reason), or `input-incomplete` (missing evidence
-file/line/route). No target contact, no model calls (VER-006, VER-024).
-
-Without `ASSESSMENT`, `plan` reads `security-assessment.yaml` in the current
-directory and stops with exit code 2 if there is none. `--assessment PATH` is
-the same as `ASSESSMENT`. The selectors are those of `verify` (see
-[Select what to verify](#select-what-to-verify-ver-026)), so `plan` shows which
-findings a `verify` with the same selectors would take.
 
 ## `scope` — resolve and check a scope file
 

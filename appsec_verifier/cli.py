@@ -1,6 +1,6 @@
 """appsec-verifier — command-line entry point.
 
-`scope`, `plan` and `export` run offline (no network, no model calls). `verify`
+`scope` and `export` run offline (no network, no model calls). `verify`
 contacts the target through an agent only when model access is configured;
 otherwise it reports every selected finding not-attempted. Before the first
 model call it runs the pre-flight checks of VER-032; `preflight` runs them alone
@@ -111,7 +111,7 @@ def _severity_role(severity: str) -> str:
     return severity.lower() if severity.lower() in _SEVERITIES else "muted"
 
 
-# ── plan ────────────────────────────────────────────────────────────────────
+# ── assessment ──────────────────────────────────────────────────────────────
 
 def _load_assessment(path: Path) -> tuple[dict | None, list, list[str]]:
     """(assessment, plans, []), or (None, [], why it cannot be used) (VER-005, VER-032)."""
@@ -138,47 +138,6 @@ def _assessment_summary(doc: dict) -> str:
     """Project and date from the assessment's meta block, to tell it is the intended one."""
     meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
     return " · ".join(printable(meta[k])[:60] for k in ("project", "generated") if meta.get(k))
-
-
-_PLAN_MARK = {"dynamic": ("✓", "ok"), "static-only": ("·", "muted"), "input-incomplete": ("!", "warn")}
-
-
-_DEFAULT_ASSESSMENT = "security-assessment.yaml"   # `plan` without a path reads it from the current directory
-
-
-def cmd_plan(args: argparse.Namespace) -> int:
-    given = args.assessment or args.assessment_opt
-    path = Path(given or _DEFAULT_ASSESSMENT)
-    if not given and not path.is_file():
-        print(f"no assessment given, and the current directory has no {_DEFAULT_ASSESSMENT}; "
-              "name the file: appsec-verifier plan PATH", file=sys.stderr)
-        return EXIT_BLOCKED
-    _, plans, errors = _load_assessment(path)
-    if errors:
-        return _blocked(f"the assessment {path} cannot be used:", errors)
-    sel = _select(args, plans)
-    dyn = [p for p in sel if p.status == "dynamic"]
-    static = [p for p in sel if p.status == "static-only"]
-    incomplete = [p for p in sel if p.status == "input-incomplete"]
-    st = Style.for_stream(sys.stdout)
-    print("\n".join([*_title(st, "plan"), *_facts(st, [
-        ("Assessment", str(path)),
-        ("Findings", f"{len(plans)} total · {len(sel)} selected"),
-        ("Verifiable", f"{len(dyn)} dynamic · {len(static)} static-only · {len(incomplete)} input-incomplete"),
-    ])]))
-    if sel:
-        print("\n" + st("Selected findings", "bold"))
-    for p in sel:
-        mark, role = _PLAN_MARK[p.status]
-        cls = f"[{printable(p.cls)}]" if p.cls else ""
-        sev = printable(p.severity) if p.severity else "?"
-        pid = printable(p.id)
-        print(f"  {st(mark, role)} {st(f'{pid:<8}', 'bold')} {printable(p.cwe):<9} "
-              f"{st(f'{sev:<8}', _severity_role(sev))} {cls:<16} {p.status}")
-        if p.status != "dynamic":
-            print("      " + st(printable(p.reason), "muted"))
-    print("\n" + st("plan only — nothing was sent to any target.", "muted"))
-    return EXIT_OK
 
 
 # ── scope ─────────────────────────────────────────────────────────────────────
@@ -841,7 +800,6 @@ def _banner(st: Style) -> str:
         "Commands:\n"
         "  verify     verify selected findings against a target (safe mode by default)\n"
         "  preflight  check assessment, scope, target, logins and model; verifies nothing\n"
-        "  plan       list dynamically verifiable findings, offline\n"
         "  scope      resolve and validate an authorisation scope file\n"
         "  export     re-emit verdicts for AppSec Analyzer\n"
         "  update     update a pipx installation of the Verifier, after your yes\n\n"
@@ -859,18 +817,6 @@ def build_parser() -> argparse.ArgumentParser:
                                        "settings with defaults (VER-031).")
     p.add_argument("--version", action="store_true", help="print version and exit")
     sub = p.add_subparsers(dest="command")
-
-    pl = sub.add_parser("plan", help="list dynamically verifiable findings (offline)")
-    src = pl.add_mutually_exclusive_group()
-    src.add_argument("assessment", nargs="?",
-                     help=f"security-assessment.yaml to read (default: ./{_DEFAULT_ASSESSMENT})")
-    src.add_argument("--assessment", dest="assessment_opt", metavar="ASSESSMENT", help="same as ASSESSMENT")
-    pl.add_argument("--category", help="filter: categories (class or technique), comma-separated")
-    pl.add_argument("--severity", help="filter: exact severities, comma-separated")
-    pl.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], help="severity floor")
-    pl.add_argument("--class", dest="cls", help="(advanced) filter: classes, comma-separated")
-    pl.add_argument("--cwe", help="(advanced) filter: CWEs, comma-separated")
-    pl.add_argument("--only", help="filter: finding ids, comma-separated")
 
     sc = sub.add_parser("scope", help="resolve and validate an authorisation scope file")
     sc.add_argument("--scope", required=True, help="scope.yaml to validate")
@@ -977,7 +923,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     vf.add_argument("--model", help="model for the selected profile (default: the profile's model)")
 
 
-COMMANDS = ("plan", "scope", "verify", "preflight", "export", "update")
+COMMANDS = ("scope", "verify", "preflight", "export", "update")
 
 
 def _stdin_is_terminal() -> bool:
@@ -1002,8 +948,6 @@ def _main(argv: list[str] | None) -> int:
     if args.version:
         print(version_string())
         return EXIT_OK
-    if args.command == "plan":
-        return cmd_plan(args)
     if args.command == "scope":
         return cmd_scope(args)
     if args.command == "verify":

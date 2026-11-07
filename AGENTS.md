@@ -53,7 +53,7 @@ summary instead.
 
 | Path | Role |
 | --- | --- |
-| `appsec_verifier/cli.py` | argparse entry point: `plan`, `scope`, `verify`, `preflight`, `export`, `update`; without a command the guided run (`guided.py`) |
+| `appsec_verifier/cli.py` | argparse entry point: `scope`, `verify`, `preflight`, `export`, `update`; without a command the guided run (`guided.py`) |
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
 | `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first model call (VER-032) |
@@ -125,7 +125,7 @@ Changes to these controls need tests that cover the refused case
   `E, F, I, UP, B`.
 - Module docstrings name the VER-IDs they implement. Keep that up to date.
 - `anthropic` (`[agent]`) and `playwright` (`[browser]`, pinned) are optional and
-  imported lazily. `plan`, `scope` and `export` must work without them.
+  imported lazily. `scope` and `export` must work without them.
 - Runtime files are found with `version_info.resource_root()`. A new runtime
   directory must be added to `RUNTIME_DIRS` in `setup.py`, `_RUNTIME_DIRS` in
   `version_info.py`, and `MANIFEST.in`.

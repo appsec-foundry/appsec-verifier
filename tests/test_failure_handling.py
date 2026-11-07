@@ -142,8 +142,8 @@ def test_an_interrupted_run_writes_what_it_found_and_exits_130(tmp_path, monkeyp
 
 
 def test_ctrl_c_outside_a_run_ends_with_130_without_a_traceback(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "cmd_plan", lambda args: (_ for _ in ()).throw(KeyboardInterrupt))
-    assert cli.main(["plan", "--assessment", "a.yaml"]) == cli.EXIT_INTERRUPTED
+    monkeypatch.setattr(cli, "cmd_scope", lambda args: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert cli.main(["scope", "--scope", "s.yaml"]) == cli.EXIT_INTERRUPTED
     assert "interrupted." in capsys.readouterr().err
 
 
