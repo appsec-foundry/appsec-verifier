@@ -252,7 +252,7 @@ appsec_verifier/    package: CLI, loader, scope guard, limits, HTTP client, auth
 schemas/            JSON schemas (as YAML) for scope, identities, verification, analyzer annotations
 data/               verifiable-cwes.yaml, limits.yaml
 docs/cli.md         command reference
-requirements.md     requirements VER-001 … VER-032
+requirements.md     requirements VER-001 … VER-033
 examples/           sample scope and identities files
 tests/
 ```

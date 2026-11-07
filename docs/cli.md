@@ -7,7 +7,7 @@
 target, verifies findings one at a time against the live application, and writes
 a verification report. It never re-runs or re-scores the static assessment.
 
-Design maps to `requirements.md` (VER-001 … VER-032); the relevant IDs are cited
+Design maps to `requirements.md` (VER-001 … VER-033); the relevant IDs are cited
 per command and flag.
 
 ---

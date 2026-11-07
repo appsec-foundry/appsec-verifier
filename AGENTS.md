@@ -6,7 +6,7 @@ whether the weakness reproduces. It is an active security test tool, so its
 safety controls are part of the product, not optional hardening.
 
 User-facing overview: `README.md`. Command reference: `docs/cli.md`.
-Requirements (VER-001 … VER-032): `requirements.md`.
+Requirements (VER-001 … VER-033): `requirements.md`.
 
 ## Setup and checks
 

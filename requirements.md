@@ -323,6 +323,14 @@ optional hardening.
   asked; only there, on explicit request and with its own limit, one fixed
   prompt without target data tests the model's answer.
 
+- **VER-033: Update its own installation on request.** A separate command
+  reinstalls a pipx installation of the Verifier from the source it was
+  installed from, only after the operator confirms in an interactive terminal.
+  Without a terminal, in CI, or for any other kind of installation it installs
+  nothing and says how to update instead. It names the installed version before
+  and after, as `--version` does: the engine version with the commit and date of
+  the build. The source is shown without credentials.
+
 - **VER-024: Explain what it could and could not do.** When a finding class is
   unsupported, a target is unreachable, a required test identity is missing, or a
   limit was hit, the report says so plainly per finding, so an unverified finding
