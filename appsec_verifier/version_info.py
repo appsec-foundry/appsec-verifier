@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 INTERFACE_VERSION = 1
-ENGINE_VERSION = "0.1.0a0"
+ENGINE_VERSION = "0.1.0a1"
 
 _RUNTIME_DIRS = ("schemas", "data")
 
