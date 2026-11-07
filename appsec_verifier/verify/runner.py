@@ -1,6 +1,8 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
 VER-020). Pure, injectable logic: the probe registry, HTTP client, budget, and
-clock are all passed in, so the whole flow is tested offline. Returns the
+clock are all passed in, so the whole flow is tested offline. An optional
+`progress` (progress.RunProgress) shows each finding with a probe and its
+steps on the console. Returns the
 verification document as a dict shaped for schemas/verification.schema.yaml,
 its results redacted of every credential value the sessions know (VER-016).
 """
@@ -105,6 +107,7 @@ def run_verification(
     listener=None,
     log=None,
     evidence_dir: Path | None = None,
+    progress=None,
 ) -> dict:
     now = now or datetime.now(timezone.utc)
     budget = budget or RunBudget(limits)
@@ -118,10 +121,20 @@ def run_verification(
             identities=identities, callback=scope.get("callback") or {},
             safe=safe, read_only=read_only, sessions=sessions, source=source,
             target_base=target_base, browser=browser, marker=new_marker(), listener=listener, log=log,
-            evidence_dir=evidence_dir,
+            evidence_dir=evidence_dir, progress=progress,
         )
 
-    results = [_result_entry(i, p, _verify_one(p, registry, ctx_factory)) for i, p in enumerate(plans, start=1)]
+    probed = [p.status == "dynamic" and registry.get(p.cls) is not None for p in plans]
+    if progress is not None:
+        progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
+    results = []
+    for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
+        if shown and progress is not None:
+            progress.finding(plan)
+        res = _verify_one(plan, registry, ctx_factory)
+        if shown and progress is not None:
+            progress.finished(plan, res)
+        results.append(_result_entry(i, plan, res))
     if sessions is not None:
         results = sessions.redact(results)      # VER-016: model text never carries a credential into the report
 

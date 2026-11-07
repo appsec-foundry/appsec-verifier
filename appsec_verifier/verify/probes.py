@@ -50,6 +50,7 @@ class ProbeContext:
     listener: object | None = None     # CallbackListener for SSRF (VER-012), or None when unavailable
     log: object | None = None          # callable(record) for the action log (VER-017), or None
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
+    progress: object | None = None     # RunProgress that shows each step on the console, or None
 
 
 @runtime_checkable

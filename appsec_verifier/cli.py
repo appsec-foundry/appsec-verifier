@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 import textwrap
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from .preflight import (
     proxy_for,
     render,
 )
+from .progress import RunProgress, duration
 from .scope import ScopeGuard
 from .term_style import Style, columns, logo
 from .verify import build_annotations, run_verification, write_reports
@@ -439,11 +441,14 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
             return EXIT_BLOCKED
 
     out_dir = Path(args.output)
-    action_log = None
+    action_log = progress = None
+    started = time.monotonic()
     if contact:
         from .verify.actionlog import ActionLog
         out_dir.mkdir(parents=True, exist_ok=True)
         action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=args.append)
+        progress = RunProgress(model=agent_info.get("model"), redact=sessions.redact,
+                               remaining_time=budget.remaining_time)
     try:
         if listener is not None and contact:
             try:
@@ -459,8 +464,11 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
             verifier_version=version_string(), target_base=target, authorization=authorization,
             safe=safe, read_only=read_only, contacted=contact, agent=agent_info, browser=browser,
             listener=listener if contact else None, log=action_log, evidence_dir=out_dir / "evidence",
+            progress=progress,
         )
     finally:
+        if progress is not None:
+            progress.close()
         if action_log is not None:
             action_log.close()
         if browser is not None:
@@ -474,7 +482,11 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
             from .verify import merge_reports
             doc = merge_reports(_load_yaml(existing_path), doc)
     paths = write_reports(doc, out_dir)
-    extra = [("Action log", str(action_log.path))] if action_log is not None else []
+    extra = []
+    if contact:
+        extra.append(("Run", _run_usage(budget, time.monotonic() - started, agent_info["profile"])))
+    if action_log is not None:
+        extra.append(("Action log", str(action_log.path)))
     if args.annotate:
         import yaml
         annotated = annotate_assessment(_load_yaml(assessment), doc)
@@ -713,6 +725,18 @@ def _print_results(st: Style, doc) -> None:
         print(f"  {st(mark, role)} {st(f'{fid:<8}', 'bold')} {cls:<15} {st(r['verdict'], role)}{conf}  {title}")
         if r.get("rationale"):
             print("      " + st(printable(r["rationale"]), "muted"))
+
+
+def _run_usage(budget: RunBudget, seconds: float, profile: str) -> str:
+    """The run's time and what it used: `4m10s · 23 model calls · 41 requests · $0.42 of $5.00`."""
+    from .agent import SUBSCRIPTION_PROFILES
+
+    calls = f"{budget.calls} model call" + ("s" if budget.calls != 1 else "")
+    requests = f"{budget.requests} request" + ("s" if budget.requests != 1 else "")
+    parts = [duration(seconds), calls, requests]
+    if profile not in SUBSCRIPTION_PROFILES:
+        parts.append(f"${budget.cost:.2f} of ${budget.limits.cost_limit_usd:.2f}")
+    return " · ".join(parts)
 
 
 def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list[str]:

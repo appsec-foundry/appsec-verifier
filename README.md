@@ -166,6 +166,14 @@ Select findings with `--category` (for example `xss`, `idor`, `sqli`),
 
 ## Output
 
+While `verify` runs, it prints its progress on standard error: one line when a
+finding starts, one per request or source read of the agent with its result,
+and one with the verdict. Each line shows the finding, the share of findings
+done, the run time and the time left. In a terminal a status line underneath
+shows the running step and how long it has been running.
+[`docs/cli.md`](docs/cli.md#verify--verify-findings-against-a-running-target)
+describes the columns.
+
 `verify` writes to `--output` (default `./verification`):
 
 - `verification.md`: the report, with verdict, confidence and evidence per

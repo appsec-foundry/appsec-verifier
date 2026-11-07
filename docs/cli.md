@@ -125,6 +125,24 @@ the assessment, with evidence artefacts (VER-020, VER-027, VER-022). A failed
 pre-flight check stops the run before the first model call. Its requests count
 against `--max-requests`.
 
+During the run, `verify` prints one line per event on standard error, in the
+columns `TIME FINDING EVENT PROGRESS ELAPSED LEFT DETAIL`, as AppSec Analyzer
+does. FINDING is the finding under test and its position among the findings
+that get a probe. EVENT is `start` and `done` for a finding, `·` for a request,
+browser check or source read of the agent with its result, `↻` for a step the
+Verifier refused, and `⚠` for a limit that stopped the finding. The `done` line
+gives the verdict, the steps and the time the finding took, and for an
+inconclusive finding the reason. PROGRESS is the share of findings done,
+ELAPSED the run time. LEFT is estimated from the findings done so far and never
+exceeds what `--max-duration` leaves; before the first finding is done it shows
+that remainder (`≤29m`). In a terminal a status line underneath shows a progress
+bar, the running step (the model call or the request) and its age. Without a
+terminal, a line with the running step follows after two minutes without
+output. The summary at the end adds a `Run` row: run time, model calls,
+requests and, except with `codex-cli` and `copilot-cli`, the spend against
+`--cost-limit`. Text from the assessment, the model or the target is shown
+without control characters and without credential values.
+
 ### Input and target boundary
 
 | Flag | Meaning | Req. |

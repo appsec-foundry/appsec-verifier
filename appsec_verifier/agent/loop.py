@@ -12,7 +12,7 @@ credential values before the planner sees it (VER-016). A planner that never
 submits ends inconclusive, not refuted (VER-024). A confirmed verdict stands
 only if the code finds the proof its class requires (proof.py). Every step —
 tool call and outcome, refused proposal, stopping limit, verdict — goes to
-`ctx.log`, the run's action log (VER-017).
+`ctx.log`, the run's action log (VER-017), and to `ctx.progress`, the console.
 """
 
 from __future__ import annotations
@@ -61,6 +61,8 @@ def _result_from_verdict(v: dict) -> ProbeResult:
 def _log(ctx, step: int, **record) -> None:
     if ctx.log is not None:
         ctx.log({"finding": ctx.plan.id, "step": step, **record})
+    if ctx.progress is not None:
+        ctx.progress.step({"step": step, **record})
 
 
 def _stopped(ctx, step: int, exc: LimitExceeded, **record) -> ProbeResult:
@@ -91,6 +93,8 @@ class AgentProbe:
             try:
                 ctx.budget.check_time()
                 ctx.guard.check_window()       # no model call once the authorisation window has closed
+                if ctx.progress is not None:
+                    ctx.progress.activity(step, self._max_steps)
                 proposal = planner.next_step(ctx, history)
             except LimitExceeded as exc:
                 return _stopped(ctx, step, exc)
@@ -103,6 +107,8 @@ class AgentProbe:
                 return _finish(ctx, step, check_proof(ctx, history, _result_from_verdict(verdict),
                                                       verdict.get("proof_steps")))
             name, args = action["tool"], action["args"]
+            if ctx.progress is not None:
+                ctx.progress.activity(step, self._max_steps, name, args)
             try:
                 result = tools.call(name, args)
             except ToolError as exc:
