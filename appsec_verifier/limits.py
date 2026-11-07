@@ -16,7 +16,7 @@ from .version_info import resource_root
 class LimitExceeded(Exception):
     def __init__(self, kind: str, detail: str):
         super().__init__(detail)
-        self.kind = kind  # "requests" | "cost" | "time" | "attempts" | "calls"
+        self.kind = kind  # "requests" | "cost" | "time" | "attempts" | "calls" | "window"
 
 
 @dataclass

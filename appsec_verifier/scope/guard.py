@@ -11,6 +11,10 @@ server may normalise into a different resource (dot segments, `//`, `\\`, `;`,
 encoded separators) is refused, so `deny_paths` and `path_prefixes` decide on
 the resource that is actually reached; `deny_paths` match case-insensitively
 on the decoded path (VER-018).
+
+The authorisation window is checked on every request, not only at start: once
+it has closed, `check_window` raises LimitExceeded("window") and the affected
+work stops (VER-001, VER-015). The clock is injectable for tests.
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
+
+from ..limits import LimitExceeded
 
 _PURPOSES = ("target", "auth", "callback", "proxy")
 # Raw path fragments that clients or servers normalise into another resource.
@@ -71,8 +77,9 @@ def _ambiguous_path(path: str) -> bool:
 
 
 class ScopeGuard:
-    def __init__(self, scope: dict):
+    def __init__(self, scope: dict, *, clock=None):
         self.scope = scope or {}
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         _, bh, bp, _ = _safe_dissect(self.scope.get("base_url") or "") or ("", "", None, "/")
         self.hosts = {h.lower() for h in (self.scope.get("hosts") or ([bh] if bh else []))}
         self.ports = set(self.scope.get("ports") or ([bp] if bp else []))
@@ -84,7 +91,7 @@ class ScopeGuard:
         self.proxy = self.scope.get("proxy") or {}
 
     def within_window(self, now: datetime | None = None) -> Decision:
-        now = now or datetime.now(timezone.utc)
+        now = now or self._clock()
         w = self.scope.get("window") or {}
         frm, unt = _parse_iso(w.get("from")), _parse_iso(w.get("until"))
         if frm and now < frm:
@@ -92,6 +99,12 @@ class ScopeGuard:
         if unt and now > unt:
             return Decision(False, f"after authorisation window (until {w.get('until')})")
         return Decision(True, "within authorisation window")
+
+    def check_window(self) -> None:
+        """Raise LimitExceeded("window") unless now lies inside the authorisation window."""
+        decision = self.within_window()
+        if not decision.allowed:
+            raise LimitExceeded("window", decision.reason)
 
     def _auth_host_matches(self, host: str, port: int | None) -> bool:
         for entry in self.auth_hosts:

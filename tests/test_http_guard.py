@@ -3,6 +3,8 @@ credentials on redirect (VER-017, VER-018, VER-015)."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
@@ -109,3 +111,39 @@ def test_methods_outside_the_allow_list_are_never_sent(method):
 def test_same_origin_is_false_for_unparseable_urls():
     assert not same_origin("https://app.example.com/x", "https://app.example.com:99999/x")
     assert not same_origin("not a url", "not a url")
+
+
+WINDOW = {"from": "2026-01-01T00:00:00Z", "until": "2026-01-02T00:00:00Z"}
+
+
+def _windowed(now, transport):
+    guard = ScopeGuard(dict(SCOPE, window=WINDOW), clock=lambda: now[0])
+    return GuardedHttpClient(guard, RunBudget(Limits()), transport)
+
+
+@pytest.mark.parametrize("when", [datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc),
+                                  datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)])
+def test_request_outside_the_window_is_stopped_before_sending(when):
+    sent = []
+    http = _windowed([when], lambda m, u, h, **k: sent.append(u) or Resp())
+    with pytest.raises(LimitExceeded) as exc:
+        http.request("GET", "https://app.example.com/x")
+    assert exc.value.kind == "window" and sent == []
+
+
+def test_window_closing_mid_run_stops_the_next_request_and_redirect_hop():
+    now = [datetime(2026, 1, 1, 12, tzinfo=timezone.utc)]
+    sent = []
+
+    def transport(m, u, h, **k):
+        sent.append(u)
+        now[0] = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)     # the window closes during this request
+        return Resp(302, {"Location": "/next"})
+
+    http = _windowed(now, transport)
+    with pytest.raises(LimitExceeded) as exc:
+        http.request("GET", "https://app.example.com/start")
+    assert exc.value.kind == "window" and sent == ["https://app.example.com/start"]
+    with pytest.raises(LimitExceeded):
+        http.request("GET", "https://app.example.com/later")
+    assert sent == ["https://app.example.com/start"]

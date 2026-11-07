@@ -1,11 +1,12 @@
-"""The agent loop that drives a probe (VER-008, VER-015, VER-017, VER-019).
+"""The agent loop that drives a probe (VER-001, VER-008, VER-015, VER-017, VER-019).
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
 verdict. Every action is validated against the strict tool schemas here,
 whichever planner produced it; an invalid one ends the finding inconclusive and
 nothing runs. The loop executes tool calls through the confined AgentTools,
-enforces a step limit and the run budget, and never lets a bad tool call escape
+enforces a step limit, the run budget and the authorisation window (checked
+before every planner call), and never lets a bad tool call escape
 — errors go back to the planner as data. A planner that never submits ends
 inconclusive, not refuted (VER-024).
 """
@@ -83,6 +84,7 @@ class AgentProbe:
         for _ in range(self._max_steps):
             try:
                 ctx.budget.check_time()
+                ctx.guard.check_window()       # no model call once the authorisation window has closed
             except LimitExceeded as exc:
                 return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
             action = check_action(planner.next_step(ctx, history))   # VER-019: no unchecked arguments

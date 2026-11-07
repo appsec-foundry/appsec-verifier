@@ -114,3 +114,21 @@ def test_every_action_is_schema_checked_whichever_planner_sent_it(tmp_path, acti
     res = AgentProbe("access-control", lambda: ScriptedPlanner([action]), max_steps=3).run(ctx)
     assert res.verdict == "inconclusive"
     assert sent == []   # nothing ran
+
+
+def test_closed_window_stops_the_finding_before_any_model_call(tmp_path):
+    from datetime import datetime, timezone
+
+    sent, asked = [], []
+
+    class Planner:
+        def next_step(self, ctx, history):
+            asked.append(1)
+            return {"tool": "http_request", "args": {"path": "/"}}
+
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp())
+    scope = dict(SCOPE, window={"until": "2026-01-01T00:00:00Z"})
+    ctx.guard = ScopeGuard(scope, clock=lambda: datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc))
+    res = AgentProbe("access-control", Planner, max_steps=3).run(ctx)
+    assert res.verdict == "inconclusive" and res.limits_hit == "window"
+    assert asked == [] and sent == []

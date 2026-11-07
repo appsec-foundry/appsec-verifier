@@ -291,7 +291,10 @@ nothing. Paths are compared percent-decoded, `deny_paths` also regardless of
 case, and a path a server could resolve to another resource (a `.` or `..`
 segment, `//`, `\`, `;`, or `%2e`, `%2f`, `%5c`, `%3b`, `%25`, `%00`) is always
 refused. Proxy variables in the environment (`HTTPS_PROXY` and the like) are
-ignored; only the scope's `proxy` is used.
+ignored; only the scope's `proxy` is used. The `window` is checked before every
+request and every planning step, not only at start: once it has closed, the
+current finding ends `inconclusive` with `limits_hit: window`, no further request
+is sent, and the run exits with 3.
 
 ### Identities file — `identities.yaml` (sessions, VER-016/028)
 
