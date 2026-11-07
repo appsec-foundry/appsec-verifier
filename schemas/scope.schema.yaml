@@ -135,11 +135,11 @@ properties:
   callback:
     type: object
     description: |
-      Operator-controlled benign endpoint used to prove SSRF and open redirect
-      (VER-012). The Verifier runs its own listener bound to `host`:`port` and
-      watches it for a hit; `base_url` is how the target should reach that
-      listener (it may differ from the bind address behind NAT or a proxy). The
-      Verifier only ever steers those two probe classes toward this destination.
+      Operator-controlled benign endpoint used to prove SSRF (VER-012). The
+      Verifier runs its own listener bound to `host`:`port` and watches it for
+      a hit; `base_url` is how the target should reach that listener (it may
+      differ from the bind address behind NAT or a proxy). Open redirect needs
+      no listener: its proof is the redirect itself, which is not followed.
     additionalProperties: false
     properties:
       base_url: { type: [string, "null"], description: URL the target uses to reach the listener. }

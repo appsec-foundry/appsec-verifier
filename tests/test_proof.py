@@ -90,9 +90,65 @@ def test_injection_without_a_flip_is_downgraded(history):
     assert res.verdict == "inconclusive" and "VER-011" in res.rationale
 
 
+# ── open redirect (VER-012) ───────────────────────────────────────────────────
+
+MARKER = ("vrf0a1b2c3d", "4e5f6a7b")
+HOST = "vrf0a1b2c3d4e5f6a7b.invalid"
+
+
+def _redirect(location, status=302, path="/redirect"):
+    step = _req(None, path=path, status=status, params={"to": f"https://{HOST}/"})
+    if location is not None:
+        step["result"]["location"] = location
+    return step
+
+
+@pytest.mark.parametrize("step", [
+    _redirect(f"https://{HOST}/"),
+    _redirect(f"https://{HOST.upper()}:8443/x?https://github.com/allowed"),          # wrapped past an allow-list
+    _redirect(f"//{HOST}/x", status=301),                                            # scheme-relative
+    _redirect(f"http://{HOST}./", status=308),                                       # trailing dot
+])
+def test_open_redirect_to_the_marker_host_confirms(step):
+    res = _check("open-redirect", [READ, step], [2], marker=MARKER, target_base="https://app.example.com")
+    assert res.verdict == "confirmed"
+
+
+@pytest.mark.parametrize("history, cited, reason", [
+    ([_redirect(f"https://{HOST}/")], None, "at least one step"),
+    ([_redirect(f"https://{HOST}/")], [], "at least one step"),
+    ([READ, _redirect(f"https://{HOST}/")], [1], "not an answered http_request"),
+    ([_redirect(f"https://{HOST}/", status=200)], [1], "VER-012"),                    # not a redirect
+    ([_redirect(f"https://{HOST}/", status=304)], [1], "VER-012"),
+    ([_redirect(None)], [1], "VER-012"),                                               # no location
+    ([_redirect(f"https://app.example.com/login?next=https://{HOST}/")], [1], "VER-012"),  # marker only in query
+    ([_redirect(f"/{HOST}/x")], [1], "VER-012"),                                     # relative: stays on target
+    ([_redirect(f"https://{HOST}.evil.example/")], [1], "VER-012"),                  # marker as a subdomain
+    ([_redirect("https://vrf00000000ffffffff.invalid/")], [1], "VER-012"),           # another finding's host
+    ([_redirect("https://[::1/")], [1], "VER-012"),                                  # unparseable location
+])
+def test_open_redirect_without_the_marker_redirect_is_downgraded(history, cited, reason):
+    res = _check("open-redirect", history, cited, marker=MARKER, target_base="https://app.example.com")
+    assert res.verdict == "inconclusive" and reason in res.rationale
+
+
+def test_open_redirect_without_a_marker_is_never_confirmed():
+    res = _check("open-redirect", [_redirect("https://.invalid/")], [1], marker=("", ""), target_base="")
+    assert res.verdict == "inconclusive" and "no redirect marker" in res.rationale
+
+
+def test_open_redirect_evidence_names_the_host_not_the_location(tmp_path):
+    step = _redirect(f"https://{HOST}/?session=abc123")
+    res = check_proof(_ctx("open-redirect", marker=MARKER, target_base="https://app.example.com",
+                           evidence_dir=tmp_path / "evidence"), [step], ProbeResult(verdict="confirmed"), [1])
+    record = json.loads((tmp_path / "evidence" / "T-1-exchanges.json").read_text())
+    assert res.verdict == "confirmed" and record["exchanges"][0]["location_host"] == HOST
+    assert "abc123" not in json.dumps(record)
+
+
 # ── classes without the required infrastructure, unknown classes ──────────────
 
-@pytest.mark.parametrize("cls", ["path-traversal", "open-redirect", "ssrf"])
+@pytest.mark.parametrize("cls", ["path-traversal", "ssrf"])
 def test_classes_whose_proof_is_not_implemented_are_never_confirmed(cls):
     res = _check(cls, [_req("alice"), _req("bob")], [1, 2])
     assert res.verdict == "inconclusive" and "VER-012" in res.rationale

@@ -14,17 +14,22 @@ against what the tools actually returned:
 - injection (VER-011): two cited http_request steps with the same method, path
   and identity but different params or body, whose answers differ in status or
   body, so the input flipped the response. Timing proofs are not supported.
-- path-traversal, open-redirect, ssrf (VER-012): never confirmed yet. The
-  marker file, the landing on the operator's URL and the callback listener
-  these classes require are not implemented.
+- open-redirect (VER-012): a cited http_request answered 301, 302, 303, 307 or
+  308 whose `location` leads to the finding's redirect host,
+  `<marker>.invalid`. The marker is random per finding, so only a target that
+  took the destination from the request can name it; `.invalid` never
+  resolves (RFC 6761), so nothing is contacted, and the redirect is not
+  followed.
+- path-traversal, ssrf (VER-012): never confirmed yet. The marker file and the
+  callback listener these classes require are not implemented.
 - any other class: never confirmed, there is no check for it.
 
 A confirmed verdict that fails its check becomes inconclusive with the reason;
 the model's claim stays in the rationale. A passing check replaces the model's
 evidence with the code's: for xss the browser's files, otherwise a record of
 the cited exchanges (method, path, params, body, identity, status, length, body
-hash; no response body, no headers), redacted of credential values and written
-owner-only under evidence/.
+hash, for a redirect the host it leads to; no response body, no headers),
+redacted of credential values and written owner-only under evidence/.
 """
 
 from __future__ import annotations
@@ -35,14 +40,20 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 from ..verify.probes import ProbeResult
 
 _NOT_YET = {
     "path-traversal": "reading back a pre-placed marker file",
-    "open-redirect": "landing on the operator's benign URL",
     "ssrf": "a request arriving at the Verifier's callback listener",
 }
+_REDIRECTS = (301, 302, 303, 307, 308)
+
+
+def redirect_host(marker) -> str | None:
+    """The host an open-redirect proof must lead to, or None without a marker."""
+    return "".join(marker) + ".invalid" if marker and all(marker) else None
 
 
 def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeResult:
@@ -54,12 +65,13 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         return _xss(history, result)
     if cls in _NOT_YET:
         return _downgrade(result, f"this version cannot produce the proof {cls} needs: {_NOT_YET[cls]} (VER-012)")
-    check = {"access-control": _contrast, "injection": _flip}.get(cls)
+    check, minimum = {"access-control": (_contrast, 2), "injection": (_flip, 2),
+                      "open-redirect": (_redirect, 1)}.get(cls, (None, 0))
     if check is None:
         return _downgrade(result, f"there is no proof check for class {cls!r}")
-    exchanges, problem = _cited_exchanges(history, cited)
+    exchanges, problem = _cited_exchanges(ctx, history, cited, minimum)
     if problem is None:
-        problem = check(exchanges)
+        problem = check(ctx, exchanges)
     if problem is not None:
         return _downgrade(result, problem)
     result.evidence = _write_record(ctx, exchanges)
@@ -83,9 +95,21 @@ def _xss(history: list[dict], result: ProbeResult) -> ProbeResult:
     return result
 
 
-def _cited_exchanges(history: list[dict], cited) -> tuple[list[dict], str | None]:
-    if not isinstance(cited, list) or len(cited) < 2:
-        return [], "a confirmed verdict must cite at least two steps in proof_steps"
+def _location_host(ctx, location) -> str | None:
+    """The host a redirect's Location leads to, resolved against the target as a browser would."""
+    if not isinstance(location, str):
+        return None
+    try:
+        host = urlsplit(urljoin(getattr(ctx, "target_base", None) or "", location)).hostname
+    except ValueError:
+        return None
+    return host.rstrip(".") if host else None
+
+
+def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[list[dict], str | None]:
+    if not isinstance(cited, list) or len(cited) < minimum:
+        steps = "two steps" if minimum == 2 else "one step"
+        return [], f"a confirmed verdict must cite at least {steps} in proof_steps"
     exchanges = []
     for n in cited:
         if type(n) is not int or not 1 <= n <= len(history):
@@ -94,11 +118,14 @@ def _cited_exchanges(history: list[dict], cited) -> tuple[list[dict], str | None
         res, args = step.get("result") or {}, step.get("args") or {}
         if step.get("tool") != "http_request" or not isinstance(res.get("status"), int):
             return [], f"proof step {n} is not an answered http_request"
-        exchanges.append({
+        exchange = {
             "step": n, "method": str(args.get("method") or "GET").upper(), "path": args.get("path"),
             "params": args.get("params") or {}, "json": args.get("json"), "role": args.get("role"),
             "status": res["status"], "length": res.get("length"), "body_sha256": res.get("body_sha256"),
-        })
+        }
+        if "location" in res:
+            exchange["location_host"] = _location_host(ctx, res["location"])
+        exchanges.append(exchange)
     return exchanges, None
 
 
@@ -114,7 +141,7 @@ def _pairs(exchanges: list[dict]):
     return ((a, b) for i, a in enumerate(exchanges) for b in exchanges[i + 1:])
 
 
-def _contrast(exchanges: list[dict]) -> str | None:
+def _contrast(ctx, exchanges: list[dict]) -> str | None:
     if any(_same_request(a, b) and a["role"] != b["role"] and _readable(a) and _readable(b)
            for a, b in _pairs(exchanges)):
         return None
@@ -122,7 +149,7 @@ def _contrast(exchanges: list[dict]) -> str | None:
             "identities (VER-010)")
 
 
-def _flip(exchanges: list[dict]) -> str | None:
+def _flip(ctx, exchanges: list[dict]) -> str | None:
     if any(a["method"] == b["method"] and a["path"] == b["path"] and a["role"] == b["role"]
            and (a["params"], a["json"]) != (b["params"], b["json"])
            and (a["status"], a["body_sha256"]) != (b["status"], b["body_sha256"])
@@ -130,6 +157,15 @@ def _flip(exchanges: list[dict]) -> str | None:
         return None
     return ("the cited steps do not show one request whose response changes with the input "
             "(same method, path and identity; different input; different status or body) (VER-011)")
+
+
+def _redirect(ctx, exchanges: list[dict]) -> str | None:
+    host = redirect_host(getattr(ctx, "marker", None))
+    if host is None:
+        return "this run has no redirect marker for the finding"
+    if any(e["status"] in _REDIRECTS and e.get("location_host") == host for e in exchanges):
+        return None
+    return f"no cited step was answered with a redirect (301, 302, 303, 307, 308) to {host} (VER-012)"
 
 
 def _write_record(ctx, exchanges: list[dict]) -> list[dict]:

@@ -42,9 +42,10 @@ Early version.
 - The code checks the proof of every `confirmed` verdict; the model's word is
   not enough. The model names the steps that prove it, and a verdict whose
   proof does not hold ends `inconclusive`. Not built yet: the marker file for
-  path traversal, observing a redirect for open redirect, and the callback
-  listener for SSRF. Findings of these three classes are therefore never
-  confirmed yet.
+  path traversal and the callback listener for SSRF. Findings of these two
+  classes are therefore never confirmed yet.
+- The agent's HTTP requests do not follow redirects. A 3xx answer comes back
+  with its `Location`, and any next hop is a request of its own.
 
 ## Usage
 
@@ -77,7 +78,7 @@ A finding counts as confirmed only with the proof in the right column.
 | Broken access control / IDOR | CWE-639, 862, 863 | the same request, sent as two different identities (or one and none), is answered 2xx with content for both |
 | SQL / NoSQL injection | CWE-89, 943 | the same request with a different input gets a different status or body; no data is extracted. Timing differences are not accepted yet |
 | Path traversal | CWE-22 | a marker file placed beforehand can be read (not built yet, never confirmed) |
-| Open redirect | CWE-601 | a harmless, controlled redirect works (not built yet, never confirmed) |
+| Open redirect | CWE-601 | the target answers with a redirect to `<marker>.invalid`, a host chosen per finding that never resolves; the redirect is observed, not followed |
 | SSRF | CWE-918 | the target calls a listener run by the Verifier (not built yet, never confirmed) |
 
 Findings that cannot be tested against a running system, such as a weak random

@@ -45,7 +45,8 @@ class ProbeContext:
     source: object | None = None       # SourceReader (read-only target checkout), or None
     target_base: str = ""              # target base URL the agent's requests are joined to
     browser: object | None = None      # ProofBrowser for XSS (VER-009), or None when unavailable
-    marker: tuple[str, str] = ("", "")  # per-finding XSS marker parts; only their runtime join counts
+    marker: tuple[str, str] = ("", "")  # per-finding marker parts: XSS joins them at runtime, open redirect
+    #                                     uses <part0><part1>.invalid as its redirect host (agent/proof.py)
     log: object | None = None          # callable(record) for the action log (VER-017), or None
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
 

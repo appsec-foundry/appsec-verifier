@@ -80,6 +80,31 @@ def test_unparseable_path_is_a_tool_error(tmp_path):
         AgentTools(_ctx(tmp_path, lambda m, u, h, **k: Resp())).http_request(path="https://[::1/x")
 
 
+def test_redirects_are_reported_not_followed(tmp_path):
+    """The agent sees the redirect and its location; no hop is sent for it, in scope or not (VER-012)."""
+    sent = []
+
+    def transport(m, u, h, **k):
+        sent.append(u)
+        resp = Resp(302, "")
+        resp.headers = {"Location": "https://evil.example/landing?t=A-token-1234"}
+        return resp
+
+    env = {"TA": "A-token-1234"}
+    out = AgentTools(_ctx(tmp_path, transport, env=env)).http_request(role="customer-a", path="/redirect")
+    assert sent == ["https://app.example.com/redirect"]
+    assert out["status"] == 302 and out["location"] == "https://evil.example/landing?t=[redacted]"
+
+
+def test_location_is_reported_only_for_redirects(tmp_path):
+    def transport(m, u, h, **k):
+        resp = Resp(201, "{}")
+        resp.headers = {"Location": "/rest/basket/3"}
+        return resp
+
+    assert "location" not in AgentTools(_ctx(tmp_path, transport)).http_request(path="/rest/basket")
+
+
 def test_safe_mode_blocks_state_change(tmp_path):
     called = []
     tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: called.append(u) or Resp()))

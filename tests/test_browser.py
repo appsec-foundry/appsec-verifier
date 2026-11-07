@@ -134,10 +134,12 @@ def test_marker_parts_are_random_and_only_their_join_is_in_the_page_hook():
     assert "text === marker" in script
 
 
-def test_system_prompt_gives_the_marker_only_for_xss():
+def test_system_prompt_gives_the_marker_only_for_xss_and_open_redirect():
     plan = SimpleNamespace(cls="xss")
     ctx = SimpleNamespace(plan=plan, identities=[], safe=True, marker=("vrfaa", "bb"))
     assert "alert('vrfaa'+'bb')" in _system(ctx)
+    ctx.plan = SimpleNamespace(cls="open-redirect")
+    assert "https://vrfaabb.invalid/" in _system(ctx) and "alert(" not in _system(ctx)
     ctx.plan = SimpleNamespace(cls="access-control")
     assert "vrfaa" not in _system(ctx)
 

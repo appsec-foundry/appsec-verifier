@@ -9,6 +9,8 @@ part of them.
 
 from __future__ import annotations
 
+from .proof import redirect_host
+
 _RESULT_CAP = 4000  # bound tool-result text fed back to the model (tokens/cost)
 
 _VERDICT_ENUM = ["confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted"]
@@ -21,7 +23,8 @@ def _tool_defs() -> list[dict]:
             "description": "Send one HTTP request to the target as a test identity. "
                            "Path is relative to the target base URL. Safe mode allows only GET/HEAD/OPTIONS; "
                            "POST/PUT/PATCH need intrusive mode; other methods are never sent. A role's "
-                           "credentials go only to its own origin.",
+                           "credentials go only to its own origin. Redirects are not followed: a 3xx answer "
+                           "reports its location; request the next hop yourself if you need it.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -98,24 +101,35 @@ def _system(ctx) -> str:
         "For injection: rely on an observable response difference, never on exfiltrated data; cite two steps "
         "with the same method, path and identity, different input, and a different status or body. "
         "For XSS: a verdict of confirmed requires a browser_check in which the payload executed. "
-        "Path traversal, open redirect and SSRF cannot be confirmed in this version; report what you observe "
+        "For open redirect: a verdict of confirmed requires a cited step answered with a redirect to the "
+        "redirect host given below. "
+        "Path traversal and SSRF cannot be confirmed in this version; report what you observe "
         "as inconclusive. "
         "Do not pursue other weaknesses; note anything incidental as an observation. "
         "When you have enough evidence — or cannot get it — call submit_verdict. "
         "If you cannot reproduce it, say not-reproducible or inconclusive; do not guess confirmed."
-        + _xss_marker_hint(ctx)
+        + _marker_hint(ctx)
     )
 
 
-def _xss_marker_hint(ctx) -> str:
+def _marker_hint(ctx) -> str:
     plan, marker = getattr(ctx, "plan", None), getattr(ctx, "marker", ("", ""))
-    if getattr(plan, "cls", None) != "xss" or not all(marker):
-        return ""
-    return (
-        f"\nXSS proof: your payload must call alert('{marker[0]}'+'{marker[1]}') — the two parts joined at "
-        "runtime (quotes may change to fit the context). Only that evaluated value counts as execution, and only "
-        "browser_check observes it; confirmed without an executed marker is downgraded."
-    )
+    cls = getattr(plan, "cls", None)
+    if cls == "xss" and all(marker):
+        return (
+            f"\nXSS proof: your payload must call alert('{marker[0]}'+'{marker[1]}') — the two parts joined at "
+            "runtime (quotes may change to fit the context). Only that evaluated value counts as execution, and "
+            "only browser_check observes it; confirmed without an executed marker is downgraded."
+        )
+    host = redirect_host(marker)
+    if cls == "open-redirect" and host:
+        return (
+            f"\nOpen-redirect proof: make the target redirect to a URL whose host is exactly {host}, e.g. "
+            f"https://{host}/ placed where the finding takes the destination (wrap it as the target's "
+            "validation requires, but keep that host). The host never resolves and the redirect is not followed. "
+            "Cite in proof_steps the http_request answered 301/302/303/307/308 with that host in its location."
+        )
+    return ""
 
 
 def _seed(ctx) -> str:

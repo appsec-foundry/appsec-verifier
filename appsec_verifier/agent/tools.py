@@ -14,7 +14,9 @@ error for the agent, never as an exception past the loop. A response body is
 redacted of every credential value before it is cut to the excerpt (VER-016).
 The agent's path is appended to the target base URL as written, without
 resolving dot segments, so the guard decides on the path the agent chose and
-refuses an ambiguous one (VER-018).
+refuses an ambiguous one (VER-018). http_request does not follow redirects: a
+3xx answer is returned with its `location`, which is what an open-redirect
+proof observes (VER-012); any further hop is a request of its own.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_ori
 from .source_reader import SourceAccessError
 
 _BODY_EXCERPT = 600
+_LOCATION_CAP = 2000
 
 
 class ToolError(Exception):
@@ -136,14 +139,22 @@ class AgentTools:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
         text = _body_text(resp)
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
-        return {
+        status = getattr(resp, "status_code", None)
+        out = {
             "role": role,
-            "status": getattr(resp, "status_code", None),
+            "status": status,
             "length": len(text),                         # of the whole body, not of the excerpt
             # of the redacted body, so no hash of a credential exists; lets the proof check compare answers
             "body_sha256": hashlib.sha256(redacted.encode("utf-8", "replace")).hexdigest(),
             "body_excerpt": redacted[:_BODY_EXCERPT],    # redacted before the cut: no partial token (VER-016)
         }
+        resp_headers = getattr(resp, "headers", None) or {}
+        location = resp_headers.get("Location") or resp_headers.get("location")
+        if isinstance(status, int) and 300 <= status < 400 and location:
+            location = str(location)
+            location = self.ctx.sessions.redact(location) if self.ctx.sessions is not None else location
+            out["location"] = location[:_LOCATION_CAP]
+        return out
 
     def _send(self, method, url, headers, params, json):
         kwargs = {}
@@ -151,7 +162,8 @@ class AgentTools:
             kwargs["params"] = params
         if json is not None:
             kwargs["json"] = json
-        return self.ctx.http.request(method, url, headers, purpose="target", **kwargs)
+        # Not followed: the agent sees the redirect itself (VER-012) and sends any next hop as its own request.
+        return self.ctx.http.request(method, url, headers, purpose="target", follow_redirects=False, **kwargs)
 
     def read_source(self, *, path: str, around_line: int | None = None) -> dict:
         if self.ctx.source is None:
