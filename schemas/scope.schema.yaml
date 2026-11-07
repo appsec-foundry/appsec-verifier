@@ -137,14 +137,38 @@ properties:
     description: |
       Operator-controlled benign endpoint used to prove SSRF (VER-012). The
       Verifier runs its own listener bound to `host`:`port` and watches it for
-      a hit; `base_url` is how the target should reach that listener (it may
-      differ from the bind address behind NAT or a proxy). Open redirect needs
-      no listener: its proof is the redirect itself, which is not followed.
+      a request carrying the finding's marker; `base_url` is how the target
+      reaches that listener. The listener binds only to loopback. A target on
+      another machine reaches it through a TLS-terminating proxy or tunnel the
+      operator runs; `base_url` then names it and must be https (plain http
+      only when its host is loopback too). The Verifier never contacts this
+      address itself. Open redirect needs no listener: its proof is the
+      redirect itself, which is not followed.
     additionalProperties: false
     properties:
       base_url: { type: [string, "null"], description: URL the target uses to reach the listener. }
-      host:     { type: [string, "null"], description: Local bind host for the built-in listener. }
+      host:     { type: [string, "null"], description: Local bind host (loopback) for the built-in listener. }
       port:     { type: [integer, "null"], minimum: 1, maximum: 65535, description: Local bind port. }
+
+  marker_file:
+    type: object
+    description: |
+      A harmless file the operator placed on the target to prove path
+      traversal (VER-012). The agent is told `path` and must make the target
+      return that file; a parameter that names any other file is refused. The
+      Verifier recognises `content` in the response itself; the model never
+      sees it. Use a random token that appears nowhere else on the target.
+    required: [path, content]
+    additionalProperties: false
+    properties:
+      path:
+        type: string
+        minLength: 1
+        description: Where the file lies on the target's file system, as the application would open it.
+      content:
+        type: string
+        pattern: "^[A-Za-z0-9_-]{16,128}$"
+        description: The token the file contains (16 to 128 letters, digits, '_' or '-').
 
   auth_hosts:
     type: array

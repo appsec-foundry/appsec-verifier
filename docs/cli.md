@@ -164,15 +164,38 @@ different input, answered with a different status or body. XSS: a
 `<marker>.invalid`, a host drawn at random per finding and given to the agent;
 `.invalid` never resolves (RFC 6761). `http_request` never follows redirects:
 a 3xx answer is returned with its `location`, and any next hop is a request of
-its own. Path traversal and SSRF are never confirmed yet, because the marker
-file and the callback listener they need are not built. A
+its own. Path traversal: a cited `http_request` whose response held the
+content of the scope's `marker_file`, recognised in code (`marker_read`); the
+model is told the file's path, never its content, which shows as
+`[marker-file]` in every tool result, and a request that carried the content
+does not count. SSRF: a request with the finding's marker reached the callback
+listener; no `proof_steps` are needed. A
 `confirmed` verdict that fails its check becomes `inconclusive`
 ("indicative, not proven: …") with the model's claim kept in the rationale. A
 passing check replaces the model's evidence with the code's: for access control,
-injection and open redirect `evidence/<finding>-exchanges.json` (owner-only)
-with method, path, params, body, identity, status, length and a hash of the
-redacted response body per cited step, for a redirect the host it leads to; no
-response body and no headers.
+injection, open redirect and path traversal `evidence/<finding>-exchanges.json`
+(owner-only) with method, path, params, body, identity, status, length and a
+hash of the redacted response body per cited step, for a redirect the host it
+leads to, for a traversal whether the marker was read; no response body and no
+headers. For SSRF `evidence/<finding>-callback-hits.json` with time, method and
+source address of each hit.
+
+**Markers for path traversal and SSRF (VER-012).** These probes are aimed only
+at harmless markers. In a path-traversal probe, a parameter or body value that
+names a file (it contains `..` or a NUL, or starts with `/`, `\`, `~` or a
+drive letter) must name the marker file; without `marker_file` in the scope no
+such value is sent. The traversal goes in a parameter or the body, because the
+guard refuses dot segments and encoded separators in the URL path. In an SSRF
+probe, a value that holds a URL (`://` or a leading `//`) must point at the
+callback listener's origin. Values are percent-decoded up to three times
+before the check; other encodings a target may accept are not decoded, and the
+agent is told the same rule. The listener (`tools/callback.py`) binds only to a
+loopback `callback.host`. A target on another machine reaches it through a
+TLS-terminating proxy or tunnel the operator runs, named in
+`callback.base_url`, which must then be https. The listener answers every
+request with an empty 204, keeps only time, method and source address of
+requests that carry a marker, and is never a target of the Verifier itself.
+If it cannot bind, the run goes on and SSRF findings stay unconfirmed.
 
 **XSS proof browser (VER-009, VER-018, VER-022).** For XSS findings the agent
 gets one more tool, `browser_check`, which loads a target page in headless
@@ -308,8 +331,8 @@ philosophy: a saved, validated result exports without new work).
 The single authority for what the Verifier may contact. Schema:
 `schemas/scope.schema.yaml`. Carries `base_url`, allowed `hosts`, `ports`,
 `path_prefixes`, an authorisation `window` (`from`/`until`), the responsible
-`owner`, `allow_state_change`, and the callback listener used for SSRF
-proofs. For authenticated targets it also carries `auth_hosts` (SSO / OIDC and
+`owner`, `allow_state_change`, the callback listener used for SSRF proofs, and
+the `marker_file` (path and token) used for path-traversal proofs. For authenticated targets it also carries `auth_hosts` (SSO / OIDC and
 token endpoints the Verifier may contact only to log in — never probed for
 findings) and `proxy` (an HTTP/HTTPS proxy to route target and auth traffic
 through, with proxy credentials named as env vars). Anything not inside it —

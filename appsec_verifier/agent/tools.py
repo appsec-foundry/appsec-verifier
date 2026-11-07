@@ -17,12 +17,25 @@ resolving dot segments, so the guard decides on the path the agent chose and
 refuses an ambiguous one (VER-018). http_request does not follow redirects: a
 3xx answer is returned with its `location`, which is what an open-redirect
 proof observes (VER-012); any further hop is a request of its own.
+
+Path traversal and SSRF are steered to harmless markers (VER-012). In a
+path-traversal probe a parameter or body value that names a file (`..`, an
+absolute path, a NUL) must name the scope's marker file; in an SSRF probe a
+value that holds a URL must point at the callback listener. Values are
+percent-decoded up to three times before the check. This is a floor, not a
+parser of every encoding; the prompt states the same rule. The marker file's
+content never reaches the model: it is replaced by "[marker-file]" in every
+tool result, and http_request reports `marker_read` instead. An SSRF probe's
+http_request reports `callback_hit` once the listener has seen the finding's
+marker.
 """
 
 from __future__ import annotations
 
 import hashlib
-from urllib.parse import urlsplit
+import re
+from pathlib import PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -32,6 +45,9 @@ from .source_reader import SourceAccessError
 
 _BODY_EXCERPT = 600
 _LOCATION_CAP = 2000
+_HIDDEN = "[marker-file]"
+_CALLBACK_WAIT_S = 1.0
+_DRIVE = re.compile(r"^[A-Za-z]:")
 
 
 class ToolError(Exception):
@@ -47,20 +63,84 @@ def _body_text(resp) -> str:
     return text
 
 
+def _strings(value):
+    """Every string value inside params or a JSON body; keys are not values."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            yield from _strings(v)
+
+
+def _decoded(value: str) -> str:
+    for _ in range(3):
+        plain = unquote(value)
+        if plain == value:
+            break
+        value = plain
+    return value
+
+
+def _file_path(value: str) -> str | None:
+    """The file path a value names, up to a NUL, or None when it does not look like one."""
+    d = _decoded(value)
+    if ".." in d or "\x00" in d or d.startswith(("/", "\\", "~")) or _DRIVE.match(d):
+        return d.split("\x00", 1)[0].replace("\\", "/")
+    return None
+
+
+def _hide(value, secret: str | None):
+    """`value` with every occurrence of the marker file's content replaced."""
+    if not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, _HIDDEN)
+    if isinstance(value, dict):
+        return {k: _hide(v, secret) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_hide(v, secret) for v in value]
+    return value
+
+
 class AgentTools:
     """Dispatches the agent's tool calls against a ProbeContext."""
 
     def __init__(self, ctx):
         self.ctx = ctx
+        marker_file = (getattr(ctx, "scope", None) or {}).get("marker_file") or {}
+        self._marker_content = marker_file.get("content") or None
+        path = str(marker_file.get("path") or "").replace("\\", "/")
+        self._marker_name = PurePosixPath(path).name or None
 
     def call(self, name: str, args: dict) -> dict:
-        if name == "http_request":
-            return self.http_request(**args)
-        if name == "read_source":
-            return self.read_source(**args)
-        if name == "browser_check":
-            return self.browser_check(**args)
-        raise ToolError(f"unknown tool {name!r}; available: http_request, read_source, browser_check")
+        tool = {"http_request": self.http_request, "read_source": self.read_source,
+                "browser_check": self.browser_check}.get(name)
+        if tool is None:
+            raise ToolError(f"unknown tool {name!r}; available: http_request, read_source, browser_check")
+        return _hide(tool(**args), self._marker_content)     # the model never sees the marker file's content
+
+    def _check_steering(self, params, body) -> None:
+        """Path-traversal and SSRF probes aim only at the marker file and the callback listener (VER-012)."""
+        cls, values = self.ctx.plan.cls, [*_strings(params), *_strings(body)]
+        if cls == "path-traversal":
+            name = self._marker_name
+            for value in values:
+                path = _file_path(value)
+                if path is not None and not (name and (path == name or path.endswith("/" + name))):
+                    raise ToolError("a path-traversal probe may name only the scope's marker file"
+                                    + (f" ({name})" if name else "; this scope names none") + " (VER-012)")
+        elif cls == "ssrf":
+            base = self.ctx.listener.base_url if self.ctx.listener is not None else None
+            for value in values:
+                d = _decoded(value)
+                if d.startswith("//") and base:
+                    d = urlsplit(base).scheme + ":" + d
+                if ("://" in d or d.startswith("//")) and not (base and same_origin(d, base)):
+                    raise ToolError("an SSRF probe may point the target only at the callback listener"
+                                    + (f" ({base}/…)" if base else "; this run has none") + " (VER-012)")
 
     def browser_check(self, *, path: str, role: str | None = None, wait_ms: int = 1500) -> dict:
         from ..tools.browser import BrowserError
@@ -117,6 +197,7 @@ class AgentTools:
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive")
         if self.ctx.http is None or not self.ctx.target_base:
             raise ToolError("no HTTP transport is wired for this run")
+        self._check_steering(params, json)
         url = self._url(path)
         headers = {}
         if role:
@@ -139,6 +220,7 @@ class AgentTools:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
         text = _body_text(resp)
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
+        redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
         status = getattr(resp, "status_code", None)
         out = {
             "role": role,
@@ -153,7 +235,11 @@ class AgentTools:
         if isinstance(status, int) and 300 <= status < 400 and location:
             location = str(location)
             location = self.ctx.sessions.redact(location) if self.ctx.sessions is not None else location
-            out["location"] = location[:_LOCATION_CAP]
+            out["location"] = _hide(location, self._marker_content)[:_LOCATION_CAP]
+        if self.ctx.plan.cls == "path-traversal" and self._marker_content:
+            out["marker_read"] = self._marker_content in text           # the raw body, checked in code
+        if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:
+            out["callback_hit"] = self.ctx.listener.wait_for("".join(self.ctx.marker), _CALLBACK_WAIT_S)
         return out
 
     def _send(self, method, url, headers, params, json):

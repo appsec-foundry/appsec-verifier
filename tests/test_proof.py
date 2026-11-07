@@ -146,12 +146,71 @@ def test_open_redirect_evidence_names_the_host_not_the_location(tmp_path):
     assert "abc123" not in json.dumps(record)
 
 
-# ── classes without the required infrastructure, unknown classes ──────────────
+# ── path traversal (VER-012) ──────────────────────────────────────────────────
 
-@pytest.mark.parametrize("cls", ["path-traversal", "ssrf"])
-def test_classes_whose_proof_is_not_implemented_are_never_confirmed(cls):
-    res = _check(cls, [_req("alice"), _req("bob")], [1, 2])
-    assert res.verdict == "inconclusive" and "VER-012" in res.rationale
+CONTENT = "vrfMarkerContent0123456789"
+TRAVERSAL_SCOPE = {"marker_file": {"path": "/srv/verifier-marker.txt", "content": CONTENT}}
+
+
+def _read(marker_read, params=None):
+    step = _req(None, path="/download", params=params or {"file": "../../srv/verifier-marker.txt"})
+    step["result"]["marker_read"] = marker_read
+    return step
+
+
+def test_traversal_that_read_the_marker_file_confirms(tmp_path):
+    res = check_proof(_ctx("path-traversal", scope=TRAVERSAL_SCOPE, evidence_dir=tmp_path / "evidence"),
+                      [READ, _read(False), _read(True)], ProbeResult(verdict="confirmed"), [3])
+    record = json.loads((tmp_path / "evidence" / "T-1-exchanges.json").read_text())
+    assert res.verdict == "confirmed" and record["exchanges"][0]["marker_read"] is True
+    assert CONTENT not in json.dumps(record)
+
+
+@pytest.mark.parametrize("history, cited, scope, reason", [
+    ([_read(True)], [1], {}, "names no marker file"),
+    ([_read(True)], None, TRAVERSAL_SCOPE, "at least one step"),
+    ([_read(False)], [1], TRAVERSAL_SCOPE, "VER-012"),
+    ([_req(None)], [1], TRAVERSAL_SCOPE, "VER-012"),                               # no marker_read at all
+    ([_read(True, params={"q": CONTENT})], [1], TRAVERSAL_SCOPE, "VER-012"),       # an echo, not a read
+    ([_read("yes")], [1], TRAVERSAL_SCOPE, "VER-012"),                              # only True counts
+])
+def test_traversal_without_a_read_marker_is_downgraded(history, cited, scope, reason):
+    res = _check("path-traversal", history, cited, scope=scope)
+    assert res.verdict == "inconclusive" and reason in res.rationale
+
+
+# ── SSRF (VER-012) ────────────────────────────────────────────────────────────
+
+class FakeListener:
+    def __init__(self, hits):
+        self._hits = hits
+
+    def hits(self, marker):
+        return list(self._hits.get(marker, []))
+
+
+def test_ssrf_confirms_on_a_listener_hit_and_records_it(tmp_path):
+    hit = {"at": "2026-11-07T10:00:00Z", "method": "GET", "source": "127.0.0.1"}
+    listener = FakeListener({"vrf0a1b2c3d4e5f6a7b": [hit]})
+    res = check_proof(_ctx("ssrf", listener=listener, marker=MARKER, evidence_dir=tmp_path / "evidence"), [],
+                      ProbeResult(verdict="confirmed"), None)
+    path = tmp_path / "evidence" / "T-1-callback-hits.json"
+    assert res.verdict == "confirmed" and res.evidence[0]["kind"] == "callback"
+    assert json.loads(path.read_text())["callback_hits"] == [hit] and (path.stat().st_mode & 0o777) == 0o600
+
+
+@pytest.mark.parametrize("listener, marker, reason", [
+    (None, MARKER, "no callback listener"),
+    (FakeListener({}), ("", ""), "no callback listener"),
+    (FakeListener({}), MARKER, "reached the callback listener"),
+    (FakeListener({"vrf00000000ffffffff": [{"at": "t"}]}), MARKER, "reached the callback listener"),  # other finding
+])
+def test_ssrf_without_a_hit_is_downgraded(listener, marker, reason):
+    res = _check("ssrf", [_req(None)], [1], listener=listener, marker=marker)
+    assert res.verdict == "inconclusive" and reason in res.rationale and "VER-012" in res.rationale
+
+
+# ── unknown classes ───────────────────────────────────────────────────────────
 
 
 def test_an_unknown_class_is_never_confirmed():

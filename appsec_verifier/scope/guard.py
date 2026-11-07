@@ -6,7 +6,9 @@ classifies it by purpose: the target attack surface, an SSO/auth host, the SSRF
 callback listener, or the declared proxy. Anything not covered is refused.
 Target and authentication requests both need a scheme from the scope's
 `schemes` (default https), so credentials never go out over plain http unless
-the scope allows it (VER-016, VER-028).
+the scope allows it (VER-016, VER-028). The SSRF callback listener is never a
+target, whichever loopback name reaches it, so only the target can produce a
+hit there (VER-012).
 
 It fails closed: a scope without a usable host or port allows no target, and a
 URL that cannot be parsed is refused, never raised. A path that a client or
@@ -64,6 +66,13 @@ def _ip(value: str):
     if ip.version == 6 and ip in _NAT64:
         return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
     return ip
+
+
+def is_loopback(host: str | None) -> bool:
+    """Whether `host` is `localhost` or a loopback address."""
+    host = str(host or "").strip("[]").lower().rstrip(".")
+    ip = _ip(host)
+    return host == "localhost" or (ip is not None and ip.is_loopback)
 
 
 @dataclass
@@ -174,6 +183,14 @@ class ScopeGuard:
     def _on_target_host(self, host: str, port: int | None) -> bool:
         return host in self.hosts and port in self.ports
 
+    def _is_callback(self, host: str, port: int | None) -> bool:
+        """Whether host:port is the callback listener, by its bind address or its base_url (VER-012)."""
+        cb_host, cb_port = str(self.callback.get("host") or "").lower(), self.callback.get("port")
+        if cb_host and port == cb_port and (host == cb_host or (is_loopback(host) and is_loopback(cb_host))):
+            return True
+        parts = _safe_dissect(self.callback.get("base_url") or "")
+        return bool(parts and parts[1]) and (host, port) == (parts[1], parts[2])
+
     def origin_allowed(self, url: str) -> bool:
         """Whether scheme, host and port of `url` are a target origin in scope."""
         parts = _safe_dissect(url)
@@ -194,6 +211,8 @@ class ScopeGuard:
                 return Decision(False, f"host {host!r} out of scope", purpose)
             if not self.ports or port not in self.ports:
                 return Decision(False, f"port {port} out of scope", purpose)
+            if self._is_callback(host, port):     # only the target may reach it, or a hit proves nothing
+                return Decision(False, "the callback listener is never a target (VER-012)", purpose)
             if _ambiguous_path(path):
                 return Decision(False, f"path {path!r} is ambiguous (dot segment, '//', '\\', ';' or an "
                                        "encoded separator) and is refused", purpose)

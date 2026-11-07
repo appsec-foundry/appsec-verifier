@@ -215,6 +215,136 @@ def test_identity_with_target_origin_is_bound_to_that_origin(tmp_path):
     assert sent == [("https://api.example.com/v1/me", "Bearer A")]
 
 
+# ── path traversal and SSRF are steered to their markers (VER-012) ───────────
+
+MARKER_FILE = {"path": "/srv/app/verifier-marker.txt", "content": "vrfMarkerContent0123456789"}
+
+
+class FakeListener:
+    base_url = "http://localhost:4444"
+
+    def __init__(self, hit=False):
+        self.hit = hit
+        self.waited = []
+
+    def url_for(self, marker):
+        return f"{self.base_url}/{marker}"
+
+    def wait_for(self, marker, timeout):
+        self.waited.append(marker)
+        return self.hit
+
+
+def _probe_ctx(tmp_path, cls, transport, *, marker_file=None, listener=None):
+    ctx = _ctx(tmp_path, transport)
+    ctx.plan.cls = cls
+    ctx.scope = dict(SCOPE, **({"marker_file": marker_file} if marker_file else {}))
+    ctx.listener = listener
+    ctx.marker = ("vrf0a1b2c3d", "4e5f6a7b")
+    return ctx
+
+
+@pytest.mark.parametrize("value", [
+    "../../srv/app/verifier-marker.txt", "/srv/app/verifier-marker.txt", "..%2F..%2Fverifier-marker.txt",
+    "%252e%252e%252fverifier-marker.txt", "..\\..\\verifier-marker.txt", "../verifier-marker.txt%00.md",
+    "legal.md", "report",
+])
+def test_traversal_values_that_lead_to_the_marker_file_are_sent(tmp_path, value):
+    sent = []
+    tools = AgentTools(_probe_ctx(tmp_path, "path-traversal", lambda m, u, h, **k: sent.append(k) or Resp(),
+                                  marker_file=MARKER_FILE))
+    tools.http_request(path="/download", params={"file": value})
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("params, body", [
+    ({"file": "../../etc/passwd"}, None),
+    ({"file": "/etc/shadow"}, None),
+    ({"file": "..%2F..%2Fetc%2Fpasswd"}, None),
+    ({"file": "%252e%252e%252fetc%252fpasswd"}, None),
+    ({"file": "C:\\Windows\\win.ini"}, None),
+    ({"file": "~/.ssh/id_rsa"}, None),
+    ({"file": "../../etc/passwd%00/verifier-marker.txt"}, None),          # NUL ends the path before the name
+    ({"file": "../../verifier-marker.txt.bak"}, None),
+    (None, {"files": [{"name": "../../etc/hosts"}]}),                      # nested in the body
+])
+def test_traversal_values_that_lead_elsewhere_are_refused(tmp_path, params, body):
+    sent = []
+    tools = AgentTools(_probe_ctx(tmp_path, "path-traversal", lambda m, u, h, **k: sent.append(u) or Resp(),
+                                  marker_file=MARKER_FILE))
+    with pytest.raises(ToolError, match="marker file"):
+        tools.http_request(method="GET", path="/download", params=params, json=body)
+    assert sent == []
+
+
+def test_without_a_marker_file_no_traversal_is_sent(tmp_path):
+    tools = AgentTools(_probe_ctx(tmp_path, "path-traversal", lambda m, u, h, **k: Resp()))
+    with pytest.raises(ToolError, match="names none"):
+        tools.http_request(path="/download", params={"file": "../verifier-marker.txt"})
+
+
+def test_marker_content_is_detected_in_code_and_hidden_from_the_model(tmp_path):
+    body = "x" * 595 + MARKER_FILE["content"] + "\n"                     # straddles the excerpt cut
+    ctx = _probe_ctx(tmp_path, "path-traversal", lambda m, u, h, **k: Resp(200, body), marker_file=MARKER_FILE)
+    (tmp_path / "verifier-marker.txt").write_text(MARKER_FILE["content"])
+    tools = AgentTools(ctx)
+    out = tools.call("http_request", {"path": "/download", "params": {"file": "../verifier-marker.txt"}})
+    assert out["marker_read"] is True and "vrfMarker" not in out["body_excerpt"]
+    assert out["body_excerpt"].endswith("x" * 595 + "[mark")             # the cut falls in the placeholder
+    assert "vrfMarker" not in str(tools.call("read_source", {"path": "verifier-marker.txt"}))
+    assert AgentTools(_probe_ctx(tmp_path, "path-traversal", lambda m, u, h, **k: Resp(200, "nope"),
+                                 marker_file=MARKER_FILE)).http_request(path="/d")["marker_read"] is False
+
+
+def test_marker_read_is_reported_only_in_traversal_probes(tmp_path):
+    ctx = _probe_ctx(tmp_path, "injection", lambda m, u, h, **k: Resp(200, MARKER_FILE["content"]),
+                     marker_file=MARKER_FILE)
+    out = AgentTools(ctx).call("http_request", {"path": "/x"})
+    assert "marker_read" not in out and "vrfMarker" not in out["body_excerpt"]
+
+
+@pytest.mark.parametrize("value", [
+    "http://localhost:4444/vrf0a1b2c3d4e5f6a7b", "HTTP://LOCALHOST:4444/x?y=1",
+    "http%3A%2F%2Flocalhost%3A4444%2Fvrf", "//localhost:4444/vrf", "plain text", "42",
+])
+def test_ssrf_values_that_point_at_the_listener_are_sent(tmp_path, value):
+    sent = []
+    listener = FakeListener(hit=True)
+    tools = AgentTools(_probe_ctx(tmp_path, "ssrf", lambda m, u, h, **k: sent.append(u) or Resp(),
+                                  listener=listener))
+    out = tools.http_request(path="/fetch", params={"url": value})
+    assert len(sent) == 1 and out["callback_hit"] is True and listener.waited == ["vrf0a1b2c3d4e5f6a7b"]
+
+
+@pytest.mark.parametrize("value", [
+    "http://169.254.169.254/latest/meta-data/", "http://localhost:4444@169.254.169.254/",
+    "http://localhost:4444\\@10.0.0.1/", "file:///etc/passwd", "gopher://localhost:6379/_INFO",
+    "http://localhost:5555/", "https://localhost:4444/", "//10.0.0.1/admin", "http%253A%252F%252F10.0.0.1%252F",
+    "see http://localhost:4444/",
+])
+def test_ssrf_values_that_point_elsewhere_are_refused(tmp_path, value):
+    sent = []
+    tools = AgentTools(_probe_ctx(tmp_path, "ssrf", lambda m, u, h, **k: sent.append(u) or Resp(),
+                                  listener=FakeListener()))
+    with pytest.raises(ToolError, match="callback listener"):
+        tools.http_request(path="/fetch", json={"target": {"url": value}})
+    assert sent == []
+
+
+def test_without_a_listener_no_ssrf_url_is_sent(tmp_path):
+    tools = AgentTools(_probe_ctx(tmp_path, "ssrf", lambda m, u, h, **k: Resp()))
+    with pytest.raises(ToolError, match="has none"):
+        tools.http_request(path="/fetch", params={"url": "http://localhost:4444/x"})
+    assert "callback_hit" not in tools.http_request(path="/fetch", params={"q": "x"})
+
+
+def test_other_classes_are_not_steered(tmp_path):
+    sent = []
+    tools = AgentTools(_probe_ctx(tmp_path, "injection", lambda m, u, h, **k: sent.append(u) or Resp()))
+    tools.http_request(path="/search", params={"q": "../x", "u": "http://example.org/"})
+    assert len(sent) == 1
+
+
 # ── failures become tool errors, never exceptions past the loop ──────────────
 
 def test_unknown_role_and_missing_secret_are_tool_errors(tmp_path):

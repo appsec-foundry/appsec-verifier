@@ -51,7 +51,8 @@ proxy:
     - 127.0.0.1
 
 callback:
-  base_url: null                     # set an operator-controlled host for SSRF/redirect proofs
-  host: null
+  base_url: null                     # SSRF proofs: https URL of a TLS tunnel/proxy to the listener
+  host: null                         # loopback bind address of the listener, e.g. 127.0.0.1
+  port: null
 
 notes: "Target reached via corp proxy; sessions issued by sso.example.com."

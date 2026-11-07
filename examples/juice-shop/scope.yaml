@@ -38,9 +38,19 @@ expected_build:
 
 allow_state_change: true      # disposable target: marked, cleaned-up writes allowed (VER-014)
 
+# SSRF proof (VER-012). The listener binds to loopback only. A Juice Shop
+# container reaches the host's loopback only with `--network host` (Linux);
+# with `-p 3000:3000` its "localhost" is the container itself.
 callback:
   base_url: http://localhost:4444   # how the target reaches the built-in listener
-  host: 127.0.0.1                    # local bind host for the Verifier's listener
+  host: 127.0.0.1                    # local bind host for the Verifier's listener (loopback)
   port: 4444                         # local bind port
+
+# Path-traversal proof (VER-012). Place a file with a random token on the
+# target, e.g. `docker exec <container> sh -c 'echo <token> > /juice-shop/verifier-marker.txt'`,
+# then uncomment. The token is never shown to the model.
+# marker_file:
+#   path: /juice-shop/verifier-marker.txt
+#   content: EDIT-random-token-16-to-128-chars
 
 notes: "Disposable local Juice Shop. Reset the container between runs."

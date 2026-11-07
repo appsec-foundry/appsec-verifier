@@ -101,10 +101,8 @@ def _system(ctx) -> str:
         "For injection: rely on an observable response difference, never on exfiltrated data; cite two steps "
         "with the same method, path and identity, different input, and a different status or body. "
         "For XSS: a verdict of confirmed requires a browser_check in which the payload executed. "
-        "For open redirect: a verdict of confirmed requires a cited step answered with a redirect to the "
-        "redirect host given below. "
-        "Path traversal and SSRF cannot be confirmed in this version; report what you observe "
-        "as inconclusive. "
+        "For open redirect, path traversal and SSRF: follow the proof instructions below; never aim at system "
+        "files, internal or metadata addresses, or anything other than the marker they name (VER-012). "
         "Do not pursue other weaknesses; note anything incidental as an observation. "
         "When you have enough evidence — or cannot get it — call submit_verdict. "
         "If you cannot reproduce it, say not-reproducible or inconclusive; do not guess confirmed."
@@ -128,6 +126,29 @@ def _marker_hint(ctx) -> str:
             f"https://{host}/ placed where the finding takes the destination (wrap it as the target's "
             "validation requires, but keep that host). The host never resolves and the redirect is not followed. "
             "Cite in proof_steps the http_request answered 301/302/303/307/308 with that host in its location."
+        )
+    if cls == "path-traversal":
+        path = ((getattr(ctx, "scope", None) or {}).get("marker_file") or {}).get("path")
+        if not path:
+            return ("\nPath traversal cannot be confirmed in this run: the scope names no marker file. Do not "
+                    "request any file; report what you observe as inconclusive.")
+        return (
+            f"\nPath-traversal proof: the operator placed a marker file at {path} on the target. Make the "
+            "target return that file and no other; a parameter or body value that names a file must name it. "
+            "Put the traversal in a parameter or the body: the URL path must not hold dot segments or encoded "
+            "separators. You will not see the file's content (it shows as [marker-file]); http_request reports "
+            "marker_read. Cite in proof_steps the http_request with marker_read true."
+        )
+    if cls == "ssrf":
+        listener = getattr(ctx, "listener", None)
+        if listener is None or not all(marker):
+            return ("\nSSRF cannot be confirmed in this run: there is no callback listener. Do not point the "
+                    "target at any URL; report what you observe as inconclusive.")
+        return (
+            f"\nSSRF proof: make the target request {listener.url_for(''.join(marker))} (a further path or "
+            "query may follow). That is the Verifier's listener; a URL in a parameter or body must point "
+            "there and nowhere else. http_request reports callback_hit once a request with your marker has "
+            "arrived; the Verifier checks the listener itself, so no proof_steps are needed."
         )
     return ""
 

@@ -271,9 +271,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
     registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
     contact = any(p.status == "dynamic" and registry.get(p.cls) for p in sel)
     browser, browser_note = _proof_browser(args, http, sel)
+    listener, listener_note = _callback_listener(scope, sel)
 
     print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                                browser_note))
+                                browser_note, listener_note))
 
     if contact:
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
@@ -298,19 +299,28 @@ def cmd_verify(args: argparse.Namespace) -> int:
         out_dir.mkdir(parents=True, exist_ok=True)
         action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=args.append)
     try:
+        if listener is not None and contact:
+            try:
+                listener.start()
+            except OSError as exc:
+                print(f"callback listener could not start ({type(exc).__name__}: {exc.strerror or exc}); "
+                      "SSRF findings cannot be confirmed", file=sys.stderr)
+                listener = None
         doc = run_verification(
             assessment_path=assessment, scope=scope, scope_path=scope_path, plans=sel,
             limits=limits, identities=identities, registry=registry, http=http,
             sessions=sessions, source=source, budget=budget,
             verifier_version=version_string(), target_base=target, authorization=authorization,
             safe=safe, read_only=read_only, contacted=contact, agent=agent_info, browser=browser,
-            log=action_log, evidence_dir=out_dir / "evidence",
+            listener=listener if contact else None, log=action_log, evidence_dir=out_dir / "evidence",
         )
     finally:
         if action_log is not None:
             action_log.close()
         if browser is not None:
             browser.close()
+        if listener is not None:
+            listener.close()
 
     if args.append:
         existing_path = out_dir / "verification.yaml"
@@ -348,8 +358,22 @@ def _proof_browser(args, http, sel):
     return browser, "Google Chrome via Playwright" + (", visible" if args.headful else "") + ", started on first use"
 
 
+def _callback_listener(scope, sel):
+    """The SSRF callback listener when an SSRF finding is selected (VER-012), not yet started, else None;
+    with a line for the pre-flight box. Without it SSRF findings stay unconfirmed."""
+    if not any(p.status == "dynamic" and p.cls == "ssrf" for p in sel):
+        return None, None
+    from .tools.callback import CallbackListener, CallbackUnavailable
+
+    try:
+        listener = CallbackListener(scope.get("callback"))
+    except CallbackUnavailable as exc:
+        return None, f"unavailable ({exc}); SSRF findings cannot be confirmed"
+    return listener, f"will listen on {listener.host}:{listener.port}, reached as {listener.base_url}"
+
+
 def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                          browser_note=None) -> str:
+                          browser_note=None, listener_note=None) -> str:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
     from .agent import SUBSCRIPTION_PROFILES
@@ -357,6 +381,7 @@ def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_onl
     cost = ("cost: subscription, not reported" if agent_info["profile"] in SUBSCRIPTION_PROFILES
             else f"cost ≤ ${limits.cost_limit_usd:.2f}")
     rows = [("browser", browser_note)] if browser_note else []
+    rows += [("callback", listener_note)] if listener_note else []
     return _box("AppSec Verifier · verify", rows + [
         ("profile", " · ".join(agent_info[k] for k in ("profile", "model", "runtime", "auth"))),
         ("assessment", str(assessment)),

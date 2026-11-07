@@ -47,6 +47,7 @@ class ProbeContext:
     browser: object | None = None      # ProofBrowser for XSS (VER-009), or None when unavailable
     marker: tuple[str, str] = ("", "")  # per-finding marker parts: XSS joins them at runtime, open redirect
     #                                     uses <part0><part1>.invalid as its redirect host (agent/proof.py)
+    listener: object | None = None     # CallbackListener for SSRF (VER-012), or None when unavailable
     log: object | None = None          # callable(record) for the action log (VER-017), or None
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
 

@@ -29,7 +29,8 @@ from .tools import AgentTools, ToolError
 
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
-_LOGGED_RESULT = ("status", "length", "executed", "blocked", "error", "path", "start_line")
+_LOGGED_RESULT = ("status", "length", "executed", "blocked", "error", "path", "start_line", "marker_read",
+                  "callback_hit")
 _PROPOSAL_CAP = 500
 
 

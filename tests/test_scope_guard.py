@@ -108,6 +108,19 @@ def test_schema_rejects_a_base_url_without_scheme_and_host():
     assert _validate_scope({**base, "base_url": "https://localhost:3000"}) == []
 
 
+@pytest.mark.parametrize("marker_file, valid", [
+    ({"path": "/srv/verifier-marker.txt", "content": "Abcdefghij0123456789_-"}, True),
+    ({"path": "/srv/verifier-marker.txt", "content": "too-short"}, False),              # guessable
+    ({"path": "/srv/verifier-marker.txt", "content": "has space in it 0123"}, False),
+    ({"path": "/srv/verifier-marker.txt"}, False),
+    ({"path": "", "content": "Abcdefghij0123456789"}, False),
+])
+def test_schema_requires_a_marker_file_with_a_long_simple_token(marker_file, valid):
+    scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "x"},
+             "window": {"from": "2026-01-01T00:00:00Z", "until": "2026-12-31T23:59:59Z"}, "marker_file": marker_file}
+    assert (_validate_scope(scope) == []) is valid
+
+
 @pytest.mark.parametrize("url", ["https://app.example.com:99999/api/x", "https://[::1/api/x", "", None, 42])
 def test_unparseable_url_is_refused_not_raised(url):
     assert not g().authorize(url, "target").allowed

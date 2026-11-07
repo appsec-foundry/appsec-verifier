@@ -20,16 +20,24 @@ against what the tools actually returned:
   took the destination from the request can name it; `.invalid` never
   resolves (RFC 6761), so nothing is contacted, and the redirect is not
   followed.
-- path-traversal, ssrf (VER-012): never confirmed yet. The marker file and the
-  callback listener these classes require are not implemented.
+- path-traversal (VER-012): a cited http_request whose response body held the
+  content of the marker file the operator placed (scope `marker_file`), seen
+  in code (`marker_read`). The model never sees that content, and a request
+  that carried it does not count, so an echo cannot stand in for a read.
+- ssrf (VER-012): a request with the finding's marker arrived at the
+  Verifier's callback listener (tools/callback.py). The listener's record is
+  the evidence; no proof_steps are needed. The guard never lets the Verifier
+  itself contact the listener, so only the target can have sent it.
 - any other class: never confirmed, there is no check for it.
 
 A confirmed verdict that fails its check becomes inconclusive with the reason;
 the model's claim stays in the rationale. A passing check replaces the model's
-evidence with the code's: for xss the browser's files, otherwise a record of
-the cited exchanges (method, path, params, body, identity, status, length, body
-hash, for a redirect the host it leads to; no response body, no headers),
-redacted of credential values and written owner-only under evidence/.
+evidence with the code's: for xss the browser's files, for ssrf the listener's
+hits (time, method, source address), otherwise a record of the cited exchanges
+(method, path, params, body, identity, status, length, body hash, for a
+redirect the host it leads to, for a traversal whether the marker was read; no
+response body, no headers), redacted of credential values and written
+owner-only under evidence/.
 """
 
 from __future__ import annotations
@@ -44,10 +52,6 @@ from urllib.parse import urljoin, urlsplit
 
 from ..verify.probes import ProbeResult
 
-_NOT_YET = {
-    "path-traversal": "reading back a pre-placed marker file",
-    "ssrf": "a request arriving at the Verifier's callback listener",
-}
 _REDIRECTS = (301, 302, 303, 307, 308)
 
 
@@ -63,10 +67,10 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     cls = getattr(ctx.plan, "cls", None)
     if cls == "xss":
         return _xss(history, result)
-    if cls in _NOT_YET:
-        return _downgrade(result, f"this version cannot produce the proof {cls} needs: {_NOT_YET[cls]} (VER-012)")
+    if cls == "ssrf":
+        return _ssrf(ctx, result)
     check, minimum = {"access-control": (_contrast, 2), "injection": (_flip, 2),
-                      "open-redirect": (_redirect, 1)}.get(cls, (None, 0))
+                      "open-redirect": (_redirect, 1), "path-traversal": (_traversal, 1)}.get(cls, (None, 0))
     if check is None:
         return _downgrade(result, f"there is no proof check for class {cls!r}")
     exchanges, problem = _cited_exchanges(ctx, history, cited, minimum)
@@ -74,7 +78,7 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         problem = check(ctx, exchanges)
     if problem is not None:
         return _downgrade(result, problem)
-    result.evidence = _write_record(ctx, exchanges)
+    result.evidence = _write_record(ctx, "exchanges", exchanges)
     return result
 
 
@@ -125,6 +129,8 @@ def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[lis
         }
         if "location" in res:
             exchange["location_host"] = _location_host(ctx, res["location"])
+        if "marker_read" in res:
+            exchange["marker_read"] = res["marker_read"] is True
         exchanges.append(exchange)
     return exchanges, None
 
@@ -168,21 +174,43 @@ def _redirect(ctx, exchanges: list[dict]) -> str | None:
     return f"no cited step was answered with a redirect (301, 302, 303, 307, 308) to {host} (VER-012)"
 
 
-def _write_record(ctx, exchanges: list[dict]) -> list[dict]:
-    """The cited exchanges as an owner-only evidence file; [] when the run has no evidence directory."""
+def _traversal(ctx, exchanges: list[dict]) -> str | None:
+    content = ((getattr(ctx, "scope", None) or {}).get("marker_file") or {}).get("content")
+    if not content:
+        return "the scope names no marker file to read (VER-012)"
+    for e in exchanges:
+        sent = json.dumps([e["path"], e["params"], e["json"]], default=str)
+        if e.get("marker_read") and content not in sent:     # an echo of the content is not a read
+            return None
+    return "no cited step returned the content of the scope's marker file (VER-012)"
+
+
+def _ssrf(ctx, result: ProbeResult) -> ProbeResult:
+    listener, marker = getattr(ctx, "listener", None), "".join(getattr(ctx, "marker", None) or ())
+    if listener is None or not marker:
+        return _downgrade(result, "this run has no callback listener for the finding (VER-012)")
+    hits = listener.hits(marker)
+    if not hits:
+        return _downgrade(result, "no request with the finding's marker reached the callback listener (VER-012)")
+    result.evidence = _write_record(ctx, "callback_hits", hits, kind="callback")
+    return result
+
+
+def _write_record(ctx, key: str, items: list[dict], kind: str = "exchange") -> list[dict]:
+    """`items` as an owner-only evidence file; [] when the run has no evidence directory."""
     directory = getattr(ctx, "evidence_dir", None)
     if directory is None:
         return []
-    record = {"finding_id": ctx.plan.id, "class": ctx.plan.cls, "exchanges": exchanges,
+    record = {"finding_id": ctx.plan.id, "class": ctx.plan.cls, key: items,
               "captured": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
     if ctx.sessions is not None:
         record = ctx.sessions.redact(record)
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = directory / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', ctx.plan.id)}-exchanges.json"
+    path = directory / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', ctx.plan.id)}-{key.replace('_', '-')}.json"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(record, indent=2, default=str))
     path.chmod(0o600)                 # also when an earlier run left the file with wider rights
-    return [{"kind": "exchange", "path": f"evidence/{path.name}", "redacted": True,
+    return [{"kind": kind, "path": f"evidence/{path.name}", "redacted": True,
              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}]

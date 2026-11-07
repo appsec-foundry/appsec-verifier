@@ -144,6 +144,21 @@ def test_system_prompt_gives_the_marker_only_for_xss_and_open_redirect():
     assert "vrfaa" not in _system(ctx)
 
 
+def test_system_prompt_names_the_traversal_and_ssrf_markers_but_never_the_file_content():
+    content = "vrfMarkerContent0123456789"
+    listener = SimpleNamespace(url_for=lambda m: f"http://localhost:4444/{m}")
+    ctx = SimpleNamespace(plan=SimpleNamespace(cls="path-traversal"), identities=[], safe=True,
+                          marker=("vrfaa", "bb"), listener=listener,
+                          scope={"marker_file": {"path": "/srv/verifier-marker.txt", "content": content}})
+    assert "/srv/verifier-marker.txt" in _system(ctx) and content not in _system(ctx)
+    ctx.plan = SimpleNamespace(cls="ssrf")
+    assert "http://localhost:4444/vrfaabb" in _system(ctx) and content not in _system(ctx)
+    ctx.scope, ctx.listener = {}, None
+    assert "no callback listener" in _system(ctx)
+    ctx.plan = SimpleNamespace(cls="path-traversal")
+    assert "names no marker file" in _system(ctx)
+
+
 # ── agent tool ────────────────────────────────────────────────────────────────
 
 class FakeBrowser:
