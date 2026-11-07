@@ -58,6 +58,7 @@ summary instead.
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
 | `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first model call (VER-032) |
 | `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |
+| `term_style.py` | console colour and logo, adapted from AppSec Analyzer; colour only after `printable` |
 | `update.py`, `version_info.py` | `update`: pipx reinstall after a yes (VER-033); `--version` from the build stamp `build-info.json` (written by `setup.py`) or Git |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/sessions.py` | sessions per test identity; secrets come from env vars |

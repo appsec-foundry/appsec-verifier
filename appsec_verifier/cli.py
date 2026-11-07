@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from .preflight import (
     render,
 )
 from .scope import ScopeGuard
+from .term_style import Style, columns, logo
 from .verify import build_annotations, run_verification, write_reports
 from .verify.report import annotate_assessment
 from .version_info import resource_root, version_string
@@ -59,13 +61,50 @@ def _select(args: argparse.Namespace, plans):
     )
 
 
-def _box(title: str, rows: list[tuple[str, str]]) -> str:
-    label_w = max((len(k) for k, _ in rows), default=0)
-    width = max(len(title) + 4, max((label_w + 3 + len(v) for _, v in rows), default=0) + 2, 58)
-    top = f"┌─ {title} " + "─" * (width - len(title) - 3) + "┐"
-    body = [f"│ {k.ljust(label_w)}  {v}".ljust(width + 1) + "│" for k, v in rows]
-    bottom = "└" + "─" * width + "┘"
-    return "\n".join([top, *body, bottom])
+# ── console layout, as in AppSec Analyzer ───────────────────────────────────
+
+_logo_shown = False
+_SEVERITIES = ("critical", "high", "medium", "low")
+# Facts whose value leads in a colour of its own; the others are bold.
+_FACT_ROLES = {"Assessment": "accent", "Target": "accent", "Base URL": "accent", "Report": "accent",
+               "Data": "accent", "Action log": "accent", "Annotated": "accent", "Profile": "agent"}
+
+
+def _title(st: Style, mode: str) -> list[str]:
+    """The logo on a terminal, once per process; otherwise `▶ AppSec Verifier · mode · version`."""
+    global _logo_shown
+    if st.enabled and not _logo_shown:
+        _logo_shown = True
+        return logo(st, f"{version_string()} · {mode}", columns() - 1)
+    return [st(f"▶ AppSec Verifier · {mode} · {version_string()}", "bold")]
+
+
+def _facts(st: Style, rows: list[tuple]) -> list[str]:
+    """Rows as `  Key        : value`. A row is (key, value) or (key, value, role);
+    the value up to ` (` takes the role, the rest is muted. A value given as
+    [(text, role), …] is joined with ` · `. On a terminal a long value wraps
+    under its own column; a path or URL is never split. Values pass `printable`
+    before they are coloured."""
+    width = max([11, *(len(row[0]) + 1 for row in rows)])
+    fit = columns() - 1 - (2 + width + 2) if st.enabled else 0
+    lines = []
+    for key, value, *given in rows:
+        role = (given and given[0]) or _FACT_ROLES.get(key, "bold")
+        label = st(f"{key:<{width}}:", "muted")
+        if isinstance(value, list):
+            lines.append(f"  {label} " + st(" · ", "muted").join(st(printable(t), r) for t, r in value))
+            continue
+        value = printable(value)
+        pieces = (textwrap.wrap(value, fit, break_long_words=False, break_on_hyphens=False)
+                  if fit > 20 and len(value) > fit else [value])
+        head, sep, tail = pieces[0].partition(" (")
+        lines.append(f"  {label} {st(head, role)}{st(sep + tail, 'muted')}".rstrip())
+        lines += [f"  {'':<{width}}  {st(piece, 'muted')}" for piece in pieces[1:]]
+    return lines
+
+
+def _severity_role(severity: str) -> str:
+    return severity.lower() if severity.lower() in _SEVERITIES else "muted"
 
 
 # ── plan ────────────────────────────────────────────────────────────────────
@@ -97,6 +136,9 @@ def _assessment_summary(doc: dict) -> str:
     return " · ".join(printable(meta[k])[:60] for k in ("project", "generated") if meta.get(k))
 
 
+_PLAN_MARK = {"dynamic": ("✓", "ok"), "static-only": ("·", "muted"), "input-incomplete": ("!", "warn")}
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     _, plans, errors = _load_assessment(Path(args.assessment))
     if errors:
@@ -105,19 +147,24 @@ def cmd_plan(args: argparse.Namespace) -> int:
     dyn = [p for p in sel if p.status == "dynamic"]
     static = [p for p in sel if p.status == "static-only"]
     incomplete = [p for p in sel if p.status == "input-incomplete"]
-    print(_box("AppSec Verifier · plan", [
-        ("assessment", str(args.assessment)),
-        ("findings", f"{len(plans)} total · {len(sel)} selected"),
-        ("verifiable", f"{len(dyn)} dynamic · {len(static)} static-only · {len(incomplete)} input-incomplete"),
-    ]))
+    st = Style.for_stream(sys.stdout)
+    print("\n".join([*_title(st, "plan"), *_facts(st, [
+        ("Assessment", str(args.assessment)),
+        ("Findings", f"{len(plans)} total · {len(sel)} selected"),
+        ("Verifiable", f"{len(dyn)} dynamic · {len(static)} static-only · {len(incomplete)} input-incomplete"),
+    ])]))
+    if sel:
+        print("\n" + st("Selected findings", "bold"))
     for p in sel:
-        mark = {"dynamic": "✓", "static-only": "·", "input-incomplete": "!"}[p.status]
-        cls = f"[{p.cls}]" if p.cls else ""
-        sev = f"{p.severity}" if p.severity else "?"
-        print(f"{mark} {p.id:<8} {p.cwe:<9} {sev:<8} {cls:<16} {p.status}")
+        mark, role = _PLAN_MARK[p.status]
+        cls = f"[{printable(p.cls)}]" if p.cls else ""
+        sev = printable(p.severity) if p.severity else "?"
+        pid = printable(p.id)
+        print(f"  {st(mark, role)} {st(f'{pid:<8}', 'bold')} {printable(p.cwe):<9} "
+              f"{st(f'{sev:<8}', _severity_role(sev))} {cls:<16} {p.status}")
         if p.status != "dynamic":
-            print(f"    {p.reason}")
-    print("\nplan only — nothing was sent to any target.")
+            print("      " + st(printable(p.reason), "muted"))
+    print("\n" + st("plan only — nothing was sent to any target.", "muted"))
     return EXIT_OK
 
 
@@ -158,26 +205,30 @@ def cmd_scope(args: argparse.Namespace) -> int:
     window = scope.get("window", {})
     guard = ScopeGuard(scope)
     win = guard.within_window()
+    state_change = bool(scope.get("allow_state_change"))
     rows = [
-        ("base_url", str(scope.get("base_url"))),
-        ("hosts", ", ".join(scope.get("hosts", []) or [scope.get("base_url", "")])),
-        ("ports", ", ".join(map(str, scope.get("ports", []) or []))),
-        ("networks", ", ".join(map(str, scope.get("networks", []) or []))
+        ("Base URL", str(scope.get("base_url"))),
+        ("Hosts", ", ".join(scope.get("hosts", []) or [scope.get("base_url", "")])),
+        ("Ports", ", ".join(map(str, scope.get("ports", []) or []))),
+        ("Networks", ", ".join(map(str, scope.get("networks", []) or []))
          or "— (public addresses, and hosts named by IP or as localhost)"),
-        ("path_prefixes", ", ".join(scope.get("path_prefixes", []) or ["/"])),
-        ("window", f"{window.get('from')} → {window.get('until')}  [{'ok' if win.allowed else 'EXPIRED/UNOPENED'}]"),
-        ("owner", str((scope.get("owner") or {}).get("name"))),
-        ("state change", "allowed" if scope.get("allow_state_change") else "read-only"),
-        ("auth_hosts", ", ".join(scope.get("auth_hosts", []) or ["—"])),
-        ("proxy", (scope.get("proxy") or {}).get("url") or "—"),
+        ("Path prefixes", ", ".join(scope.get("path_prefixes", []) or ["/"])),
+        ("Window", f"{window.get('from')} → {window.get('until')} ({'open now' if win.allowed else 'not open now'})",
+         "ok" if win.allowed else "critical"),
+        ("Owner", str((scope.get("owner") or {}).get("name"))),
+        ("State change", "allowed" if state_change else "read-only", "warn" if state_change else "ok"),
+        ("Auth hosts", ", ".join(scope.get("auth_hosts", []) or ["—"])),
+        ("Proxy", (scope.get("proxy") or {}).get("url") or "—"),
     ]
-    print(_box("AppSec Verifier · scope", rows))
+    st = Style.for_stream(sys.stdout)
+    print("\n".join([*_title(st, "scope"), *_facts(st, rows)]))
     if args.target:
         d = guard.authorize(args.target, "target")
-        print(f"\ntarget {args.target}: {'INSIDE scope' if d.allowed else 'OUT OF SCOPE — ' + d.reason}")
+        verdict = st("INSIDE scope", "ok") if d.allowed else st(f"OUT OF SCOPE — {printable(d.reason)}", "critical")
+        print(f"\ntarget {printable(args.target)}: {verdict}")
         if not d.allowed:
             return EXIT_BLOCKED
-    print("\nscope only — nothing was contacted.")
+    print("\n" + st("scope only — nothing was contacted.", "muted"))
     return EXIT_OK
 
 
@@ -356,8 +407,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
     listener, listener_note = _callback_listener(scope, sel)
 
     summary = _assessment_summary(doc)
-    print(_verify_preflight_box(f"{assessment} · {summary}" if summary else assessment, target, scope, sel, limits,
-                                safe, read_only, contact, agent_info, browser_note, listener_note))
+    st = Style.for_stream(sys.stdout)
+    print("\n".join(_verify_settings(st, f"{assessment} · {summary}" if summary else assessment, target, scope, sel,
+                                     limits, safe, read_only, contact, agent_info, browser_note, listener_note)))
     if invocation:
         print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
@@ -369,19 +421,19 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         authorization = {"confirmed": True, "mode": conf.mode,
                          "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
     else:
-        print("\nNo target-contacting probe is available yet — emitting a report with every "
-              "selected finding as not-attempted. Nothing was contacted.")
+        print("\n" + st("No target-contacting probe is available yet — emitting a report with every "
+                        "selected finding as not-attempted. Nothing was contacted.", "warn"))
         authorization = {"confirmed": False, "mode": "ci-flag" if args.non_interactive else "interactive", "at": None}
 
     if args.dry_run:
-        print("\n--dry-run: selection and scope resolved; no report written, nothing contacted.")
+        print("\n" + st("--dry-run: selection and scope resolved; no report written, nothing contacted.", "muted"))
         return EXIT_OK
 
     if contact:   # VER-032: reachability and logins before the first model call
         checks = [check_target(http, target, proxy=proxy_for(scope, target))]
         if not failed(checks):
             checks += check_identities(sessions, identities, http, target, scope=scope)
-        print("\nPreflight\n" + render(checks))
+        print("\n" + st("Preflight", "bold") + "\n" + render(checks, st))
         if failed(checks):
             print("\na pre-flight check failed: no finding was tested and no model was asked.", file=sys.stderr)
             return EXIT_BLOCKED
@@ -422,18 +474,18 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
             from .verify import merge_reports
             doc = merge_reports(_load_yaml(existing_path), doc)
     paths = write_reports(doc, out_dir)
-    extra: list[str] = [f"action log: {action_log.path}"] if action_log is not None else []
+    extra = [("Action log", str(action_log.path))] if action_log is not None else []
     if args.annotate:
         import yaml
         annotated = annotate_assessment(_load_yaml(assessment), doc)
         dest = assessment if args.in_place else (out_dir / "security-assessment.annotated.yaml")
         with open(dest, "w", encoding="utf-8") as fh:
             yaml.safe_dump(annotated, fh, sort_keys=False, allow_unicode=True)
-        extra.append(f"annotated assessment: {dest}" + (" (in place)" if args.in_place else ""))
+        extra.append(("Annotated", f"{dest}" + (" (in place)" if args.in_place else "")))
 
     if args.print_results:
-        _print_results(doc)
-    print(_verify_summary_box(doc, paths, extra))
+        _print_results(st, doc)
+    print("\n".join(_verify_summary(st, doc, paths, extra)))
     return 3 if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
 
 
@@ -448,13 +500,14 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
     args.non_interactive = args.non_interactive or args.json     # a JSON run never prompts
     out = sys.stderr if args.json else sys.stdout
+    st = Style.for_stream(out)
     checks: list[Check] = []
 
     def add(*items: Check) -> None:
         checks.extend(items)
-        print(render(list(items)), file=out, flush=True)
+        print(render(list(items), st), file=out, flush=True)
 
-    print("Preflight", file=out)
+    print(st("Preflight", "bold"), file=out)
     doc, plans, errors = _load_assessment(Path(args.assessment))
     if errors:
         add(Check("Assessment", "fail", "; ".join(errors)))
@@ -579,7 +632,9 @@ def _preflight_result(args, checks: list[Check], out) -> int:
     import json
 
     ok = not failed(checks)
-    print(f"\npreflight {'passed' if ok else 'failed'}; nothing was verified.", file=out)
+    st = Style.for_stream(out)
+    print("\n" + st(f"preflight {'passed' if ok else 'failed'}; nothing was verified.", "ok" if ok else "critical"),
+          file=out)
     if args.json:
         print(json.dumps({"kind": "preflight", "ok": ok, "verification": "not_run",
                           "checks": [c.as_dict() for c in checks]}, sort_keys=True))
@@ -588,7 +643,7 @@ def _preflight_result(args, checks: list[Check], out) -> int:
 
 def _proof_browser(args, http, sel):
     """The XSS proof browser when an XSS finding is selected (VER-009), else None;
-    with a line for the pre-flight box. Without it XSS findings stay unconfirmed."""
+    with a line for the run settings. Without it XSS findings stay unconfirmed."""
     if not any(p.status == "dynamic" and p.cls == "xss" for p in sel):
         return None, None
     from .tools.browser import BrowserUnavailable, ProofBrowser
@@ -603,7 +658,7 @@ def _proof_browser(args, http, sel):
 
 def _callback_listener(scope, sel):
     """The SSRF callback listener when an SSRF finding is selected (VER-012), not yet started, else None;
-    with a line for the pre-flight box. Without it SSRF findings stay unconfirmed."""
+    with a line for the run settings. Without it SSRF findings stay unconfirmed."""
     if not any(p.status == "dynamic" and p.cls == "ssrf" for p in sel):
         return None, None
     from .tools.callback import CallbackListener, CallbackUnavailable
@@ -615,57 +670,64 @@ def _callback_listener(scope, sel):
     return listener, f"will listen on {listener.host}:{listener.port}, reached as {listener.base_url}"
 
 
-def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                          browser_note=None, listener_note=None) -> str:
+def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
+                     browser_note=None, listener_note=None) -> list[str]:
     dyn = sum(1 for p in sel if p.status == "dynamic")
     classes = sorted({p.cls for p in sel if p.cls})
     from .agent import SUBSCRIPTION_PROFILES
 
     cost = ("cost: subscription, not reported" if agent_info["profile"] in SUBSCRIPTION_PROFILES
             else f"cost ≤ ${limits.cost_limit_usd:.2f}")
-    rows = [("browser", browser_note)] if browser_note else []
-    rows += [("callback", listener_note)] if listener_note else []
-    return _box("AppSec Verifier · verify", rows + [
-        ("profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth", "check"))
+    rows = [
+        ("Assessment", str(assessment)),
+        ("Target", f"{target} ({'will contact' if contact else 'not contacted yet'})"),
+        ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"),
+        ("Selection", f"{len(sel)} findings · {dyn} dynamic · classes: {', '.join(classes) or '—'}"),
+        ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth", "check"))
                                if v)),
-        ("assessment", str(assessment)),
-        ("target", f"{target}  ({'will contact' if contact else 'not contacted yet'})"),
-        ("scope", f"{', '.join(scope.get('hosts', []) or [target])}  owner: {(scope.get('owner') or {}).get('name')}"),
-        ("selection", f"{len(sel)} findings · {dyn} dynamic · classes: {', '.join(classes) or '—'}"),
-        ("boundaries", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} req · "
-                       f"≤ {int(limits.max_duration_s)}s · {limits.rate_rps} rps"),
-        ("mode", f"{'safe' if safe else 'intrusive'} · {'read-only' if read_only else 'state-changing'}"),
-    ])
+        ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} req · "
+                   f"≤ {int(limits.max_duration_s)}s · {limits.rate_rps} rps"),
+        ("Mode", f"{'safe' if safe else 'intrusive'} · {'read-only' if read_only else 'state-changing'}",
+         "ok" if safe else "warn"),
+    ]
+    for key, note in (("Browser", browser_note), ("Callback", listener_note)):
+        if note:
+            rows.append((key, note, "warn" if note.startswith("unavailable") else None))
+    return [*_title(st, "verify"), *_facts(st, rows)]
 
 
-_VERDICT_MARK = {"confirmed": "✓", "not-reproducible": "✗", "blocked-by-control": "⊘",
-                 "inconclusive": "?", "not-attempted": "·"}
+_VERDICT_MARK = {"confirmed": ("✓", "critical"), "not-reproducible": ("✗", "ok"), "blocked-by-control": ("⊘", "ok"),
+                 "inconclusive": ("?", "warn"), "not-attempted": ("·", "muted")}
 
 
-def _print_results(doc) -> None:
-    """Render per-finding verdicts to the console (VER-013)."""
-    print("\nResults:")
+def _print_results(st: Style, doc) -> None:
+    """Render per-finding verdicts to the console (VER-013). Text from the
+    assessment and the model passes `printable` before it is coloured (VER-005)."""
+    print("\n" + st("Results", "bold"))
     for r in doc["results"]:
         fr = r.get("finding_ref", {})
-        mark = _VERDICT_MARK.get(r["verdict"], " ")
-        conf = f" ({r['confidence']})" if r.get("confidence") else ""
-        title = fr.get("title") or fr.get("cwe") or ""
-        print(f"{mark} {fr.get('id'):<8} {str(r.get('class') or '-'):<15} {r['verdict']}{conf}  {title}")
+        mark, role = _VERDICT_MARK.get(r["verdict"], (" ", "muted"))
+        conf = f" ({printable(r['confidence'])})" if r.get("confidence") else ""
+        title = printable(fr.get("title") or fr.get("cwe") or "")
+        fid, cls = printable(fr.get("id")), printable(r.get("class") or "-")
+        print(f"  {st(mark, role)} {st(f'{fid:<8}', 'bold')} {cls:<15} {st(r['verdict'], role)}{conf}  {title}")
         if r.get("rationale"):
-            print(f"    {r['rationale']}")
+            print("      " + st(printable(r["rationale"]), "muted"))
 
 
-def _verify_summary_box(doc, paths, extra) -> str:
+def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list[str]:
     s = doc["meta"]["summary"]
+    verdicts = ((s["confirmed"], "confirmed", "critical"), (s["not_reproducible"], "not-repro", "ok"),
+                (s["blocked"], "blocked", "ok"), (s["inconclusive"], "inconclusive", "warn"),
+                (s["not_attempted"], "not-attempted", "muted"))
     rows = [
-        ("verified", f"{s['total']} findings"),
-        ("verdicts", f"{s['confirmed']} confirmed · {s['not_reproducible']} not-repro · "
-                     f"{s['blocked']} blocked · {s['inconclusive']} inconclusive · {s['not_attempted']} not-attempted"),
-        ("report", str(paths["md"])),
-        ("data", str(paths["yaml"])),
+        ("Verified", f"{s['total']} findings"),
+        ("Verdicts", [(f"{n} {label}", role if n else "muted") for n, label, role in verdicts]),
+        ("Report", str(paths["md"])),
+        ("Data", str(paths["yaml"])),
+        *extra,
     ]
-    rows += [("", line) for line in extra]
-    return "\n" + _box("AppSec Verifier · done", rows)
+    return ["", st("Done", "bold"), *_facts(st, rows)]
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -682,10 +744,11 @@ def cmd_export(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _banner() -> str:
-    return (
-        f"AppSec Verifier {version_string()} — verify static assessment findings "
-        f"against a running app.\n\n"
+def _banner(st: Style) -> str:
+    head = (logo(st, version_string(), columns() - 1) if st.enabled else
+            [f"AppSec Verifier {version_string()} — verify static assessment findings against a running app."])
+    return "\n".join(head) + (
+        "\n\n"
         "Guided run:\n"
         "  appsec-verifier ASSESSMENT   asks for the settings with defaults, then verifies\n\n"
         "Commands:\n"
@@ -855,7 +918,7 @@ def main(argv: list[str] | None = None) -> int:
         except UpdateError as exc:
             print(f"appsec-verifier: error: {exc}", file=sys.stderr)
             return EXIT_BLOCKED
-    print(_banner())
+    print(_banner(Style.for_stream(sys.stdout)))
     return EXIT_OK
 
 

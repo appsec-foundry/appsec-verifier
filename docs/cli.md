@@ -74,7 +74,7 @@ is invalid until its target, window and owner are filled in, so the next guided
 run proposes it but refuses it until it is edited. The guided run never uses a
 scope it wrote and never widens one.
 
-After the questions the run shows the `verify` pre-flight box and the equivalent
+After the questions the run shows the `verify` settings and the equivalent
 non-interactive command line, e.g.
 
 ```
@@ -291,7 +291,7 @@ whatever the model says. On execution the browser draws a banner and saves a
 screenshot and a JSON event record under `evidence/` (owner-only). Screenshots
 can show target data; the report marks them for review before sharing, and the
 Analyzer export never references them. Without Playwright or Chrome the
-pre-flight box says so and XSS findings cannot be confirmed.
+`Browser` line in the run settings says so and XSS findings cannot be confirmed.
 
 **Safe mode (default, VER-030).** Without `--allow-intrusive` the run stays
 read-only, even when the scope permits state change. It sends the most harmless
@@ -308,7 +308,7 @@ data, so use intrusive mode only against a disposable test instance.
 
 ### Interactive and non-interactive
 
-- Interactive (default, with a terminal): the run prints the pre-flight box and
+- Interactive (default, with a terminal): the run prints its settings and
   waits for one confirmation before the first request (VER-002). The guided run
   (above) asks for the settings first.
 - Non-interactive (`--non-interactive` / `--ci`, or no terminal): no prompts.
@@ -317,13 +317,21 @@ data, so use intrusive mode only against a disposable test instance.
 
 ### Console output
 
-Before the first request `verify` prints a box with the profile and model, the
-assessment, the target, the scope and its owner, the selection, the limits and
-the mode (safe or intrusive), and asks `Proceed against this target? [y/N]`.
-At the end it prints a summary box with the number of findings per verdict and
-the paths of the report files. `--print` adds one line per finding with its
-verdict (`✓` confirmed, `✗` not reproducible, `⊘` blocked by a control,
-`?` inconclusive, `·` not attempted) and the rationale.
+The console looks like AppSec Analyzer's. Before the first request `verify`
+prints its settings as `Key : value` lines: the assessment, the target, the
+scope and its owner, the selection, the profile and model, the limits and the
+mode (safe or intrusive), and asks `Proceed against this target? [y/N]`. At the
+end it prints `Done` with the number of findings per verdict and the paths of
+the report files. `--print` adds one line per finding with its verdict (`✓`
+confirmed, `✗` not reproducible, `⊘` blocked by a control, `?` inconclusive,
+`·` not attempted) and the rationale.
+
+On a terminal the output is in colour and starts with the logo: a confirmed
+finding is red, not reproducible or blocked green, inconclusive yellow, and
+severities and pre-flight results have their own colours. `NO_COLOR` (any
+value) turns colour off, `FORCE_COLOR=1` turns it on without a terminal, and
+`COLORTERM=truecolor` selects the 24-bit palette. Without a terminal, for
+example in CI or when redirected to a file, the output is plain text.
 
 **Exit codes.**
 

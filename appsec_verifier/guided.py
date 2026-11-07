@@ -4,7 +4,7 @@
 holds, and asks for the settings of the run, each with a default. Answers pass
 the same checks as the matching `verify` options and are re-asked when invalid;
 options already given are used as given. The settings are then handed to
-`verify`, which shows the pre-flight box, the equivalent non-interactive
+`verify`, which shows the run settings, the equivalent non-interactive
 invocation, and asks for the one confirmation of VER-002.
 
 The dialog contacts nothing, never asks for a secret value (credentials stay in
@@ -32,6 +32,7 @@ from .limits import Limits
 from .loader import list_categories
 from .preflight import printable as clean
 from .scope import ScopeGuard
+from .term_style import Style
 from .version_info import resource_root
 
 SEVERITY_FLOORS = ("critical", "high", "medium", "low")
@@ -146,13 +147,14 @@ def overview(assessment: Path, plans) -> str:
     by_class = Counter(p.cls for p in dyn)
     by_sev = Counter(clean(p.severity).lower() or "unknown" for p in dyn)
     order = [*SEVERITY_FLOORS, *sorted(set(by_sev) - set(SEVERITY_FLOORS))]
-    return cli._box("AppSec Verifier · assessment", [
-        ("assessment", str(assessment)),
-        ("findings", f"{len(plans)} total · {len(dyn)} dynamically verifiable · {static} static-only · "
+    st = Style.for_stream(sys.stdout)
+    return "\n".join([*cli._title(st, "assessment"), *cli._facts(st, [
+        ("Assessment", str(assessment)),
+        ("Findings", f"{len(plans)} total · {len(dyn)} dynamically verifiable · {static} static-only · "
                      f"{incomplete} input-incomplete"),
-        ("by class", " · ".join(f"{c} {n}" for c, n in sorted(by_class.items())) or "—"),
-        ("by severity", " · ".join(f"{s} {by_sev[s]}" for s in order if by_sev[s]) or "—"),
-    ])
+        ("By class", " · ".join(f"{c} {n}" for c, n in sorted(by_class.items())) or "—"),
+        ("By severity", [(f"{s} {by_sev[s]}", cli._severity_role(s)) for s in order if by_sev[s]] or "—"),
+    ])])
 
 
 def _ask_selection(d: Dialog, args, plans) -> None:

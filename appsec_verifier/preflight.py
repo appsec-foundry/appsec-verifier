@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+import textwrap
 import unicodedata
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -37,11 +38,12 @@ import httpx
 
 from .auth import AuthError
 from .limits import LimitExceeded
+from .term_style import Style, columns
 from .tools import ScopeViolation, same_origin
 
 LOGIN_METHODS = ("form", "oidc-password", "oidc-client-credentials")
 GENERATION_TIMEOUT_S = 60.0
-_MARKS = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
+_MARKS = {"ok": ("✓", "ok"), "warn": ("⚠", "warn"), "fail": ("✗", "critical"), "info": ("·", "muted")}
 _LABEL_WIDTH = 12
 
 
@@ -91,9 +93,21 @@ def printable(text) -> str:
     return "".join(ch for ch in str(text) if unicodedata.category(ch) not in ("Cc", "Cf"))
 
 
-def render(checks: list[Check]) -> str:
-    return "\n".join(f"  {_MARKS[c.status]} {printable(c.label):<{_LABEL_WIDTH}} {printable(c.message)}"
-                     for c in checks)
+def render(checks: list[Check], st: Style | None = None) -> str:
+    """One `  ✓ Label  message` row per check. On a terminal the mark takes the
+    colour of its status and a long message wraps under its own column."""
+    st = st or Style(False)
+    indent = 2 + 2 + _LABEL_WIDTH + 1
+    fit = columns() - 1 - indent if st.enabled else 0
+    lines = []
+    for c in checks:
+        mark, role = _MARKS[c.status]
+        message = printable(c.message)
+        pieces = (textwrap.wrap(message, fit, break_long_words=False, break_on_hyphens=False)
+                  if fit > 20 and len(message) > fit else [message])
+        lines.append(f"  {st(mark, role)} {st(f'{printable(c.label):<{_LABEL_WIDTH}}', 'muted')} {pieces[0]}")
+        lines += [" " * indent + piece for piece in pieces[1:]]
+    return "\n".join(lines)
 
 
 def failed(checks: list[Check]) -> bool:

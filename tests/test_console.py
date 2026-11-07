@@ -1,0 +1,118 @@
+"""Console output in the look of AppSec Analyzer: colour only on a terminal or
+with FORCE_COLOR, never with NO_COLOR, and escape sequences only from the
+Verifier itself, never from the assessment or the model (VER-005)."""
+
+from __future__ import annotations
+
+import io
+import re
+
+import pytest
+import yaml
+
+from appsec_verifier import cli
+from appsec_verifier.preflight import Check, render
+from appsec_verifier.term_style import Style, color_enabled
+
+SGR = re.compile(r"\x1b\[[0-9;]*m")
+HOSTILE = "\x1b]0;pwned\x07\x1b[2J"   # sets the window title, rings, clears the screen
+
+
+class Tty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+@pytest.mark.parametrize(("env", "tty", "expected"), [
+    ({}, True, True),
+    ({}, False, False),
+    ({"NO_COLOR": "1"}, True, False),
+    ({"NO_COLOR": "1", "FORCE_COLOR": "1"}, True, False),
+    ({"FORCE_COLOR": "1"}, False, True),
+    ({"FORCE_COLOR": "0"}, False, False),
+    ({"TERM": "dumb"}, True, False),
+])
+def test_colour_follows_no_color_force_color_and_the_terminal(env, tty, expected):
+    assert color_enabled(Tty() if tty else io.StringIO(), env) is expected
+
+
+def test_truecolor_only_when_the_terminal_says_so():
+    assert Style.for_stream(Tty(), {"COLORTERM": "truecolor"})("x", "ok") == "\x1b[38;2;143;209;158mx\x1b[0m"
+    assert Style.for_stream(Tty(), {})("x", "ok") == "\x1b[32mx\x1b[0m"
+
+
+@pytest.fixture
+def assessment(tmp_path):
+    threats = [
+        {"id": "T-1", "cwe": "CWE-79", "severity": "high", "title": "xss", "evidence": {"file": "a.ts", "line": 1}},
+        {"id": f"T-2{HOSTILE}", "cwe": "CWE-89", "severity": "critical", "title": "sqli",
+         "evidence": {"file": "b.ts", "line": 2}},
+    ]
+    path = tmp_path / "assessment.yaml"
+    path.write_text(yaml.safe_dump({"threats": threats}))
+    return path
+
+
+def test_without_a_terminal_the_output_is_plain_with_analyzer_style_facts(assessment, capsys):
+    assert cli.main(["plan", "--assessment", str(assessment)]) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert out.startswith("▶ AppSec Verifier · plan · ")
+    assert "  Findings   : 2 total · 2 selected" in out
+
+
+def test_force_color_colours_plan_but_strips_escapes_from_the_assessment(assessment, capsys, monkeypatch):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert cli.main(["plan", "--assessment", str(assessment)]) == 0
+    out = capsys.readouterr().out
+    assert SGR.search(out) and "appsec-verifier" in out                      # the logo
+    assert "\x1b[31mcritical\x1b[0m" in out                                   # severity colour
+    plain = SGR.sub("", out)
+    assert "\x1b" not in plain and "\x07" not in plain and "T-2]0;pwned[2J" in plain
+
+
+def test_no_color_wins_over_force_color(assessment, capsys, monkeypatch):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert cli.main(["plan", "--assessment", str(assessment)]) == 0
+    assert "\x1b" not in capsys.readouterr().out
+
+
+def test_results_strip_escapes_from_assessment_and_model_text(capsys):
+    doc = {"results": [{"finding_ref": {"id": f"T-1{HOSTILE}", "title": f"xss{HOSTILE}"}, "class": "xss",
+                        "verdict": "confirmed", "confidence": f"high{HOSTILE}", "rationale": f"ran{HOSTILE}"}]}
+    for st in (Style(False), Style(True)):
+        cli._print_results(st, doc)
+        plain = SGR.sub("", capsys.readouterr().out)
+        assert "\x1b" not in plain and "\x07" not in plain
+        assert "confirmed" in plain and "ran]0;pwned[2J" in plain
+
+
+def test_facts_strip_escapes_and_colour_by_role():
+    lines = cli._facts(Style(True), [("Target", f"http://a{HOSTILE} (will contact)"), ("Mode", "safe", "ok"),
+                                     ("Verdicts", [("1 confirmed", "critical"), (f"0 blocked{HOSTILE}", "muted")])])
+    plain = SGR.sub("", "\n".join(lines))
+    assert "\x1b" not in plain and "\x07" not in plain
+    assert "\x1b[36mhttp://a]0;pwned[2J\x1b[0m\x1b[90m (will contact)\x1b[0m" in lines[0]
+    assert "\x1b[32msafe\x1b[0m" in lines[1] and "\x1b[31m1 confirmed\x1b[0m" in lines[2]
+    assert [SGR.sub("", line) for line in lines][:2] == ["  Target     : http://a]0;pwned[2J (will contact)",
+                                                          "  Mode       : safe"]
+
+
+def test_the_logo_appears_once_per_run_then_the_title_line():
+    st = Style(True)
+    first, second = cli._title(st, "assessment"), cli._title(st, "verify")
+    assert len(first) == 3 and "appsec-verifier" in first[0] and "assessment" in SGR.sub("", first[2])
+    assert [SGR.sub("", line) for line in second] == [f"▶ AppSec Verifier · verify · {cli.version_string()}"]
+    assert cli._title(Style(False), "plan") == [f"▶ AppSec Verifier · plan · {cli.version_string()}"]
+
+
+def test_preflight_marks_take_the_colour_of_their_status():
+    checks = [Check("Target", "ok", "200"), Check("alice", "warn", "w"), Check("bob", "fail", f"401{HOSTILE}"),
+              Check("Proxy", "info", "-")]
+    coloured = render(checks, Style(True)).split("\n")
+    assert [line[2:12] for line in coloured] == ["\x1b[32m✓\x1b[0m", "\x1b[33m⚠\x1b[0m", "\x1b[31m✗\x1b[0m",
+                                                  "\x1b[90m·\x1b[0m"]
+    assert "\x1b" not in SGR.sub("", "\n".join(coloured))
+    assert render(checks) == ("  ✓ Target       200\n  ⚠ alice        w\n  ✗ bob          401]0;pwned[2J\n"
+                              "  · Proxy        -")
