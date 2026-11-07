@@ -107,8 +107,10 @@ class AgentTools:
             headers = self._session_headers(role)
         try:
             resp = self._send(m, url, headers, params, json)
-            if getattr(resp, "status_code", None) in (401, 403) and role and self.ctx.sessions is not None:
-                self.ctx.sessions.invalidate(role)                # VER-028: refresh once on auth failure
+            # VER-028: re-obtain the session once when the target rejects it as unauthenticated (401).
+            # A 403 is an authorisation answer, often the very result under test; a new login cannot change it.
+            if getattr(resp, "status_code", None) == 401 and role and self.ctx.sessions is not None:
+                self.ctx.sessions.invalidate(role)
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json)
         except ScopeViolation as exc:

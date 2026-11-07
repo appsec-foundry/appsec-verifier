@@ -88,6 +88,28 @@ def test_auth_failure_triggers_one_refresh(tmp_path):
     assert out["status"] == 200 and calls["n"] == 2  # retried once after 401
 
 
+class LoginResp(Resp):
+    def json(self):
+        return {"token": "session-token"}
+
+
+def test_forbidden_answer_never_triggers_a_new_login(tmp_path):
+    """403 is an authorisation decision (often the finding's result), not an expired
+    session: the session is reused and the target sees no extra login (VER-028)."""
+    sent = []
+
+    def transport(m, u, h, **k):
+        sent.append((m, u))
+        return LoginResp(200) if u.endswith("/login") else Resp(403)
+
+    idents = [{"role": "alice", "method": "form",
+               "auth": {"login_url": "https://app.example.com/login", "username_env": "AU", "password_env": "AP"}}]
+    tools = AgentTools(_ctx(tmp_path, transport, idents=idents, env={"AU": "alice", "AP": "pw"}))
+    for _ in range(3):
+        assert tools.http_request(role="alice", path="/rest/admin")["status"] == 403
+    assert [m for m, _ in sent] == ["POST", "GET", "GET", "GET"]
+
+
 # ── methods ───────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("method", ["DELETE", "delete", "TRACE", "CONNECT", "PURGE"])
