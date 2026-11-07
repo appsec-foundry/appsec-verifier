@@ -121,6 +121,23 @@ def test_a_step_line_shows_the_agent_note_the_payload_and_the_model_time(monkeyp
 
 
 
+def test_each_screenshot_of_a_finding_is_named_with_its_path_under_the_done_line():
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={}, out_dir="verification")
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    evidence = [{"kind": "browser-event", "path": "evidence/T-1-xss-1.json"},
+                {"kind": "screenshot", "path": "evidence/T-1-xss-1.png"},
+                {"kind": "har", "path": "evidence/T-1-poc.har"},
+                {"kind": "screenshot", "path": "evidence/T-1-exchange-1.png"}]
+    progress.finished(_plan(), ProbeResult(verdict="confirmed", evidence=evidence))
+    rows = _rows(out)[-3:]
+    assert rows[0].split()[3] == "done"
+    assert [r.split()[3] for r in rows[1:]] == ["img", "img"]
+    assert rows[1].endswith("screenshot verification/evidence/T-1-xss-1.png")
+    assert rows[2].endswith("screenshot verification/evidence/T-1-exchange-1.png")
+
+
 def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_done_line():
     out = io.StringIO()
     progress = RunProgress(out, clock=Clock(), env={})

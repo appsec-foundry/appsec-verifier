@@ -285,6 +285,14 @@ def test_an_answer_that_trickles_in_ends_after_the_timeout(serve):
     assert time.monotonic() - started < 1.5
 
 
+def test_a_request_can_get_a_shorter_timeout_than_the_transport(serve):
+    url = serve(b"x" * 8, chunk=1, pause=0.25)
+    started = time.monotonic()
+    with pytest.raises(httpx.ReadTimeout):
+        HttpxTransport(timeout=30.0)("GET", url, {}, timeout=0.5)
+    assert time.monotonic() - started < 1.5
+
+
 def test_an_answer_within_its_bounds_is_read_whole_with_its_time(serve):
     url = serve(b"y" * 3000, chunk=1000, pause=0)
     resp = HttpxTransport(timeout=5.0)("GET", url, {})

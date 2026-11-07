@@ -10,7 +10,8 @@ hop is authorised again. Chrome itself runs in a network namespace of its own
 (Linux, `unshare --user --net`) that has no interface but loopback, so nothing
 it sends can leave the machine, including traffic the interception never sees
 such as WebRTC/UDP. Inside it Chrome's own proxy points to a closed local port
-and host resolution is disabled; WebSockets and service workers are blocked.
+and host resolution is disabled; WebSockets are never connected to a server
+and service workers are blocked.
 Chrome runs with its sandbox on. Where the namespace or the sandbox is not
 available, the browser does not start and XSS stays unproven.
 
@@ -20,7 +21,10 @@ message equals the joined marker counts. A page that merely echoes the payload
 text shows the expression, not its value. On execution a banner is drawn and a
 JSON event record is saved owner-only under evidence/, with a screenshot when
 screenshots are on for XSS (VER-035): a caption names finding, URL, identity
-and time, and the elements that carry the payload are outlined. Each request
+and time, the elements that carry the payload are outlined and a tag with an
+arrow points at the first, the banner stands on the top page also when the
+payload ran in a frame, and what of the page covered the payload (a dialog, a
+backdrop) is hidden and named in the caption. Each request
 the guarded client answered is handed back for the proof of concept (VER-034),
 bodies only for documents, XHR and fetch.
 
@@ -32,7 +36,12 @@ nothing to the target. Screenshots can show target data, so their evidence
 entry says so.
 
 A Playwright error outside the page load, such as a crashed Chrome, is a
-BrowserError and closes the browser; the next use starts a new one.
+BrowserError and closes the browser; the next use starts a new one. A check
+ends in bounded time even on a page that never finishes: loading has
+NAVIGATION_TIMEOUT_MS, a page request other than a document at most
+PAGE_REQUEST_TIMEOUT_S (a long poll), nothing is answered after the wait, and
+marking and screenshot have EVIDENCE_TIMEOUT_MS each; a page that does not
+answer keeps its event record without a screenshot.
 """
 
 from __future__ import annotations
@@ -46,6 +55,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +68,8 @@ _SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 MAX_BODY_BYTES = 5 * 1024 * 1024
 MAX_WAIT_MS = 5000
 NAVIGATION_TIMEOUT_MS = 30_000
+PAGE_REQUEST_TIMEOUT_S = 5.0       # any request but a document; long polls are cut here
+EVIDENCE_TIMEOUT_MS = 5000         # marking and screenshot of a page whose script may never return
 _DROP_REQUEST_HEADERS = {"host", "content-length", "connection"}
 _DROP_RESPONSE_HEADERS = {"content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"}
 _CLOSED_PROXY = "http://127.0.0.1:9"
@@ -70,6 +82,11 @@ SCREENSHOT_NOTE = TARGET_DATA_NOTE
 SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf")
 _EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves; answered from the record
 _HIGHLIGHT = "#b00020"
+
+
+def _leave_unconnected(ws) -> None:
+    """WebSocket route handler: the socket is never connected to a server. Playwright calls this handler on
+    its own event loop, where a synchronous call such as `ws.close()` waits on itself and spins forever."""
 
 
 def _quietly(close) -> None:
@@ -161,10 +178,10 @@ class Abort:
 
 
 def answer(method: str, url: str, headers: dict, body: bytes | None, *, http, identity_headers: dict,
-           target_base: str, safe: bool):
+           target_base: str, safe: bool, timeout: float | None = None):
     """Answer one browser request through the guarded client, or abort it.
-    Identity headers are added only for the target's own origin. LimitExceeded
-    propagates so the caller can stop the check."""
+    Identity headers are added only for the target's own origin; `timeout`
+    bounds the request. LimitExceeded propagates so the caller can stop the check."""
     method = (method or "GET").upper()
     if safe and method not in _SAFE_METHODS:
         return Abort(f"{method} blocked in safe/read-only mode")
@@ -179,7 +196,7 @@ def answer(method: str, url: str, headers: dict, body: bytes | None, *, http, id
             send[key] = value
     try:
         resp = http.request(method, url, send, purpose="target", follow_redirects=False,
-                            **({"content": body} if body else {}))
+                            **({"content": body} if body else {}), **({"timeout": timeout} if timeout else {}))
     except ScopeViolation as exc:
         return Abort(f"out of scope: {exc}")
     content = getattr(resp, "content", None)
@@ -217,7 +234,7 @@ def _init_script(parts: tuple[str, str]) -> str:
     Object.defineProperty(window, name, { configurable: false, writable: false, value: function (message) {
       const text = String(message);
       try { window.__appsecVerifierReport(name, text); } catch (e) {}
-      if (text === marker) banner();
+      if (text === marker && window === window.top) banner();     // in a frame the screenshot draws it on top
       return name === 'confirm' ? false : null;
     } });
   }
@@ -226,11 +243,14 @@ def _init_script(parts: tuple[str, str]) -> str:
 
 # Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
 # payload, also quoted in the caption), text that equals one of `values` (access control), and a caption.
-# The page moves clear of the banner and the caption, so neither hides a mark. All text is set as text,
-# never parsed as HTML. Returns how many places were marked.
-_MARK_SCRIPT = """({part, values, lines, none, color}) => {
+# `banner` is drawn on the top page when the payload ran in a frame. The page moves clear of the banner and
+# the caption, so neither hides a mark; whatever of the page still covers the first mark (a dialog, a
+# backdrop) is hidden and named in the caption, and a tag with an arrow and `label` points at that mark.
+# All text is set as text, never parsed as HTML. Returns the number of marks and what was hidden, as JSON.
+_MARK_SCRIPT = """({part, values, lines, none, color, banner, label}) => {
   const marks = [];
   const root = document.body || document.documentElement;
+  const ours = (el) => el.id === '__appsec_verifier_banner' || el.hasAttribute('data-appsec-verifier');
   let carrier = null;
   const outline = (el) => {
     if (!el || el === root || marks.includes(el) || marks.length >= 20) return;
@@ -240,7 +260,7 @@ _MARK_SCRIPT = """({part, values, lines, none, color}) => {
   };
   if (part) {
     for (const el of root.querySelectorAll('*')) {
-      if (el.id === '__appsec_verifier_banner') continue;
+      if (ours(el)) continue;
       const inAttr = Array.from(el.attributes || []).some((a) => String(a.value).includes(part));
       const inScript = el.tagName === 'SCRIPT' && (el.textContent || '').includes(part);
       if (!inAttr && !inScript) continue;
@@ -267,19 +287,69 @@ _MARK_SCRIPT = """({part, values, lines, none, color}) => {
       }
     }
   }
+  if (banner && !document.getElementById('__appsec_verifier_banner')) {
+    const b = document.createElement('div');
+    b.id = '__appsec_verifier_banner';
+    b.textContent = banner;
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:' + color + ';'
+      + 'color:#fff;font:bold 16px sans-serif;padding:8px';
+    root.appendChild(b);
+  }
   const box = document.createElement('div');
+  box.setAttribute('data-appsec-verifier', 'caption');
   const extra = carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]);
   box.textContent = lines.concat(extra).join('\\n');
   box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;white-space:pre-wrap;'
     + 'word-break:break-all;background:rgba(17,17,17,.92);color:#fff;font:13px/1.4 monospace;'
     + 'padding:8px 10px;border-top:3px solid ' + color;
   root.appendChild(box);
-  const banner = document.getElementById('__appsec_verifier_banner');
-  const top = banner ? banner.getBoundingClientRect().height : 0;
-  root.style.setProperty('margin-top', (top + 8) + 'px', 'important');
-  root.style.setProperty('margin-bottom', (box.getBoundingClientRect().height + 8) + 'px', 'important');
-  if (marks[0] && marks[0].scrollIntoView) marks[0].scrollIntoView({block: 'center'});
-  return marks.length;
+  const bar = document.getElementById('__appsec_verifier_banner');
+  const fit = () => {
+    root.style.setProperty('margin-top', ((bar ? bar.getBoundingClientRect().height : 0) + 8) + 'px', 'important');
+    root.style.setProperty('margin-bottom', (box.getBoundingClientRect().height + 8) + 'px', 'important');
+    if (marks[0] && marks[0].scrollIntoView) marks[0].scrollIntoView({block: 'center'});
+  };
+  fit();
+  const target = marks[0], hidden = [], gone = [];
+  if (target && document.elementsFromPoint) {
+    const r = target.getBoundingClientRect();
+    for (const [fx, fy] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
+      const x = r.left + r.width * fx, y = r.top + r.height * fy;
+      if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+      const stack = document.elementsFromPoint(x, y);
+      const at = stack.findIndex((el) => el === target || target.contains(el));
+      if (at < 0) continue;          // the mark takes no hits here, so nothing tells what covers it
+      for (const el of stack.slice(0, at)) {
+        if (el.contains(target) || ours(el)) continue;
+        let cover = el;     // the whole layer: its outermost element that does not hold the mark
+        while (cover.parentElement && !cover.parentElement.contains(target)) cover = cover.parentElement;
+        if (gone.includes(cover) || gone.length >= 5) continue;
+        gone.push(cover);
+        cover.style.setProperty('visibility', 'hidden', 'important');
+        hidden.push((cover.tagName.toLowerCase() + (cover.id ? '#' + cover.id : '')
+          + Array.from(cover.classList).slice(0, 2).map((c) => '.' + c).join('')).slice(0, 80));
+      }
+    }
+  }
+  if (hidden.length) {
+    box.textContent += '\\nhidden for the screenshot because it covered the mark: ' + hidden.join(', ');
+    fit();
+  }
+  if (target && label) {
+    const r = target.getBoundingClientRect();
+    const tag = document.createElement('div');
+    tag.setAttribute('data-appsec-verifier', 'label');
+    tag.style.cssText = 'position:fixed;z-index:2147483647;background:' + color + ';color:#fff;'
+      + 'font:bold 14px sans-serif;padding:3px 8px;border-radius:3px;white-space:nowrap;pointer-events:none';
+    tag.textContent = '▼ ' + label;
+    root.appendChild(tag);
+    const h = tag.getBoundingClientRect().height;
+    const above = r.top - h - 8 > (bar ? bar.getBoundingClientRect().bottom : 0);
+    if (!above) tag.textContent = '▲ ' + label;
+    tag.style.left = Math.max(0, Math.min(r.left, innerWidth - tag.getBoundingClientRect().width)) + 'px';
+    tag.style.top = (above ? r.top - h - 8 : r.bottom + 8) + 'px';
+  }
+  return JSON.stringify({marks: marks.length, hidden});
 }"""
 
 
@@ -388,13 +458,22 @@ class ProofBrowser:
             exchanges.append({**outcome.exchange, "content": body[:MAX_RAW_BYTES] if kept else b"",
                               "content_size": len(body), "navigation": navigation, "keep_body": kept})
 
+        # Chrome waits while a request is answered, so each answer is bounded: nothing after the navigation
+        # time, later nothing after the wait, and no request but a document longer than PAGE_REQUEST_TIMEOUT_S.
+        until = [time.monotonic() + NAVIGATION_TIMEOUT_MS / 1000]
+
         def on_route(route, request):
             from ..limits import LimitExceeded
 
+            left = until[0] - time.monotonic()
             try:
-                outcome = answer(request.method, request.url, request.headers, request.post_data_buffer,
-                                 http=self._http, identity_headers=identity_headers, target_base=target_base,
-                                 safe=safe)
+                if left <= 0:
+                    outcome = Abort("the check's time was up")
+                else:
+                    outcome = answer(request.method, request.url, request.headers, request.post_data_buffer,
+                                     http=self._http, identity_headers=identity_headers, target_base=target_base,
+                                     safe=safe, timeout=left if request.resource_type == "document"
+                                     else min(left, PAGE_REQUEST_TIMEOUT_S))
             except LimitExceeded as exc:
                 limits.append(exc)
                 outcome = Abort(f"stopped by limit: {exc.kind}")
@@ -409,7 +488,7 @@ class ProofBrowser:
 
         context = browser.new_context(service_workers="block", accept_downloads=False)
         try:
-            context.route_web_socket(re.compile(".*"), lambda ws: ws.close())
+            context.route_web_socket(re.compile(".*"), _leave_unconnected)
             context.route("**/*", on_route)
             context.expose_binding("__appsecVerifierReport",
                                    lambda source, kind, message: events.append((str(kind), str(message)[:300])))
@@ -422,8 +501,10 @@ class ProofBrowser:
                 status = resp.status if resp else None
             except PlaywrightError:
                 error = "navigation failed or was blocked"
+            wait = max(0, min(int(wait_ms), MAX_WAIT_MS))
+            until[0] = min(until[0], time.monotonic() + wait / 1000)
             if not limits:
-                page.wait_for_timeout(max(0, min(int(wait_ms), MAX_WAIT_MS)))
+                page.wait_for_timeout(wait)
             if limits:
                 raise limits[0]
             joined = marker[0] + marker[1]
@@ -444,11 +525,19 @@ class ProofBrowser:
         return f"{re.sub(r'[^A-Za-z0-9_.-]', '_', finding_id)}-{kind}-{n}"
 
     @staticmethod
-    def _mark(page, lines: list[str], *, part: str = "", values=(), none: str | None = None) -> int | None:
-        """Caption and highlights drawn over the page before its screenshot; None if the page refused them."""
+    def _mark(page, lines: list[str], *, part: str = "", values=(), none: str | None = None,
+              banner: str | None = None, label: str | None = None) -> dict | None:
+        """Caption, highlights, banner and label drawn over the page before its screenshot, as
+        {"marks": n, "hidden": [what was hidden because it covered the first mark]}; None if the page refused
+        them or did not answer in time. Unlike evaluate(), wait_for_function() has a timeout, so a page script
+        that never returns cannot hold the check; the script's result is a JSON string, never falsy."""
         try:
-            return int(page.evaluate(_MARK_SCRIPT, {"part": part, "values": list(values), "lines": lines,
-                                                    "none": none, "color": _HIGHLIGHT}))
+            done = page.wait_for_function(f"(arg) => ({_MARK_SCRIPT})(arg)",
+                                          arg={"part": part, "values": list(values), "lines": lines, "none": none,
+                                               "color": _HIGHLIGHT, "banner": banner, "label": label},
+                                          timeout=EVIDENCE_TIMEOUT_MS)
+            out = json.loads(done.json_value())
+            return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5]}
         except Exception:  # noqa: BLE001 - the screenshot is still taken, unmarked
             return None
 
@@ -460,6 +549,8 @@ class ProofBrowser:
 
     def _save(self, page, finding_id: str, url: str, status, events, marker: tuple[str, str],
               role: str | None) -> list[dict]:
+        from playwright.sync_api import Error as PlaywrightError
+
         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         joined = marker[0] + marker[1]
         stem = self._stem(finding_id, "xss")
@@ -470,12 +561,19 @@ class ProofBrowser:
                 "captured": captured}
         shot = None
         if "xss" in self.screenshots:
-            data["marked_elements"] = self._mark(
+            marked = self._mark(
                 page, [f"AppSec Verifier · {finding_id} · XSS marker {joined} executed via {', '.join(via)}",
                        f"{unquote(url)[:300]} as {role or 'anonymous'} → {status}", f"captured {captured}"],
-                part=marker[0], none="(the element that carries the payload was not found in the page)")
+                part=marker[0], none="(the element that carries the payload was not found in the page)",
+                banner=f"AppSec Verifier: XSS marker {joined} executed", label="payload that executed")
+            data["marked_elements"] = marked["marks"] if marked else None
+            if marked and marked["hidden"]:
+                data["hidden_for_screenshot"] = marked["hidden"]
             shot = self._dir / f"{stem}.png"
-            page.screenshot(path=str(shot))
+            try:
+                page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
+            except PlaywrightError:      # a page that does not answer: the event record still proves execution
+                shot = None
         record.write_text(json.dumps(data, indent=2), encoding="utf-8")
         entries = [self._entry(record, "browser-event")]
         if shot is not None:
@@ -501,7 +599,7 @@ class ProofBrowser:
 
         context = browser.new_context(service_workers="block", accept_downloads=False, java_script_enabled=False)
         try:
-            context.route_web_socket(re.compile(".*"), lambda ws: ws.close())
+            context.route_web_socket(re.compile(".*"), _leave_unconnected)
             context.route("**/*", on_route)
             page = context.new_page()
             try:
@@ -523,9 +621,10 @@ class ProofBrowser:
         shot, marked = self._guarded(
             self._shoot_recorded,
             url=url, status=status, content_type=content_type, body=html, finding_id=finding_id,
-            kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none))
+            kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none,
+                                                                label="value named in the verdict"))
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
-                                                    marked=marked)]
+                                                    marked=marked["marks"] if marked else None)]
 
     def render_exchanges(self, *, html: str, finding_id: str, marked: int) -> list[dict]:
         """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035)."""

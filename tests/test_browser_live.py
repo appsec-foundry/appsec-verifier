@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import html
 import os
+import signal
 import socket
 import stat
+import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, urlparse
 
+import httpx
 import pytest
 
 pytest.importorskip("playwright.sync_api")
@@ -42,12 +45,22 @@ class Target:
     def __call__(self, method, url, headers, **kw):
         self.seen.append(url)
         parsed = urlparse(url)
+        if parsed.path == "/hold":                   # a long poll: the server holds the answer for 25 s
+            time.sleep(min(25, kw.get("timeout") or 25))
+            raise httpx.ReadTimeout("held")
         q = parse_qs(parsed.query).get("q", [""])[0]
         pages = {
             "/reflect": f"<html><body><p>Results for {q}</p></body></html>",
             "/safe": f"<html><body><p>Results for {html.escape(q)}</p></body></html>",
             "/echo": "<html><body><script>alert(new URLSearchParams(location.search).get('q'))</script></body></html>",
             "/ext": '<html><body><script src="https://evil.example.net/x.js"></script></body></html>',
+            "/live": "<html><body><script>new WebSocket('wss://shop.example.com/socket')</script>"
+                     f"<p>Results for {q}</p></body></html>",
+            "/poll": "<html><body><script>fetch('/hold'); addEventListener('load', () => fetch('/hold'))</script>"
+                     f"<p>Results for {q}</p></body></html>",
+            "/spin": f"<html><body><p>Results for {q}</p><script>while (true) {{}}</script></body></html>",
+            "/dialog": f"<html><body><p>Results for {q}</p><div id=welcome style='position:fixed;inset:0;"
+                       "z-index:10;background:#333;color:#fff'>Welcome!</div></body></html>",
             "/webrtc": "<html><body><script>const port = new URLSearchParams(location.search).get('port');"
                        "const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:127.0.0.1:' + port}]});"
                        "pc.createDataChannel('x'); pc.createOffer().then(o => pc.setLocalDescription(o));"
@@ -110,6 +123,53 @@ def test_out_of_scope_navigation_is_blocked(browser):
     assert result["executed"] is False and result.get("error") and target.seen == []
 
 
+def test_a_page_that_opens_a_websocket_is_checked_without_hanging(browser):
+    """A WebSocket handler that calls Playwright synchronously spins forever on its event loop;
+    the check must come back in seconds, with the proof intact."""
+    b, _, _ = browser
+    fired = []
+
+    def hung(signum, frame):
+        fired.append(signum)
+        raise TimeoutError("browser check hangs")
+
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+        result = _check(b, "/live?q=" + quote(payload, safe=""))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert not fired and result["executed"] is True
+
+
+def test_requests_the_server_holds_open_do_not_hold_up_the_check(browser):
+    """A long poll before load is cut after a few seconds; one sent during the wait ends with the wait."""
+    b, _, _ = browser
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+    started = time.monotonic()
+    result = _check(b, "/poll?q=" + quote(payload, safe=""))
+    assert time.monotonic() - started < 9
+    assert result["executed"] is True
+    assert any(x["url"].endswith("/hold") and "ReadTimeout" in x["reason"] for x in result["blocked"])
+
+
+def test_a_page_script_that_never_returns_ends_the_check_with_the_proof_kept(browser, monkeypatch):
+    """The page never reaches load and does not answer the marking or the screenshot; each has a timeout
+    (shortened here), and the event record of the executed marker is kept."""
+    from appsec_verifier.tools import browser as browser_module
+
+    monkeypatch.setattr(browser_module, "NAVIGATION_TIMEOUT_MS", 2000)
+    monkeypatch.setattr(browser_module, "EVIDENCE_TIMEOUT_MS", 1000)
+    b, _, _ = browser
+    payload = f"<script>alert({marker_expression(MARKER)})</script>"
+    started = time.monotonic()
+    result = _check(b, "/spin?q=" + quote(payload, safe=""))
+    assert time.monotonic() - started < 10
+    assert result["executed"] is True and [e["kind"] for e in result["evidence"]] == ["browser-event"]
+
+
 def test_udp_from_the_page_never_leaves_chrome(browser):
     """WebRTC/STUN is UDP, which the request interception never sees; only the
     network namespace keeps it in (VER-018). Without it this listener gets packets."""
@@ -146,6 +206,20 @@ def test_screenshot_marks_the_payload_and_names_the_proof(browser):
     assert event["marked_elements"] == 1
     pages = [x for x in result["_exchanges"] if x["navigation"]]
     assert len(pages) == 1 and pages[0]["status"] == 200 and b"Results for" in pages[0]["content"]
+
+
+def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browser):
+    """VER-035: the payload runs in a frame under the page's own dialog; the screenshot shows the frame,
+    says what it hid, and the event record lists it."""
+    import json
+
+    b, _, tmp = browser
+    payload = f"<iframe src=\"javascript:alert({marker_expression(MARKER)})\"></iframe>"
+    result = _check(b, "/dialog?q=" + quote(payload, safe=""))
+    assert result["executed"] is True
+    kinds = {e["kind"]: e for e in result["evidence"]}
+    event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
+    assert event["marked_elements"] == 1 and event["hidden_for_screenshot"] == ["div#welcome"]
 
 
 def test_screenshots_can_be_turned_off_without_losing_the_proof(tmp_path):

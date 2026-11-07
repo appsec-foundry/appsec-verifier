@@ -243,7 +243,7 @@ def _html(m, u, h, **k):
 
 
 @pytest.mark.parametrize("transport, screenshots, verdict, pages, exchanges", [
-    (_html, SCREENSHOT_CLASSES, "confirmed", 2, 0),                     # the pages show the proof
+    (_html, SCREENSHOT_CLASSES, "confirmed", 2, 1),                     # the pages, and the exchanges beside them
     (lambda m, u, h, **k: Resp(), SCREENSHOT_CLASSES, "confirmed", 0, 1),   # JSON: the exchanges instead
     (_html, ("xss",), "confirmed", 0, 0),                               # turned off for the class
     (_html, SCREENSHOT_CLASSES, "not-reproducible", 0, 1),              # no page proof: the exchanges
@@ -262,11 +262,12 @@ def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, p
         assert call["highlight"] == ["bob@shop.test"]              # only values found in the response
         assert "<h1>Basket of bob@shop.test</h1>" in call["html"]
         assert "customer-a" in call["caption"][1] and "no new request" in call["caption"][2]
-        assert sum(e["kind"] == "screenshot" for e in result.evidence) == 2
+        assert sum(e["kind"] == "screenshot" for e in result.evidence) == 3
     if exchanges:
         page = browser.exchanges[0]["html"]
         assert "<mark>[identity customer-a]</mark>" in page and "<mark>[identity customer-b]</mark>" in page
         assert "<mark>bob@shop.test</mark>" in page and "not on the page" not in page
+        assert "<span class=tag>named in the verdict ▸</span><mark>bob@shop.test</mark>" in page
 
 
 # ── the exchange image (VER-035) ─────────────────────────────────────────────
@@ -309,9 +310,11 @@ def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
                     [_get(None, "/search", q="x' OR 1=1--"), _get(None, "/search", q="x' OR 1=2--"),
                      {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2]}}])
     page = shot["html"]
-    assert "<mark>x%27%20OR%201%3D1--</mark>" in page and "<mark>x%27%20OR%201%3D2--</mark>" in page
+    assert "<mark>x%27+OR+1%3D1--</mark>" in page and "<mark>x%27+OR+1%3D2--</mark>" in page   # as httpx sends it
     assert "<mark>1</mark>,2,3]}" in page and "<mark>]}</mark>" in page      # where the two answers part
     assert page.count("<mark>") == 6 and "HTTP/<mark>" not in page             # once, not wherever "1" recurs
+    assert page.count("<span class=tag>input ▸</span><mark>x%27+OR+1%3D") == 2       # each mark says what it is
+    assert page.count("<span class=tag>answer differs ▸</span><mark>") == 2
     assert "<mark>input, decoded: x&#x27; OR 1=1--</mark>" in page
     assert "answered in" not in page                                           # no time: not a timing proof
 
@@ -352,17 +355,29 @@ def test_exchange_image_escapes_everything_the_target_sent(tmp_path):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
 
 
-def test_no_exchange_image_without_decisive_steps_or_when_a_page_shows_the_proof(tmp_path):
+def test_no_exchange_image_without_decisive_steps(tmp_path):
     _, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
                     [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
     assert shot is None
-    page = {"executed": True, "evidence": [{"kind": "screenshot", "path": "evidence/T-001-xss-1.png"}]}
+
+
+def test_an_executed_xss_gets_the_exchange_image_beside_the_page_with_the_opened_page_marked(tmp_path):
+    raw = poc.capture(Resp(200, "<html><app-root></app-root></html>", {"content-type": "text/html"}),
+                      method="GET", url="https://shop.example.com/")       # the fragment never reaches the server
+    page = {"executed": True, "evidence": [{"kind": "screenshot", "path": "evidence/T-001-xss-1.png"}],
+            "_exchanges": [{**raw, "navigation": True}]}
     browser = RenderBrowser()
-    browser.check = lambda url, **kw: dict(page)
+    browser.check = lambda url, **kw: {**page, "_exchanges": list(page["_exchanges"])}
     ctx = _ctx(tmp_path, None, cls="xss", browser=browser)
-    result, _ = _run(ctx, [{"tool": "browser_check", "args": {"path": "/s?q=x"}},
+    result, _ = _run(ctx, [{"tool": "browser_check", "args": {"path": "/#/search?q=%3Ciframe%20src%3D%22javascript:"
+                                                                      "alert('vrfaa11'%2B'bb22')%22%3E"}},
                            {"verdict": {"verdict": "confirmed", "rationale": "r"}}])
-    assert result.verdict == "confirmed" and browser.exchanges == []
+    assert result.verdict == "confirmed" and len(browser.exchanges) == 1
+    assert [e["kind"] for e in result.evidence].count("screenshot") == 2
+    html = browser.exchanges[0]["html"]
+    assert ("<mark>opened in the browser: /#/search?q=&lt;iframe src=&quot;javascript:alert(&#x27;vrfaa11&#x27;+"
+            "&#x27;bb22&#x27;)&quot;&gt;</mark>") in html
+    assert "<mark>marker executed in the browser: yes</mark>" in html
 
 
 # ── report and export ────────────────────────────────────────────────────────

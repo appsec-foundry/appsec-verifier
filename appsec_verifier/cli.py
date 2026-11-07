@@ -518,7 +518,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         progress = RunProgress(model=agent_info.get("model"), redact=sessions.redact,
                                remaining_time=budget.remaining_time,
                                spent=(lambda: budget.cost) if priced else None, cost_limit=limits.cost_limit_usd,
-                               api_prices=not agent_info.get("api_billing", False))
+                               api_prices=not agent_info.get("api_billing", False), out_dir=out_dir)
     try:
         if listener is not None and contact:
             try:

@@ -7,7 +7,8 @@ contract refused and ``⚠`` for a limit that stopped the finding. A step line g
 what the step checks, the request with its query and body, the result and how long the model took to
 propose the step; the ``done`` line ends with the agent's rationale. When the run shows costs (API
 billing, or ``--show-costs`` as in AppSec Analyzer), the ``done`` line also gives the finding's model
-cost and the run's spend against its cost limit. PROGRESS counts finished findings,
+cost and the run's spend against its cost limit. Under it an ``img`` line names each screenshot the
+finding produced, with its path in the output directory. PROGRESS counts finished findings,
 ELAPSED is the run's time. LEFT extrapolates the time the finished findings took, never beyond the
 run's time limit; until the first finding has finished it shows that limit (``≤29m``).
 
@@ -143,8 +144,9 @@ class RunProgress:
 
     def __init__(self, stream=None, *, model: str | None = None, redact=None, remaining_time=None,
                  spent=None, cost_limit: float = 0.0, api_prices: bool = False,
-                 live: bool | None = None, clock=time.time, env=None):
+                 live: bool | None = None, clock=time.time, env=None, out_dir=None):
         self._stream = sys.stderr if stream is None else stream
+        self._out_dir = out_dir           # where the evidence paths of a result lie
         env = os.environ if env is None else env
         self.st = Style.for_stream(self._stream, env)
         if live is None:
@@ -263,6 +265,10 @@ class RunProgress:
             self.done += 1
             self._activity = ""
             self._record("done", " · ".join(parts), role=_VERDICT_ROLES.get(verdict))
+            for entry in result.evidence or []:
+                if isinstance(entry, dict) and entry.get("kind") == "screenshot" and entry.get("path"):
+                    path = os.path.join(self._out_dir, entry["path"]) if self._out_dir else entry["path"]
+                    self._record("img", f"screenshot {printable(path)}")
 
     def close(self) -> None:
         """Stop the ticker and remove the status line; the run's last message follows on a clean line."""

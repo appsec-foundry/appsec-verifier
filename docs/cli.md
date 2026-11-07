@@ -173,7 +173,9 @@ the result, and how long the model took to propose the step (`model 14s`). The
 `done` line gives the verdict, the steps, the time the finding took, when costs
 are shown the finding's model cost and the run's spend (`$0.08 · run $0.42 of
 $10.00`), and the agent's rationale; a confirmed verdict also says `proof checked`, because it
-stands only when the Verifier found the proof its class requires. The verdict
+stands only when the Verifier found the proof its class requires. Under it an
+`img` line names each screenshot the finding produced and where it lies
+(`screenshot verification/evidence/T-036-xss-1.png`). The verdict
 is green when the finding is confirmed, red when it was not reproduced or a
 control blocked it (a likely false positive), and yellow when it stays
 inconclusive; the results at the end use the same colours. When a Claude CLI
@@ -390,16 +392,22 @@ Google Chrome (Playwright, `appsec-verifier[browser]`; `--headful` shows it).
 Chrome opens no connection itself: every request of the page is intercepted and
 sent through the same scope guard, budget and safe mode as the agent's HTTP
 requests, identity headers are added only for the identity's origin, redirects
-go back to the browser so each hop is checked, and anything else is aborted
-(WebSockets and service workers included). Chrome itself is started inside a
-network namespace of its own (`unshare --user --net --map-current-user`) that
+go back to the browser so each hop is checked, and anything else is aborted,
+service workers included. WebSockets are never connected to a server. Chrome
+itself is started inside a network namespace of its own
+(`unshare --user --net --map-current-user`) that
 has no interface but loopback, so traffic the interception never sees, such as
 WebRTC/UDP, cannot leave the machine either. This needs Linux, `unshare` from
 util-linux and unprivileged user namespaces. Chrome runs with its own sandbox.
 Where the namespace or the sandbox is unavailable (other systems, some
 containers), the browser does not start and XSS findings cannot be confirmed.
 If Chrome fails during the run, that check ends with an error the agent sees,
-and the next check starts a new Chrome.
+and the next check starts a new Chrome. A check takes at most about 45
+seconds: 30 for loading the page, then the wait the agent asked for (at most
+5), and 5 each for marking the page and taking its screenshot. A request of
+the page other than a document gets at most 5 seconds, so a long poll the
+server holds open does not hold up the check; a page that does not answer in
+time keeps its proof of execution but gets no screenshot.
 
 Each finding gets a random two-part marker; the payload must call
 `alert('<part1>'+'<part2>')`, and only a dialog
@@ -413,7 +421,11 @@ whatever the model says. On execution the browser draws a banner and saves a
 JSON event record under `evidence/` (owner-only) and, unless `--screenshots`
 leaves out `xss`, a screenshot. Its caption names the finding, the URL as
 requested, the identity, the time and the element that carries the payload,
-which is outlined in red; the page is moved clear of banner and caption. The
+which is outlined in red, with a red tag and arrow pointing at it; the page is
+moved clear of banner and caption. The banner stands at the top of the page
+also when the payload ran in a frame. Whatever of the page covers the payload
+element, such as a dialog and its backdrop, is hidden for the screenshot and
+named in the caption and in the event record. The
 proof does not depend on the screenshot. Screenshots can show target data; the
 report marks them for review before sharing, and the Analyzer export never
 references them. Without Playwright or Chrome the `Browser` line in the run
@@ -424,25 +436,28 @@ classes that get screenshots.
 finding, each decisive response that is an HTML page is rendered in the proof
 browser from the recorded, redacted response. Only the page itself is answered;
 images, styles and scripts are aborted and scripts are off, so nothing is sent
-to the target and the page may look unstyled. A JSON or other response gets
-the exchange screenshot below. The caption names finding, step, request,
+to the target and the page may look unstyled. The exchange screenshot below is
+taken as well. The caption names finding, step, request,
 identity, status and time. Up to three values the model names in `highlight`,
 such as the other identity's email, are marked in yellow when they occur in
 the response.
 
-**Exchange screenshots (VER-035).** Every other tested finding whose verdict
+**Exchange screenshots (VER-035).** Every tested finding whose verdict
 rests on steps (see proof of concept above) gets
-`evidence/<finding>-exchange-<n>.png` when `--screenshots` includes its class:
-open redirect, path traversal, injection and SSRF always, XSS without an
-executed marker, access control without an HTML page. It shows the decisive
+`evidence/<finding>-exchange-<n>.png` when `--screenshots` includes its class,
+also beside the page screenshot of an executed XSS or an access-control page.
+It shows the decisive
 steps, request and response side by side as recorded and redacted, built as a
 page without scripts and rendered in the proof browser without a new request.
-Marked is what the code can locate: the identity, the XSS or SSRF marker, the
+Marked is what the code can locate, each kind with a red label that says what
+it is (`payload`, `input`, `answer differs`): the identity, the XSS or SSRF marker, the
 redirect host and the `Location` header, the marker file's name and content,
 the input and the part of the answer that differ between two injection
 requests (the input also decoded), a different status, and the answer times
 when they differ by 2 s or more. For SSRF the image also says whether the
-listener received the marker, for XSS whether it executed. The proof browser
+listener received the marker, for XSS which page the browser opened (with the
+payload, also when it sits in the `#` fragment that never reaches the server)
+and whether the marker executed. The proof browser
 starts for screenshots only when a finding of an included class is selected;
 without Playwright or Chrome no screenshot is taken and the verdicts stand.
 

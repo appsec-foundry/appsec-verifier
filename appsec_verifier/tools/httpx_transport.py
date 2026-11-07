@@ -149,9 +149,12 @@ class HttpxTransport:
         client.cookies.jar.set_policy(_NoCookies())
         self._client = client
 
-    def __call__(self, method: str, url: str, headers: dict, **kwargs) -> httpx.Response:
-        deadline = time.monotonic() + self._timeout
-        request = self._client.build_request(method, url, headers=headers, **kwargs)
+    def __call__(self, method: str, url: str, headers: dict, *, timeout: float | None = None,
+                 **kwargs) -> httpx.Response:
+        """`timeout` shortens the transport's bound for this request only (the proof browser's page requests)."""
+        limit = self._timeout if timeout is None else min(self._timeout, timeout)
+        deadline = time.monotonic() + limit
+        request = self._client.build_request(method, url, headers=headers, timeout=limit, **kwargs)
         resp = self._client.send(request, stream=True)
         chunks, size = [], 0
         try:
@@ -160,7 +163,7 @@ class HttpxTransport:
                 if size > self._max_bytes:
                     raise ResponseTooLarge(f"the answer exceeds {self._max_bytes} bytes", request=request)
                 if time.monotonic() > deadline:
-                    raise httpx.ReadTimeout(f"the answer was not complete within {self._timeout:g}s",
+                    raise httpx.ReadTimeout(f"the answer was not complete within {limit:g}s",
                                             request=request)
                 chunks.append(chunk)
         finally:

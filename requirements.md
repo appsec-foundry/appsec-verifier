@@ -173,14 +173,15 @@ optional hardening.
   page in which an XSS marker executed (VER-009), and of a confirmed
   access-control finding's contested response when that is an HTML page,
   rendered from the recorded response without a new request (VER-010). Every
-  other finding with steps its verdict rests on (VER-034) gets an image of
-  those exchanges instead, request and response side by side, also rendered
+  finding with steps its verdict rests on (VER-034) also gets an image of
+  those exchanges, request and response side by side, also rendered
   from the record. The operator chooses per run whether and for which classes
   screenshots are taken, by default for all. Each screenshot shows what the
   proof rests on: a caption names the finding, URL, identity and time, and
-  what the code can locate is marked, such as the executed payload, the
+  what the code can locate is marked and labelled, such as the executed payload, the
   contested data, the redirect target, the marker file's content, the input
-  and answer that differ, or the answer times. Marks leave the recorded
+  and answer that differ, or the answer times. What of the page covers the
+  executed payload is hidden and named. Marks leave the recorded
   exchange unchanged. A screenshot illustrates the proof; no verdict depends
   on it.
 

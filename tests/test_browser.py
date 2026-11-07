@@ -350,6 +350,13 @@ def test_answer_hands_back_the_exchange_for_the_proof_of_concept():
     assert "AAA" not in repr(out)                                           # never in a printed Fulfil
 
 
+def test_answer_bounds_the_request_with_the_time_the_check_gives_it():
+    t = Transport()
+    answer("GET", BASE + "/p", {}, None, http=_http(t), identity_headers={}, target_base=BASE, safe=True,
+           timeout=2.5)
+    assert t.calls[0]["timeout"] == 2.5
+
+
 def test_launch_failure_leaves_xss_unproven(tmp_path):
     def launcher(headless):
         raise OSError("no chrome")
