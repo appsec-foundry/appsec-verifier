@@ -1,14 +1,19 @@
 """Read the assessment and the verifiable-CWE catalog, and classify each finding
-for verification planning (VER-005, VER-006, VER-026). Offline: no network, no
-model calls.
+for verification planning (VER-005, VER-006, VER-026). The assessment is checked
+against schemas/assessment.schema.yaml, which covers only the fields read here,
+and its finding ids must be unique (VER-032). Error messages name the place and
+the rule; the only value they quote is a repeated id, escaped by repr. Offline:
+no network, no model calls.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from jsonschema.validators import validator_for
 
 from .matchkey import match_key
 from .version_info import resource_root
@@ -96,11 +101,56 @@ def classify(threat: dict, catalog: dict[str, dict]) -> FindingPlan:
     )
 
 
-def load_plans(assessment_path: Path) -> list[FindingPlan]:
+class AssessmentError(ValueError):
+    """The assessment lacks the structure the Verifier reads (VER-005, VER-032)."""
+
+    def __init__(self, errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.errors = errors
+
+
+_MAX_ERRORS = 10
+
+
+def _rule(error) -> str:
+    if error.validator == "type":
+        types = error.validator_value if isinstance(error.validator_value, list) else [error.validator_value]
+        return "must be " + " or ".join(t for t in types if t != "null")
+    if error.validator == "required":
+        return error.message            # names the property from the schema, not a value from the file
+    if error.validator == "minLength":
+        return "must not be empty"
+    return f"fails the {error.validator} rule"
+
+
+def assessment_errors(doc: dict) -> list[str]:
+    """Why `doc` cannot be read as an assessment; empty when it can."""
+    with open(resource_root() / "schemas" / "assessment.schema.yaml", encoding="utf-8") as fh:
+        schema = yaml.safe_load(fh)
+    found = sorted(validator_for(schema)(schema).iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
+    errors = [f"{'/'.join(map(str, e.absolute_path)) or 'file'}: {_rule(e)}" for e in found]
+    if not errors:
+        ids = [t["id"] for t in doc["threats"]]
+        errors = [f"threats: id {i[:40]!r} is used {n} times" for i, n in Counter(ids).items() if n > 1]
+    return errors[:_MAX_ERRORS] + ([f"… {len(errors) - _MAX_ERRORS} more"] if len(errors) > _MAX_ERRORS else [])
+
+
+def read_assessment(assessment_path: Path) -> dict:
+    """The assessment, or AssessmentError when it lacks the structure read here."""
     doc = _load_yaml(assessment_path)
-    threats = doc.get("threats") or []
+    errors = assessment_errors(doc)
+    if errors:
+        raise AssessmentError(errors)
+    return doc
+
+
+def plans_from(doc: dict) -> list[FindingPlan]:
     catalog = load_verifiable_cwes()
-    return [classify(t, catalog) for t in threats if isinstance(t, dict)]
+    return [classify(t, catalog) for t in doc["threats"]]
+
+
+def load_plans(assessment_path: Path) -> list[FindingPlan]:
+    return plans_from(read_assessment(assessment_path))
 
 
 def select(

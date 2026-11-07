@@ -49,6 +49,7 @@ the `[browser]` extra; still no network).
 | `appsec_verifier/cli.py` | argparse entry point: `plan`, `scope`, `verify`, `export`; without a command the guided run (`guided.py`) |
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
+| `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first model call (VER-032) |
 | `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/sessions.py` | sessions per test identity; secrets come from env vars |

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
@@ -92,7 +94,9 @@ def test_max_attempts_bounds_the_agent_steps_per_finding(tmp_path, monkeypatch):
             asked.append(1)
             return {"tool": "read_source", "args": {"path": "routes/basket.ts"}}
 
-    def no_network(*a, **k):
+    def no_network(method, url, headers, **k):    # only the pre-flight GET of the target is answered (VER-032)
+        if (method, url) == ("GET", "https://app.example.com"):
+            return SimpleNamespace(status_code=200, headers={})
         raise AssertionError("the test reached the transport")
 
     from appsec_verifier.tools import httpx_transport

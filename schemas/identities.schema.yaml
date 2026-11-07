@@ -70,6 +70,14 @@ properties:
             client_id_env:    { type: [string, "null"] }
             client_secret_env: { type: [string, "null"] }
             scope:            { type: [string, "null"], description: "OIDC scopes, space-separated." }
+            check_url:
+              type: [string, "null"]
+              description: |
+                Optional URL the pre-flight check requests once with this
+                identity's credentials (VER-032): 2xx means accepted, 401 or 403
+                rejected. It must be on the origin the credentials are attached to
+                (`target_origin`, else the target URL) and inside the scope. Not
+                for method none.
 
       # Require the fields each method actually needs; secrets stay as *_env.
       allOf:

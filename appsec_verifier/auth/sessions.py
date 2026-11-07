@@ -148,7 +148,7 @@ class SessionManager:
                                   purpose="auth", json=payload)
         token = _extract_token(resp)
         if not token:
-            raise AuthError("form login did not return a recognisable token")
+            raise AuthError(f"form login did not return a recognisable token (HTTP {resp.status_code})")
         return {"Authorization": f"Bearer {token}"}
 
     def _oidc(self, auth: dict, *, grant: str) -> dict:
@@ -171,5 +171,5 @@ class SessionManager:
                                   purpose="auth", data=data)
         token = _extract_token(resp)
         if not token:
-            raise AuthError(f"OIDC {grant} grant did not return an access token")
+            raise AuthError(f"OIDC {grant} grant did not return an access token (HTTP {resp.status_code})")
         return {"Authorization": f"Bearer {token}"}

@@ -21,7 +21,6 @@ from __future__ import annotations
 import os
 import shlex
 import sys
-import unicodedata
 from collections import Counter
 from pathlib import Path
 
@@ -30,7 +29,8 @@ import yaml
 from . import cli
 from .agent import DEFAULT_PROFILE, PROFILES, SUBSCRIPTION_PROFILES
 from .limits import Limits
-from .loader import list_categories, load_plans
+from .loader import list_categories
+from .preflight import printable as clean
 from .scope import ScopeGuard
 from .version_info import resource_root
 
@@ -51,12 +51,6 @@ _LIMITS = (
 
 class Cancelled(Exception):
     """The operator ended the dialog (Ctrl-C or end of input)."""
-
-
-def clean(text) -> str:
-    """Drop control and format characters (escape sequences, bidi overrides)
-    from text that came from an input file before it reaches the terminal."""
-    return "".join(ch for ch in str(text) if unicodedata.category(ch) not in ("Cc", "Cf"))
 
 
 class Dialog:
@@ -101,10 +95,9 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
     environ = os.environ if environ is None else environ
     cwd = Path.cwd()
     assessment = Path(args.assessment)
-    try:
-        plans = load_plans(assessment)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
-        _err(f"cannot read the assessment {assessment}: {type(exc).__name__}")
+    _, plans, errors = cli._load_assessment(assessment)
+    if errors:
+        _err(f"the assessment {assessment} cannot be used:\n" + "\n".join(f"  - {clean(e)}" for e in errors))
         return cli.EXIT_BLOCKED
     try:
         Limits.load(_limit_overrides(args))

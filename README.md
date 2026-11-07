@@ -86,6 +86,24 @@ what a selection contains without contacting anything.
 Before the first request, `verify` prints the plan and asks for confirmation. In
 CI, pass `--non-interactive --yes`. `--dry-run` prints the plan and stops.
 
+Before it asks the model for anything, `verify` checks its inputs and access:
+the assessment's structure, the scope and proxy settings, the model profile
+(for `codex` and `anthropic-api` with one metadata request that generates
+nothing), and, after the confirmation, that the target answers and every test
+identity can log in. A failed check stops the run with exit code 2. To run these
+checks alone, for example before a CI run:
+
+```sh
+appsec-verifier preflight --profile claude \
+  --assessment ./out/security-assessment.yaml \
+  --scope ./scope.yaml --identities ./identities.yaml
+```
+
+`--offline` contacts nothing, `--json` prints the result for CI, and
+`--test-model --cost-limit 0.10` adds one call with a fixed prompt to see the
+model answer. A static token or basic credentials are checked against the target
+only when the identity names a `check_url`.
+
 ## What it verifies
 
 A finding counts as confirmed only with the proof in the right column.
@@ -106,9 +124,9 @@ reason. The list of testable CWEs is in
 
 Possible verdicts: `confirmed`, `not-reproducible`, `blocked-by-control` (a
 protection the static analysis could not see stops the attack), `inconclusive`,
-`not-attempted`. If a check fails, for example because the target does not
-answer or a login is rejected, that finding ends `inconclusive` and the run
-continues.
+`not-attempted`. If a request fails during the run, for example because the
+target stops answering or a login is rejected, that finding ends `inconclusive`
+and the run continues.
 
 ## Safety
 
@@ -187,6 +205,8 @@ Details in [`docs/cli.md`](docs/cli.md).
 - `plan` lists which findings of an assessment can be tested dynamically. Offline.
 - `scope` validates a scope file and checks whether a URL falls inside it. Offline.
 - `verify` tests the selected findings against the target.
+- `preflight` checks the assessment, scope, proxy, target, logins and model
+  profile without verifying anything; `--offline` contacts nothing.
 - `appsec-verifier ASSESSMENT`, without a command, asks for the `verify` settings
   and then runs `verify`.
 - `export` converts a `verification.yaml` into a file AppSec Analyzer can read.

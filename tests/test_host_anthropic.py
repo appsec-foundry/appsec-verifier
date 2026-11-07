@@ -50,6 +50,17 @@ class FakeClient:
         self.options.append(options)
         return self
 
+    @property
+    def models(self):
+        return SimpleNamespace(retrieve=self.retrieve)
+
+    def retrieve(self, model, **kwargs):          # models.retrieve: the metadata check (VER-032)
+        self.calls.append({"retrieve": model})
+        out = self.script.pop(0) if self.script else None
+        if isinstance(out, Exception):
+            raise out
+        return out
+
     def create(self, **kwargs):
         self.calls.append(kwargs)
         out = self.script.pop(0)
@@ -182,7 +193,7 @@ def test_profile_selection_builds_a_host_planner(monkeypatch):
     factory, info = _build_planner_factory(args, environ={"ANTHROPIC_API_KEY": "sk-test"})
     assert isinstance(factory(), HostPlanner)
     assert info == {"profile": "anthropic-api", "model": "claude-opus-5-5", "runtime": "Anthropic API",
-                    "auth": "API key"}
+                    "auth": "API key", "check": "model metadata accessible"}
 
 
 # ── the run's bounds now apply to this profile (they did not before) ──────────

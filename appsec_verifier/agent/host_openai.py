@@ -5,10 +5,13 @@ Each step is one POST to the fixed Responses endpoint with no tools, strict
 structured output for the step schema, and `store: false`. Redirects are not
 followed, so the key only ever goes to that endpoint. The cost is computed from
 the reported token usage at the installed catalog prices (data/model-catalog.yaml)
-and charged against the USD ceiling (VER-015).
+and charged against the USD ceiling (VER-015). `check_access` reads the model's
+metadata once, without generating, for the pre-flight check (VER-032).
 """
 
 from __future__ import annotations
+
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -18,6 +21,7 @@ from .hosts import HostReply, HostUnavailable, check_model_name
 from .steps import STEP_SCHEMA, strict_json
 
 ENDPOINT = "https://api.openai.com/v1/responses"
+MODELS_ENDPOINT = "https://api.openai.com/v1/models"
 DEFAULT_MODEL = "gpt-sol"
 REASONING_EFFORT = "medium"
 MAX_OUTPUT_TOKENS = 16_000
@@ -42,22 +46,45 @@ def _post(url: str, headers: dict, body: dict, timeout: float) -> tuple[int, byt
         return resp.status_code, resp.content
 
 
+def _get(url: str, headers: dict, timeout: float) -> int:
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        return client.get(url, headers=headers).status_code
+
+
+def _status_reason(status: int) -> str:
+    return {401: "authentication_failed", 403: "authentication_failed", 404: "model_unavailable",
+            429: "rate_limit"}.get(status, "server_error" if status >= 500 else "invalid_request")
+
+
 class OpenAIHost:
     label = "OpenAI API"
     profile = "codex"
 
-    def __init__(self, *, model: str, prices: dict, api_key: str, post=_post):
-        self.model, self.prices, self._key, self._post = model, prices, api_key, post
+    def __init__(self, *, model: str, prices: dict, api_key: str, post=_post, get=_get):
+        self.model, self.prices, self._key, self._post, self._get = model, prices, api_key, post, get
         self.version, self.auth = "", "API key"
         self.broken: str | None = None
 
     @classmethod
-    def resolve(cls, *, model: str | None, environ, post=_post) -> OpenAIHost:
+    def resolve(cls, *, model: str | None, environ, post=_post, get=_get) -> OpenAIHost:
         key = environ.get("OPENAI_API_KEY")
         if not key:
             raise HostUnavailable("the codex profile needs OPENAI_API_KEY")
         model_id, entry = catalog_model(model or DEFAULT_MODEL)
-        return cls(model=model_id, prices=entry, api_key=key, post=post)
+        return cls(model=model_id, prices=entry, api_key=key, post=post, get=get)
+
+    def check_access(self, timeout: float) -> None:
+        """One model metadata request: the API accepts the key and offers the model.
+        Generates nothing (VER-032). Raises HostUnavailable with a fixed reason code."""
+        try:
+            status = self._get(f"{MODELS_ENDPOINT}/{quote(self.model, safe='')}",
+                               {"Authorization": f"Bearer {self._key}"}, timeout)
+        except httpx.TimeoutException:
+            raise HostUnavailable(f"model {self.model}: timeout") from None
+        except httpx.HTTPError:
+            raise HostUnavailable(f"model {self.model}: connection_failed") from None
+        if status != 200:
+            raise HostUnavailable(f"model {self.model}: {_status_reason(status)} (HTTP {status})")
 
     def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
         body = {
@@ -77,9 +104,7 @@ class OpenAIHost:
         except httpx.HTTPError:
             return HostReply(error="connection_failed")
         if status != 200:
-            reason = {401: "authentication_failed", 403: "authentication_failed", 429: "rate_limit"}.get(
-                status, "server_error" if status >= 500 else "invalid_request")
-            return HostReply(error=f"{reason} (HTTP {status})")
+            return HostReply(error=f"{_status_reason(status)} (HTTP {status})")
         try:
             response = strict_json(data.decode("utf-8"))
             usage = response["usage"]

@@ -136,6 +136,8 @@ def test_verify_confirms_ssrf_when_the_target_calls_the_listener(tmp_path, monke
         status_code, text, headers = 200, "fetched", {}
 
     def vulnerable_target(method, url, headers, params=None, **kwargs):      # the target fetches what it is given
+        if params is None:                                                   # the pre-flight GET (VER-032)
+            return Resp()
         u = urlsplit(params["url"])
         conn = http.client.HTTPConnection(u.hostname, u.port, timeout=5)    # direct, never through a proxy
         conn.request("GET", u.path)

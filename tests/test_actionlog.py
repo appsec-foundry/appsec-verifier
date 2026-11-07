@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import stat
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import yaml
 
@@ -62,7 +63,9 @@ def test_verify_writes_the_log_with_the_refused_request(tmp_path, monkeypatch):
                 return {"tool": "http_request", "args": {"path": "/rest/%2e%2e/admin"}}
             return {"verdict": {"verdict": "inconclusive", "rationale": "refused"}}
 
-    def no_network(*a, **k):
+    def no_network(method, url, headers, **k):    # only the pre-flight GET of the target is answered (VER-032)
+        if (method, url) == ("GET", "https://app.example.com"):
+            return SimpleNamespace(status_code=200, headers={})
         raise AssertionError("the test reached the transport")
 
     from appsec_verifier.tools import httpx_transport

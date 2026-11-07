@@ -2,7 +2,9 @@
 
 `scope`, `plan` and `export` run offline (no network, no model calls). `verify`
 contacts the target through an agent only when model access is configured;
-otherwise it reports every selected finding not-attempted. Called with an
+otherwise it reports every selected finding not-attempted. Before the first
+model call it runs the pre-flight checks of VER-032; `preflight` runs them alone
+and verifies nothing (preflight.py). Called with an
 assessment and no command, it starts the guided run of guided.py (VER-031),
 which asks for the `verify` settings and then runs `verify`. See docs/cli.md
 for the full design.
@@ -17,8 +19,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .limits import Limits, RunBudget
-from .loader import load_plans, select
-from .preflight import confirm_authorization
+from .loader import AssessmentError, plans_from, read_assessment, select
+from .preflight import (
+    Check,
+    check_identities,
+    check_target,
+    confirm_authorization,
+    failed,
+    generation_test,
+    printable,
+    proxy_for,
+    render,
+)
 from .scope import ScopeGuard
 from .verify import build_annotations, run_verification, write_reports
 from .verify.report import annotate_assessment
@@ -58,8 +70,37 @@ def _box(title: str, rows: list[tuple[str, str]]) -> str:
 
 # ── plan ────────────────────────────────────────────────────────────────────
 
+def _load_assessment(path: Path) -> tuple[dict | None, list, list[str]]:
+    """(assessment, plans, []), or (None, [], why it cannot be used) (VER-005, VER-032)."""
+    import yaml
+    try:
+        doc = read_assessment(path)
+    except AssessmentError as exc:
+        return None, [], exc.errors
+    except (OSError, yaml.YAMLError) as exc:
+        return None, [], [f"cannot read it: {type(exc).__name__}"]
+    except ValueError as exc:                       # not a mapping at the top level
+        return None, [], [str(exc)]
+    return doc, plans_from(doc), []
+
+
+def _blocked(header: str, errors: list[str]) -> int:
+    print(header, file=sys.stderr)
+    for e in errors:
+        print(f"  - {printable(e)}", file=sys.stderr)
+    return EXIT_BLOCKED
+
+
+def _assessment_summary(doc: dict) -> str:
+    """Project and date from the assessment's meta block, to tell it is the intended one."""
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    return " · ".join(printable(meta[k])[:60] for k in ("project", "generated") if meta.get(k))
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
-    plans = load_plans(Path(args.assessment))
+    _, plans, errors = _load_assessment(Path(args.assessment))
+    if errors:
+        return _blocked(f"the assessment {args.assessment} cannot be used:", errors)
     sel = _select(args, plans)
     dyn = [p for p in sel if p.status == "dynamic"]
     static = [p for p in sel if p.status == "static-only"]
@@ -148,8 +189,9 @@ _IDENTITY_ENDPOINTS = ("login_url", "token_url", "authorize_url")
 def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[dict], list[str]]:
     """Load the identities file and check it before anything is contacted
     (VER-016, VER-025, VER-028): schema-valid, every `*_env` variable set, each
-    authentication endpoint allowed by the scope for authentication, and each
-    `target_origin` inside the scope. Errors name variables, never values."""
+    authentication endpoint allowed by the scope for authentication, each
+    `target_origin` inside the scope, and each `check_url` inside the scope on an
+    identity that has credentials (VER-032). Errors name variables, never values."""
     if not path:
         return [], []
     import yaml
@@ -180,17 +222,50 @@ def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[di
                 errors.append(f"{role}: {key} is refused for authentication: {decision.reason}")
         if auth.get("target_origin") and not guard.origin_allowed(auth["target_origin"]):
             errors.append(f"{role}: target_origin is outside the scope")
+        if auth.get("check_url"):
+            decision = guard.authorize(auth["check_url"], "target")
+            if ident["method"] == "none":
+                errors.append(f"{role}: check_url needs an identity with credentials, not method none")
+            elif not decision.allowed:
+                errors.append(f"{role}: check_url is outside the scope: {decision.reason}")
     return identities, errors
+
+
+def _check_proxy(scope: dict, env) -> list[str]:
+    """The declared proxy's URL and credential variables (VER-016, VER-029, VER-032).
+    Without this, a missing variable would send no proxy credentials at all.
+    Errors name variables, never values."""
+    from urllib.parse import urlsplit
+
+    proxy = scope.get("proxy") or {}
+    if not proxy.get("url"):
+        return []
+    try:
+        parts = urlsplit(proxy["url"])
+        valid = parts.scheme in ("http", "https") and bool(parts.hostname) and (parts.port or 1) > 0
+    except ValueError:
+        valid = False
+    if not valid:
+        return ["proxy: url must be an http or https URL with a host and a valid port"]
+    errors = []
+    if parts.username or parts.password:
+        errors.append("proxy: url must not contain credentials; name them with username_env and password_env")
+    names = [proxy.get("username_env"), proxy.get("password_env")]
+    if any(names) and not all(names):
+        errors.append("proxy: username_env and password_env are needed together")
+    errors += [f"proxy: environment variable {name} is not set" for name in names if name and not env.get(name)]
+    return errors
 
 
 class ProfileError(Exception):
     """The model profile cannot be used for this run."""
 
 
-def _build_planner_factory(args, environ=None):
+def _build_planner_factory(args, environ=None, *, check_access: bool = True):
     """Resolve the model profile (--profile) into (planner factory, agent info),
     chosen as in AppSec Analyzer: without --profile an interactive run uses
-    `claude`; a non-interactive run must name its profile."""
+    `claude`; a non-interactive run must name its profile. An API profile's model
+    metadata is read once unless `check_access` is off (VER-032)."""
     from .agent import DEFAULT_PROFILE, PROFILES, SUBSCRIPTION_PROFILES, HostUnavailable
     from .agent.profiles import resolve
 
@@ -203,7 +278,8 @@ def _build_planner_factory(args, environ=None):
         raise ProfileError(f"--cost-limit is not available with {profile}, which reports no cost; "
                            "bound the run with --max-calls and --max-duration")
     try:
-        return resolve(profile, model=args.model, environ=os.environ if environ is None else environ)
+        return resolve(profile, model=args.model, environ=os.environ if environ is None else environ,
+                       check_access=check_access)
     except HostUnavailable as exc:
         raise ProfileError(f"{profile}: {exc}") from exc
 
@@ -217,7 +293,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         return EXIT_BLOCKED
     scope_path = Path(args.scope)
     scope = _load_yaml(scope_path)
-    errors = _validate_scope(scope)
+    errors = _validate_scope(scope) or _check_proxy(scope, os.environ)
     if errors:
         print("scope file is invalid:", file=sys.stderr)
         for e in errors:
@@ -235,7 +311,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         print(f"target out of scope: {td.reason}", file=sys.stderr)
         return EXIT_BLOCKED
 
-    plans = load_plans(assessment)
+    doc, plans, errors = _load_assessment(assessment)
+    if errors:
+        return _blocked(f"the assessment {assessment} cannot be used; nothing was contacted:", errors)
     sel = _select(args, plans)
     if not sel:
         print("empty selection — nothing to verify (refine --category/--severity/--only).", file=sys.stderr)
@@ -277,8 +355,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
     browser, browser_note = _proof_browser(args, http, sel)
     listener, listener_note = _callback_listener(scope, sel)
 
-    print(_verify_preflight_box(assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                                browser_note, listener_note))
+    summary = _assessment_summary(doc)
+    print(_verify_preflight_box(f"{assessment} · {summary}" if summary else assessment, target, scope, sel, limits,
+                                safe, read_only, contact, agent_info, browser_note, listener_note))
     if invocation:
         print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
@@ -297,6 +376,15 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
     if args.dry_run:
         print("\n--dry-run: selection and scope resolved; no report written, nothing contacted.")
         return EXIT_OK
+
+    if contact:   # VER-032: reachability and logins before the first model call
+        checks = [check_target(http, target, proxy=proxy_for(scope, target))]
+        if not failed(checks):
+            checks += check_identities(sessions, identities, http, target, scope=scope)
+        print("\nPreflight\n" + render(checks))
+        if failed(checks):
+            print("\na pre-flight check failed: no finding was tested and no model was asked.", file=sys.stderr)
+            return EXIT_BLOCKED
 
     out_dir = Path(args.output)
     action_log = None
@@ -349,6 +437,155 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
     return 3 if any(r.get("limits_hit") for r in doc["results"]) else EXIT_OK
 
 
+# ── preflight (VER-032) ───────────────────────────────────────────────────────
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """The checks of VER-032 without verifying anything. The offline checks come
+    first; the target and its logins only after the confirmation of VER-002 and
+    not with --offline; --test-model adds one bounded model call. Progress goes
+    to stdout, or to stderr with --json, which prints the result on stdout."""
+    from .guided import load_scope
+
+    args.non_interactive = args.non_interactive or args.json     # a JSON run never prompts
+    out = sys.stderr if args.json else sys.stdout
+    checks: list[Check] = []
+
+    def add(*items: Check) -> None:
+        checks.extend(items)
+        print(render(list(items)), file=out, flush=True)
+
+    print("Preflight", file=out)
+    doc, plans, errors = _load_assessment(Path(args.assessment))
+    if errors:
+        add(Check("Assessment", "fail", "; ".join(errors)))
+    else:
+        add(_assessment_check(doc, plans))
+
+    scope, guard, errors = load_scope(args.scope)
+    target = args.target or (scope or {}).get("base_url")
+    if errors:
+        add(Check("Scope", "fail", "; ".join(errors)))
+    elif not (decision := guard.authorize(target, "target")).allowed:
+        add(Check("Scope", "fail", f"{target} is out of scope: {decision.reason}"))
+        guard = None
+    else:
+        window = scope.get("window") or {}
+        add(Check("Scope", "ok", f"{target} in scope · window until {window.get('until')} · "
+                                 f"owner {(scope.get('owner') or {}).get('name')}"))
+        if (scope.get("proxy") or {}).get("url"):
+            add(_proxy_check(scope, target))
+
+    identities: list[dict] = []
+    if not args.identities:
+        add(Check("Identities", "info", "none given; only anonymous requests are possible"))
+    elif guard is None:
+        add(Check("Identities", "info", "not checked without a usable scope"))
+    else:
+        identities, errors = _check_identities(args.identities, guard, os.environ)
+        add(Check("Identities", "fail", "; ".join(errors)) if errors else
+            Check("Identities", "ok", f"{', '.join(i['role'] for i in identities)} · environment variables set"))
+
+    host, test_budget = None, None
+    try:
+        factory, info = _build_planner_factory(args, check_access=not args.offline)
+    except ProfileError as exc:
+        add(Check("Model", "fail", str(exc)))
+    else:
+        host = factory.host
+        unproven = "quota not checked" if info["check"] == "model metadata accessible" else \
+            "server access and quota not checked" + (" (--offline)" if args.offline else "")
+        add(Check("Model", "ok", f"{info['profile']} · {info['model']} · {info['runtime']} · {info['auth']} · "
+                                 f"{info['check']}; {unproven}"))
+        if args.test_model:
+            test_budget, problem = _generation_budget(args, info["profile"])
+            if problem:
+                add(Check("Model test", "fail", problem))
+
+    if failed(checks):
+        return _preflight_result(args, checks, out)
+    if args.offline:
+        add(Check("Target", "info", "not contacted (--offline): reachability and logins not checked"))
+    else:
+        from .auth import SessionManager
+        from .tools import GuardedHttpClient
+        from .tools.httpx_transport import transport_from_scope
+
+        via = proxy_for(scope, target)
+        print(f"\nThe next checks contact {target}{f' via proxy {via}' if via else ''}: one GET, one login "
+              "per identity with a login or token endpoint, one GET per check_url.", file=out)
+        conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
+        if not conf.confirmed:
+            add(Check("Target", "fail", f"not contacted: {conf.reason}; confirm with --yes, or use --offline"))
+        else:
+            http = GuardedHttpClient(guard, RunBudget(Limits.load()), transport_from_scope(scope))
+            add(check_target(http, target, proxy=via))
+            if not failed(checks):
+                add(*check_identities(SessionManager(identities, http, env=os.environ), identities, http, target,
+                                      scope=scope))
+    if test_budget is not None:
+        if failed(checks):
+            add(Check("Model test", "info", "not run: an earlier check failed"))
+        else:
+            print(f"\nModel test: one fixed prompt to {host.model}, without target data, findings or credentials; "
+                  + (f"limit ${args.cost_limit:.2f}" if args.cost_limit is not None else "one call of the plan"),
+                  file=out)
+            add(generation_test(host, test_budget))
+    return _preflight_result(args, checks, out)
+
+
+def _assessment_check(doc: dict, plans) -> Check:
+    counts = {s: sum(p.status == s for p in plans) for s in ("dynamic", "static-only", "input-incomplete")}
+    text = (f"{len(plans)} findings: {counts['dynamic']} dynamic, {counts['static-only']} static-only, "
+            f"{counts['input-incomplete']} input-incomplete")
+    summary = _assessment_summary(doc)
+    text = f"{summary} · {text}" if summary else text
+    if not counts["dynamic"]:
+        return Check("Assessment", "warn", f"{text}; nothing can be verified dynamically")
+    return Check("Assessment", "ok", text)
+
+
+def _proxy_check(scope: dict, target: str) -> Check:
+    errors = _check_proxy(scope, os.environ)
+    if errors:
+        return Check("Proxy", "fail", "; ".join(errors))
+    proxy = scope["proxy"]
+    via = proxy_for(scope, target)
+    if via is None:
+        return Check("Proxy", "info", f"declared, but {target} is reached directly (no_proxy)")
+    creds = (f"credentials from {proxy['username_env']} and {proxy['password_env']}" if proxy.get("username_env")
+             else "without credentials")
+    return Check("Proxy", "ok", f"{via} · {creds}")
+
+
+def _generation_budget(args, profile: str) -> tuple[RunBudget | None, str | None]:
+    """The separate limit of --test-model: one call, and for a priced profile an
+    explicit cost limit of at least USD 0.01, as in AppSec Analyzer."""
+    from .agent import SUBSCRIPTION_PROFILES
+
+    if args.offline:
+        return None, "--test-model calls the model, so it cannot run with --offline"
+    if profile in SUBSCRIPTION_PROFILES:
+        if args.max_calls is None or args.max_calls < 1:
+            return None, f"--test-model with {profile} needs --max-calls 1: the test uses one call of the plan"
+    elif args.cost_limit is None or args.cost_limit < 0.01:
+        return None, "--test-model needs --cost-limit of at least 0.01 (USD) for its one call"
+    try:
+        return RunBudget(Limits.load({"cost_limit_usd": args.cost_limit, "max_calls": 1})), None
+    except ValueError as exc:
+        return None, f"invalid limit: {exc}"
+
+
+def _preflight_result(args, checks: list[Check], out) -> int:
+    import json
+
+    ok = not failed(checks)
+    print(f"\npreflight {'passed' if ok else 'failed'}; nothing was verified.", file=out)
+    if args.json:
+        print(json.dumps({"kind": "preflight", "ok": ok, "verification": "not_run",
+                          "checks": [c.as_dict() for c in checks]}, sort_keys=True))
+    return EXIT_OK if ok else EXIT_BLOCKED
+
+
 def _proof_browser(args, http, sel):
     """The XSS proof browser when an XSS finding is selected (VER-009), else None;
     with a line for the pre-flight box. Without it XSS findings stay unconfirmed."""
@@ -389,7 +626,8 @@ def _verify_preflight_box(assessment, target, scope, sel, limits, safe, read_onl
     rows = [("browser", browser_note)] if browser_note else []
     rows += [("callback", listener_note)] if listener_note else []
     return _box("AppSec Verifier · verify", rows + [
-        ("profile", " · ".join(agent_info[k] for k in ("profile", "model", "runtime", "auth"))),
+        ("profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth", "check"))
+                               if v)),
         ("assessment", str(assessment)),
         ("target", f"{target}  ({'will contact' if contact else 'not contacted yet'})"),
         ("scope", f"{', '.join(scope.get('hosts', []) or [target])}  owner: {(scope.get('owner') or {}).get('name')}"),
@@ -451,13 +689,17 @@ def _banner() -> str:
         "Guided run:\n"
         "  appsec-verifier ASSESSMENT   asks for the settings with defaults, then verifies\n\n"
         "Commands:\n"
-        "  verify   verify selected findings against a target (safe mode by default)\n"
-        "  plan     list dynamically verifiable findings, offline\n"
-        "  scope    resolve and validate an authorisation scope file\n"
-        "  export   re-emit verdicts for AppSec Analyzer\n\n"
+        "  verify     verify selected findings against a target (safe mode by default)\n"
+        "  preflight  check assessment, scope, target, logins and model; verifies nothing\n"
+        "  plan       list dynamically verifiable findings, offline\n"
+        "  scope      resolve and validate an authorisation scope file\n"
+        "  export     re-emit verdicts for AppSec Analyzer\n\n"
         "No probe contacts a target yet; see requirements.md and docs/cli.md. "
         "Run a command with --help."
     )
+
+
+_PROFILE_CHOICES = ["claude", "codex-cli", "copilot-cli", "codex", "anthropic-api"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -483,6 +725,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     vf = sub.add_parser("verify", help="verify selected findings against a target (safe mode by default)")
     _add_run_options(vf, guided=False)
+
+    pf = sub.add_parser("preflight", help="check assessment, scope, target, logins and model; verifies nothing")
+    pf.add_argument("--assessment", required=True, help="security-assessment.yaml to check")
+    pf.add_argument("--scope", required=True, help="authorisation scope file")
+    pf.add_argument("--url", "--target", dest="target", help="URL to check (default: scope base_url); must be in scope")
+    pf.add_argument("--identities", help="identities.yaml; each login is tried once")
+    pf.add_argument("--profile", choices=_PROFILE_CHOICES, help="model profile, as for verify")
+    pf.add_argument("--model", help="model for the selected profile")
+    pf.add_argument("--offline", action="store_true",
+                    help="contact nothing: neither the target, its login endpoints, nor the model provider")
+    pf.add_argument("--test-model", action="store_true",
+                    help="send one fixed prompt to the model; needs --cost-limit, or --max-calls 1 for "
+                         "codex-cli and copilot-cli")
+    pf.add_argument("--cost-limit", type=float, help="with --test-model: spending limit of the call, USD")
+    pf.add_argument("--max-calls", type=int, help="with --test-model: call limit (subscription profiles)")
+    pf.add_argument("--non-interactive", "--ci", dest="non_interactive", action="store_true",
+                    help="no prompts; contacting the target then needs --yes")
+    pf.add_argument("--yes", action="store_true", help="confirm contacting the target without a prompt")
+    pf.add_argument("--json", action="store_true", help="print the result as JSON on stdout; never prompts")
 
     ex = sub.add_parser("export", help="re-emit a verification.yaml for AppSec Analyzer")
     ex.add_argument("--verification", required=True, help="verification.yaml to export")
@@ -550,7 +811,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     vf.add_argument("--read-only", action="store_true", help="force read-only even if the scope allows state change")
     vf.add_argument("--dry-run", action="store_true", help="resolve selection + scope, write nothing, contact nothing")
     vf.add_argument("--headful", action="store_true", help="run the proof browser visibly (local debugging)")
-    vf.add_argument("--profile", choices=["claude", "codex-cli", "copilot-cli", "codex", "anthropic-api"],
+    vf.add_argument("--profile", choices=_PROFILE_CHOICES,
                     help="model profile, as in AppSec Analyzer: claude (Claude CLI, login or key; default when "
                          "interactive), codex-cli (ChatGPT login), copilot-cli (Copilot login), codex "
                          "(OPENAI_API_KEY), anthropic-api (ANTHROPIC_API_KEY, no CLI needed). "
@@ -558,7 +819,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     vf.add_argument("--model", help="model for the selected profile (default: the profile's model)")
 
 
-COMMANDS = ("plan", "scope", "verify", "export")
+COMMANDS = ("plan", "scope", "verify", "preflight", "export")
 
 
 def _stdin_is_terminal() -> bool:
@@ -581,6 +842,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_scope(args)
     if args.command == "verify":
         return cmd_verify(args)
+    if args.command == "preflight":
+        return cmd_preflight(args)
     if args.command == "export":
         return cmd_export(args)
     print(_banner())

@@ -22,6 +22,8 @@ per command and flag.
 - `verify` — verify findings of an assessment against a running target.
 - `appsec-verifier ASSESSMENT` (no command) — the guided run: asks for the
   `verify` settings with defaults, then runs `verify` (VER-031).
+- `preflight` — check the assessment, scope, proxy, target, logins and model
+  profile without verifying anything; `--offline` contacts nothing (VER-032).
 
 **Inspect without touching the target** (no network, no model calls)
 
@@ -115,12 +117,17 @@ appsec-verifier verify \
   --output ./verification
 ```
 
-Flow: load and schema-check the assessment (VER-005) → resolve the selection and
-the scope and, interactively, **print both for one explicit confirmation**
-(VER-002, VER-026) → probe the target for reachability and build/version match
-(VER-003) → for each selected finding, run a bounded, scope-confined verification
-of exactly that finding (VER-008, VER-015, VER-017) → write the report or
-annotate the assessment, with evidence artefacts (VER-020, VER-027, VER-022).
+Flow: check the assessment's structure, the scope and proxy settings, the
+identities file and the model profile (VER-005, VER-032) → resolve the selection
+and the scope and, interactively, **print both for one explicit confirmation**
+(VER-002, VER-026) → check that the target answers and every identity logs in,
+the pre-flight checks of [`preflight`](#preflight--check-before-a-run-ver-032)
+(VER-003, VER-032; the build/version match of VER-003 is *not implemented yet*)
+→ for each selected finding, run a bounded, scope-confined verification of
+exactly that finding (VER-008, VER-015, VER-017) → write the report or annotate
+the assessment, with evidence artefacts (VER-020, VER-027, VER-022). A failed
+pre-flight check stops the run before the first model call. Its requests count
+against `--max-requests`.
 
 ### Input and target boundary
 
@@ -348,11 +355,54 @@ Proceed against this target? [y/N]
 ```
 
 **Exit codes.** `0` all selected findings tested (whatever the verdict); `2`
-run blocked before testing (bad/expired scope, unconfirmed authorisation,
-unreachable target, missing required identity, empty selection); `3` a limit —
+run blocked before testing (malformed assessment, bad/expired scope, unset proxy
+or identity variable, unusable model profile, unconfirmed authorisation,
+unreachable target, rejected login, empty selection); `3` a limit —
 including the cost ceiling — stopped the run before all selected findings were
 tested. Verdicts themselves never set a non-zero exit — a confirmed weakness is a
 successful run.
+
+## `preflight` — check before a run (VER-032)
+
+```
+appsec-verifier preflight --assessment ./security-assessment.yaml --scope ./scope.yaml \
+  [--url URL] [--identities ./identities.yaml] [--profile P] [--model M] \
+  [--offline] [--json] [--yes] [--non-interactive] \
+  [--test-model (--cost-limit USD | --max-calls 1)]
+```
+
+Runs the checks `verify` runs before its first model call, and verifies nothing.
+Each check prints one line: `✓` passed, `⚠` works with a caveat, `✗` failed,
+`·` not checked or not applicable.
+
+| Check | What it does | Contacts |
+| --- | --- | --- |
+| Assessment | Checks the fields the Verifier reads against `schemas/assessment.schema.yaml` and that finding ids are unique. Shows project, date, and how many findings are dynamic, static-only, input-incomplete. Messages name the place and the rule; only a repeated id is quoted, escaped. | nothing |
+| Scope | Schema, window, URL inside the scope. | nothing |
+| Proxy | The proxy URL is http(s) without inline credentials, and `username_env`/`password_env` are both set. | nothing |
+| Identities | Schema, every `*_env` variable set, endpoints and `check_url` inside the scope. | nothing |
+| Model | The profile resolves (CLI present and logged in, or key set; model known and priced). For `codex` and `anthropic-api` one metadata request shows the key is accepted and the model offered; it generates nothing and proves no quota. | the provider (not with `--offline`) |
+| Target | One GET to the URL through the scope gate and the declared proxy. A redirect is not followed. Any HTTP answer counts as reachable; 5xx warns. A failure names its cause: name resolution, refused connection, timeout, TLS certificate or handshake, proxy refusal or proxy authentication (407), or an address the scope refuses. | the target |
+| per role | One login for `form` and OIDC identities, never retried. With `auth.check_url`, one GET there with the identity's credentials: 2xx accepted, 401/403 rejected, anything else unclear. `bearer` and `basic` without `check_url` are reported as not checked against the target. | target, login endpoints |
+| Model test | Only with `--test-model`: one fixed prompt without target data, findings or credentials. Passes when the host stays confined and replies with exactly the requested step. | the provider |
+
+The offline checks run first. If one fails, nothing is contacted. The target and
+login checks run only after one explicit confirmation (VER-002): at the prompt,
+or with `--yes`. `--non-interactive` without `--yes` contacts nothing and fails.
+A failed target check skips the logins.
+
+`--test-model` needs its own limit: `--cost-limit` of at least USD 0.01 for
+`claude`, `codex` and `anthropic-api`, `--max-calls 1` for `codex-cli` and
+`copilot-cli`. It cannot be combined with `--offline` and runs only when all other
+checks passed.
+
+`--json` prints `{"kind": "preflight", "ok": …, "verification": "not_run",
+"checks": [{"check", "status", "message"}]}` on stdout and the progress lines on
+stderr. It never prompts, so contacting the target needs `--yes`.
+
+Messages never contain a secret, a token, a response body or a raw error text,
+which can hold proxy credentials (VER-016). Exit code `0` when no check failed,
+`2` otherwise.
 
 ## `plan` — what is verifiable, offline
 
@@ -401,7 +451,8 @@ The single authority for what the Verifier may contact. Schema:
 the `marker_file` (path and token) used for path-traversal proofs. For authenticated targets it also carries `auth_hosts` (SSO / OIDC and
 token endpoints the Verifier may contact only to log in — never probed for
 findings) and `proxy` (an HTTP/HTTPS proxy to route target and auth traffic
-through, with proxy credentials named as env vars). Anything not inside it —
+through, with proxy credentials named as env vars; the URL itself must not hold
+credentials, and both variables must be set). Anything not inside it —
 target, auth host, or proxy — is refused, not attempted. `base_url` must be an
 absolute http(s) URL with a host; a scope without a usable host or port allows
 nothing. Paths are compared percent-decoded, `deny_paths` also regardless of
@@ -457,7 +508,12 @@ URL. A request as that role to any other origin is refused (VER-018). Before
 the first request `verify` checks the file against the schema, checks that every
 `*_env` variable it names is set, and that login endpoints and `target_origin`
 lie inside the scope; any failure stops the run with exit 2 and names the
-variable, never a value. `oidc-authorization-code` is not implemented yet and is
+variable, never a value. After the confirmation and before the first model call,
+every `form` and OIDC identity logs in once, and a rejected login stops the run
+(VER-032). An identity can name `auth.check_url`, a URL on the origin its
+credentials are sent to: the pre-flight check requests it once with the
+credentials, which is the only way a `bearer` or `basic` identity is checked
+against the target. `oidc-authorization-code` is not implemented yet and is
 refused there. The HTTP client keeps no cookies: sessions travel only in the
 headers the Verifier attaches, never in a cookie the target set for another
 identity. Credential and token values
@@ -516,7 +572,7 @@ scripts/
   probes/         # per-class proof logic: xss, access-control, injection, traversal...
   report/         # verification.yaml + verification.md writers, evidence store
   export/         # analyzer-annotations exporter
-schemas/          # verification, scope, identities, analyzer-annotations (JSON Schema in YAML)
+schemas/          # verification, scope, identities, assessment, analyzer-annotations (JSON Schema in YAML)
 data/             # limits.yaml, verifiable-cwes.yaml
 tests/            # safety-control tests (VER-025)
 ```

@@ -262,7 +262,7 @@ def test_the_invocation_runs_the_same_settings(env):
 def test_unreadable_or_unverifiable_assessments_block(env, capsys):
     env.assessment.write_text(": not yaml : [")
     assert env.go()[0] == cli.EXIT_BLOCKED
-    assert "cannot read the assessment" in capsys.readouterr().err
+    assert "cannot read it: ParserError" in capsys.readouterr().err
     env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[3]]}))
     rc, _, prompts, _ = env.go()
     assert rc == cli.EXIT_BLOCKED and prompts == []

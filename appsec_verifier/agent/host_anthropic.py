@@ -12,7 +12,8 @@ in data/anthropic-model-catalog.yaml and charged against the USD ceiling; a
 model without a price there is refused. A model priced by prompt length
 (Claude Haiku 5.5) has a second rate card, used for a response whose prompt,
 cache reads and writes included, is longer than its threshold. SDK errors become fixed reason codes,
-so no provider prose reaches the report.
+so no provider prose reaches the report. `check_access` reads the model's
+metadata once, without generating, for the pre-flight check (VER-032).
 """
 
 from __future__ import annotations
@@ -58,7 +59,8 @@ def _default_client(environ):
 def _reason(exc: Exception) -> str:
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
-        reason = {401: "authentication_failed", 403: "authentication_failed", 429: "rate_limit"}.get(
+        reason = {401: "authentication_failed", 403: "authentication_failed", 404: "model_unavailable",
+                  429: "rate_limit"}.get(
             status, "server_error" if status >= 500 else "invalid_request")
         return f"{reason} (HTTP {status})"
     name = type(exc).__name__
@@ -81,6 +83,14 @@ class AnthropicHost:
         model = model or DEFAULT_MODEL
         prices = catalog_prices(model)
         return cls(model=model, prices=prices, client=(client_factory or _default_client)(environ))
+
+    def check_access(self, timeout: float) -> None:
+        """One model metadata request: the API accepts the key and offers the model.
+        Generates nothing (VER-032). Raises HostUnavailable with a fixed reason code."""
+        try:
+            self._client.with_options(timeout=timeout, max_retries=0).models.retrieve(self.model)
+        except Exception as exc:  # noqa: BLE001 - any SDK failure is reported by its fixed reason code
+            raise HostUnavailable(f"model {self.model}: {_reason(exc)}") from None
 
     def _cost(self, usage) -> float:
         """USD for one response. A prompt (input, cache writes and cache reads) longer than the

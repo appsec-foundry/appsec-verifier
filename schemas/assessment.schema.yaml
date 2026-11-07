@@ -1,0 +1,40 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://appsec-verifier/schemas/assessment.schema.yaml
+title: The fields the Verifier reads from a security-assessment.yaml
+description: |
+  Not the AppSec Analyzer output schema: only the fields the Verifier reads,
+  with the types it needs (VER-005, VER-032). Other fields pass unchecked. A
+  finding without a CWE or an evidence location is valid here; it is reported
+  as static-only or input-incomplete.
+
+type: object
+required: [threats]
+properties:
+
+  meta:
+    type: object
+
+  threats:
+    type: array
+    items:
+      type: object
+      required: [id]
+      properties:
+        id:                 { type: string, minLength: 1 }
+        title:              { type: [string, "null"] }
+        cwe:                { type: [string, "null"] }
+        severity:           { type: [string, "null"] }
+        effective_severity: { type: [string, "null"] }
+        evidence:
+          type: [array, object, "null"]
+          items: { $ref: "#/$defs/location" }
+          properties: { file: { type: [string, "null"] } }
+        instances:
+          type: [array, "null"]
+          items: { $ref: "#/$defs/location" }
+
+$defs:
+  location:
+    description: An evidence location. Entries that are not mappings are skipped.
+    properties:
+      file: { type: [string, "null"] }
