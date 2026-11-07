@@ -21,7 +21,7 @@ examples are.
 
 - `verify` — verify findings of an assessment against a running target.
 - `appsec-verifier ASSESSMENT` (no command) — the guided run: asks for the
-  `verify` settings with defaults, then runs `verify` (VER-031).
+  `verify` settings that have no usable default, then runs `verify` (VER-031).
 - `preflight` — check the assessment, scope, proxy, target, logins and model
   profile without verifying anything; `--offline` contacts nothing (VER-032).
 
@@ -44,52 +44,52 @@ examples are.
 
 Called with an assessment and no command, the Verifier reads the assessment
 offline, shows how many findings it holds, how many are dynamically verifiable,
-and their split by class and severity, then asks for the settings of the run.
-The `Needs` line names what the classes present need before the run: test
-identities in `identities.yaml` for access control, `marker_file` in the scope
-and the file on the target for path traversal, `callback` in the scope for
-SSRF, and Google Chrome with `appsec-verifier[browser]` for XSS. Without it
+and their split by class and severity, then asks only for what has no usable
+default. The `Needs` line names what the classes present need before the run:
+test identities in `identities.yaml` for access control, `marker_file` in the
+scope and the file on the target for path traversal, `callback` in the scope
+for SSRF, and Google Chrome with `appsec-verifier[browser]` for XSS. Without it
 their findings cannot be confirmed. Enter accepts the default shown in brackets.
 
 | Question | Default | Same as |
 | --- | --- | --- |
-| Classes to verify | all verifiable classes present | `--category` |
 | Lowest severity | `high` (High and Critical); `all` for no floor | `--min-severity` |
-| Scope file | `scope.yaml` next to the assessment, else in the working directory; without one, Enter writes one from your answers (below) | `--scope` |
-| Target URL | the scope's `base_url` | `--url` |
-| Identities file | `identities.yaml` next to the scope, the assessment, or in the working directory; else `none` | `--identities` |
+| Target URL | none; asked only without a scope file (below) | `--url` |
+| Identities file | asked only when `identities.yaml` is found next to the scope, the assessment, or in the working directory; `none` for no identities | `--identities` |
 | Model profile | `claude` | `--profile` |
-| Change the run limits? | no: `data/limits.yaml`; yes asks each limit | `--cost-limit`, `--max-calls`, `--max-requests`, `--max-attempts`, `--max-duration`, `--rate` |
 | Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
 | Existing report in the output directory | append; or overwrite, or a new directory | `--append`, `--output` |
 
+All classes present are tested unless `--category` narrows them, and the limits
+are those of `data/limits.yaml` unless `--cost-limit`, `--max-calls`,
+`--max-requests`, `--max-attempts`, `--max-duration` or `--rate` change them.
+Both are shown with the other settings before the confirmation.
+
 Each answer goes through the same check as its option and is asked again when
-invalid: a scope that is unreadable, schema-invalid or outside its window, a URL
-outside the scope, an identities file with unset variables (named, never their
-values), a profile that is not available, a limit that is not a positive number.
-Options given on the command line are used as given and not asked, e.g.
+invalid: a URL without http or https, with a user name or password, or with an
+ambiguous path, an identities file with unset variables (named, never their
+values), a profile that is not available. Options given on the command line are
+used as given and not asked, e.g.
 `appsec-verifier ./security-assessment.yaml --scope ./scope.yaml`. No question
 asks for a password, token, or other secret; credentials stay in environment
 variables.
 
-Without a scope file, Enter at the scope question asks for the target URL, the
-end of the test window, the owner and an optional reference such as a ticket.
-Target and owner have no default, and the target is never taken from the
-assessment. A URL without http or https, with a user name or password, or with
-an ambiguous path is asked again. The window ends at 23:59:59 UTC of the current
-day unless you enter a date or time; a date alone means the end of that day.
-The answers are written to `scope.yaml` next to the assessment, never over an
-existing file: the target's host, port and scheme, the whole host as path, a
-window starting now, and `allow_state_change: false`. The run then uses this
-scope and does not ask for the target URL again. Further keys (`hosts`,
-`deny_paths`, `networks`, `allow_state_change` and the others below) are added
-by editing the file; the guided run never widens a scope.
+A `scope.yaml` next to the assessment, else in the working directory, is used
+without a question; the run prints its path. If it cannot be used, for instance
+because its window has closed, the run stops with exit 2 and says why. Correct
+the file, or move it away to enter a target URL instead.
+
+Without a scope file the run asks for the target URL, which has no default and
+is never taken from the assessment. The run then tests only that URL's scheme,
+host and port, read-only, as `verify --url` does without `--scope`, and writes
+no file. Because you typed the target, Enter at the confirmation starts the run
+(`[Y/n]`); with a scope file the confirmation stays `[y/N]`.
 
 After the questions the run shows the `verify` settings and the equivalent
 non-interactive command line, e.g.
 
 ```
-appsec-verifier verify --assessment ./security-assessment.yaml --scope ./scope.yaml \
+appsec-verifier verify --assessment ./security-assessment.yaml \
   --url http://localhost:3000 --output ./verification --min-severity high \
   --profile claude --non-interactive --yes
 ```
@@ -100,9 +100,9 @@ nothing.
 
 `--non-interactive` (`--ci`), or standard input that is not a terminal, turns the
 questions off: `appsec-verifier ASSESSMENT --ci --scope … --profile … --yes`
-behaves like `verify` with the same options. A missing `--scope` or `--profile`
-blocks the run with exit 2 and names both; a missing `--yes` blocks it at the
-confirmation as in `verify`.
+behaves like `verify` with the same options. Without `--scope` or `--url`, or
+without `--profile`, the run stops with exit 2 and names what is missing; a
+missing `--yes` blocks it at the confirmation as in `verify`.
 
 ## `verify` — verify findings against a running target
 
@@ -159,8 +159,8 @@ without control characters and without credential values.
 | Flag | Meaning | Req. |
 | --- | --- | --- |
 | `--assessment PATH` | `security-assessment.yaml` to verify (the one the Analyzer produced). | VER-005 |
-| `--scope PATH` | Authorisation scope file (`schemas/scope.schema.yaml`). The only source of the target boundary, plus the declared proxy and auth hosts. | VER-001 |
-| `--url URL` (alias `--target`) | Start/base URL to test. Must fall inside the scope; mismatch is refused. If omitted, the scope's `base_url` is used. | VER-001/004 |
+| `--scope PATH` | Authorisation scope file (`schemas/scope.schema.yaml`): the target boundary, the declared proxy and auth hosts, the test window and the owner. Without it, `--url` alone sets the boundary. | VER-001 |
+| `--url URL` (alias `--target`) | Start/base URL to test. With `--scope` it must fall inside the scope; a mismatch is refused, and without `--url` the scope's `base_url` is used. Without `--scope` it is required and is the whole boundary: its scheme, host and port, read-only, with no window and no owner. | VER-001/004 |
 | `--identities PATH` | Test-identity config (`schemas/identities.schema.yaml`): bearer, basic, form, or OIDC login per role. Secret **values** come from env, never this file. | VER-016/028 |
 | `--proxy URL` | *Not implemented yet; set `proxy.url` in the scope file.* Route target and auth traffic through this HTTP/HTTPS proxy, overriding the scope's `proxy.url`. Proxy credentials still come from the env vars the scope names. | VER-029 |
 
@@ -430,8 +430,10 @@ data, so use intrusive mode only against a disposable test instance.
 
 The console looks like AppSec Analyzer's. Before the first request `verify`
 prints its settings as `Key : value` lines: the assessment, the target, the
-scope and its owner, the selection, the profile and model, the limits and the
-mode (safe or intrusive), and asks `Proceed against this target? [y/N]`. For
+scope and its owner (or `no scope file`), the selection, the profile and model,
+the limits and the mode (safe or intrusive), and asks
+`Proceed against this target? [y/N]`, or `[Y/n]` in the guided run after you
+typed the target URL. For
 selected classes that need a preparation, one more line names it or says it is
 missing: `Identities` (access control, roles only), `Browser` (XSS), `Callback`
 (SSRF) and `Marker file` (path traversal, its path only). A line that starts
@@ -561,10 +563,17 @@ Git; a build without either shows `(commit unknown)`.
 
 ### Scope file — `scope.yaml` (authorisation, VER-001)
 
-The scope file is the only source of what the Verifier may contact. Schema:
-`schemas/scope.schema.yaml`; examples in `examples/`. A minimal scope needs
-`schema_version`, `base_url`, `window` and `owner`; the README's quick start
-shows one.
+The scope file states what the Verifier may contact, during which window, and
+who is responsible. Schema: `schemas/scope.schema.yaml`; examples in
+`examples/`. A minimal scope needs `schema_version`, `base_url`, `window` and
+`owner`; the README's quick start shows one.
+
+Without a scope file, `--url` alone is the scope: the URL's scheme, host and
+port, the whole host, read-only, for that run. You need a scope file for
+anything more: several hosts or ports, path prefixes, `deny_paths`, a host name
+that resolves to a private address (`networks`), a proxy, login hosts, the SSRF
+callback, the marker file, write requests, or a test window and owner on
+record.
 
 | Key | Meaning |
 | --- | --- |

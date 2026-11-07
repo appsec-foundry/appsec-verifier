@@ -127,8 +127,8 @@ def test_preflight_marks_take_the_colour_of_their_status():
 
 @pytest.mark.parametrize("argv, expected", [
     (["verify", "security-assessment.yaml"], [
-        "usage: appsec-verifier verify --assessment FILE --scope FILE [options]",
-        "appsec-verifier verify: error: the following arguments are required: --assessment, --scope",
+        "usage: appsec-verifier verify --assessment FILE (--scope FILE | --url URL) [options]",
+        "appsec-verifier verify: error: the following arguments are required: --assessment",
         "To be asked for the settings instead: appsec-verifier ASSESSMENT",
         "Options and examples: appsec-verifier verify --help"]),
     (["security-assessment.yaml", "--bogus"], [

@@ -71,7 +71,7 @@ properties:
         required: [file]
         additionalProperties: true
         properties:
-          file:         { type: string }
+          file:         { type: [string, "null"], description: "null when the run had the target URL alone (VER-001)" }
           sha256:       { type: [string, "null"] }
           owner:        { type: [string, "null"] }
           window_from:  { type: [string, "null"] }

@@ -109,7 +109,7 @@ def run_verification(
     *,
     assessment_path: Path,
     scope: dict,
-    scope_path: Path,
+    scope_path: Path | None,
     plans: list[FindingPlan],
     limits: Limits,
     identities: list[dict],
@@ -210,8 +210,8 @@ def run_verification(
             "build_match": (target_status or {}).get("build_match", "unknown"),
         },
         "scope": {
-            "file": str(scope_path),
-            "sha256": _sha256(scope_path),
+            "file": str(scope_path) if scope_path else None,     # None: the target URL alone (VER-001)
+            "sha256": _sha256(scope_path) if scope_path else None,
             "owner": (scope.get("owner") or {}).get("name"),
             "window_from": window.get("from"),
             "window_until": window.get("until"),

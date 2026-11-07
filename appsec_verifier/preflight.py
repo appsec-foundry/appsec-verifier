@@ -54,23 +54,26 @@ class Confirmation:
     reason: str
 
 
-def confirm_authorization(*, non_interactive: bool, assume_yes: bool, prompt=input) -> Confirmation:
+def confirm_authorization(*, non_interactive: bool, assume_yes: bool, default_yes: bool = False,
+                          prompt=input) -> Confirmation:
     """Decide whether the run is authorised to start.
 
     - ``--yes`` confirms without a prompt and is recorded as ``ci-flag``.
     - A non-interactive run without ``--yes`` is NOT confirmed (it must not
       prompt and must not assume consent).
-    - An interactive run asks once; only an explicit yes confirms.
+    - An interactive run asks once; only an explicit yes confirms, or Enter
+      with ``default_yes``, which the guided run sets only when the operator
+      typed the target URL in it.
     """
     if assume_yes:
         return Confirmation(True, "ci-flag", "authorised by explicit flag")
     if non_interactive:
         return Confirmation(False, "ci-flag", "non-interactive run without --yes: not confirmed")
     try:
-        answer = prompt("Proceed against this target? [y/N] ").strip().lower()
+        answer = prompt(f"Proceed against this target? [{'Y/n' if default_yes else 'y/N'}] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return Confirmation(False, "interactive", "no input available: not confirmed")
-    if answer in ("y", "yes"):
+    if answer in ("y", "yes") or (default_yes and not answer):
         return Confirmation(True, "interactive", "confirmed at the prompt")
     return Confirmation(False, "interactive", "declined at the prompt")
 

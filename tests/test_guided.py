@@ -1,11 +1,13 @@
-"""Guided run from the assessment alone (VER-031): defaults, options not asked
-again, invalid answers asked again, no scope without the operator, no secret
-asked, cancel contacts nothing, and without a terminal nothing is asked."""
+"""Guided run from the assessment alone (VER-031): only what has no usable
+default is asked, options are not asked again, invalid answers are asked again,
+a found scope file is used as it is or blocks, without one only the typed URL's
+host is tested and no file is written, no secret is asked, cancel contacts
+nothing, Enter confirms only after a typed URL, and without a terminal nothing
+is asked."""
 
 from __future__ import annotations
 
 import shlex
-from datetime import datetime, timezone
 
 import pytest
 import yaml
@@ -22,10 +24,10 @@ THREATS = [
     {"id": "T-3", "cwe": "CWE-89", "severity": "medium", "title": "sqli", "evidence": {"file": "c.ts", "line": 3}},
     {"id": "T-4", "cwe": "CWE-330", "severity": "low", "title": "prng", "evidence": {"file": "d.ts", "line": 4}},
 ]
-# classes, severity, scope, URL, identities, profile, change limits
-DEFAULTS = ["", "", "", "", "", "", ""]
-# classes, severity, and Enter at the scope question when no scope file exists
-NEW_SCOPE = ["", "", ""]
+IDENTITY = {"identities": [{"role": "alice", "method": "bearer", "auth": {"token_env": "ALICE_TOKEN"}}]}
+# severity, profile: all that is asked with a scope file and without an identities file
+DEFAULTS = ["", ""]
+SECRET_WORDS = ("password", "token", "secret", "key")
 
 
 class Script:
@@ -56,7 +58,8 @@ def env(tmp_path, monkeypatch):
     (run / "assessment.yaml").write_text(yaml.safe_dump({"threats": THREATS}))
     (run / "scope.yaml").write_text(yaml.safe_dump(SCOPE))
     calls = []
-    monkeypatch.setattr(cli, "cmd_verify", lambda args, invocation=None: calls.append((args, invocation)) or 0)
+    monkeypatch.setattr(cli, "cmd_verify", lambda args, invocation=None, default_yes=False:
+                        calls.append((args, invocation, default_yes)) or 0)
     monkeypatch.setattr(cli, "_build_planner_factory",
                         lambda args, environ=None: (object, {"profile": args.profile, "model": "m",
                                                              "runtime": "fake", "auth": "none"}))
@@ -81,16 +84,18 @@ def env(tmp_path, monkeypatch):
 
 def test_defaults_lead_to_verify_with_high_and_above(env):
     rc, args, prompts, out = env.go(*DEFAULTS)
-    assert rc == 0 and len(prompts) == 7
+    assert rc == 0 and [p.split(" ")[0] for p in prompts] == ["Lowest", "Model"]
     assert "4 total · 3 dynamically verifiable · 1 static-only" in out
     assert "critical 1 · high 1 · medium 1" in out
-    assert "→ 2 findings selected, 2 of them dynamically verifiable" in out
+    assert "→ 2 findings to verify" in out
     assert (args.category, args.min_severity) == (None, "high")
-    assert args.scope == str(env.run / "scope.yaml") and args.target == BASE
+    assert args.scope == str(env.run / "scope.yaml") and f"scope   {env.run / 'scope.yaml'}" in out
+    assert args.target is None                                  # verify takes the scope's base_url
     assert args.identities is None and args.profile == "claude" and args.output == "./verification"
     assert not args.allow_intrusive and not args.append and not args.non_interactive and not args.yes
-    _, invocation = env.calls[0]
+    _, invocation, default_yes = env.calls[0]
     assert "--min-severity high" in invocation and invocation.endswith("--non-interactive --yes")
+    assert "--url" not in shlex.split(invocation) and not default_yes
 
 
 def test_the_overview_names_what_the_classes_present_need_before_the_run(env):
@@ -108,134 +113,154 @@ def test_the_overview_has_no_needs_line_when_no_class_present_needs_preparation(
 
 def test_no_question_asks_for_a_secret(env):
     _, _, prompts, _ = env.go(*DEFAULTS)
-    assert not any(word in p.lower() for p in prompts for word in ("password", "token", "secret", "key"))
+    assert not any(word in p.lower() for p in prompts for word in SECRET_WORDS)
 
 
 def test_text_from_the_assessment_cannot_control_the_terminal(env):
     env.assessment.write_text(yaml.safe_dump({"threats": [
         {**THREATS[0], "severity": "\x1b]0;owned\x07\x1b[2Jhigh‮"}]}))
-    rc, _, _, out = env.go("", "all", "", "", "", "", "")
+    rc, _, _, out = env.go("all", "")
     assert rc == 0 and "\x1b" not in out and "\x07" not in out and "‮" not in out
 
 
 def test_options_given_are_not_asked(env):
-    rc, args, prompts, _ = env.go("", "", extra=[
+    rc, args, prompts, _ = env.go(extra=[
         "--scope", str(env.run / "scope.yaml"), "--url", BASE + "/app", "--profile", "anthropic-api",
         "--min-severity", "medium", "--category", "xss,idor"])
-    assert rc == 0
-    assert [p.split(" ")[0] for p in prompts] == ["Identities", "Change"]
+    assert rc == 0 and prompts == []
     assert (args.target, args.profile, args.min_severity, args.category) == (
         BASE + "/app", "anthropic-api", "medium", "xss,idor")
 
 
-def test_invalid_answers_are_asked_again(env):
-    rc, args, prompts, out = env.go(
-        "bogus", "xss",                          # unknown class, then a valid one
-        "x", "all",                              # unknown severity, then all
-        str(env.run / "missing.yaml"), "",       # unreadable scope, then the proposed one
-        "https://evil.example", "",              # out of scope, then the base URL
-        "", "", "")
-    assert rc == 0 and len(prompts) == 11
-    assert "unknown class: bogus" in out and "cannot read the scope file" in out and "out of scope" in out
-    assert (args.category, args.min_severity, args.target) == ("xss", None, BASE)
+def test_neither_the_classes_nor_the_limits_are_asked(env):
+    rc, args, prompts, _ = env.go(*DEFAULTS, extra=["--cost-limit", "5"])
+    assert rc == 0 and not any(p.startswith(("Classes", "Change", "Cost")) for p in prompts)
+    assert args.category is None and "--cost-limit 5.0" in env.calls[0][1]
+
+
+def test_an_invalid_severity_is_asked_again(env):
+    rc, args, prompts, out = env.go("x", "all", "")
+    assert rc == 0 and len(prompts) == 3 and "choose critical, high, medium, low, or all" in out
+    assert args.min_severity is None and "→ 3 findings to verify" in out
 
 
 def test_an_empty_selection_is_asked_again(env):
-    rc, args, _, out = env.go("ssrf", "", "", "", "", "", "", "", "")
+    rc, args, _, out = env.go("", "medium", "", extra=["--category", "sqli"])
     assert rc == 0 and "nothing in this selection can be verified dynamically" in out
-    assert args.category is None
+    assert args.min_severity == "medium" and "→ 1 finding to verify" in out
 
 
-def test_without_a_scope_one_is_written_from_the_answers_and_used(env):
+# ── without a scope file: the typed URL alone (VER-001, VER-004) ─────────────
+
+def test_without_a_scope_file_the_typed_url_is_the_scope_and_nothing_is_written(env):
     (env.run / "scope.yaml").unlink()
-    rc, args, prompts, out = env.go(*NEW_SCOPE, "http://localhost:3000", "2099-12-31", "Tess Tester", "T-42",
-                                    "", "", "")
-    path = env.run / "scope.yaml"
-    assert rc == 0 and len(prompts) == 10 and path.is_file()
-    assert prompts[2].startswith("Scope file, or Enter to write one next to the assessment")
-    assert [p.split(" ")[0] for p in prompts[3:7]] == ["Target", "Authorisation", "Owner,", "Reference,"]
-    assert not any(word in p.lower() for p in prompts for word in ("password", "token", "secret", "key"))
-    scope = yaml.safe_load(path.read_text())
-    assert set(scope) == {"schema_version", "base_url", "schemes", "window", "owner", "allow_state_change"}
-    assert scope["base_url"] == "http://localhost:3000" and scope["schemes"] == ["http"]
-    assert scope["window"]["until"] == "2099-12-31T23:59:59Z" and scope["allow_state_change"] is False
-    assert scope["owner"] == {"name": "Tess Tester", "contact": None, "reference": "T-42"}
-    assert (args.scope, args.target) == (str(path), "http://localhost:3000") and f"wrote {path}" in out
-    assert not any(p.startswith("Target URL [") for p in prompts)       # the URL is not asked twice
-    assert str(path) in shlex.split(env.calls[0][1])
+    rc, args, prompts, out = env.go("", "http://localhost:3000", "")
+    assert rc == 0 and [p.split(" ")[0] for p in prompts] == ["Lowest", "Target", "Model"]
+    assert prompts[1] == "Target URL you are authorised to test: "
+    assert "tests only the host and port of the URL you enter, read-only" in out
+    assert (args.scope, args.target) == (None, "http://localhost:3000")
+    assert not (env.run / "scope.yaml").exists() and not (env.cwd / "scope.yaml").exists()
+    _, invocation, default_yes = env.calls[0]
+    parts = shlex.split(invocation)
+    assert "--scope" not in parts and parts[parts.index("--url") + 1] == "http://localhost:3000"
+    assert default_yes                                          # Enter confirms after a typed URL
+    assert not any(word in p.lower() for p in prompts for word in SECRET_WORDS)
 
 
-def test_the_window_of_a_new_scope_ends_today_by_default(env):
+def test_an_invalid_target_url_is_asked_again(env):
     (env.run / "scope.yaml").unlink()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rc, _, prompts, _ = env.go(*NEW_SCOPE, BASE, "", "Tess", "", "", "", "")
-    scope = yaml.safe_load((env.run / "scope.yaml").read_text())
-    assert rc == 0 and prompts[4].endswith(f"[{today}T23:59:59Z]: ")
-    assert scope["window"]["until"] == f"{today}T23:59:59Z" and scope["schemes"] == ["https"]
-    assert scope["owner"]["reference"] is None
-
-
-def test_invalid_answers_for_a_new_scope_are_asked_again(env):
-    (env.run / "scope.yaml").unlink()
-    rc, _, _, out = env.go(
-        *NEW_SCOPE,
+    rc, args, _, out = env.go(
+        "",
         "",                                       # no target
         "localhost:3000",                         # no scheme
         "ftp://files.example.com",                # not http(s)
+        "http://[::1",                            # not a URL
         "http://admin:pw@localhost:3000",         # credentials in the URL
         "http://localhost:3000/a/../b",           # ambiguous path
         "http://localhost:3000",
-        "2020-01-01", "tomorrow", "2099-01-01T12:00:00+02:00",   # past, unparseable, then valid
-        "", "Tess",                               # no owner, then one
-        "", "", "", "")
-    scope_text = (env.run / "scope.yaml").read_text()
-    assert rc == 0 and "admin:pw" not in scope_text
-    assert "a target URL is required" in out and out.count("absolute http or https URL") == 2
+        "")
+    assert rc == 0 and args.target == "http://localhost:3000"
+    assert "a target URL is required" in out and out.count("absolute http or https URL") == 3
     assert "leave credentials out of the URL" in out and "is ambiguous" in out
-    assert out.count("enter a future date or time") == 2 and "the owner is required" in out
-    assert yaml.safe_load(scope_text)["window"]["until"] == "2099-01-01T10:00:00Z"
+    assert "admin:pw" not in env.calls[0][1]
 
 
-def test_a_new_scope_never_replaces_a_file_or_follows_a_link(env, tmp_path, capsys):
-    elsewhere = tmp_path / "elsewhere.yaml"
+def test_a_url_given_as_option_is_used_without_asking_and_without_default_yes(env):
     (env.run / "scope.yaml").unlink()
-    (env.run / "scope.yaml").symlink_to(elsewhere)        # dangling: not proposed, and not written through
-    rc, _, _, _ = env.go(*NEW_SCOPE, BASE, "", "Tess", "")
-    assert rc == cli.EXIT_BLOCKED and env.calls == [] and not elsewhere.exists()
-    assert "already exists and was left unchanged" in capsys.readouterr().err
+    rc, args, prompts, _ = env.go(*DEFAULTS, extra=["--url", BASE])
+    assert rc == 0 and not any(p.startswith("Target") for p in prompts)
+    assert (args.scope, args.target) == (None, BASE) and env.calls[0][2] is False
 
 
-@pytest.mark.parametrize("at", range(4))
-def test_cancelling_a_new_scope_writes_and_contacts_nothing(env, capsys, at):
+def test_an_invalid_url_option_blocks_and_contacts_nothing(env, capsys):
     (env.run / "scope.yaml").unlink()
-    rc, _, _, _ = env.go(*NEW_SCOPE, *[BASE, "", "Tess", ""][:at], KeyboardInterrupt)
+    rc, _, _, _ = env.go(*DEFAULTS, extra=["--url", "http://admin:pw@localhost:3000"])
+    err = capsys.readouterr().err
+    assert rc == cli.EXIT_BLOCKED and env.calls == []
+    assert "leave credentials out of the URL" in err and "pw@" not in err
+
+
+@pytest.mark.parametrize("stop", [EOFError, KeyboardInterrupt])
+def test_cancelling_at_the_url_question_writes_and_contacts_nothing(env, capsys, stop):
+    (env.run / "scope.yaml").unlink()
+    rc, _, _, _ = env.go("", stop)
     assert rc == cli.EXIT_BLOCKED and env.calls == [] and not (env.run / "scope.yaml").exists()
     assert "cancelled; nothing was contacted" in capsys.readouterr().err
 
 
-def test_an_invalid_scope_file_is_refused_and_asked_again(env):
-    (env.run / "scope.yaml").write_text(yaml.safe_dump({"schema_version": 1, "base_url": None}))
-    rc, _, prompts, out = env.go("", "", "")      # accepts the proposed file, then input ends
-    assert rc == cli.EXIT_BLOCKED and env.calls == [] and "base_url" in out
-    assert prompts[2].startswith("Scope file [") and prompts[3].startswith("Scope file [")
+# ── a scope file given or found (VER-001) ────────────────────────────────────
+
+@pytest.mark.parametrize("scope, reason", [
+    ({**SCOPE, "window": {"from": "2026-01-01T00:00:00Z", "until": "2026-01-02T00:00:00Z"}},
+     "the authorisation window is not open now"),
+    ({"schema_version": 1, "base_url": None}, "base_url"),
+])
+def test_a_found_scope_file_that_cannot_be_used_blocks_and_is_not_replaced(env, capsys, scope, reason):
+    (env.run / "scope.yaml").write_text(yaml.safe_dump(scope))
+    before = (env.run / "scope.yaml").read_text()
+    rc, _, prompts, _ = env.go(*DEFAULTS)
+    err = capsys.readouterr().err
+    assert rc == cli.EXIT_BLOCKED and env.calls == [] and len(prompts) == 1
+    assert reason in err and "move it away to enter a target URL instead" in err
+    assert (env.run / "scope.yaml").read_text() == before
+
+
+def test_a_scope_file_given_that_cannot_be_used_blocks(env, capsys):
+    rc, _, _, _ = env.go(*DEFAULTS, extra=["--scope", str(env.run / "missing.yaml")])
+    err = capsys.readouterr().err
+    assert rc == cli.EXIT_BLOCKED and env.calls == [] and "cannot read the scope file" in err
+    assert "move it away" not in err
+
+
+def test_a_scope_file_in_the_working_directory_is_found(env):
+    (env.run / "scope.yaml").rename(env.cwd / "scope.yaml")
+    rc, args, _, _ = env.go(*DEFAULTS)
+    assert rc == 0 and args.scope == str(env.cwd / "scope.yaml")
+
+
+# ── identities (VER-010, VER-016, VER-028) ──────────────────────────────────
+
+def test_identities_are_asked_only_when_a_file_is_found(env):
+    _, _, prompts, _ = env.go(*DEFAULTS)
+    assert not any(p.startswith("Identities") for p in prompts)
 
 
 def test_missing_credentials_are_named_and_asked_again(env):
-    (env.run / "identities.yaml").write_text(yaml.safe_dump(
-        {"identities": [{"role": "alice", "method": "bearer", "auth": {"token_env": "ALICE_TOKEN"}}]}))
-    rc, args, _, out = env.go("", "", "", "", "", "none", "", "")
+    (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
+    rc, args, prompts, out = env.go("", "", "none", "")
     assert rc == 0 and "ALICE_TOKEN" in out and args.identities is None
-    assert "1 access-control finding(s) selected; without a test identity they cannot be confirmed" in out
+    assert prompts[1].startswith(f"Identities file (test roles; credentials come from environment variables), "
+                                 f"or 'none' [{env.run / 'identities.yaml'}]")
 
 
 def test_identities_are_used_and_values_never_shown(env):
-    (env.run / "identities.yaml").write_text(yaml.safe_dump(
-        {"identities": [{"role": "alice", "method": "bearer", "auth": {"token_env": "ALICE_TOKEN"}}]}))
-    rc, args, prompts, out = env.go(*DEFAULTS, environ={"ALICE_TOKEN": "s3cr3t-value"})
+    (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
+    rc, args, prompts, out = env.go("", "", "", environ={"ALICE_TOKEN": "s3cr3t-value"})
     assert rc == 0 and args.identities == str(env.run / "identities.yaml") and "roles: alice" in out
-    assert "cannot be confirmed" not in out
     assert "s3cr3t-value" not in out + "".join(prompts) + env.calls[0][1]
 
+
+# ── model, mode, output ──────────────────────────────────────────────────────
 
 def test_intrusive_mode_needs_its_own_yes(env):
     (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
@@ -260,16 +285,8 @@ def test_an_existing_report_is_not_replaced_without_asking(env, answers, append,
     (env.cwd / "verification").mkdir()
     (env.cwd / "verification" / "verification.yaml").write_text("{}")
     rc, args, prompts, _ = env.go(*DEFAULTS, *answers)
-    assert rc == 0 and prompts[7].startswith("A report already exists")
+    assert rc == 0 and prompts[2].startswith("A report already exists")
     assert (args.append, args.output) == (append, output)
-
-
-def test_limits_can_be_changed_and_are_checked(env):
-    rc, args, _, out = env.go(*DEFAULTS[:-1], "y", "abc", "-1", "5", "", "", "", "", "")
-    assert rc == 0 and "greater than 0" in out
-    assert args.cost_limit == 5.0
-    assert (args.max_calls, args.max_requests, args.max_attempts, args.max_duration, args.rate) == (None,) * 5
-    assert "--cost-limit 5.0" in env.calls[0][1]
 
 
 def test_an_invalid_limit_option_blocks_before_any_question(env, capsys):
@@ -288,11 +305,6 @@ def test_an_unavailable_profile_option_blocks_before_any_question(env, monkeypat
     assert "model profile unavailable" in capsys.readouterr().err
 
 
-def test_no_cost_question_for_a_subscription_profile(env):
-    _, _, prompts, out = env.go(*DEFAULTS[:5], "y", "", "", "", "", "", extra=["--profile", "codex-cli"])
-    assert "cost not reported" in out and not any(p.startswith("Cost") for p in prompts)
-
-
 def test_an_unavailable_profile_is_asked_again(env, monkeypatch):
     def factory(args, environ=None):
         if args.profile == "claude":
@@ -300,7 +312,7 @@ def test_an_unavailable_profile_is_asked_again(env, monkeypatch):
         return object, {}
 
     monkeypatch.setattr(cli, "_build_planner_factory", factory)
-    rc, args, _, out = env.go("", "", "", "", "", "", "bogus", "anthropic-api", "")
+    rc, args, _, out = env.go("", "", "bogus", "anthropic-api")
     assert rc == 0 and "CLI not found" in out and "choose one of" in out and args.profile == "anthropic-api"
 
 
@@ -312,10 +324,15 @@ def test_cancelling_contacts_nothing(env, capsys, stop, at):
     assert "cancelled; nothing was contacted" in capsys.readouterr().err
 
 
-def test_the_invocation_runs_the_same_settings(env):
-    (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
-    env.go("xss,idor", "medium", "", BASE + "/app", "", "anthropic-api", "y", "7.5", "", "", "", "", "", "y")
-    args, invocation = env.calls[0]
+@pytest.mark.parametrize("with_scope", [True, False])
+def test_the_invocation_runs_the_same_settings(env, with_scope):
+    if with_scope:
+        (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
+        env.go("medium", "anthropic-api", "y", extra=["--category", "xss,idor", "--cost-limit", "7.5"])
+    else:
+        (env.run / "scope.yaml").unlink()
+        env.go("medium", "http://localhost:3000", "anthropic-api", extra=["--category", "xss,idor"])
+    args, invocation, _ = env.calls[0]
     parts = shlex.split(invocation)
     again = cli.build_parser().parse_args(parts[1:])
     for attr in ("assessment", "scope", "target", "identities", "output", "category", "min_severity", "profile",
@@ -338,16 +355,16 @@ def test_non_interactive_names_what_is_missing(env, capsys):
     (env.run / "scope.yaml").unlink()
     rc, _, prompts, _ = env.go(interactive=False)
     assert rc == cli.EXIT_BLOCKED and prompts == [] and env.calls == []
-    assert not (env.run / "scope.yaml").exists() and not (env.cwd / "scope.yaml").exists()
-    assert "needs --scope and --profile" in capsys.readouterr().err
+    assert "needs --scope or --url and --profile" in capsys.readouterr().err
 
 
-def test_non_interactive_runs_verify_with_the_options(env):
-    rc, args, prompts, _ = env.go(interactive=False, extra=["--scope", str(env.run / "scope.yaml"),
-                                                            "--profile", "anthropic-api"])
+@pytest.mark.parametrize("target", [["--scope", "SCOPE"], ["--url", BASE]])
+def test_non_interactive_runs_verify_with_the_options(env, target):
+    target = [str(env.run / "scope.yaml") if t == "SCOPE" else t for t in target]
+    rc, args, prompts, _ = env.go(interactive=False, extra=[*target, "--profile", "anthropic-api"])
     assert rc == 0 and prompts == []
     assert args.non_interactive and args.output == "./verification" and args.min_severity is None
-    assert env.calls[0][1] is None
+    assert env.calls[0][1] is None and env.calls[0][2] is False
 
 
 @pytest.mark.parametrize("terminal, extra", [(False, []), (True, ["--non-interactive"]), (True, ["--ci"])])
@@ -366,8 +383,10 @@ def test_main_keeps_the_commands(env, capsys):
     assert "· scope ·" in capsys.readouterr().out
 
 
-def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, capsys):
-    """Answering the setup questions is not the confirmation of VER-002."""
+@pytest.mark.parametrize("typed", [False, True])
+def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, capsys, typed):
+    """Answering the setup questions is not the confirmation of VER-002; Enter
+    confirms there only when the target URL was typed in this run."""
     from appsec_verifier.tools import httpx_transport
 
     monkeypatch.undo()
@@ -390,8 +409,12 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args, environ=None: (Planner, info))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: no_network)
     monkeypatch.setattr(cli, "confirm_authorization", confirm)
-    rc, _, _, _ = env.go("access-control", *DEFAULTS[1:])
+    if typed:
+        (env.run / "scope.yaml").unlink()
+        rc, _, _, _ = env.go("", BASE, "", extra=["--category", "access-control"])
+    else:
+        rc, _, _, _ = env.go(*DEFAULTS, extra=["--category", "access-control"])
     out = capsys.readouterr()
-    assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False}]
+    assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False, "default_yes": typed}]
     assert "The same run without questions" in out.out and "not authorised to proceed" in out.err
     assert not (env.cwd / "verification").exists()

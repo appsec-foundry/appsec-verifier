@@ -28,19 +28,23 @@ optional hardening.
 
 ## Target the right system
 
-- **VER-001: Require an explicit authorisation scope.** Every run names a scope
-  file that lists the authorised target: base URL, host, allowed ports, allowed
-  path prefixes, an authorisation window (from/until), and a responsible owner.
-  The Verifier contacts only destinations inside that scope. Anything outside it
+- **VER-001: Require an explicit authorisation scope.** Every run names its
+  scope: a scope file, or the target URL alone. A scope file lists the
+  authorised target (base URL, hosts, allowed ports, allowed path prefixes), an
+  authorisation window (from/until), and a responsible owner; it is needed for
+  anything beyond a single host and for write requests (VER-030). The URL alone
+  authorises only its scheme, host and port, read-only, for that run. The
+  Verifier contacts only destinations inside the scope. Anything outside it
   — a different host, port, scheme, or path prefix, or a time outside the window
   — is refused, not attempted. There is no implicit or default target.
 
 - **VER-002: Confirm before the first request.** Before it sends anything to the
   target, the Verifier prints the resolved scope (target, ports, path prefixes,
   window, owner) and asks for one explicit confirmation. Silence, a timeout, or
-  an unrelated answer does not count as confirmation. In non-interactive or CI
-  use, a single explicit flag stands in for the prompt and is recorded in the
-  report; nothing else suppresses the question.
+  an unrelated answer does not count as confirmation; Enter confirms only in a
+  guided run in which the operator typed the target URL (VER-031). In
+  non-interactive or CI use, a single explicit flag stands in for the prompt
+  and is recorded in the report; nothing else suppresses the question.
 
 - **VER-003: Verify the target before testing.** The Verifier first checks that
   the target is reachable and, where possible, that its version or commit matches
@@ -315,19 +319,19 @@ optional hardening.
   `verify` command stays unguided. It reads the assessment offline (VER-005,
   VER-006), shows how many findings it holds, how many are dynamically
   verifiable, and how they split by weakness class and severity, and then asks
-  for the settings of the run, each with a default the operator can accept:
-  - **Selection** (VER-026): the weakness classes, by default every verifiable
-    class present, and a severity floor, by default high.
-  - **Target** (VER-001, VER-004): the scope file and the URL, by default the
-    scope's base URL. Neither is taken from the assessment. Without a scope file
-    the run asks for target, window end, owner and reference and writes a scope
-    from these answers only; target and owner have no default, and the guided
-    run never widens a scope.
-  - **Identities** (VER-016, VER-028): the test identities to use. Missing
-    credentials are pointed out, and so are access-control findings that cannot
-    be confirmed for lack of two identities (VER-010).
-  - **Model and budget** (VER-023, VER-015): the profile and the run limits, by
-    default the documented ones.
+  only for the settings that have no usable default:
+  - **Selection** (VER-026): a severity floor, by default high. Every
+    verifiable class present is tested unless an option narrows them.
+  - **Target** (VER-001, VER-004): a scope file given or found next to the
+    assessment or in the working directory is used as it is; one that cannot be
+    used stops the run. Without one the run asks for the target URL, which has
+    no default, and the URL alone is the scope. Neither comes from the
+    assessment; the guided run writes no scope and never widens one.
+  - **Identities** (VER-016, VER-028): asked only when an identities file is
+    found. Missing credentials are pointed out, and so are access-control
+    findings that cannot be confirmed for lack of two identities (VER-010).
+  - **Model and budget** (VER-023, VER-015): the profile; the run limits are the
+    documented ones unless options change them.
   - **Mode and output** (VER-030, VER-020, VER-027): safe mode and the
     standalone report by default. Intrusive mode is offered only where the scope
     allows state change and needs its own explicit yes. An existing report is
@@ -338,12 +342,14 @@ optional hardening.
   run never asks for a secret value. Before anything is contacted it shows the
   resolved settings with the equivalent non-interactive invocation, then asks
   for the confirmation of VER-002; answering the setup questions is not that
-  confirmation. Cancelling at any point contacts nothing.
+  confirmation. Only when the operator typed the target URL does Enter confirm.
+  Cancelling at any point contacts nothing.
 
   An explicit flag turns the guided run off for CI, and it is also off when no
   terminal is attached, so an unattended run never waits for input. All
   settings then come from the invocation and documented defaults; a missing
-  scope, profile, or confirmation blocks the run and names what is missing.
+  scope or URL, profile, or confirmation blocks the run and names what is
+  missing.
 
 - **VER-032: Check inputs and access before the first model call.** Before a run
   asks a model for a step, it checks the assessment's structure (VER-005), that

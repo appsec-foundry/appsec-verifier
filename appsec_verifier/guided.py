@@ -1,56 +1,54 @@
 """Guided run from the assessment alone (VER-031).
 
 `appsec-verifier <assessment>` reads the assessment offline, shows what it
-holds, and asks for the settings of the run, each with a default. Answers pass
-the same checks as the matching `verify` options and are re-asked when invalid;
-options already given are used as given. The settings are then handed to
-`verify`, which shows the run settings, the equivalent non-interactive
-invocation, and asks for the one confirmation of VER-002.
+holds, and asks only for what has no usable default: the severity floor, the
+target URL when there is no scope file, an identities file when one is found,
+and the model profile. Answers pass the same checks as the matching `verify`
+options and are re-asked when invalid; options already given are used as
+given. The settings are then handed to `verify`, which shows them with the
+equivalent non-interactive invocation and asks for the one confirmation of
+VER-002.
 
-The dialog contacts nothing, never asks for a secret value (credentials stay in
-environment variables, VER-016), and never widens a scope. Without a scope file
-it asks for the target, the end of the window, the owner and a reference, and
-writes a scope next to the assessment that holds only these answers, never over
-an existing file (VER-001, VER-004). Text from the assessment is untrusted (VER-005) and is
-shown without control characters. Without a terminal, or with
---non-interactive, nothing is asked: the run takes its settings from the
-invocation and blocks on a missing scope or profile.
+A scope file given or found next to the assessment or in the working directory
+is used as it is. Without one the run takes the target URL the operator types,
+and the scope is that URL's host and port, read-only, for this run only
+(VER-001, VER-004); then Enter at the confirmation proceeds. The dialog
+contacts nothing, writes no file, never asks for a secret value (credentials
+stay in environment variables, VER-016), and never widens a scope. Text from
+the assessment is untrusted (VER-005) and is shown without control characters.
+Without a terminal, or with --non-interactive, nothing is asked: the run takes
+its settings from the invocation and blocks on a missing target or profile.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import sys
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import yaml
 
 from . import cli
-from .agent import DEFAULT_PROFILE, PROFILES, SUBSCRIPTION_PROFILES
+from .agent import DEFAULT_PROFILE, PROFILES
 from .limits import Limits
-from .loader import list_categories
 from .preflight import printable as clean
 from .scope import ScopeGuard
-from .scope.guard import _parse_iso
 from .term_style import Style
 
 SEVERITY_FLOORS = ("critical", "high", "medium", "low")
 DEFAULT_FLOOR = "high"
 DEFAULT_OUTPUT = "./verification"
 
-# (args attribute, verify option, Limits field, label, type)
+# (args attribute, verify option, Limits field)
 _LIMITS = (
-    ("cost_limit", "--cost-limit", "cost_limit_usd", "Cost ceiling, USD", float),
-    ("max_calls", "--max-calls", "max_calls", "Model calls for the run", int),
-    ("max_requests", "--max-requests", "max_requests", "Requests to the target", int),
-    ("max_attempts", "--max-attempts", "max_attempts", "Agent steps per finding", int),
-    ("max_duration", "--max-duration", "max_duration_s", "Run duration, seconds", float),
-    ("rate", "--rate", "rate_rps", "Requests per second (0: no rate limit)", float),
+    ("cost_limit", "--cost-limit", "cost_limit_usd"),
+    ("max_calls", "--max-calls", "max_calls"),
+    ("max_requests", "--max-requests", "max_requests"),
+    ("max_attempts", "--max-attempts", "max_attempts"),
+    ("max_duration", "--max-duration", "max_duration_s"),
+    ("rate", "--rate", "rate_rps"),
 )
 
 
@@ -91,7 +89,8 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
     if not interactive:
         args.non_interactive = True
         args.output = args.output or DEFAULT_OUTPUT
-        missing = [flag for flag, value in (("--scope", args.scope), ("--profile", args.profile)) if not value]
+        missing = [flag for flag, value in (("--scope or --url", args.scope or args.target),
+                                            ("--profile", args.profile)) if not value]
         if missing:
             _err(f"a non-interactive run needs {' and '.join(missing)}; nothing was contacted.")
             return cli.EXIT_BLOCKED
@@ -126,20 +125,16 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         found = _ask_scope(d, args, assessment, cwd)
         if found is None:
             return cli.EXIT_BLOCKED
-        scope, guard = found
-        _ask_target(d, args, scope, guard)
-        identities = _ask_identities(d, args, guard, environ, assessment, cwd)
-        if identities is None:
+        scope, guard, typed = found
+        if _ask_identities(d, args, guard, environ, assessment, cwd) is None:
             return cli.EXIT_BLOCKED
-        _note_access_control(d, args, plans, identities)
         _ask_profile(d, args)
-        _ask_limits(d, args)
         _ask_mode(d, args, scope)
         _ask_output(d, args)
     except Cancelled:
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
-    return cli.cmd_verify(args, invocation=equivalent_invocation(args))
+    return cli.cmd_verify(args, invocation=equivalent_invocation(args), default_yes=typed)
 
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
@@ -173,24 +168,9 @@ def overview(assessment: Path, plans) -> str:
 
 
 def _ask_selection(d: Dialog, args, plans) -> None:
-    ask_classes = not any((args.category, args.cls, args.cwe, args.only))
+    """Only the severity floor is asked; the classes are all present unless --category or --class says otherwise."""
     ask_floor = not any((args.severity, args.min_severity, args.only))
-    present = sorted({p.cls for p in plans if p.status == "dynamic"})
-    known = set(list_categories())
     while True:
-        if ask_classes:
-            while True:
-                answer = d.question(f"Classes to verify ({', '.join(present)}, or 'all')", "all")
-                chosen = {c.strip().lower() for c in answer.split(",") if c.strip()}
-                if chosen == {"all"}:
-                    args.category = None
-                    break
-                unknown = sorted(chosen - known)
-                if chosen and not unknown:
-                    args.category = ",".join(sorted(chosen))
-                    break
-                d.out(f"  unknown class: {', '.join(clean(u) for u in unknown) or '—'}; "
-                      f"choose from {', '.join(sorted(known))}")
         if ask_floor:
             while True:
                 answer = d.question(f"Lowest severity to verify ({', '.join(SEVERITY_FLOORS)}, or 'all')",
@@ -199,10 +179,9 @@ def _ask_selection(d: Dialog, args, plans) -> None:
                     args.min_severity = None if answer == "all" else answer
                     break
                 d.out("  choose critical, high, medium, low, or all")
-        sel = cli._select(args, plans)
-        dyn = sum(1 for p in sel if p.status == "dynamic")
-        d.out(f"  → {len(sel)} findings selected, {dyn} of them dynamically verifiable")
-        if dyn or not (ask_classes or ask_floor):
+        dyn = sum(1 for p in cli._select(args, plans) if p.status == "dynamic")
+        d.out(f"  → {dyn} finding{'' if dyn == 1 else 's'} to verify")
+        if dyn or not ask_floor:
             return
         d.out("  nothing in this selection can be verified dynamically; choose again")
 
@@ -238,144 +217,46 @@ def load_scope(path) -> tuple[dict | None, ScopeGuard | None, list[str]]:
     return scope, guard, []
 
 
-_SCOPE_HEADER = """\
-# Authorisation scope for AppSec Verifier (VER-001), written by the guided run
-# from your answers. The Verifier contacts nothing outside it and never widens it.
-
-"""
-
-_SCOPE_MORE = """
-# More settings, described under "Scope file" in docs/cli.md of
-# https://github.com/appsec-foundry/appsec-verifier:
-# hosts: [app.test.example.com, api.test.example.com]   all target hosts; replaces the host of base_url
-# ports: [443, 8443]              all target ports; replaces the port of base_url
-# path_prefixes: [/api/]          default: the whole host
-# deny_paths: [/admin/]           paths that are never contacted
-# networks: [10.0.0.0/8]          private networks the host names may resolve to
-# Set allow_state_change to true only for a disposable instance: it allows
-# marked write requests, together with --allow-intrusive.
-"""
-
-
-def _target_problem(url: str) -> str | None:
-    """Why `url` cannot be the target of a new scope, or None."""
-    if not url:
-        return "a target URL is required; it is never taken from the assessment"
-    if clean(url) != url or any(c.isspace() for c in url):
-        return "the URL contains spaces or control characters"
-    parts = urlsplit(url)
-    scheme = parts.scheme.lower()
-    if scheme not in ("http", "https") or not parts.hostname:
-        return "enter an absolute http or https URL with a host, e.g. https://app.test.example.com"
-    if parts.username is not None or parts.password is not None:
-        return "leave credentials out of the URL; test identities take theirs from environment variables"
-    decision = ScopeGuard({"base_url": url, "schemes": [scheme]}).authorize(url, "target")
-    return None if decision.allowed else clean(decision.reason)
-
-
-def _window_end(answer: str) -> datetime | None:
-    """The answer as a time in UTC; a date alone means the end of that day."""
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", answer):
-        answer += "T23:59:59Z"
-    end = _parse_iso(answer)
-    return end.astimezone(timezone.utc) if end else None
-
-
-def _utc(moment: datetime) -> str:
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _create_scope(d: Dialog, args, path: Path):
-    """Ask for the target, the end of the window, the owner and a reference, and
-    write them as the scope at `path`, never over an existing file. Only the end
-    of the window has a default, so the scope holds what the operator entered and
-    nothing from the assessment (VER-001, VER-004, VER-031)."""
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    while True:
-        url = d.question("Target URL you are authorised to test")
-        problem = _target_problem(url)
-        if problem is None:
-            break
-        d.out(f"  {problem}")
-    while True:
-        until = _window_end(d.question("Authorisation window ends (UTC)", now.strftime("%Y-%m-%dT23:59:59Z")))
-        if until and until > now:
-            break
-        d.out("  enter a future date or time, e.g. 2026-11-30 or 2026-11-30T18:00:00Z")
-    while not (owner := clean(d.question("Owner, the person responsible for this test")).strip()):
-        d.out("  the owner is required; the report records it")
-    reference = clean(d.question("Reference, e.g. ticket or approval (optional)")).strip() or None
-    scope = {"schema_version": 1, "base_url": url, "schemes": [urlsplit(url).scheme.lower()],
-             "window": {"from": _utc(now), "until": _utc(until)},
-             "owner": {"name": owner, "contact": None, "reference": reference},
-             "allow_state_change": False}
-    errors = cli._validate_scope(scope)
-    if errors:
-        _err("the answers do not make a valid scope; nothing was written or contacted:\n"
-             + "\n".join(f"  - {clean(e)}" for e in errors))
-        return None
-    try:
-        with open(path, "x", encoding="utf-8") as fh:
-            fh.write(_SCOPE_HEADER + yaml.safe_dump(scope, sort_keys=False, allow_unicode=True) + _SCOPE_MORE)
-    except FileExistsError:
-        _err(f"\n{path} already exists and was left unchanged. Nothing was contacted.")
-        return None
-    except OSError as exc:
-        _err(f"\ncannot write {path}: {type(exc).__name__}. Nothing was contacted.")
-        return None
-    scope, guard, errors = load_scope(path)
-    if errors:
-        _err(f"\n{path} cannot be used:\n" + "\n".join(f"  - {clean(e)}" for e in errors))
-        return None
-    args.scope, args.target = str(path), url
-    d.out(f"  wrote {path}\n"
-          f"    target  {url} (whole host, read-only)\n"
-          f"    window  {scope['window']['from']} → {scope['window']['until']}\n"
-          f"    owner   {owner}")
-    return scope, guard
-
-
 def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
+    """The scope file given or found, used as it is, or else the scope of the
+    target URL the operator types (VER-001, VER-004). Returns the scope, its
+    guard, and whether the URL was typed here; None when a scope file cannot be used."""
+    given = bool(args.scope)
+    if not given:
+        found = _candidates("scope.yaml", assessment.parent, cwd)
+        if found:
+            args.scope = str(found[0])
+            d.out(f"  scope   {found[0]}")
     if args.scope:
         scope, guard, errors = load_scope(args.scope)
         if errors:
-            _err("scope file is invalid:\n" + "\n".join(f"  - {clean(e)}" for e in errors))
+            _err(f"the scope file {args.scope} cannot be used; nothing was contacted:\n"
+                 + "\n".join(f"  - {clean(e)}" for e in errors)
+                 + "\ncorrect the file, e.g. its window" + ("." if given else ", or move it away to enter "
+                                                                         "a target URL instead."))
             return None
-        return scope, guard
-    found = _candidates("scope.yaml", assessment.parent, cwd)
-    if not found:
-        d.out("No scope file found next to the assessment or in the working directory. The scope file "
-              "authorises this test: target, time window, and owner (VER-001).")
-    while True:
-        if found:
-            answer = d.question("Scope file", str(found[0]))
-        else:
-            answer = d.question("Scope file, or Enter to write one next to the assessment")
-        if not answer:
-            return _create_scope(d, args, assessment.parent / "scope.yaml")
-        scope, guard, errors = load_scope(answer)
-        if not errors:
-            args.scope = answer
-            return scope, guard
-        for e in errors:
-            d.out(f"  {clean(e)}")
-
-
-def _ask_target(d: Dialog, args, scope: dict, guard: ScopeGuard) -> None:
+        return scope, guard, False
     if args.target:
-        return
+        scope, errors = cli.url_scope(args.target)
+        if errors:
+            _err(f"--url cannot be used: {clean(errors[0])}; nothing was contacted.")
+            return None
+        return scope, ScopeGuard(scope), False
+    d.out("No scope.yaml next to the assessment or in the working directory: the run tests only the host "
+          "and port of the URL you enter, read-only (VER-001).")
     while True:
-        answer = d.question("Target URL", str(scope.get("base_url")))
-        decision = guard.authorize(answer, "target")
-        if decision.allowed:
-            args.target = answer
-            return
-        d.out(f"  out of scope: {clean(decision.reason)}")
+        url = d.question("Target URL you are authorised to test")
+        scope, errors = cli.url_scope(url)
+        if not errors:
+            args.target = url
+            return scope, ScopeGuard(scope), True
+        d.out(f"  {clean(errors[0])}")
 
 
 # ── identities (VER-010, VER-016, VER-028) ──────────────────────────────────
 
 def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Path, cwd: Path):
+    """The identities given, or a found identities.yaml unless the operator answers 'none'; [] without one."""
     if args.identities:
         identities, errors = cli._check_identities(args.identities, guard, environ)
         if errors:
@@ -383,10 +264,13 @@ def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Pat
                  + "\n".join(f"  - {clean(e)}" for e in errors))
             return None
         return identities
-    found = _candidates("identities.yaml", Path(args.scope).parent, assessment.parent, cwd)
+    dirs = [Path(args.scope).parent] if args.scope else []
+    found = _candidates("identities.yaml", *dirs, assessment.parent, cwd)
+    if not found:
+        return []
     while True:
         answer = d.question("Identities file (test roles; credentials come from environment variables), "
-                            "or 'none'", str(found[0]) if found else "none")
+                            "or 'none'", str(found[0]))
         if answer.lower() == "none":
             return []
         identities, errors = cli._check_identities(answer, guard, environ)
@@ -399,16 +283,7 @@ def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Pat
         d.out("  set missing variables and start again, or choose another file or 'none'")
 
 
-def _note_access_control(d: Dialog, args, plans, identities) -> None:
-    """Without a test identity only the anonymous caller is left, and an
-    access-control finding needs two identities to be confirmed (VER-010)."""
-    n = sum(1 for p in cli._select(args, plans) if p.status == "dynamic" and p.cls == "access-control")
-    if n and not identities:
-        d.out(f"  note: {n} access-control finding(s) selected; without a test identity they cannot be "
-              "confirmed (VER-010)")
-
-
-# ── model, limits, mode, output (VER-015, VER-020, VER-023, VER-027, VER-030) ──
+# ── model, mode, output (VER-015, VER-020, VER-023, VER-027, VER-030) ──
 
 def _ask_profile(d: Dialog, args) -> None:
     if args.profile:
@@ -428,32 +303,7 @@ def _ask_profile(d: Dialog, args) -> None:
 
 
 def _limit_overrides(args) -> dict:
-    return {field: getattr(args, attr) for attr, _, field, _, _ in _LIMITS}
-
-
-def _ask_limits(d: Dialog, args) -> None:
-    subscription = args.profile in SUBSCRIPTION_PROFILES
-    limits = Limits.load(_limit_overrides(args))
-    cost = "cost not reported" if subscription else f"cost ≤ ${limits.cost_limit_usd:.2f}"
-    d.out(f"Run limits: {cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} requests · "
-          f"≤ {limits.max_attempts} steps per finding · ≤ {int(limits.max_duration_s)} s · {limits.rate_rps} rps")
-    if not d.yes("Change the run limits?"):
-        return
-    for attr, _, field, label, kind in _LIMITS:
-        if getattr(args, attr) is not None or (attr == "cost_limit" and subscription):
-            continue
-        current = getattr(limits, field)
-        while True:
-            answer = d.question(label, str(current))
-            try:
-                value = kind(answer)
-                Limits.load({**_limit_overrides(args), field: value})
-            except ValueError as exc:
-                d.out(f"  {clean(exc)}")
-                continue
-            if value != current:
-                setattr(args, attr, value)
-            break
+    return {field: getattr(args, attr) for attr, _, field in _LIMITS}
 
 
 def _ask_mode(d: Dialog, args, scope: dict) -> None:
@@ -488,10 +338,11 @@ def _free_dir(path: Path) -> str:
 
 # ── equivalent invocation ────────────────────────────────────────────────────
 
-_VALUE_OPTIONS = (("identities", "--identities"), ("source", "--source"), ("output", "--output"),
+_VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--identities"),
+                  ("source", "--source"), ("output", "--output"),
                   ("category", "--category"), ("cls", "--class"), ("severity", "--severity"),
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
-                  *((attr, flag) for attr, flag, *_ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
+                  *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
                   ("screenshots", "--screenshots"))
 _FLAGS = (("print_results", "--print"), ("append", "--append"), ("annotate", "--annotate"),
           ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"), ("read_only", "--read-only"),
@@ -501,8 +352,7 @@ _FLAGS = (("print_results", "--print"), ("append", "--append"), ("annotate", "--
 def equivalent_invocation(args) -> str:
     """The `verify` command line that runs the same settings without questions,
     for CI: --non-interactive with --yes standing in for the confirmation (VER-002)."""
-    parts = ["appsec-verifier", "verify", "--assessment", str(args.assessment), "--scope", str(args.scope),
-             "--url", str(args.target)]
+    parts = ["appsec-verifier", "verify", "--assessment", str(args.assessment)]
     for attr, flag in _VALUE_OPTIONS:
         value = getattr(args, attr, None)
         if value is not None:

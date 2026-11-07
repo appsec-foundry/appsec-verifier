@@ -178,6 +178,30 @@ def _read_scope(path: Path) -> tuple[dict | None, list[str]]:
     return scope, _validate_scope(scope)
 
 
+def url_scope(url: str | None) -> tuple[dict | None, list[str]]:
+    """Without a scope file, the scope of the target URL alone (VER-001): its scheme, host and port, the
+    whole host, read-only. It lasts for this run, so it has no window and no owner. The URL comes from the
+    operator, never from the assessment (VER-004)."""
+    from urllib.parse import urlsplit
+
+    if not url:
+        return None, ["a target URL is required; it is never taken from the assessment"]
+    if printable(url) != url or any(c.isspace() for c in url):
+        return None, ["the URL contains spaces or control characters"]
+    try:
+        parts = urlsplit(url)
+        scheme, host = parts.scheme.lower(), parts.hostname
+    except ValueError:
+        scheme, host = "", None
+    if scheme not in ("http", "https") or not host:
+        return None, ["enter an absolute http or https URL with a host, e.g. https://app.test.example.com"]
+    if parts.username is not None or parts.password is not None:
+        return None, ["leave credentials out of the URL; test identities take theirs from environment variables"]
+    scope = {"schema_version": 1, "base_url": url, "schemes": [scheme], "allow_state_change": False}
+    decision = ScopeGuard(scope).authorize(url, "target")
+    return (scope, []) if decision.allowed else (None, [printable(decision.reason)])
+
+
 def cmd_scope(args: argparse.Namespace) -> int:
     scope, errors = _read_scope(Path(args.scope))
     if errors:
@@ -318,21 +342,29 @@ def _build_planner_factory(args, environ=None, *, check_access: bool = True):
         raise ProfileError(f"{profile}: {exc}") from exc
 
 
-def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
+def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_yes: bool = False) -> int:
     """Verify the selected findings. `invocation`, from the guided run, is the
-    equivalent non-interactive command line, shown before the confirmation."""
+    equivalent non-interactive command line, shown before the confirmation;
+    `default_yes` is set by the guided run when the operator typed the target
+    URL in it, so Enter at the confirmation proceeds (VER-002)."""
     assessment = Path(args.assessment)
     if not assessment.is_file():
         print(f"assessment not found: {assessment}", file=sys.stderr)
         return EXIT_BLOCKED
-    scope_path = Path(args.scope)
-    scope, errors = _read_scope(scope_path)
-    errors = errors or _check_proxy(scope, os.environ)
-    if errors:
-        print("scope file is invalid:", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
-        return EXIT_BLOCKED
+    if args.scope:
+        scope_path = Path(args.scope)
+        scope, errors = _read_scope(scope_path)
+        errors = errors or _check_proxy(scope, os.environ)
+        if errors:
+            print("scope file is invalid:", file=sys.stderr)
+            for e in errors:
+                print(f"  - {e}", file=sys.stderr)
+            return EXIT_BLOCKED
+    else:
+        scope_path = None
+        scope, errors = url_scope(args.target)
+        if errors:
+            return _blocked("without --scope, the run needs a valid --url; nothing was contacted:", errors)
 
     guard = ScopeGuard(scope)
     win = guard.within_window()
@@ -406,7 +438,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None) -> int:
         print(f"\nThe same run without questions, e.g. in CI:\n  {invocation}")
 
     if contact:
-        conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
+        conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes,
+                                     default_yes=default_yes)
         if not conf.confirmed:
             print(f"\nnot authorised to proceed: {conf.reason}", file=sys.stderr)
             return EXIT_BLOCKED
@@ -517,13 +550,19 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     else:
         add(_assessment_check(doc, plans))
 
-    scope, guard, errors = load_scope(args.scope)
+    if args.scope:
+        scope, guard, errors = load_scope(args.scope)
+    else:
+        scope, errors = url_scope(args.target)
+        guard = ScopeGuard(scope) if scope else None
     target = args.target or (scope or {}).get("base_url")
     if errors:
         add(Check("Scope", "fail", "; ".join(errors)))
     elif not (decision := guard.authorize(target, "target")).allowed:
         add(Check("Scope", "fail", f"{target} is out of scope: {decision.reason}"))
         guard = None
+    elif not args.scope:
+        add(Check("Scope", "ok", f"no scope file: only {target}'s host and port, read-only"))
     else:
         window = scope.get("window") or {}
         add(Check("Scope", "ok", f"{target} in scope · window until {window.get('until')} · "
@@ -737,7 +776,8 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
     rows = [
         ("Assessment", str(assessment)),
         ("Target", f"{target} ({'will contact' if contact else 'not contacted yet'})"),
-        ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"),
+        ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"
+         if "owner" in scope else f"no scope file: only {target}'s host and port, read-only"),
         ("Selection", f"{len(sel)} findings · {dyn} dynamic · classes: {', '.join(classes) or '—'}"),
         ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth", "check"))
                                if v)),
@@ -878,7 +918,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     vf = sub.add_parser(
         "verify", help="verify selected findings against a target (safe mode by default)",
-        usage="appsec-verifier verify --assessment FILE --scope FILE [options]",
+        usage="appsec-verifier verify --assessment FILE (--scope FILE | --url URL) [options]",
         hint="To be asked for the settings instead: appsec-verifier ASSESSMENT\n"
              "Options and examples: appsec-verifier verify --help",
         description=_wrap("Tests the selected findings against the target and writes a report. Before the first "
@@ -894,7 +934,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pf = sub.add_parser(
         "preflight", help="check assessment, scope, target, logins and model; verifies nothing",
-        usage="appsec-verifier preflight --assessment FILE --scope FILE [options]",
+        usage="appsec-verifier preflight --assessment FILE (--scope FILE | --url URL) [options]",
         description=_wrap("Checks the assessment, scope, proxy, identities, target, logins and model, and tests "
                           "no finding. The target and the logins are contacted only after one confirmation."),
         epilog="Examples:\n"
@@ -905,7 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
                f"    appsec-verifier preflight {_FILES} \\\n"
                "      --identities identities.yaml --profile claude")
     pf.add_argument("--assessment", metavar="FILE", required=True, help="security-assessment.yaml to check")
-    pf.add_argument("--scope", metavar="FILE", required=True, help="scope file")
+    pf.add_argument("--scope", metavar="FILE", help="scope file; without it, --url alone")
     pf.add_argument("--url", "--target", dest="target", metavar="URL",
                     help="URL to check (default: base_url of the scope); must lie inside the scope")
     pf.add_argument("--identities", metavar="FILE", help="test accounts by role; each login is tried once")
@@ -965,14 +1005,15 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     if guided:
         src.add_argument("assessment", metavar="ASSESSMENT", help="security-assessment.yaml from AppSec Analyzer")
         src.add_argument("--scope", metavar="FILE", help="scope file: what may be contacted, until when, by whom "
-                                                         "(asked when missing)")
+                                                         "(default: scope.yaml next to the assessment or here)")
     else:
         src.add_argument("--assessment", metavar="FILE", required=True,
                          help="security-assessment.yaml from AppSec Analyzer")
-        src.add_argument("--scope", metavar="FILE", required=True,
+        src.add_argument("--scope", metavar="FILE",
                          help="scope file: what may be contacted, until when, by whom")
     src.add_argument("--url", "--target", dest="target", metavar="URL",
-                     help="URL to start from (default: base_url of the scope); must lie inside the scope")
+                     help="URL to start from (default: base_url of the scope); must lie inside the scope. "
+                          "Without --scope, only this URL's host and port are contacted, read-only")
     src.add_argument("--identities", metavar="FILE",
                      help="test accounts by role; their credentials come from environment variables")
     src.add_argument("--source", metavar="DIR", help="checkout of the application's source code, read by the agent")

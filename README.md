@@ -26,8 +26,11 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
    ```
 
-2. Write a scope file. It is your authorisation: the Verifier contacts nothing
-   outside it. For a test instance on your own machine:
+2. Optional: write a scope file. Without one, the guided run asks for the
+   target URL and tests only that URL's host and port, read-only. A scope file
+   authorises more, such as several hosts, a proxy or write requests, and
+   records the test period and who is responsible. The Verifier contacts
+   nothing outside it. For a test instance on your own machine:
 
    ```yaml
    # scope.yaml
@@ -37,9 +40,6 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    window: {from: "2026-11-01T00:00:00Z", until: "2026-11-30T23:59:59Z"}  # your test period
    owner: {name: Your Name}   # who is responsible for the test
    ```
-
-   If you skip this step, the guided run asks for the target, the end of the
-   test window and your name, and writes `scope.yaml` next to the assessment.
 
 3. Optional: add test accounts in `identities.yaml`. Access-control findings
    need two of them. The file names environment variables, never the passwords
@@ -52,8 +52,9 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    ```
 
    It shows how many findings can be tested and what they need, such as test
-   accounts or the browser, asks for the settings (Enter keeps the default), and
-   asks once more before it sends the first request.
+   accounts or the browser, asks for the few settings without a default (Enter
+   keeps a default shown in brackets), and asks once more before it sends the
+   first request.
 
 5. Read the report in `./verification/verification.md`.
 
