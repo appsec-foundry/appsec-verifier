@@ -311,6 +311,18 @@ optional hardening.
   settings then come from the invocation and documented defaults; a missing
   scope, profile, or confirmation blocks the run and names what is missing.
 
+- **VER-032: Check inputs and access before the first model call.** Before a run
+  asks a model for a step, it checks the assessment's structure (VER-005), that
+  the target answers through the declared proxy (VER-003, VER-029), that every
+  identity obtains a session and, where it names a check URL, is accepted there
+  (VER-028), and that the model profile is usable, for an API profile by one
+  metadata request. A failed check blocks the run and names its cause, never a
+  secret or raw error (VER-016); what a check cannot prove is said. Checks that
+  contact the target follow the confirmation of VER-002, and each login is tried
+  once. A separate command runs the same checks without verifying, offline if
+  asked; only there, on explicit request and with its own limit, one fixed
+  prompt without target data tests the model's answer.
+
 - **VER-024: Explain what it could and could not do.** When a finding class is
   unsupported, a target is unreachable, a required test identity is missing, or a
   limit was hit, the report says so plainly per finding, so an unverified finding
