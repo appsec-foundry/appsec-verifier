@@ -5,8 +5,9 @@ It checks the destination at the moment of use — scheme, host, port, path — 
 classifies it by purpose: the target attack surface, an SSO/auth host, the SSRF
 callback listener, or the declared proxy. Anything not covered is refused.
 Target and authentication requests both need a scheme from the scope's
-`schemes` (default https), so credentials never go out over plain http unless
-the scope allows it (VER-016, VER-028). The SSRF callback listener is never a
+`schemes` (default: the scheme of `base_url`, else https), so credentials go
+out over plain http only when the scope names http, in `schemes` or in its
+`base_url` (VER-016, VER-028). The SSRF callback listener is never a
 target, whichever loopback name reaches it, so only the target can produce a
 hit there (VER-012).
 
@@ -125,10 +126,10 @@ class ScopeGuard:
     def __init__(self, scope: dict, *, clock=None):
         self.scope = scope or {}
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        _, bh, bp, _ = _safe_dissect(self.scope.get("base_url") or "") or ("", "", None, "/")
+        bs, bh, bp, _ = _safe_dissect(self.scope.get("base_url") or "") or ("", "", None, "/")
         self.hosts = {h.lower() for h in (self.scope.get("hosts") or ([bh] if bh else []))}
         self.ports = set(self.scope.get("ports") or ([bp] if bp else []))
-        self.schemes = set(self.scope.get("schemes") or ["https"])
+        self.schemes = set(self.scope.get("schemes") or ([bs] if bs in ("http", "https") else ["https"]))
         self.path_prefixes = self.scope.get("path_prefixes") or ["/"]
         self.deny_paths = self.scope.get("deny_paths") or []
         self.auth_hosts = self.scope.get("auth_hosts") or []

@@ -36,7 +36,6 @@ logged in. Other models are listed under [Model profiles](#model-profiles).
    # scope.yaml
    schema_version: 1
    base_url: http://localhost:3000
-   schemes: [http]        # only https is allowed unless you list http
    window: {from: "2026-11-01T00:00:00Z", until: "2026-11-30T23:59:59Z"}  # your test period
    owner: {name: Your Name}   # who is responsible for the test
    ```

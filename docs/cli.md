@@ -576,7 +576,7 @@ record.
 | Key | Meaning |
 | --- | --- |
 | `base_url` | Absolute http(s) URL of the target. Hosts and ports default to those of this URL. |
-| `hosts`, `ports`, `schemes`, `path_prefixes` | What may be contacted. `schemes` defaults to `https`. |
+| `hosts`, `ports`, `schemes`, `path_prefixes` | What may be contacted. `schemes` defaults to the scheme of `base_url`, so plain http is allowed only when `base_url` or `schemes` names it. |
 | `deny_paths` | Paths that are never contacted, compared regardless of case and percent-encoding. |
 | `networks` | CIDR ranges of private or loopback addresses that may be contacted (see below). |
 | `window` | Authorised test period (`from`, `until`, ISO 8601 UTC). |

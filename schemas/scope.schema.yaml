@@ -63,9 +63,8 @@ properties:
     type: array
     description: |
       Allowed URL schemes for target and authentication requests (login and
-      token endpoints included). Default ["https"].
+      token endpoints included). Default: the scheme of base_url.
     items: { type: string, enum: [http, https] }
-    default: [https]
 
   path_prefixes:
     type: array

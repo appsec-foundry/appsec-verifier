@@ -59,6 +59,28 @@ def test_auth_host_allowed_only_for_auth_purpose():
     assert not g().authorize("https://sso.example.com/token", "target").allowed
 
 
+def test_without_schemes_only_the_scheme_of_the_base_url_is_allowed():
+    local = ScopeGuard({"base_url": "http://localhost:3000"})
+    assert local.authorize("http://localhost:3000/rest/products", "target").allowed
+    assert local.authorize("http://localhost:3000/rest/user/login", "auth").allowed
+    assert not local.authorize("https://localhost:3000/rest/products", "target").allowed
+    remote = ScopeGuard({"base_url": "https://app.example.com"})
+    assert remote.authorize("https://app.example.com/x", "target").allowed
+    assert not remote.authorize("http://app.example.com:443/x", "target").allowed
+    assert not remote.authorize("http://app.example.com:443/login", "auth").allowed
+
+
+def test_schemes_given_replace_the_scheme_of_the_base_url():
+    guard = ScopeGuard({"base_url": "http://localhost:3000", "schemes": ["https"]})
+    assert not guard.authorize("http://localhost:3000/", "target").allowed
+    assert guard.authorize("https://localhost:3000/", "target").allowed
+
+
+@pytest.mark.parametrize("base_url", [None, "", "localhost:3000", "ftp://files.example.com"])
+def test_without_a_usable_base_url_the_default_scheme_stays_https(base_url):
+    assert ScopeGuard({"base_url": base_url}).schemes == {"https"}
+
+
 def test_auth_needs_a_scheme_the_scope_allows():
     """Credentials never go out over plain http unless the scope's `schemes` allow it."""
     assert not g().authorize("http://sso.example.com:443/token", "auth").allowed

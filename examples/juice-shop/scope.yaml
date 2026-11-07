@@ -14,7 +14,7 @@ hosts:
 ports:
   - 3000
 schemes:
-  - http                      # Juice Shop serves plain HTTP locally; override the https default
+  - http                      # Juice Shop serves plain HTTP locally
 
 path_prefixes:
   - /                         # whole local instance in scope
