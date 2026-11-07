@@ -309,7 +309,17 @@ nothing. Paths are compared percent-decoded, `deny_paths` also regardless of
 case, and a path a server could resolve to another resource (a `.` or `..`
 segment, `//`, `\`, `;`, or `%2e`, `%2f`, `%5c`, `%3b`, `%25`, `%00`) is always
 refused. Proxy variables in the environment (`HTTPS_PROXY` and the like) are
-ignored; only the scope's `proxy` is used. The `window` is checked before every
+ignored; only the scope's `proxy` is used. Addresses are checked when the
+connection is made (VER-018): each host name is resolved once, every address
+it resolves to is checked, and the connection goes to a checked address, so a
+DNS answer that changes after the scope check cannot steer a request elsewhere.
+Public addresses are allowed. Loopback, private and other non-public addresses
+need the scope's `networks` (CIDR list), unless the host is written as that
+address or as `localhost`. Link-local addresses (cloud metadata at
+169.254.169.254 included), other known metadata addresses, multicast,
+unspecified and reserved addresses are never contacted. If any address of a
+host is refused, the request is refused. Through a proxy only the proxy's
+address is checked; the proxy resolves the target. The `window` is checked before every
 request and every planning step, not only at start: once it has closed, the
 current finding ends `inconclusive` with `limits_hit: window`, no further request
 is sent, and the run exits with 3.

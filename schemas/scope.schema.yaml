@@ -35,8 +35,23 @@ properties:
     type: array
     description: |
       Allowed hosts. When absent, only the host of `base_url` is allowed.
-      Entries are exact hostnames or IPs; no wildcards. Each is enforced against
-      the address resolved at connection time, including IPv6 (VER-018).
+      Entries are exact hostnames or IPs; no wildcards. The address a host
+      resolves to is checked when the connection is made, IPv6 included
+      (VER-018); see `networks`.
+    items: { type: string }
+
+  networks:
+    type: array
+    description: |
+      Non-public networks (CIDR, e.g. "10.20.0.0/16", "fd12::/48") that the
+      target, auth, callback and proxy hosts may resolve to. Every host name
+      is resolved when the connection is made and each address is checked:
+      public addresses are allowed; loopback, private and other non-public
+      addresses only inside these networks, or when the host is that address
+      or `localhost` itself. Link-local addresses (cloud metadata at
+      169.254.169.254 included), other known metadata addresses, multicast,
+      unspecified and reserved addresses are never contacted, whatever is
+      listed here. Through a proxy only the proxy's address is checked.
     items: { type: string }
 
   ports:

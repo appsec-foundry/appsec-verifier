@@ -89,9 +89,14 @@ def _validate_scope(scope: dict) -> list[str]:
         from jsonschema.validators import validator_for
         cls = validator_for(schema)
         cls.check_schema(schema)
-        return [f"{'/'.join(map(str, e.path))}: {e.message}" for e in cls(schema).iter_errors(scope)]
+        errors = [f"{'/'.join(map(str, e.path))}: {e.message}" for e in cls(schema).iter_errors(scope)]
     except ModuleNotFoundError:
-        return [f"missing required field: {k}" for k in schema.get("required", []) if k not in scope]
+        errors = [f"missing required field: {k}" for k in schema.get("required", []) if k not in scope]
+    from .scope.guard import parse_network
+    networks = scope.get("networks") if isinstance(scope, dict) else None
+    if isinstance(networks, list):
+        errors += [f"networks: {n!r} is not an IP network (CIDR)" for n in networks if parse_network(n) is None]
+    return errors
 
 
 def cmd_scope(args: argparse.Namespace) -> int:
@@ -109,6 +114,8 @@ def cmd_scope(args: argparse.Namespace) -> int:
         ("base_url", str(scope.get("base_url"))),
         ("hosts", ", ".join(scope.get("hosts", []) or [scope.get("base_url", "")])),
         ("ports", ", ".join(map(str, scope.get("ports", []) or []))),
+        ("networks", ", ".join(map(str, scope.get("networks", []) or []))
+         or "— (public addresses, and hosts named by IP or as localhost)"),
         ("path_prefixes", ", ".join(scope.get("path_prefixes", []) or ["/"])),
         ("window", f"{window.get('from')} → {window.get('until')}  [{'ok' if win.allowed else 'EXPIRED/UNOPENED'}]"),
         ("owner", str((scope.get("owner") or {}).get("name"))),

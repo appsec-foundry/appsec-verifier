@@ -103,6 +103,11 @@ explicitly allows. The controls follow the
   `%2f`) is refused, and `deny_paths` match regardless of case and percent
   encoding. Proxy settings from the environment (`HTTPS_PROXY` and the like)
   are ignored; only the scope's proxy is used.
+- The address a host name resolves to is checked when the connection is made.
+  Cloud metadata and other link-local addresses are never contacted. Loopback
+  and private addresses need the scope's `networks` list, unless the scope
+  names the host as an IP address or as `localhost`. Behind a proxy only the
+  proxy's address is checked.
 - Passwords, tokens and client secrets are read from environment variables. They
   do not appear in logs or the report, and the agent only sees role names. If the
   target echoes one back, it is replaced by `[redacted]` before the model or the

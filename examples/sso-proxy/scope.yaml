@@ -18,6 +18,12 @@ schemes:
 path_prefixes:
   - /
 
+# Non-public networks the hosts above may resolve to. Every address is checked
+# when the connection is made (VER-018). Here only the proxy is connected to,
+# and it usually sits in a private network. EDIT to your proxy's network.
+networks:
+  - 10.0.0.0/8
+
 window:
   from:  "2026-01-01T00:00:00Z"    # EDIT to your authorised window
   until: "2026-06-30T23:59:59Z"

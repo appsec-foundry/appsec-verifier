@@ -44,7 +44,10 @@ These implement VER-001, -014 to -018, -025, -030. A change that loosens one
 needs an explicit decision from the maintainer, not a workaround.
 
 - Every request to the target goes through `GuardedHttpClient` and `ScopeGuard`.
-  Do not add a code path that opens connections directly.
+  Do not add a code path that opens connections directly. The resolved address
+  is checked when the connection is made (`AddressCheckingBackend` in
+  `tools/httpx_transport.py`, rule in `ScopeGuard.address_allowed`); metadata
+  and other link-local addresses are never contacted (VER-018).
 - Limits are enforced in code, outside the model. Reaching one stops the
   affected work.
 - The agent's tools are only those in `agent/tools.py`: guarded HTTP as a named
@@ -63,8 +66,13 @@ needs an explicit decision from the maintainer, not a workaround.
   isolation flags in line with AppSec Analyzer's adapters.
 - The proof browser (`tools/browser.py`) never connects by itself: every page
   request goes through `answer()` and the `GuardedHttpClient`, or is aborted.
-  A confirmed XSS needs a `browser_check` result with `executed: true`
-  (`agent/loop.py`); the model's verdict alone never suffices (VER-009).
+  Chrome runs in a network namespace without network access
+  (`unshare --user --net`); without it the browser does not start.
+- A confirmed verdict needs the proof its class requires, checked in code
+  against the cited steps (`agent/proof.py`): XSS a `browser_check` with
+  `executed: true`, access control a two-identity contrast, injection a
+  response that flips with the input. The model's verdict alone never
+  suffices (VER-009 to VER-013).
 - Missing or invalid scope, identity or confirmation blocks the run.
 
 Changes to these controls need tests that cover the refused case

@@ -15,10 +15,19 @@ on the decoded path (VER-018).
 The authorisation window is checked on every request, not only at start: once
 it has closed, `check_window` raises LimitExceeded("window") and the affected
 work stops (VER-001, VER-015). The clock is injectable for tests.
+
+`address_allowed` decides on the address a host name resolved to, when the
+connection is made (VER-018; tools/httpx_transport.py calls it). Link-local
+addresses (cloud metadata at 169.254.169.254 included), the other known
+metadata addresses, multicast, unspecified and reserved addresses are never
+contacted. Public addresses are allowed. Loopback, private and other
+non-public addresses only when the scope's `networks` lists them, or when the
+host itself is that address or `localhost`, i.e. the scope names it literally.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import unquote, urlsplit
@@ -28,6 +37,30 @@ from ..limits import LimitExceeded
 _PURPOSES = ("target", "auth", "callback", "proxy")
 # Raw path fragments that clients or servers normalise into another resource.
 _AMBIGUOUS_PATH = ("//", "\\", ";", "%2e", "%2f", "%5c", "%3b", "%25", "%00")
+# Cloud metadata endpoints outside link-local: AWS IPv6, Alibaba, Azure wire server.
+_METADATA = frozenset(ipaddress.ip_address(a) for a in ("fd00:ec2::254", "100.100.100.200", "168.63.129.16"))
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")          # IPv6 prefix that embeds an IPv4 address
+
+
+def parse_network(value) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    """A scope `networks` entry as a network, or None when it is not one."""
+    try:
+        return ipaddress.ip_network(str(value).strip(), strict=False)
+    except ValueError:
+        return None
+
+
+def _ip(value: str):
+    """The address, with an IPv4 address embedded as IPv4-mapped or NAT64 IPv6 unwrapped."""
+    try:
+        ip = ipaddress.ip_address(str(value).strip("[]").split("%", 1)[0])
+    except ValueError:
+        return None
+    if ip.version == 6 and ip.ipv4_mapped:
+        return ip.ipv4_mapped
+    if ip.version == 6 and ip in _NAT64:
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip
 
 
 @dataclass
@@ -89,6 +122,7 @@ class ScopeGuard:
         self.auth_hosts = self.scope.get("auth_hosts") or []
         self.callback = self.scope.get("callback") or {}
         self.proxy = self.scope.get("proxy") or {}
+        self.networks = [n for n in map(parse_network, self.scope.get("networks") or []) if n is not None]
 
     def within_window(self, now: datetime | None = None) -> Decision:
         now = now or self._clock()
@@ -99,6 +133,23 @@ class ScopeGuard:
         if unt and now > unt:
             return Decision(False, f"after authorisation window (until {w.get('until')})")
         return Decision(True, "within authorisation window")
+
+    def address_allowed(self, host: str, address: str) -> Decision:
+        """May a connection for `host` go to `address`, which `host` resolved to? (VER-018)"""
+        ip = _ip(address)
+        if ip is None:
+            return Decision(False, f"{host} resolved to an unparseable address {str(address)[:60]!r}")
+        # Python counts ::1 as reserved (it lies in ::/8); loopback is decided below like other internal addresses.
+        if (ip.is_link_local or ip in _METADATA or ip.is_multicast or ip.is_unspecified
+                or (ip.is_reserved and not ip.is_loopback)):
+            return Decision(False, f"{host} resolved to {ip}, a link-local, metadata, multicast, unspecified or "
+                                   "reserved address, which is never contacted (VER-018)")
+        if ip.is_global or any(ip.version == n.version and ip in n for n in self.networks):
+            return Decision(True, f"{ip} is allowed")
+        if _ip(host) == ip or (host.lower().rstrip(".") == "localhost" and ip.is_loopback):
+            return Decision(True, f"{ip} is the host the scope names")
+        return Decision(False, f"{host} resolved to {ip}, which is not public; list its network in the "
+                               "scope's `networks` to allow it (VER-018)")
 
     def check_window(self) -> None:
         """Raise LimitExceeded("window") unless now lies inside the authorisation window."""
