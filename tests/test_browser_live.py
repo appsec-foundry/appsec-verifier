@@ -12,7 +12,7 @@ import os
 import socket
 import stat
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
 
@@ -75,7 +75,7 @@ def _check(b, path, finding="T-1"):
 def test_executed_marker_is_proven_with_owner_only_evidence(browser):
     b, _, tmp = browser
     payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
-    result = _check(b, "/reflect?q=" + payload)
+    result = _check(b, "/reflect?q=" + quote(payload, safe=""))
     assert result["executed"] is True
     kinds = {e["kind"]: e for e in result["evidence"]}
     shot = tmp / kinds["screenshot"]["path"]
@@ -86,13 +86,13 @@ def test_executed_marker_is_proven_with_owner_only_evidence(browser):
 
 def test_encoded_reflection_is_not_execution(browser):
     b, _, _ = browser
-    result = _check(b, f"/safe?q=<script>alert({marker_expression(MARKER)})</script>")
+    result = _check(b, "/safe?q=" + quote(f"<script>alert({marker_expression(MARKER)})</script>", safe=""))
     assert result["executed"] is False and "evidence" not in result
 
 
 def test_echoed_payload_text_is_not_execution(browser):
     b, _, _ = browser
-    result = _check(b, f"/echo?q={marker_expression(MARKER)}")
+    result = _check(b, "/echo?q=" + quote(marker_expression(MARKER), safe=""))
     assert result["executed"] is False and result["dialogs"] == [{"kind": "alert", "is_marker": False}]
 
 
