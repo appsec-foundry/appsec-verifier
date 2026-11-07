@@ -11,8 +11,11 @@ are cited per command and option.
 
 ## Commands
 
-`appsec-verifier` without arguments lists the commands;
-`appsec-verifier <command> --help` lists the options of one.
+`appsec-verifier` without arguments, or with `--help`, lists the commands with
+examples. `appsec-verifier <command> --help` lists the options of one by group,
+with example calls; `appsec-verifier ASSESSMENT --help` does the same for the
+guided run. A wrong call shows the short usage, the error and where the
+examples are.
 
 **Act against a target** (makes model calls and network requests)
 

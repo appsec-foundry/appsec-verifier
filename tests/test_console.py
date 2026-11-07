@@ -121,3 +121,48 @@ def test_preflight_marks_take_the_colour_of_their_status():
     assert "\x1b" not in SGR.sub("", "\n".join(coloured))
     assert render(checks) == ("  ✓ Target       200\n  ⚠ alice        w\n  ✗ bob          401]0;pwned[2J\n"
                               "  · Proxy        -")
+
+
+# ── help and usage errors ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("argv, expected", [
+    (["verify", "security-assessment.yaml"], [
+        "usage: appsec-verifier verify --assessment FILE --scope FILE [options]",
+        "appsec-verifier verify: error: the following arguments are required: --assessment, --scope",
+        "To be asked for the settings instead: appsec-verifier ASSESSMENT",
+        "Options and examples: appsec-verifier verify --help"]),
+    (["security-assessment.yaml", "--bogus"], [
+        "usage: appsec-verifier ASSESSMENT [options]",
+        "appsec-verifier: error: unrecognized arguments: --bogus",
+        "Options and examples: appsec-verifier ASSESSMENT --help"]),
+])
+def test_a_usage_error_shows_the_short_usage_and_where_the_examples_are(argv, expected, capsys):
+    with pytest.raises(SystemExit) as exit_:
+        cli.main(argv)
+    assert exit_.value.code == cli.EXIT_BLOCKED and capsys.readouterr().err.splitlines() == expected
+
+
+@pytest.mark.parametrize("argv", [["verify", "--help"], ["preflight", "--help"], ["scope", "--help"],
+                                  ["export", "--help"], ["security-assessment.yaml", "--help"]])
+def test_help_ends_with_examples_that_fit_a_terminal(argv, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
+    with pytest.raises(SystemExit) as exit_:
+        cli.main(argv)
+    out = capsys.readouterr().out
+    assert exit_.value.code == 0 and ("\nExamples:\n" in out or "\nExample:\n" in out)
+    assert max(len(line) for line in out.splitlines()) <= 90
+
+
+def test_verify_help_groups_its_options(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["verify", "--help"])
+    out = capsys.readouterr().out
+    assert [g for g in ("target and input:", "findings to test:", "model:", "limits:", "mode:", "output:")
+            if f"\n{g}\n" in out] == ["target and input:", "findings to test:", "model:", "limits:", "mode:",
+                                      "output:"]
+
+
+def test_top_level_help_lists_the_commands_with_examples(capsys):
+    assert cli.main(["--help"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Commands:" in out and "\nExamples:\n" in out and "  plan " not in out

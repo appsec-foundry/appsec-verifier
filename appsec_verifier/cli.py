@@ -814,6 +814,9 @@ def cmd_export(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+_FILES = "--assessment security-assessment.yaml --scope scope.yaml"
+
+
 def _banner(st: Style) -> str:
     head = (logo(st, version_string(), columns() - 1) if st.enabled else
             [f"AppSec Verifier {version_string()} — verify static assessment findings against a running app."])
@@ -827,53 +830,111 @@ def _banner(st: Style) -> str:
         "  scope      resolve and validate an authorisation scope file\n"
         "  export     re-emit verdicts for AppSec Analyzer\n"
         "  update     update a pipx installation of the Verifier, after your yes\n\n"
-        "Quick start: README.md. All options: docs/cli.md, or run a command with --help."
+        "Examples:\n"
+        "  appsec-verifier security-assessment.yaml\n"
+        f"  appsec-verifier preflight {_FILES} --offline\n"
+        f"  appsec-verifier verify {_FILES} \\\n"
+        "      --identities identities.yaml --min-severity high --profile claude\n\n"
+        "Options and examples of a command: appsec-verifier COMMAND --help, of the guided run:\n"
+        "appsec-verifier ASSESSMENT --help. Quick start: README.md. All options: docs/cli.md."
     )
 
 
+def _wrap(text: str) -> str:
+    """A help description, wrapped for an 80-column terminal; the formatter keeps it as written."""
+    return textwrap.fill(text, 78)
+
+
+class _Parser(argparse.ArgumentParser):
+    """Help with the description and examples as written. A usage error shows the
+    short usage, the error and where to find the examples, not every option."""
+
+    def __init__(self, *args, hint: str | None = None, **kwargs):
+        kwargs.setdefault("formatter_class", argparse.RawDescriptionHelpFormatter)
+        super().__init__(*args, **kwargs)
+        self.hint = hint or f"Options and examples: {self.prog} --help"
+
+    def error(self, message):
+        self.exit(EXIT_BLOCKED, f"{self.format_usage()}{self.prog}: error: {message}\n{self.hint}\n")
+
+
 _PROFILE_CHOICES = ["claude", "codex-cli", "copilot-cli", "codex", "anthropic-api"]
+_PROFILE_HELP = ("claude (Claude CLI, default when interactive), codex-cli (ChatGPT login), copilot-cli "
+                 "(Copilot login), codex (OPENAI_API_KEY), anthropic-api (ANTHROPIC_API_KEY)")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="appsec-verifier", add_help=True,
-                                description="Dynamic verification of static security-assessment findings.",
-                                epilog="Guided run: appsec-verifier ASSESSMENT [verify options] asks for the "
-                                       "settings with defaults (VER-031).")
+    p = _Parser(prog="appsec-verifier", add_help=False)
+    p.add_argument("-h", "--help", action="store_true", help=argparse.SUPPRESS)   # prints the banner
     p.add_argument("--version", action="store_true", help="print version and exit")
     sub = p.add_subparsers(dest="command")
 
-    sc = sub.add_parser("scope", help="resolve and validate an authorisation scope file")
-    sc.add_argument("--scope", required=True, help="scope.yaml to validate")
-    sc.add_argument("--target", help="check whether this URL falls inside the scope")
+    sc = sub.add_parser(
+        "scope", help="resolve and validate an authorisation scope file",
+        description="Validates a scope file and prints what may be contacted. Contacts nothing.",
+        epilog="Example:\n  appsec-verifier scope --scope scope.yaml --target http://localhost:3000/rest/products")
+    sc.add_argument("--scope", metavar="FILE", required=True, help="scope file to validate")
+    sc.add_argument("--target", metavar="URL", help="also say whether this URL lies inside the scope")
 
-    vf = sub.add_parser("verify", help="verify selected findings against a target (safe mode by default)")
+    vf = sub.add_parser(
+        "verify", help="verify selected findings against a target (safe mode by default)",
+        usage="appsec-verifier verify --assessment FILE --scope FILE [options]",
+        hint="To be asked for the settings instead: appsec-verifier ASSESSMENT\n"
+             "Options and examples: appsec-verifier verify --help",
+        description=_wrap("Tests the selected findings against the target and writes a report. Before the first "
+                          "request it asks once; --yes confirms without asking."),
+        epilog="Examples:\n"
+               "  High and Critical findings, with the test accounts of identities.yaml:\n"
+               f"    appsec-verifier verify {_FILES} \\\n"
+               "      --identities identities.yaml --min-severity high --profile claude\n\n"
+               "  Only XSS and IDOR, at most USD 2, without questions (CI):\n"
+               f"    appsec-verifier verify {_FILES} \\\n"
+               "      --category xss,idor --cost-limit 2 --profile anthropic-api --non-interactive --yes")
     _add_run_options(vf, guided=False)
 
-    pf = sub.add_parser("preflight", help="check assessment, scope, target, logins and model; verifies nothing")
-    pf.add_argument("--assessment", required=True, help="security-assessment.yaml to check")
-    pf.add_argument("--scope", required=True, help="authorisation scope file")
-    pf.add_argument("--url", "--target", dest="target", help="URL to check (default: scope base_url); must be in scope")
-    pf.add_argument("--identities", help="identities.yaml; each login is tried once")
-    pf.add_argument("--profile", choices=_PROFILE_CHOICES, help="model profile, as for verify")
-    pf.add_argument("--model", help="model for the selected profile")
+    pf = sub.add_parser(
+        "preflight", help="check assessment, scope, target, logins and model; verifies nothing",
+        usage="appsec-verifier preflight --assessment FILE --scope FILE [options]",
+        description=_wrap("Checks the assessment, scope, proxy, identities, target, logins and model, and tests "
+                          "no finding. The target and the logins are contacted only after one confirmation."),
+        epilog="Examples:\n"
+               "  The files only; contacts nothing:\n"
+               f"    appsec-verifier preflight {_FILES} \\\n"
+               "      --identities identities.yaml --offline\n\n"
+               "  Also the target, the logins and the model, after one confirmation:\n"
+               f"    appsec-verifier preflight {_FILES} \\\n"
+               "      --identities identities.yaml --profile claude")
+    pf.add_argument("--assessment", metavar="FILE", required=True, help="security-assessment.yaml to check")
+    pf.add_argument("--scope", metavar="FILE", required=True, help="scope file")
+    pf.add_argument("--url", "--target", dest="target", metavar="URL",
+                    help="URL to check (default: base_url of the scope); must lie inside the scope")
+    pf.add_argument("--identities", metavar="FILE", help="test accounts by role; each login is tried once")
+    pf.add_argument("--profile", choices=_PROFILE_CHOICES, metavar="PROFILE", help=f"model profile: {_PROFILE_HELP}")
+    pf.add_argument("--model", help="model of the profile (default: the profile's model)")
     pf.add_argument("--offline", action="store_true",
                     help="contact nothing: neither the target, its login endpoints, nor the model provider")
     pf.add_argument("--test-model", action="store_true",
                     help="send one fixed prompt to the model; needs --cost-limit, or --max-calls 1 for "
                          "codex-cli and copilot-cli")
-    pf.add_argument("--cost-limit", type=float, help="with --test-model: spending limit of the call, USD")
-    pf.add_argument("--max-calls", type=int, help="with --test-model: call limit (subscription profiles)")
+    pf.add_argument("--cost-limit", type=float, metavar="USD", help="with --test-model: spending limit of the call")
+    pf.add_argument("--max-calls", type=int, metavar="N", help="with --test-model: call limit (subscription profiles)")
     pf.add_argument("--non-interactive", "--ci", dest="non_interactive", action="store_true",
                     help="no prompts; contacting the target then needs --yes")
     pf.add_argument("--yes", action="store_true", help="confirm contacting the target without a prompt")
     pf.add_argument("--json", action="store_true", help="print the result as JSON on stdout; never prompts")
 
-    ex = sub.add_parser("export", help="re-emit a verification.yaml for AppSec Analyzer")
-    ex.add_argument("--verification", required=True, help="verification.yaml to export")
-    ex.add_argument("--output", help="output path (default: analyzer-verification.json)")
-    ex.add_argument("--format", dest="fmt", choices=["json", "yaml"], default="json")
+    ex = sub.add_parser(
+        "export", help="re-emit a verification.yaml for AppSec Analyzer",
+        description=_wrap("Converts the verdicts of a finished run into the file AppSec Analyzer reads. "
+                          "Contacts nothing."),
+        epilog="Example:\n  appsec-verifier export --verification verification/verification.yaml")
+    ex.add_argument("--verification", metavar="FILE", required=True, help="verification.yaml of a finished run")
+    ex.add_argument("--output", metavar="FILE", help="file to write (default: analyzer-verification.json)")
+    ex.add_argument("--format", dest="fmt", choices=["json", "yaml"], default="json", help="default: json")
 
-    sub.add_parser("update", help="update a pipx installation of the Verifier, after your yes (VER-033)")
+    sub.add_parser("update", help="update a pipx installation of the Verifier, after your yes",
+                   description=_wrap("Reinstalls the Verifier with pipx from the source it was installed from, "
+                                     "after you confirm."))
 
     return p
 
@@ -881,11 +942,18 @@ def build_parser() -> argparse.ArgumentParser:
 def build_guided_parser() -> argparse.ArgumentParser:
     """`appsec-verifier ASSESSMENT [options]`: the guided run (VER-031). It takes
     the `verify` options; those given are not asked."""
-    p = argparse.ArgumentParser(
-        prog="appsec-verifier", usage="appsec-verifier ASSESSMENT [verify options]",
-        description="Guided run: reads the assessment, asks for the settings of the run with defaults, "
-                    "then verifies after one confirmation. Options given here are not asked. Without a "
-                    "terminal, or with --non-interactive, nothing is asked.")
+    p = _Parser(
+        prog="appsec-verifier", usage="appsec-verifier ASSESSMENT [options]",
+        hint="Options and examples: appsec-verifier ASSESSMENT --help",
+        description=_wrap("Guided run: reads the assessment, asks for the settings of the run with defaults, "
+                          "then verifies after one confirmation. Options given here are not asked. Without a "
+                          "terminal, or with --non-interactive, nothing is asked."),
+        epilog="Examples:\n"
+               "  Ask for every setting:\n"
+               "    appsec-verifier security-assessment.yaml\n\n"
+               "  Use this scope and these test accounts, ask for the rest:\n"
+               "    appsec-verifier security-assessment.yaml --scope scope.yaml \\\n"
+               "      --identities identities.yaml")
     _add_run_options(p, guided=True)
     return p
 
@@ -893,58 +961,76 @@ def build_guided_parser() -> argparse.ArgumentParser:
 def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     """The options of `verify`, shared with the guided run. The guided run takes
     the assessment as its argument and asks for the scope when it is missing."""
+    src = vf.add_argument_group("target and input")
     if guided:
-        vf.add_argument("assessment", help="security-assessment.yaml to verify")
-        vf.add_argument("--scope", help="authorisation scope file (asked when missing)")
+        src.add_argument("assessment", metavar="ASSESSMENT", help="security-assessment.yaml from AppSec Analyzer")
+        src.add_argument("--scope", metavar="FILE", help="scope file: what may be contacted, until when, by whom "
+                                                         "(asked when missing)")
     else:
-        vf.add_argument("--assessment", required=True, help="security-assessment.yaml to verify")
-        vf.add_argument("--scope", required=True, help="authorisation scope file")
-    vf.add_argument("--url", "--target", dest="target",
-                    help="start/base URL to test (default: scope base_url); must be in scope")
-    vf.add_argument("--identities", help="identities.yaml (roles + env-var credential refs)")
-    vf.add_argument("--source", help="read-only checkout of the target repo, to ground the agent (VER-017)")
-    vf.add_argument("--output", default=None if guided else "./verification",
-                    help="report/evidence directory (default: ./verification)")
-    # selection (VER-026)
-    vf.add_argument("--category", help="categories, comma-separated: class or technique "
-                                       "(e.g. 'idor', 'access-control', 'sqli', 'xss')")
-    vf.add_argument("--severity", help="exact severities, comma-separated (e.g. critical,high)")
-    vf.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], help="severity floor")
-    vf.add_argument("--class", dest="cls", help="(advanced) weakness classes, comma-separated")
-    vf.add_argument("--cwe", help="(advanced) CWEs, comma-separated")
-    vf.add_argument("--only", help="finding ids, comma-separated")
-    # boundaries (VER-015)
-    vf.add_argument("--cost-limit", type=float, help="model-spend ceiling, USD")
-    vf.add_argument("--max-requests", type=int)
-    vf.add_argument("--max-attempts", type=int)
-    vf.add_argument("--max-calls", type=int, help="cap on model calls (planning steps) for the run")
-    vf.add_argument("--max-duration", type=float, help="run wall-clock ceiling, seconds")
-    vf.add_argument("--rate", type=float, help="max requests/second")
-    # output mode (VER-020/027) and run mode (VER-002/030)
-    vf.add_argument("--report", action="store_true", help="standalone report (default)")
-    vf.add_argument("--print", dest="print_results", action="store_true",
-                    help="also print per-finding results to the console")
-    vf.add_argument("--append", action="store_true",
-                    help="extend an existing report in --output instead of overwriting")
-    vf.add_argument("--annotate", action="store_true", help="also write an annotated assessment copy")
-    vf.add_argument("--in-place", action="store_true", help="with --annotate: modify the assessment file itself")
-    vf.add_argument("--non-interactive", "--ci", dest="non_interactive", action="store_true",
-                    help="no prompts; selection, scope, and cost come from the invocation")
-    vf.add_argument("--yes", action="store_true", help="confirm authorisation without a prompt (recorded)")
-    vf.add_argument("--allow-intrusive", action="store_true",
-                    help="opt out of safe mode: permit marked state-changing / more thorough probing (VER-030)")
-    vf.add_argument("--read-only", action="store_true", help="force read-only even if the scope allows state change")
-    vf.add_argument("--dry-run", action="store_true", help="resolve selection + scope, write nothing, contact nothing")
-    vf.add_argument("--headful", action="store_true", help="run the proof browser visibly (local debugging)")
-    vf.add_argument("--screenshots", type=screenshot_option, metavar="CLASSES",
-                    help="classes that get screenshots, comma-separated: xss, access-control, injection, "
-                         "open-redirect, path-traversal, ssrf; or 'none' (default: all)")
-    vf.add_argument("--profile", choices=_PROFILE_CHOICES,
-                    help="model profile, as in AppSec Analyzer: claude (Claude CLI, login or key; default when "
-                         "interactive), codex-cli (ChatGPT login), copilot-cli (Copilot login), codex "
-                         "(OPENAI_API_KEY), anthropic-api (ANTHROPIC_API_KEY, no CLI needed). "
-                         "Required with --non-interactive")
-    vf.add_argument("--model", help="model for the selected profile (default: the profile's model)")
+        src.add_argument("--assessment", metavar="FILE", required=True,
+                         help="security-assessment.yaml from AppSec Analyzer")
+        src.add_argument("--scope", metavar="FILE", required=True,
+                         help="scope file: what may be contacted, until when, by whom")
+    src.add_argument("--url", "--target", dest="target", metavar="URL",
+                     help="URL to start from (default: base_url of the scope); must lie inside the scope")
+    src.add_argument("--identities", metavar="FILE",
+                     help="test accounts by role; their credentials come from environment variables")
+    src.add_argument("--source", metavar="DIR", help="checkout of the application's source code, read by the agent")
+
+    sel = vf.add_argument_group(
+        "findings to test", "Asked when not given." if guided else "Without these, every finding that can be "
+                                                                   "tested dynamically.")
+    sel.add_argument("--category", metavar="LIST", help="classes or techniques, comma-separated, e.g. xss,idor,sqli")
+    sel.add_argument("--severity", metavar="LIST", help="exact severities, comma-separated, e.g. critical,high")
+    sel.add_argument("--min-severity", choices=["low", "medium", "high", "critical"], metavar="LEVEL",
+                     help="lowest severity to test: low, medium, high or critical")
+    sel.add_argument("--only", metavar="IDS", help="finding ids, comma-separated, e.g. T-003,T-009; "
+                                                   "overrides the other selectors")
+    sel.add_argument("--class", dest="cls", metavar="LIST", help="(advanced) weakness classes, comma-separated")
+    sel.add_argument("--cwe", metavar="LIST", help="(advanced) CWEs, comma-separated, e.g. CWE-79,CWE-639")
+
+    model = vf.add_argument_group("model")
+    model.add_argument("--profile", choices=_PROFILE_CHOICES, metavar="PROFILE",
+                       help=f"{_PROFILE_HELP}; required with --non-interactive")
+    model.add_argument("--model", help="model of the profile (default: the profile's model)")
+
+    lim = vf.add_argument_group("limits", "Without these, the values in data/limits.yaml apply"
+                                + ("; the run shows them and asks." if guided else "."))
+    lim.add_argument("--cost-limit", type=float, metavar="USD", help="spending limit for model calls")
+    lim.add_argument("--max-calls", type=int, metavar="N", help="model calls for the run")
+    lim.add_argument("--max-requests", type=int, metavar="N", help="requests to the target for the run")
+    lim.add_argument("--max-attempts", type=int, metavar="N", help="agent steps per finding")
+    lim.add_argument("--max-duration", type=float, metavar="SECONDS", help="run time")
+    lim.add_argument("--rate", type=float, metavar="N", help="requests per second; 0 for no rate limit")
+
+    mode = vf.add_argument_group("mode")
+    mode.add_argument("--allow-intrusive", action="store_true",
+                      help="also send marked write requests (POST, PUT, PATCH); needs allow_state_change: true "
+                           "in the scope. Default: GET, HEAD and OPTIONS only")
+    mode.add_argument("--read-only", action="store_true",
+                      help="no write requests, even with --allow-intrusive and a scope that allows them")
+    mode.add_argument("--non-interactive", "--ci", dest="non_interactive", action="store_true",
+                      help="ask nothing; every setting comes from the options")
+    mode.add_argument("--yes", action="store_true", help="confirm the test without a prompt; the report records it")
+    mode.add_argument("--dry-run", action="store_true",
+                      help="resolve selection and scope, then stop: writes nothing, contacts nothing")
+    mode.add_argument("--headful", action="store_true", help="show the proof browser (local debugging)")
+
+    out = vf.add_argument_group("output")
+    out.add_argument("--output", metavar="DIR", default=None if guided else "./verification",
+                     help="directory for the report and the evidence (default: ./verification)")
+    out.add_argument("--report", action="store_true", help="standalone report (default)")
+    out.add_argument("--print", dest="print_results", action="store_true",
+                     help="also print the verdict of each finding")
+    out.add_argument("--append", action="store_true",
+                     help="add to an existing report in the output directory instead of replacing it")
+    out.add_argument("--annotate", action="store_true",
+                     help="also write a copy of the assessment with the verdict of each finding")
+    out.add_argument("--in-place", action="store_true", help="with --annotate: write the verdicts into the "
+                                                             "assessment file itself")
+    out.add_argument("--screenshots", type=screenshot_option, metavar="CLASSES",
+                     help="classes that get screenshots, comma-separated: xss, access-control, injection, "
+                          "open-redirect, path-traversal, ssrf; or none (default: all)")
 
 
 COMMANDS = ("scope", "verify", "preflight", "export", "update")
