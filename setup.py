@@ -3,11 +3,13 @@
 Like AppSec Analyzer, the runtime resources (schemas/, data/) live at the repo
 root for a source checkout, and are copied into the ``appsec_verifier`` package
 at build time so a ``pipx install`` (which builds a wheel) carries them. The
-package's ``resource_root()`` then finds them in either place.
+package's ``resource_root()`` then finds them in either place. The build also
+stamps the commit and its date into ``build-info.json`` for ``--version``.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -18,13 +20,14 @@ ROOT = Path(__file__).resolve().parent
 RUNTIME_DIRS = ("schemas", "data")
 
 # Single source of the version — read without importing the package.
-_version: dict = {}
-exec((ROOT / "appsec_verifier" / "version_info.py").read_text(encoding="utf-8"), _version)  # noqa: S102
+_VERSION_INFO = ROOT / "appsec_verifier" / "version_info.py"
+_version: dict = {"__file__": str(_VERSION_INFO)}
+exec(_VERSION_INFO.read_text(encoding="utf-8"), _version)  # noqa: S102
 VERSION = _version["ENGINE_VERSION"]
 
 
 class BuildVerifier(build_py):
-    """Copy the runtime resource dirs into the built package."""
+    """Copy the runtime resource dirs into the built package and stamp the build."""
 
     def run(self) -> None:
         super().run()
@@ -37,6 +40,12 @@ class BuildVerifier(build_py):
             if dst.exists():
                 shutil.rmtree(dst)
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        stamp = target / _version["BUILD_INFO"]
+        info = _version["read_git"](ROOT)
+        if info:
+            stamp.write_text(json.dumps(info) + "\n", encoding="utf-8")
+        else:
+            stamp.unlink(missing_ok=True)  # a reused build directory must not keep an old stamp
 
 
 setup(

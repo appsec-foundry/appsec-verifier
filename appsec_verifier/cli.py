@@ -693,7 +693,8 @@ def _banner() -> str:
         "  preflight  check assessment, scope, target, logins and model; verifies nothing\n"
         "  plan       list dynamically verifiable findings, offline\n"
         "  scope      resolve and validate an authorisation scope file\n"
-        "  export     re-emit verdicts for AppSec Analyzer\n\n"
+        "  export     re-emit verdicts for AppSec Analyzer\n"
+        "  update     update a pipx installation of the Verifier, after your yes\n\n"
         "No probe contacts a target yet; see requirements.md and docs/cli.md. "
         "Run a command with --help."
     )
@@ -749,6 +750,8 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--verification", required=True, help="verification.yaml to export")
     ex.add_argument("--output", help="output path (default: analyzer-verification.json)")
     ex.add_argument("--format", dest="fmt", choices=["json", "yaml"], default="json")
+
+    sub.add_parser("update", help="update a pipx installation of the Verifier, after your yes (VER-033)")
 
     return p
 
@@ -819,7 +822,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     vf.add_argument("--model", help="model for the selected profile (default: the profile's model)")
 
 
-COMMANDS = ("plan", "scope", "verify", "preflight", "export")
+COMMANDS = ("plan", "scope", "verify", "preflight", "export", "update")
 
 
 def _stdin_is_terminal() -> bool:
@@ -846,6 +849,13 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_preflight(args)
     if args.command == "export":
         return cmd_export(args)
+    if args.command == "update":
+        from .update import UpdateError, update_installation
+        try:
+            return update_installation()
+        except UpdateError as exc:
+            print(f"appsec-verifier: error: {exc}", file=sys.stderr)
+            return EXIT_BLOCKED
     print(_banner())
     return EXIT_OK
 

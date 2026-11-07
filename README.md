@@ -185,6 +185,19 @@ pipx inject appsec-verifier playwright==1.64.1   # XSS proof browser; uses the i
 For the CLI profiles, install the agent CLI and log in (`claude`, `codex login`,
 `copilot login`).
 
+To update a pipx installation later:
+
+```sh
+appsec-verifier update
+```
+
+It shows the installed version and the source pipx recorded (GitHub or a local
+checkout), asks `[Y/n]`, and then runs
+`pipx upgrade --pip-args=--force-reinstall appsec-verifier`, which you can also
+run yourself. Like a new `pipx install`, it takes the newest dependency versions
+`setup.py` allows, not the pins of `requirements.lock`. Details:
+[`docs/cli.md`](docs/cli.md#update--update-the-installed-verifier-ver-033).
+
 Reproducible install from a checkout, with every package pinned and
 hash-checked ([`requirements.lock`](requirements.lock), generated for Python
 3.10):

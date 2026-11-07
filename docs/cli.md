@@ -38,6 +38,11 @@ per command and flag.
 - `export` — re-emit the verdicts of a finished `verification.yaml` in a form
   AppSec Analyzer can read back; no re-verification (VER-021, VER-015).
 
+**Maintain the installation**
+
+- `update` — update a pipx installation of the Verifier after your yes
+  (VER-033).
+
 ---
 
 ## Guided run — `appsec-verifier ASSESSMENT` (VER-031)
@@ -437,6 +442,39 @@ and the cross-run `match_key` (VER-007) that AppSec Analyzer can re-ingest to
 annotate findings with their dynamic-verification status. Additive and explicit;
 it never rewrites or re-scores the assessment (VER-021). No model calls (VER-015
 philosophy: a saved, validated result exports without new work).
+
+## `update` — update the installed Verifier (VER-033)
+
+```
+appsec-verifier update
+```
+
+- Reinstalls the Verifier from the source pipx recorded at install time, such
+  as GitHub or a local checkout. Credentials in a recorded URL are not shown.
+- Shows the installed version and the source, then asks `[Y/n]`. Enter or `y`
+  confirms; anything else, or closed input, installs nothing.
+- Runs `pipx upgrade --pip-args=--force-reinstall appsec-verifier`, which you
+  can also run yourself. `--force-reinstall` reinstalls even when the version
+  number is unchanged, as is usual between GitHub commits. Like a new
+  `pipx install`, it takes the newest dependency versions `setup.py` allows, not
+  the pins of `requirements.lock`; packages added with `pipx inject` stay.
+- Hides the pipx output and shows it only when the update fails (exit 2).
+- Afterwards shows the new version as `appsec-verifier --version` prints it,
+  read from the new installation: the engine version with commit and date of
+  the build, e.g. `0.1.0a1 (a26a8e10, 2026-11-07)`. `(unchanged)` means the
+  source had nothing newer.
+- Needs an interactive terminal outside CI (`CI` set); no option skips the
+  question. Otherwise it exits 2 and names the pipx command to run yourself.
+- An installation without pipx (a venv from `requirements.lock`, an editable
+  checkout) is not changed; update it the way you installed it.
+
+To switch the source, run `pipx install --force` with the new source. A
+checkout installed with `pipx install --force .` stays the source: change it,
+for example with `git pull`, and run `update`.
+
+`--version` names the build. `setup.py` stamps commit, date and local changes
+into the package (`build-info.json`); a checkout without a stamp is read from
+Git; a build without either shows `(commit unknown)`.
 
 ---
 
