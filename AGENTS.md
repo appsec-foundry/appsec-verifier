@@ -129,6 +129,27 @@ Changes to these controls need tests that cover the refused case
 - If you change behaviour or flags, update `README.md` and `docs/cli.md` in the
   same change. Mark flags that are documented but not implemented as such.
 
+## Writing documentation
+
+Applies to `README.md`, `docs/`, changelog and release notes, help texts and
+messages users read.
+
+- Write for the user: what changes for them, what they have to do, what they
+  will see. Leave out internals (class names, refactorings, how a bug was
+  found) unless the user needs them to act.
+- Plain, factual sentences. No promotional or inflated words ("powerful",
+  "seamless", "robust", "comprehensive", "significantly"), no filler ("It's
+  worth noting", "Note that", "In summary"), no closing summary section.
+- Say each thing once. No extra headings, lists, tables or examples that add
+  nothing new; a short paragraph is often clearer than a nested list. Bold
+  sparingly, no emoji, no dashes in place of commas or full stops.
+- Name things as the user sees them: command, flag, file, message text.
+  Describe only what the code does now.
+- Changelog: one line per change, breaking changes first with what to do.
+  Not "Introduced a robust self-update mechanism that significantly improves
+  the upgrade experience", but "New `update` command: reinstalls the Verifier
+  with pipx after you confirm."
+
 ## Commits
 
 Subject `area: summary` (e.g. `verify:`, `agent:`, `tools+auth:`, `docs:`),
