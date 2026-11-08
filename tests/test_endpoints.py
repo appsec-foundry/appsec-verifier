@@ -69,13 +69,16 @@ def _plan(cls, *endpoints):
                        status="dynamic", cls=cls, reason="", endpoints=tuple(endpoints))
 
 
-def _blocker(plan, identities=(), browser=None, listener=None, scope=None, safe=True):
+def _blocker(plan, identities=(), browser=None, listener=None, scope=None, safe=True, source=True):
+    """With `source` a finding that names no request can still find its route, so the other rules decide."""
     return cli._blocker(plan, identities=list(identities), browser=browser, listener=listener, scope=scope or {},
-                        safe=safe)
+                        safe=safe, source=source)
 
 
 GET_LOGIN, POST = Endpoint("GET", "/a", True), Endpoint("POST", "/b", None)
 ALICE = [{"role": "alice"}]
+CONTRACT = {"injection_inputs": [{"finding_id": "T-1", "path": "/a", "input_location": "params", "input_name": "q",
+                                  "semantics": "literal"}]}
 
 
 def test_a_class_without_its_proof_prerequisite_is_not_tested():
@@ -90,22 +93,60 @@ def test_a_class_without_its_proof_prerequisite_is_not_tested():
 
 
 def test_the_requests_a_finding_names_decide_whether_safe_mode_or_a_missing_login_rule_it_out():
-    assert _blocker(_plan("injection", POST)) == ("intrusive", "safe mode; every request the assessment names "
-                                                               "writes")
-    assert _blocker(_plan("injection", POST), safe=False) is None
-    assert _blocker(_plan("injection", GET_LOGIN)) == ("identity", "no test identity; every request the "
-                                                                   "assessment names requires a login")
-    assert _blocker(_plan("injection", GET_LOGIN), identities=ALICE) is None
-    assert _blocker(_plan("injection", GET_LOGIN, Endpoint("GET", "/c", None))) is None     # one needs no login
-    assert _blocker(_plan("injection", POST, Endpoint("PAGE", "/#/x", None)))[0] == "intrusive"
-    assert _blocker(_plan("injection")) is None                                             # nothing named: tried
+    def blocker(plan, **kw):
+        return _blocker(plan, scope=CONTRACT, **kw)                   # an injection proof needs its contract
+
+    assert blocker(_plan("injection", POST)) == ("intrusive", "safe mode; every request the assessment names writes")
+    assert blocker(_plan("injection", POST), safe=False) is None
+    assert blocker(_plan("injection", GET_LOGIN)) == ("identity", "no test identity; every request the "
+                                                                  "assessment names requires a login")
+    assert blocker(_plan("injection", GET_LOGIN), identities=ALICE) is None
+    assert blocker(_plan("injection", GET_LOGIN, Endpoint("GET", "/c", None))) is None     # one needs no login
+    assert blocker(_plan("injection", POST, Endpoint("PAGE", "/#/x", None)))[0] == "intrusive"
+    assert blocker(_plan("injection")) is None                                             # nothing named: tried
+
+
+def test_injection_without_its_contract_or_with_only_writes_is_not_tested():
+    get = Endpoint("GET", "/a", None)
+    assert _blocker(_plan("injection", get)) == ("contract", "no literal-input contract for this finding in "
+                                                             "injection_inputs")
+    elsewhere = {"injection_inputs": [{**CONTRACT["injection_inputs"][0], "finding_id": "T-9"}]}
+    assert _blocker(_plan("injection", get), scope=elsewhere)[0] == "contract"            # another finding's
+    assert _blocker(_plan("injection", get), scope=CONTRACT) is None
+    # Every proof repeats its controls and a write is never repeated, so --allow-intrusive cannot help.
+    assert _blocker(_plan("injection", POST), safe=False) == ("repeat", "the proof repeats each control, and "
+                                                                        "every request the assessment names writes")
+    assert _blocker(_plan("injection", POST))[0] == "repeat"                              # not "intrusive mode"
+    written = _plan("injection")
+    written.verification_context = {"variants": [{"id": "v", "request": {"method": "PATCH", "path": "/b"}}]}
+    assert _blocker(written, safe=False)[0] == "repeat"
+    assert _blocker(_plan("injection", POST, get), safe=False)[0] == "contract"            # a read can carry it
+
+
+def test_a_finding_without_any_route_is_tested_only_with_the_source():
+    reason = ("route", "the assessment names no request for this finding, and without --source none can be read")
+    assert _blocker(_plan("ssrf"), listener=object(), source=False) == reason
+    assert _blocker(_plan("open-redirect"), source=False) == reason
+    assert _blocker(_plan("ssrf"), listener=object()) is None                              # the source may name it
+    assert _blocker(_plan("ssrf", POST), listener=object(), safe=False, source=False) is None
+    assert _blocker(_plan("xss", Endpoint("PAGE", "/#/x", None)), browser=object(), source=False) is None
+    assert _blocker(_plan("injection"), scope=CONTRACT, source=False) is None              # the contract names it
+    session = {"session_checks": [{"finding_id": "T-1", "path": "/", "cookie": "sid"}]}
+    assert _blocker(_plan("session"), scope=session, source=False) is None
+    with_variant = _plan("open-redirect")
+    with_variant.verification_context = {"variants": [{"id": "v", "request": {"method": "GET", "path": "/r"}}]}
+    assert _blocker(with_variant, source=False) is None
 
 
 # ── verify lists the test cases first and does not test what it cannot confirm ─
 
 BASE = "https://app.example.com"
 SCOPE = {"schema_version": 1, "base_url": BASE, "owner": {"name": "tester"},
-         "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
+         "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"},
+         "injection_inputs": [
+             {"finding_id": f, "path": p, "input_location": loc, "input_name": n, "semantics": "literal"}
+             for f, p, loc, n in (("T-1", "/rest/products/search", "params", "q"),
+                                  ("T-2", "/rest/user/login", "json", "email"))]}
 THREATS = [
     {"id": "T-1", "cwe": "CWE-89", "severity": "critical", "title": "sqli in search",
      "scenario": "GET /rest/products/search?q=' breaks the query.",

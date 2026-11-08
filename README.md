@@ -70,7 +70,7 @@ A finding counts as confirmed only with the proof in the right column.
 | Open redirect | CWE-601 | the target redirects to a marker host that does not exist; the redirect is not followed |
 | SSRF | CWE-918 | the target calls a listener the Verifier runs on your machine |
 
-XSS needs the proof browser (see [Install](#install)), path traversal a marker file named in the scope (`marker_file`), and SSRF a listener the target can reach. For a target on `localhost` the Verifier starts that listener itself; for any other target the scope names it (`callback`). Details: [`docs/cli.md`](docs/cli.md).
+XSS needs the proof browser (see [Install](#install)), path traversal a marker file named in the scope (`marker_file`), injection the input the scope declares as literal data (`injection_inputs`), and SSRF a listener the target can reach. For a target on `localhost` the Verifier starts that listener itself; for any other target the scope names it (`callback`). Details: [`docs/cli.md`](docs/cli.md).
 
 Each finding ends with one of these verdicts:
 
@@ -126,7 +126,7 @@ Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severi
 
 ## Output
 
-Before it contacts the target, `verify` shows a test plan: the findings it will test with the requests the assessment names, and the findings it cannot test in this run, grouped by what they need (a test identity, the proof browser, a marker file, a callback, or `--allow-intrusive`) and how to provide it. Those are not tested unless you add `--test-all`.
+Before it contacts the target, `verify` shows a test plan: the findings it will test with the requests the assessment names, and the findings it cannot test in this run, grouped by what they need (a test identity, the proof browser, a marker file, a callback, an injection contract, a route, or `--allow-intrusive`) and how to provide it. Those are not tested unless you add `--test-all`.
 
 While `verify` runs, it prints its progress on standard error, each finding set apart by a blank line: its title and the agent that tests it, with model, step budget and identities, one entry per request or source read of the agent with what it checks, the request it tested and the result, and one with the verdict and its reason: green confirmed, red not reproduced, yellow inconclusive. Each entry shows the finding, the share of findings done, the run time and the time left. When costs are shown, each step gives its cost and the verdict the run's spend. In a terminal the tested request and the amounts are highlighted, and a status line underneath shows the run's spend so far, the running step and how long it has been running. [`docs/cli.md`](docs/cli.md#verify--verify-findings-against-a-running-target) describes the columns.
 

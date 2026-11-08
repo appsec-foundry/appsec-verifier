@@ -349,3 +349,99 @@ def test_batch_repetitions_keep_evidence_and_stop_before_extra_requests(tmp_path
     result = AgentProbe("injection", Planner).run(ctx)
     assert result.verdict == "inconclusive" and result.limits_hit == "stagnation"
     assert len(sent) == 10 and len(result.poc["steps"]) == 10
+
+
+SEARCH_VARIANT = {"id": "v-search", "hypothesis": "q is rendered as HTML in the heading", "request": {
+    "method": "GET", "path": "/#/search", "inputs": [{"location": "query", "name": "q"}]}}
+
+
+class ExecutingBrowser:
+    def check(self, url, **kw):
+        return {"executed": True, "context_verified": True, "evidence": []}
+
+
+class Script:
+    def __init__(self, steps):
+        self.steps, self.calls = iter(steps), 0
+
+    def next_step(self, ctx, history):
+        self.calls += 1
+        return next(self.steps, {"verdict": {"verdict": "inconclusive", "rationale": "script ended"}})
+
+
+def xss_context(tmp_path):
+    ctx = context(tmp_path)
+    ctx.plan = replace(ctx.plan, cls="xss", cwe="CWE-79", endpoints=(),
+                       verification_context={"variants": [SEARCH_VARIANT]})
+    ctx.browser, ctx.marker = ExecutingBrowser(), ("m1", "m2")
+    return ctx
+
+
+def xss_plan(*prerequisites, variant="v-search"):
+    args = {"kind": "execution", "hypothesis": "q reaches an innerHTML sink unsanitized", "path": "/#/search",
+            "method": "GET", "strategy": {**STRATEGY, "prerequisites": list(prerequisites)}}
+    if variant:
+        args["variant"] = variant
+    return {"tool": "plan_test", "args": args}
+
+
+def page_loads(status, *steps):
+    return {"condition": "The search page loads", "status": status, **({"steps": list(steps)} if steps else {})}
+
+
+def test_rejected_plans_leave_the_allowance_to_the_corrected_plan(tmp_path):
+    """Two plans rejected for their strategy must not use up the corrected one, whose key is the same."""
+    ctx = xss_context(tmp_path)
+    logs = []
+    ctx.log = logs.append
+    script = Script([
+        {"tool": "read_context", "args": {"variant": "v-search"}},
+        xss_plan(page_loads("observed", 1)),  # a context step is no observation
+        xss_plan(page_loads("observed", 1)),
+        xss_plan(page_loads("assumed")),  # differs only in its strategy, so its repetition key is the same
+        {"tool": "browser_check", "args": {"path": "/#/search?q=<svg/onload=alert('m1'+'m2')>"}},
+        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [5]}},
+    ])
+    result = AgentProbe("xss", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.limits_hit is None
+    errors = [r["result"]["error"] for r in logs if (r.get("result") or {}).get("error")]
+    assert len(errors) == 2
+    assert all("prerequisite 1 is observed but cites step 1 without a recorded response" in e for e in errors)
+
+
+def test_identical_rejected_plans_still_stop_after_three_failures(tmp_path):
+    ctx = xss_context(tmp_path)
+    logs = []
+    ctx.log = logs.append
+    script = Script([xss_plan(variant=None) for _ in range(4)])
+    result = AgentProbe("xss", lambda: script).run(ctx)
+    assert result.verdict == "inconclusive" and result.limits_hit == "stagnation"
+    assert script.calls == 3
+    assert sum(bool((r.get("result") or {}).get("error")) for r in logs) == 3
+
+
+def test_accepted_plans_keep_using_the_allowance_and_a_refused_route_refunds_nothing(tmp_path):
+    c = Controller(xss_context(tmp_path))
+    args = xss_plan()["args"]
+    for _ in range(2):
+        c.before("plan_test", args)
+        c.observe("plan_test", args, {"accepted": True, "experiment": args})
+    elsewhere = {**args, "path": "/elsewhere"}
+    with pytest.raises(ToolError, match="no matching route"):
+        c.before("plan_test", elsewhere)
+    c.observe("plan_test", elsewhere, {"error": "request has no matching route"})
+    with pytest.raises(LimitExceeded, match="repetition"):
+        c.before("plan_test", {**args, "hypothesis": "the same plan in other words"})
+
+
+def test_plan_names_every_problem_and_accepts_a_recorded_response(tmp_path):
+    ctx = xss_context(tmp_path)
+    ctx.responses = {2: {"body": "", "complete": True}}
+    tools = AgentTools(ctx)
+    with pytest.raises(ToolError) as rejected:
+        tools.plan_test(**xss_plan(page_loads("observed", 1, 2), page_loads("observed"), variant=None)["args"])
+    message = str(rejected.value)
+    assert "prerequisite 1 is observed but cites step 1 without a recorded response" in message
+    assert "prerequisite 2 is observed but cites no step" in message
+    assert "select an evidenced finding variant" in message
+    assert tools.plan_test(**xss_plan(page_loads("observed", 2))["args"])["accepted"] is True

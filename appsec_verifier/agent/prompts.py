@@ -37,7 +37,11 @@ def _tool_defs() -> list[dict]:
             "Use boolean with baseline/positive/negative inputs and a JSON pointer to a meaningful response field; "
             "repeat each twice. Timing uses two baseline and two positive inputs, alternating. Access-control "
             "uses an operator-supplied resource, an owner or a privileged reference, as the access-control proof "
-            "instructions say. A new plan requires fresh observations.",
+            "instructions say. A new plan requires fresh observations. "
+            "If the finding lists variants, set variant to the one you test. Prerequisite status: observed only "
+            "with http_request steps of this finding whose recorded response shows it; assumed for what analysis, "
+            "source or context suggests, or what the test itself will show; missing for what does not hold or "
+            "cannot be obtained. A plan that still lists a missing prerequisite cannot support confirmed.",
             "input_schema": PLAN_SCHEMA,
         },
         {
@@ -193,7 +197,7 @@ def _system(ctx) -> str:
         "Use read_context for architecture, dependencies, attack_chains, walkthrough and prior_results. "
         "Prior results describe individual observations, never a proven transition or completed attack chain. "
         "Before proof collection, record strategy in plan_test: the evidenced data flow, prerequisites "
-        "(observed/assumed/missing with step references), why this approach is informative, the alternative "
+        "(observed, assumed or missing, as plan_test defines them), why this approach is informative, the alternative "
         "normal explanation, expected observation and stop condition. Harmless diagnostic requests can come first. "
         "For a revision, include revision_reason explaining the new observation and one justified change. "
         "Do not repeat identical failed attempts. Missing prerequisites remain open, never automatically satisfied. "
@@ -359,6 +363,10 @@ def _seed(ctx) -> str:
         "test_resources": resources,
         "session_checks": [
             r for r in (getattr(ctx, "scope", None) or {}).get("session_checks", []) if r["finding_id"] == p.id
+        ],
+        # The operator's literal-input contract (VER-011): empty means no injection proof plan is accepted.
+        "injection_inputs": [
+            r for r in (getattr(ctx, "scope", None) or {}).get("injection_inputs", []) if r["finding_id"] == p.id
         ],
         "selection_reason": getattr(p, "selection_reason", None),
         "dependencies": context.get("dependencies", []),

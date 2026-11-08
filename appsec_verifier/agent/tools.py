@@ -147,12 +147,22 @@ class AgentTools:
     def plan_test(self, **plan) -> dict:
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
-        for prerequisite in plan["strategy"]["prerequisites"]:
+        # Name every declaration problem at once, so one revision can fix them all.
+        responses = getattr(self.ctx, "responses", {})
+        problems = []
+        for i, prerequisite in enumerate(plan["strategy"]["prerequisites"], 1):
             steps = prerequisite.get("steps", [])
-            if prerequisite["status"] == "observed" and (
-                not steps or any(n not in getattr(self.ctx, "responses", {}) for n in steps)
-            ):
-                raise ToolError("observed prerequisites must cite recorded response steps from this finding")
+            unrecorded = [str(n) for n in steps if n not in responses]
+            if prerequisite["status"] == "observed" and (not steps or unrecorded):
+                cited = "step " + ", ".join(unrecorded) + " without a recorded response" if unrecorded else "no step"
+                problems.append(f"prerequisite {i} is observed but cites {cited}")
+        if problems:
+            problems.append("observed cites only http_request steps of this finding; mark the others assumed")
+        variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
+        if variants and not plan.get("variant"):
+            problems.append("select an evidenced finding variant for this plan")
+        if problems:
+            raise ToolError("; ".join(problems))
         from .experiments import expression_controls, ldap_controls, operator_controls, sql_controls
 
         if any(
@@ -209,9 +219,6 @@ class AgentTools:
             raise ToolError("timing uses baseline and positive only")
         if plan.get("input_location") == "form" and plan.get("method", "GET") in SAFE_METHODS:
             raise ToolError("form experiments need a body-capable write method and intrusive authorization")
-        variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
-        if variants and not plan.get("variant"):
-            raise ToolError("select an evidenced finding variant for this plan")
         if plan.get("variant"):
             variant = next((v for v in variants if v["id"] == plan["variant"]), None)
             if variant is None:

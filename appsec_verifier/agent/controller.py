@@ -27,6 +27,7 @@ class Controller:
         self.failures = 0
         self.plan = None
         self.source_routes = []
+        self._counted = None  # the repetition key the last before() call charged
 
     def check(self):
         self.ctx.guard.check_window()
@@ -158,6 +159,7 @@ class Controller:
         return token([name, args])
 
     def before(self, name, args):
+        self._counted = None
         self.check()
         if name in ("http_request", "browser_check", "plan_test"):
             self._target(name, args)
@@ -166,11 +168,16 @@ class Controller:
         if self.repetitions[key] >= allowance:
             raise LimitExceeded("stagnation", "action repetition allowance exhausted; no further execution")
         self.repetitions[key] += 1
+        self._counted = key
 
     def observe(self, name, args, result):
         failed = bool(result.get("error")) or (type(result.get("status")) is int and result["status"] >= 500)
         if failed:
             self.failures += 1
+            if name == "plan_test" and self._counted is not None:
+                # A rejected plan executed nothing, and its key leaves out the strategy it was rejected for:
+                # the corrected plan keeps the allowance. Repeated rejections still stop after three failures.
+                self.repetitions[self._counted] -= 1
         elif name == "plan_test":
             if result.get("accepted"):
                 self.plan = result.get("experiment") or args

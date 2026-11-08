@@ -137,6 +137,17 @@ def test_the_seed_carries_the_requests_and_the_description_the_assessment_gives(
     assert "Requests the assessment names" not in prompt(_ctx(), [])          # nothing named, no empty line
 
 
+def test_the_seed_shows_the_finding_s_injection_contract_and_no_other():
+    ctx = _ctx()
+    entry = {"finding_id": "T-1", "path": "/rest/products/search", "input_location": "params", "input_name": "q",
+             "semantics": "literal"}
+    ctx.scope = {"injection_inputs": [entry, {**entry, "finding_id": "T-2", "path": "/other"}]}
+    text = prompt(ctx, [])
+    assert '"injection_inputs": [{"finding_id": "T-1", "path": "/rest/products/search"' in text
+    assert "/other" not in text
+    assert '"injection_inputs": []' in prompt(_ctx(), [])                     # none declared, said so
+
+
 def test_read_source_is_offered_only_with_a_source_checkout():
     without = system_prompt(_ctx())
     assert '"name": "read_source"' not in without and "no source checkout in this run" in without
