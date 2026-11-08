@@ -28,15 +28,7 @@ optional hardening.
 
 ## Target the right system
 
-- **VER-001: Require an explicit authorisation scope.** Every run names its
-  scope: a scope file, or the target URL alone. A scope file lists the
-  authorised target (base URL, hosts, allowed ports, allowed path prefixes), an
-  authorisation window (from/until), and a responsible owner; it is needed for
-  anything beyond a single host and for write requests (VER-030). The URL alone
-  authorises only its scheme, host and port, read-only, for that run. The
-  Verifier contacts only destinations inside the scope. Anything outside it
-  — a different host, port, scheme, or path prefix, or a time outside the window
-  — is refused, not attempted. There is no implicit or default target.
+- **VER-001: Require an explicit authorisation scope.** Every run names its scope: a scope file, or the target URL alone. A scope file lists the authorised target (base URL, hosts, allowed ports, allowed path prefixes), an authorisation window (from/until), and a responsible owner; it is needed for anything beyond a single host. The URL alone authorises only its scheme, host and port, for that run; write requests follow VER-030. The Verifier contacts only destinations inside the scope. Anything outside it — a different host, port, scheme, or path prefix, or a time outside the window — is refused, not attempted. There is no implicit or default target.
 
 - **VER-002: Confirm before the first request.** Before it sends anything to the
   target, the Verifier prints the resolved scope (target, ports, path prefixes,
@@ -132,15 +124,7 @@ optional hardening.
   executed*, never as confirmed, so DOM handling and sanitisers are not mistaken
   for exploitable output.
 
-- **VER-010: Prove access-control findings by comparison.** An IDOR or missing-
-  authorisation finding is confirmed by showing that identity A can perform or
-  read something that belongs to identity B, or that an unauthenticated caller
-  reaches a protected operation. This requires at least two independent test
-  identities (see VER-016). The result records which identity saw what, with the
-  requests and responses as evidence. A single successful request without the
-  cross-identity contrast is not sufficient. The operator declares the known
-  harmless resource, expected marker, allowed and denied roles. Different role
-  labels backed by the same credentials do not establish independent identities.
+- **VER-010: Prove access-control findings by comparison.** An IDOR or missing-authorisation finding is confirmed by showing that identity A can perform or read something that belongs to identity B, or that an unauthenticated caller reaches a protected operation. This requires at least two independent test identities (see VER-016). The result records which identity saw what, with the requests and responses as evidence. A single successful request without the cross-identity contrast is not sufficient. The operator can declare the known harmless resource, expected marker, allowed and denied roles; a declared resource takes precedence. Without one, given two normal accounts and intrusive mode (VER-030), the Verifier creates the resource: the owning account writes a random marker and reads it back, an unauthenticated read must not show it, and the other account's read decides. A privileged function is confirmed when a normal account receives the same response as a privileged account (VER-041) and an unauthenticated caller is refused. Both count at medium confidence (VER-013). Different role labels backed by the same credentials do not establish independent identities.
 
 - **VER-011: Prove injection without exfiltration.** Injection findings are
   confirmed through controlled, observable behavioural differences — a boolean
@@ -155,14 +139,7 @@ optional hardening.
   SQL confirmation requires fresh complementary predicate controls. Command,
   template and XPath confirmation requires fresh computed arithmetic results.
 
-- **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path
-  traversal is confirmed by reading a pre-placed, non-sensitive marker file;
-  open redirect by landing on an operator-controlled benign URL; SSRF by a
-  request arriving at a callback the Verifier itself listens on, bound to the
-  host and port the scope declares. The Verifier does not read system files,
-  follow redirects to arbitrary hosts, or reach internal or metadata addresses to
-  demonstrate impact. The callback destination is the only place those two probe
-  classes are steered toward.
+- **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path traversal is confirmed by reading a pre-placed, non-sensitive marker file; open redirect by landing on an operator-controlled benign URL; SSRF by a request arriving at a callback the Verifier itself listens on, bound to the host and port the scope declares or, for a target on a loopback address without one, to a free loopback port, where a hit confirms the finding because the application fetched an internal address. The Verifier does not read system files, follow redirects to arbitrary hosts, or reach internal or metadata addresses to demonstrate impact. The callback destination is the only place those two probe classes are steered toward.
 
 - **VER-013: State each verdict and its confidence.** Every tested finding gets
   one verdict — confirmed, not reproducible, blocked by a control, or
@@ -214,16 +191,7 @@ optional hardening.
   techniques are never performed. A probe whose outcome is unknown is reconciled
   or treated as having had an effect, never blindly retried.
 
-- **VER-030: Safe mode is the default.** By default the Verifier runs in a
-  cautious mode: it stays read-only even when the scope permits state change,
-  sends the single most benign payload that can still decide a verdict, keeps the
-  request count and rate low, and avoids pervasive or noisy behaviour such as
-  wordlist fuzzing, broad parameter sweeps, or trying many payload variants.
-  Going beyond this — the marked, cleaned-up state-changing probes of VER-014, or
-  more thorough probing — requires an explicit opt-out, and that choice is
-  recorded in the report. Safe mode never disables a safety control; it only
-  tightens behaviour. A single class can be verified on its own (VER-026), and
-  safe mode applies the same way to that one class.
+- **VER-030: Safe mode is the default.** By default the Verifier runs in a cautious mode: it stays read-only even when the scope permits state change, sends the single most benign payload that can still decide a verdict, keeps the request count and rate low, and avoids pervasive or noisy behaviour such as wordlist fuzzing, broad parameter sweeps, or trying many payload variants. Going beyond this — the marked, cleaned-up state-changing probes of VER-014, or more thorough probing — requires an explicit opt-out, and that choice is recorded in the report. The opt-out alone permits state change for the scope in effect, unless a scope file explicitly forbids it. Safe mode never disables a safety control; it only tightens behaviour. A single class can be verified on its own (VER-026), and safe mode applies the same way to that one class.
 
 - **VER-015: Bound every run.** Limits on total requests, per-finding attempts,
   retries, request rate, wall-clock time, and model spend are enforced outside
@@ -236,9 +204,9 @@ optional hardening.
 
 - **VER-036: Stop unproductive verification.** Before each model call and tool action, the Verifier checks authorisation, remaining budgets and recorded progress outside the model. Tool actions must stay within the finding under test (VER-008). Repeated failed or redundant actions without new evidence stop after documented finite allowances; planned repetitions required for proof remain permitted. Running actions are bounded by the remaining execution time. A stopped finding retains its evidence and reports the reason without claiming a negative result (VER-024).
 
-- **VER-016: Handle test credentials as secrets.** Session credentials for the test identities (bearer tokens, usernames and passwords, client secrets, session cookies) come from environment variables supplied by the operator or, in an interactive run, from hidden input; sessions are also obtained at run time (VER-028, VER-040). None is stored, committed or bundled, and none is a default or shared account. Credential and token **values** never appear in logs, in the report, in evidence artefacts, or in any prompt sent to a model; only a role label identifies an identity, and captured requests are redacted of Authorization headers, cookies, and token parameters. Self-registration is used only when the scope explicitly allows it and the target has open registration, and any account it creates is marked and reported.
+- **VER-016: Handle test credentials as secrets.** Session credentials for the test identities (bearer tokens, usernames and passwords, client secrets, session cookies) come from environment variables supplied by the operator or, in an interactive run, from hidden input; a user name may also be given on the command line (VER-041); sessions are also obtained at run time (VER-028, VER-040). None is stored, committed or bundled, and none is a default or shared account. Credential and token **values** never appear in logs, in the report, in evidence artefacts, or in any prompt sent to a model; only a role label identifies an identity, and captured requests are redacted of Authorization headers, cookies, and token parameters. Self-registration is used only when the scope explicitly allows it and the target has open registration, and any account it creates is marked and reported.
 
-- **VER-028: Authenticate through the operator's mechanism.** The Verifier obtains sessions the way the target expects: a static bearer token, HTTP basic or form login with a username and password, an SSO/OIDC flow (client-credentials grant, resource-owner password grant, an authorization-code flow with PKCE in the operator's own browser, or a device-code flow), or a login program (VER-040). The Verifier never handles the password of an interactive SSO login. Each identity declares its method and its authentication endpoint, directly or through its issuer's discovery document, inside the scope (VER-029); the Verifier sends the identity's credentials only to that bound endpoint, obtains a token or session, and attaches it to requests to the target. It never sends a credential to an endpoint the identity did not name, and never re-sends a token across a redirect to a different origin (VER-018). A token is obtained once per identity and reused, renewed before it expires, with a refresh token where one was issued, and re-obtained when a request is rejected as unauthenticated, so a long run stays within its bounds without re-logging in for every finding. Flows that need a person run only in an interactive run and before the first finding; elsewhere such an identity blocks the run before anything is contacted. Later in the run the Verifier never asks, and an identity whose session cannot be renewed is unavailable for the rest of the run.
+- **VER-028: Authenticate through the operator's mechanism.** The Verifier obtains sessions the way the target expects: a static bearer token, HTTP basic or form login with a username and password, an SSO/OIDC flow (client-credentials grant, resource-owner password grant, an authorization-code flow with PKCE in the operator's own browser, or a device-code flow), or a login program (VER-040). The Verifier never handles the password of an interactive SSO login. Each identity declares its method and its authentication endpoint, directly or through its issuer's discovery document, inside the scope (VER-029); the Verifier sends the identity's credentials only to that bound endpoint, obtains a token or session, and attaches it to requests to the target. It never sends a credential to an endpoint the identity did not name or, for an account of VER-041, to one other than the endpoint shown before the confirmation, and never re-sends a token across a redirect to a different origin (VER-018). A token is obtained once per identity and reused, renewed before it expires, with a refresh token where one was issued, and re-obtained when a request is rejected as unauthenticated, so a long run stays within its bounds without re-logging in for every finding. Flows that need a person run only in an interactive run and before the first finding; elsewhere such an identity blocks the run before anything is contacted. Later in the run the Verifier never asks, and an identity whose session cannot be renewed is unavailable for the rest of the run.
 
 - **VER-029: Reach the target through a declared proxy.** When the operator
   declares an HTTP/HTTPS proxy, the Verifier routes its target and authentication
@@ -250,6 +218,8 @@ optional hardening.
   still refuses every destination not listed (VER-001).
 
 - **VER-040: Obtain a session from the operator's login program.** An identity can name a program the operator provides, which the Verifier runs without a shell and without model credentials to obtain that identity's session and, optionally, its expiry. The program is shown before it first runs and confirmed with VER-002; one from an identities file the guided run found rather than was given needs its own explicit yes, and the model can neither choose nor change it. The Verifier attaches only the headers the identity allows, only to its origin (VER-018), handles every value as in VER-016, and runs the program again only to renew the session (VER-028). The program's own requests are outside the run's scope, limits and safe mode (VER-001, VER-015, VER-030); the documentation and the confirmation say so.
+
+- **VER-041: Sign in accounts named on the command line.** Instead of an identities file, the operator can name test accounts by user name, normal or privileged, with the password entered hidden or read from an environment variable the operator names (VER-016). The Verifier signs each in with a username and password POST that returns a token, at the login URL the operator gives or else at the single login entry point the assessment names for the target, and shows that endpoint before the confirmation (VER-002); if the assessment names none or several, the operator gives the URL. The model only chooses the field names and never sees a value; credentials go only to that endpoint, with at most two attempts per account. A login that returns no token stops the run and points to the identities file (VER-028). The model knows the accounts only by neutral role names. A privileged account only reads (VER-030) and serves as the reference for VER-010.
 
 - **VER-017: Give the agent the least authority it needs.** The verification
   agent is driven through narrow, purpose-built tools — a scoped HTTP client, a
