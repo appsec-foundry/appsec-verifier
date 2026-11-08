@@ -1,10 +1,14 @@
 """The evidence the code requires before a finding counts as confirmed
-(VER-009 to VER-013, VER-022).
+(VER-009 to VER-013, VER-022, VER-043).
 
 The model's verdict alone never confirms a finding. A confirmed verdict cites
 its proof in `proof_steps`: step numbers of the loop's history, counted from 1
 as the prompt and the action log number them. The code checks those steps
-against what the tools actually returned:
+against what the tools actually returned. The latest test plan names the route,
+variant and identities the proof must match; for a confirmation its steps may
+also precede that plan, except in an injection experiment (VER-011), and an
+assumption the plan still lists as missing blocks nothing (VER-043). A negative
+verdict still needs attempts after its plan:
 
 - xss (VER-009): a browser_check in which the marker executed. The browser's
   screenshot and event record become the evidence; no proof_steps are needed.
@@ -79,9 +83,8 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         return result
     if result.verdict != "confirmed":
         return _negative(ctx, history, result, cited)
-    _, declaration = latest_plan(history)
-    if any(p.get("status") == "missing" for p in declaration.get("strategy", {}).get("prerequisites", [])):
-        return _downgrade(result, "the plan still declares a missing prerequisite")
+    # The plan guides the agent; an assumption it still lists as missing blocks nothing once the class's proof
+    # below holds, and steps sent before the latest plan count when they meet it (VER-043).
     cls = getattr(ctx.plan, "cls", None)
     if cls == "session":
         from .session_proof import session_check
@@ -294,19 +297,20 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
     if getattr(ctx.plan, "verification_context", {}).get("variants") and (
         not start or plan.get("kind") != "execution" or not plan.get("variant")
     ):
-        return _downgrade(result, "select the XSS variant in an execution plan before browser proof")
+        return _downgrade(result, "declare an execution plan that selects the XSS variant; its route decides which "
+                                  "browser_check counts")
     proofs = [
         h["result"]
-        for n, h in enumerate(history, 1)
-        if n > start
-        and h.get("tool") == "browser_check"
+        for h in history
+        if h.get("tool") == "browser_check"
         and (not plan.get("path") or planned_route(plan["path"], h.get("args", {}).get("path") or ""))
         and isinstance(h.get("result"), dict)
         and h["result"].get("executed") is True
         and h["result"].get("context_verified") is True
     ]
     if not proofs:
-        return _downgrade(result, "no browser_check saw the marker execute", "indicative, not executed")
+        where = f" on the planned route {plan['path']}" if plan.get("path") else ""
+        return _downgrade(result, "no browser_check saw the marker execute" + where, "indicative, not executed")
     joined = "".join(getattr(ctx, "marker", None) or ())
     if joined and any(joined in _decoded(json.dumps(h.get("args") or {}, default=str)) for h in history):
         # A page that shows a parameter with alert() would echo it: only a marker joined at runtime counts.

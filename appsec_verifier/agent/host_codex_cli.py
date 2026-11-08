@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 from .host_openai import DEFAULT_MODEL, REASONING_EFFORT, catalog_model
-from .hosts import HostReply, HostUnavailable, call_process, classify, host_env, run_process
+from .hosts import HostReply, HostUnavailable, call_process, classify, host_env, run_process, write_images
 from .steps import STEP_SCHEMA, strict_json
 
 MINIMUM_VERSION = (0, 163, 0)
@@ -39,8 +39,10 @@ class CodexCliHost:
     profile = "codex-cli"
     api_billing = False     # subscription: no cost is reported
 
-    def __init__(self, binary: str, version: str, *, model: str, features: dict, environ, run=run_process):
+    def __init__(self, binary: str, version: str, *, model: str, features: dict, environ, run=run_process,
+                 image_flag: bool = False):
         self.binary, self.version, self.model, self.features = binary, version, model, features
+        self.supports_images = image_flag   # `exec --image`, for an evidence review (VER-042)
         self.auth = "ChatGPT login"
         self.env = host_env(environ, _ENV)
         self.run = run
@@ -73,9 +75,10 @@ class CodexCliHost:
                     raise HostUnavailable("Codex CLI needs a ChatGPT login; run `codex login`")
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             raise HostUnavailable(f"could not query Codex CLI: {type(exc).__name__}") from exc
-        return cls(binary, version, model=model_id, features=features, environ=environ, run=run)
+        return cls(binary, version, model=model_id, features=features, environ=environ, run=run,
+                   image_flag="--image" in flags)
 
-    def command(self, schema_path: Path, instructions_path: Path) -> list[str]:
+    def command(self, schema_path: Path, instructions_path: Path, images=()) -> list[str]:
         features = "{" + ",".join(f"{json.dumps(k)}={str(v).lower()}" for k, v in self.features.items()) + "}"
         config = {
             "features": features,
@@ -103,10 +106,11 @@ class CodexCliHost:
             "--model", self.model,
             "--output-schema", str(schema_path),
             *[arg for key, value in config.items() for arg in ("-c", f"{key}={value}")],
+            *[f"--image={path}" for path in images],   # one value each, so "-" stays the prompt
             "-",
         ]
 
-    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None, images=()) -> HostReply:
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-codex-") as cwd:
             schema_path, instructions_path = Path(cwd) / "schema.json", Path(cwd) / "instructions.txt"
             files = ((schema_path, json.dumps(schema if schema is not None else STEP_SCHEMA)),
@@ -114,7 +118,7 @@ class CodexCliHost:
             for path, text in files:
                 path.write_text(text, encoding="utf-8")
                 path.chmod(0o600)
-            result = call_process(self, self.command(schema_path, instructions_path),
+            result = call_process(self, self.command(schema_path, instructions_path, write_images(cwd, images)),
                                   input=prompt, cwd=cwd, timeout=timeout)
         if isinstance(result, HostReply):
             return result

@@ -38,21 +38,38 @@ def test_preparation_changes_readiness_and_is_shown_before_execution():
     assert "Preparation: POST /api/Notes" in "\n".join(_test_cases(Style(False), [plan], {}))
 
 
-@pytest.mark.parametrize("kind", ["other-collection", "other-file", "no-source", "duplicate", "ambiguous", "variant"])
-def test_unproven_or_ambiguous_relationships_do_not_expand_requests(kind):
+@pytest.mark.parametrize("kind", ["other-file", "no-source", "duplicate", "other-record-route", "variant"])
+def test_any_creation_route_the_assessment_names_for_the_resource_prepares_it(kind):
+    """VER-043: the POST on a record route's collection that the attack surface lists, wherever its handler is."""
     doc = document()
-    if kind == "other-collection":
-        doc["attack_surface"][0]["entry_point"] = "POST /api/Users"
-    elif kind == "other-file":
+    if kind == "other-file":
         doc["attack_surface"][0]["notes"] = "handler: routes/users.ts:10"
     elif kind == "no-source":
         doc["attack_surface"][0]["notes"] = ""
     elif kind == "duplicate":
         doc["attack_surface"] *= 2
-    elif kind == "ambiguous":
+    elif kind == "other-record-route":
         doc["threats"][0]["scenario"] += " and GET /api/Users/:id"
     else:
         doc["threats"][0]["verification_context"] = {"version": 1, "variants": []}
+    assert [(e.method, e.path) for e in plans_from(doc)[0].preparation] == [("POST", "/api/Notes")]
+
+
+@pytest.mark.parametrize("entry_point", ["POST /api/Users", "POST /api", "POST /api/Notes/:id", "PUT /api/Notes",
+                                         "POST /api/Notes/archive"])
+def test_no_route_outside_the_resource_collection_prepares_it(entry_point):
+    """No URL guessing: another collection, a parent, a record, another method or a sub-route never counts."""
+    doc = document()
+    doc["attack_surface"][0]["entry_point"] = entry_point
+    assert plans_from(doc)[0].preparation == ()
+
+
+def test_each_record_route_gets_its_own_collection_and_other_findings_get_none():
+    doc = document()
+    doc["threats"][0]["scenario"] += " and PUT /api/Users/:id"
+    doc["attack_surface"].append({"entry_point": "POST /api/Users", "notes": "handler: server.ts:408"})
+    assert [e.path for e in plans_from(doc)[0].preparation] == ["/api/Notes", "/api/Users"]
+    doc["threats"][0]["cwe"] = "CWE-89"
     assert plans_from(doc)[0].preparation == ()
 
 
@@ -126,6 +143,28 @@ def test_stateful_two_account_pilot(tmp_path, protected, public):
     assert result.verdict == expected, result.rationale
     assert len(calls) == 4 and sum(method == "POST" for method, _ in calls) == 1
     assert ctx.budget.requests == 4
+    # The creation route is not one of the finding's own: the result records the deviation (VER-008, VER-043).
+    assert [o for o in result.observations if o.startswith("Deviation:")] == [
+        "Deviation: the owner created its own test resource with POST /api/Notes, a route the assessment names "
+        "for this resource outside this finding (VER-043)."]
+
+
+def test_a_refused_or_unanswered_preparation_is_no_deviation(tmp_path):
+    ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request expected"),
+               safe=False, read_only=False, env=ENV, idents=IDENTITIES[:2])
+    ctx.plan, ctx.marker = plans_from(document())[0], MARKER
+    c = ControllerWithPlan(ctx, {"kind": "access-control", "owner": "account-1", "path": "/api/Notes/:id"})
+    args = {"method": "POST", "path": "/api/Notes", "role": "account-1", "json": {"text": "unmarked"}}
+    with pytest.raises(ToolError, match="must carry"):
+        c.before("http_request", args)
+    args["json"] = {"text": "".join(MARKER)}
+    c.before("http_request", args)
+    c.observe("http_request", args, {"error": "request failed"})
+    assert c.deviations == []
+    args["json"] = {"text": "".join(MARKER) + " second"}    # a write runs once; the next one differs
+    c.before("http_request", args)
+    c.observe("http_request", args, {"status": 201})
+    assert c.deviations == ["POST /api/Notes"]
 
 
 def test_unknown_cwe_is_unsupported_not_claimed_static_only():
@@ -135,13 +174,9 @@ def test_unknown_cwe_is_unsupported_not_claimed_static_only():
     assert plan.status == "unsupported" and "no supported proof method" in plan.reason
 
 
-def test_registration_evidence_can_link_separate_handlers_but_not_another_route():
-    doc = document(file='routes/readNote.ts')
-    doc['attack_surface'][0]['notes'] = 'handler: server.ts:427'
-    registration = {'entry_point': 'GET /api/Notes/:id', 'notes': 'handler: server.ts:426'}
-    doc['attack_surface'].append(registration)
-    assert plans_from(doc)[0].preparation
-    registration['entry_point'] = 'GET /api/Users/:id'
+def test_only_a_read_or_change_of_a_record_links_its_collection():
+    doc = document()
+    doc["threats"][0]["scenario"] = "DELETE /api/Notes/:id"
     assert plans_from(doc)[0].preparation == ()
-    registration['entry_point'] = 'DELETE /api/Notes/:id'
-    assert plans_from(doc)[0].preparation == ()
+    doc["threats"][0]["scenario"] = "PATCH /api/Notes/:id"
+    assert [e.path for e in plans_from(doc)[0].preparation] == ["/api/Notes"]

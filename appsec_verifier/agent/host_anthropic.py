@@ -21,7 +21,7 @@ from __future__ import annotations
 import yaml
 
 from ..version_info import resource_root
-from .hosts import HostReply, HostUnavailable, check_model_name
+from .hosts import HostReply, HostUnavailable, check_model_name, png_base64
 from .steps import STEP_SCHEMA, strict_json
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -107,11 +107,17 @@ class AnthropicHost:
         prices = long if long is not None and prompt > long["threshold_tokens"] else self.prices
         return sum(tokens[field] * prices[price] for field, price in _PRICED_USAGE) / 1_000_000
 
-    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
+    supports_images = True   # PNG screenshots of an evidence review (VER-042)
+
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None, images=()) -> HostReply:
+        content = prompt if not images else [
+            *({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": png_base64(image)}}
+              for image in images),
+            {"type": "text", "text": prompt}]
         try:
             resp = self._client.with_options(timeout=timeout, max_retries=0).messages.create(
                 model=self.model, max_tokens=MAX_TOKENS, system=system,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": content}],
                 output_config={"format": {"type": "json_schema", "schema":
                                           schema if schema is not None else STEP_SCHEMA}},
             )

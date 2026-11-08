@@ -61,6 +61,7 @@ class ProbeContext:
     evidence_test_planner: object | None = None
     evidence_reviewer_factory: object | None = None
     evidence_panels: list[dict] = field(default_factory=list)
+    recapture: object | None = None   # another page for an unclear screenshot after a review issue (VER-042)
 
 
 @runtime_checkable

@@ -323,6 +323,13 @@ properties:
               sha256:   { type: [string, "null"] }
               redacted: { type: [boolean, "null"] }
               note:     { type: [string, "null"] }
+              explanation:
+                type: string
+                maxLength: 300
+                description: |
+                  On the application screenshot that leads the report: the test
+                  agent's one-sentence explanation of what the image shows, shown
+                  labelled as such; it is never proof (VER-035).
 
         poc:
           type: [object, "null"]
@@ -397,7 +404,16 @@ $defs:
         minimum: 0
         maximum: 3
       visual_review:
-        const: not-performed
+        enum:
+        - not-performed
+        - performed
+      images_reviewed:
+        type: array
+        description: |
+          The application screenshots a model was shown (paths under evidence/);
+          never HTTP or other evidence images (VER-042).
+        items:
+          type: string
       reason:
         type: string
       issues:
@@ -416,6 +432,7 @@ $defs:
               - excerpt
               - readability
               - missing-evidence
+              - screenshot
             detail: &id001
               type: string
               minLength: 1

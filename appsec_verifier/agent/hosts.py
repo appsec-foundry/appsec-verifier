@@ -8,11 +8,14 @@ run time, charges the reported cost (VER-015), and validates the step
 (steps.py, VER-019). A failed call ends only its finding, but after
 MAX_FAILED_CALLS failed calls in a row (an exhausted quota, a rejected login, a
 provider that is down) the host makes no further call in the run. A host only
-sends the request and returns a HostReply.
+sends the request and returns a HostReply. For an evidence review a host that
+can take images also receives the cleared PNG screenshots; once it rejects a
+call that carries them, later reviews of the run send text only (VER-042).
 """
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import selectors
@@ -55,6 +58,26 @@ def check_model_name(model: str) -> str:
     if not isinstance(model, str) or not _MODEL_NAME.fullmatch(model) or ".." in model:
         raise HostUnavailable(f"invalid model name {model!r}")
     return model
+
+
+def png_base64(image: bytes) -> str:
+    """A screenshot an evidence review attaches (VER-042), checked to be a PNG and base64-encoded."""
+    if not isinstance(image, bytes) or not image.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("an attached image must be a PNG")
+    return base64.b64encode(image).decode("ascii")
+
+
+def write_images(directory, images) -> list[str]:
+    """The PNG screenshots of a review call as files in a CLI host's empty temporary directory, for a CLI that
+    attaches images by path; returns their paths (VER-042)."""
+    paths = []
+    for n, image in enumerate(images, 1):
+        png_base64(image)
+        path = os.path.join(directory, f"screenshot-{n}.png")
+        with open(path, "wb") as fh:
+            fh.write(image)
+        paths.append(path)
+    return paths
 
 
 def classify(text: str) -> str:
@@ -154,12 +177,19 @@ class HostPlanner:
         except HostCallError as exc:
             return inconclusive(str(exc))
 
-    def structured(self, ctx, system: str, payload: str, schema: dict):
-        """A tool-less review/revision call; its caller validates the separate schema (VER-042)."""
-        ctx.guard.check_window()
-        return self._request(ctx, system, payload, schema=schema)
+    @property
+    def supports_images(self) -> bool:
+        """Whether the host can attach PNG screenshots to a review call (VER-042)."""
+        return bool(getattr(self._host, "supports_images", False)) and not getattr(self._host, "images_refused", False)
 
-    def _request(self, ctx, system: str, payload: str, *, schema=None):
+    def structured(self, ctx, system: str, payload: str, schema: dict, *, images=()):
+        """A tool-less review/revision call; its caller validates the separate schema (VER-042). `images` are PNG
+        bytes the caller has cleared for a model; a host that cannot take them never receives them."""
+        ctx.guard.check_window()
+        return self._request(ctx, system, payload, schema=schema,
+                             images=tuple(images) if self.supports_images else ())
+
+    def _request(self, ctx, system: str, payload: str, *, schema=None, images=()):
         host = self._host
         if host.broken:
             raise HostCallError(f"{host.label} stopped for this run: {host.broken}")
@@ -178,7 +208,8 @@ class HostPlanner:
         try:
             with execution_deadline(timeout, kind="model-timeout"):
                 reply = host.call(system, payload, timeout, ctx.budget,
-                                  **({"schema": schema} if schema is not None else {}))
+                                  **({"schema": schema} if schema is not None else {}),
+                                  **({"images": images} if images else {}))
         except LimitExceeded as exc:
             if exc.kind != "model-timeout":
                 raise
@@ -190,6 +221,8 @@ class HostPlanner:
             ctx.budget.note_cost(reply.usd)
         if reply.breach:
             raise HostCallError(f"{host.label} confinement check failed: {reply.breach}")
+        if reply.error and images:
+            host.images_refused = True   # later reviews of this run send text only (VER-042)
         if reply.error:
             # Kept on the host, not the planner: a planner lives for one finding, the host for the run.
             host.failed_calls = getattr(host, "failed_calls", 0) + 1

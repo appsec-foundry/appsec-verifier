@@ -1,4 +1,4 @@
-"""The action schemas and prompts every model host shares (VER-017, VER-019).
+"""The action schemas and prompts every model host shares (VER-017, VER-019, VER-043).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, browser_check) plus submit_verdict — and
@@ -33,17 +33,20 @@ def _tool_defs() -> list[dict]:
         },
         {
             "name": "plan_test",
-            "description": "Declare the hypothesis and controls BEFORE proof requests. "
+            "description": "Declare the hypothesis and controls. An injection experiment must be declared BEFORE "
+            "its proof requests; for other classes the plan guides you, and answered requests that already match "
+            "it count as proof as well. "
             "Use boolean with baseline/positive/negative inputs and a JSON pointer to a meaningful response field; "
             "repeat each twice. Timing uses two baseline and two positive inputs, alternating. Both use a GET "
             "request, because a write is never repeated. Access-control "
             "uses exactly one of resource (the id of an operator-supplied test resource), owner or reference, as the "
-            "access-control proof instructions say; change goes only with owner. A new plan requires fresh "
+            "access-control proof instructions say; change goes only with owner. A new injection plan requires fresh "
             "observations. "
             "If the finding lists variants, set variant to the one you test. Prerequisite status: observed only "
             "with http_request steps of this finding whose recorded response shows it; assumed for what analysis, "
             "source or context suggests, or what the test itself will show; missing for what does not hold or "
-            "cannot be obtained. A plan that still lists a missing prerequisite cannot support confirmed.",
+            "cannot be obtained. A prerequisite still listed as missing blocks nothing once the proof shows it was "
+            "met.",
             "input_schema": PLAN_SCHEMA,
         },
         {
@@ -144,8 +147,11 @@ def _tool_defs() -> list[dict]:
             "For a confirmed access-control verdict, highlight may name up to three short values "
             "copied from a cited response that show data the requesting identity must not see "
             "(e.g. the other identity's id or email); the screenshot marks them. "
-            "For an access-control finding with a known UI route, supply browser_evidence so the "
-            "successful effect is captured on the application page. HTTP evidence always accompanies it.",
+            "For a confirmed access-control or injection finding whose exploit or effect a page of the "
+            "application can show, supply browser_evidence with the page that shows it best, so the effect is "
+            "captured there. For any confirmed verdict with an application screenshot, image_explanation is one "
+            "sentence that tells a reader what the image shows; the report labels it as your explanation. HTTP "
+            "evidence always accompanies the image.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -164,16 +170,20 @@ def _tool_defs() -> list[dict]:
                         "properties": {
                             "path": {"type": "string", "minLength": 1, "maxLength": 2000},
                             "step": {"type": "integer", "minimum": 1},
-                            "value": {"type": "string", "minLength": 3, "maxLength": 200},
+                            "values": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": True,
+                                       "items": {"type": "string", "minLength": 3, "maxLength": 200}},
+                            "role": {"type": "string", "minLength": 1, "maxLength": 64},
                         },
-                        "required": ["path", "step", "value"],
-                        "description": "For confirmed access-control UI findings: the evidenced application route, "
-                        "a decisive successful GET proof step and an exact visible value from its response. "
-                        "The browser opens that route read-only as the cited step's identity and must read "
-                        "the same resource and display that value. Use the owner's read-back step for a "
+                        "required": ["path", "step", "values"],
+                        "description": "For confirmed access-control or injection findings with a page that shows "
+                        "the effect: the evidenced application route, a decisive successful GET proof step and up "
+                        "to three exact values from its response to mark. The browser opens that route read-only "
+                        "as role (one of the run's identities; by default the cited step's identity) and must "
+                        "read the same resource and display a value. Use the owner's read-back step for a "
                         "confirmed write effect. Never guess a UI route or substitute an API endpoint. "
                         "Omit for API-only findings. XSS already captures the page where its marker executed.",
                     },
+                    "image_explanation": {"type": "string", "minLength": 10, "maxLength": 300},
                     "highlight": {
                         "type": "array",
                         "maxItems": 3,
@@ -218,6 +228,9 @@ def _system(ctx) -> str:
         "Use read_context for the mechanism, SQL construction/dialect, filters and processing order; "
         "read_source only at relevant locations if clarification is needed. Treat analysis as hypotheses, "
         "not runtime proof. Never copy destructive attack steps; use harmless markers. "
+        "Where a page of the application can show the exploit or its effect, you may choose test inputs whose "
+        "effect is visible there, such as XSS that also writes visible text next to the required alert; anything "
+        "stored still carries the finding's marker. "
         "Use read_context for architecture, dependencies, attack_chains, walkthrough and prior_results. "
         "Prior results describe individual observations, never a proven transition or completed attack chain. "
         "Before proof collection, record strategy in plan_test: the evidenced data flow, prerequisites "
@@ -229,9 +242,11 @@ def _system(ctx) -> str:
         "Three consecutive tool errors or server errors stop this finding before another model call. "
         "Rewording a plan does not reset these allowances. Requests must match the finding's declared routes "
         "or literal routes read from its evidenced source file; declaring a plan cannot grant a new route, except the "
-        "GET of a write proof's change, for the record its owner created. "
+        "GET of a write proof's change, for the record its owner created, and the evidenced preparation route on "
+        "which the owner creates its own test resource. "
         "If no such route is available, report the missing prerequisite without guessing a target. "
-        "Before injection or access-control proof requests, call plan_test. For boolean injection, keep "
+        "Call plan_test before injection proof requests; for other classes call it before citing proof, and "
+        "matching answered requests from before it count. For boolean injection, keep "
         "all other inputs fixed and repeat baseline, true and false variants twice. Select a meaningful "
         "JSON pointer before collecting proof; true must reproduce the stable baseline and false must "
         "change it. Reflection, timestamps, error pages and ordinary input-dependent results are not proof. "
@@ -293,7 +308,8 @@ def _access_hint(ctx) -> str:
             "path the GET that reads the resource back (a placeholder such as :id may stand for its id). The "
             "accepted plan returns a marker. Then, as the owner and no one else, create something that belongs to "
             "that account and holds the marker in a text field the target returns, with one write to a route of "
-            "this finding that names no record in its path, such as a POST to a collection. Read it back with the "
+            "this finding or its evidenced preparation that names no record in its path, such as a POST to a "
+            "collection. Read it back with the "
             "same GET and inputs as the owner, without a role, and as another normal account; never send the "
             "marker in a read. Confirmed needs the owner to see the marker, the read "
             "without a role not to see it, and the other account to see it. Cite the write and the reads. The "

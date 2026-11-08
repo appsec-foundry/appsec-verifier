@@ -241,6 +241,17 @@ def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browse
     assert event["marked_elements"] == 1 and event["hidden_for_screenshot"] == ["div#welcome"]
 
 
+@pytest.mark.parametrize("extra, reviewable", [("", True), (" s3cret-token", False)])
+def test_a_screenshot_is_cleared_for_a_model_only_without_a_secret_in_its_page_text(browser, extra, reviewable):
+    """VER-042: the page text and the frame's own text are checked when the image is taken."""
+    b, _, _ = browser
+    b.private_text = lambda text: "s3cret-token" in text
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>{extra}"
+    result = _check(b, "/reflect?q=" + quote(payload, safe=""))
+    shot = next(e for e in result["evidence"] if e["kind"] == "screenshot")
+    assert shot["reviewable"] is reviewable
+
+
 def test_floating_layers_are_hidden_for_the_screenshot_while_the_header_stays(browser):
     """VER-035: notifications and confetti that do not hold the payload leave the image; the app's header bar
     stays as context, and the event record names what was hidden."""
@@ -347,7 +358,8 @@ def test_application_capture_requires_visible_effect_and_matching_resource(tmp_p
     try:
         result = b.check(url, identity_headers={}, target_base=BASE, marker=MARKER,
                          finding_id="T-UI", wait_ms=200, safe=True, role="customer-a",
-                         observation={"resource_url": BASE + "/api/proof", "value": "verifier-test-effect", "step": 2})
+                         observation={"resource_url": BASE + "/api/proof", "step": 2,
+                                      "values": ["verifier-test-effect", "not-on-the-page"]})
     finally:
         b.close()
     assert bool(result["evidence"]) is captured

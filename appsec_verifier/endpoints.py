@@ -1,4 +1,4 @@
-"""The requests a finding names, read from the assessment (VER-005, VER-008).
+"""The requests a finding names, read from the assessment (VER-005, VER-008, VER-043).
 
 An AppSec Analyzer assessment describes a finding in prose: its scenario and
 attack steps often name the request (`GET /rest/basket/:id`). Its attack surface
@@ -11,6 +11,8 @@ The result is a hint from the input file. It is shown to the operator, decides
 whether the run can test a finding at all (a login without a test identity,
 only write requests in safe mode), and is given to the agent. That a request
 needs a login is known only where the attack surface says `auth_required: true`.
+For access control it also names where the owner may create its own test
+resource: the POST to a record route's collection that the attack surface lists.
 Nothing here contacts the target.
 """
 
@@ -117,36 +119,29 @@ def finding_endpoints(threat: dict, surface) -> tuple[Endpoint, ...]:
 
 
 def preparation_endpoints(threat: dict, surface, endpoints) -> tuple[Endpoint, ...]:
-    """A source-located POST to the exact collection of a finding's record route.
+    """For each record route of an access-control finding, the POST to its exact collection that the
+    assessment's attack surface names: the route on which the owner may create its own test resource (VER-010),
+    also when this finding does not name it (VER-043); using it is recorded as a deviation (VER-008).
 
-    No URL guessing or cross-finding reuse. Structured variants keep their explicit
-    request boundary; ambiguous collections need an operator resource instead.
-    These are preparation candidates, never permission to send a request.
+    No URL guessing: a collection the attack surface does not list as a POST gets none. These are preparation
+    candidates, never permission to send a request.
     """
-    if threat.get("cwe") not in ("CWE-639", "CWE-862", "CWE-863") or threat.get("verification_context"):
+    if threat.get("cwe") not in ("CWE-639", "CWE-862", "CWE-863"):
         return ()
-    files = {loc.rsplit(":", 1)[0] for loc in _locations(threat)}
-    entries = _entries(surface)
-    # A route registration can live separately from its handler. Only an exact
-    # matching record request links that registration file to this finding.
-    files.update(e.handler.rsplit(":", 1)[0] for e in entries if e.handler and any(
-        e.method == endpoint.method and e.template == endpoint.path for endpoint in endpoints))
-    collections = set()
+    collections = []
     for endpoint in endpoints:
         path, _, record = endpoint.path.rpartition("/")
         if endpoint.method not in ("GET", "PUT", "PATCH") or not re.fullmatch(r":\w+|\{\w+\}|<\w+>", record):
             continue
-        if re.fullmatch(r"/(?:[A-Za-z_][A-Za-z0-9_-]*/)*[A-Za-z_][A-Za-z0-9_-]*", path):
-            collections.add(path)
-    if len(collections) != 1:
-        return ()
-    entries = [e for e in entries if e.method == "POST" and e.template in collections
-               and e.handler and e.handler.rsplit(":", 1)[0] in files]
-    if len(entries) != 1:
-        return ()
-    e = entries[0]
-    candidate = Endpoint("POST", e.template, e.login)
-    return () if candidate in endpoints else (candidate,)
+        if re.fullmatch(r"/(?:[A-Za-z_][A-Za-z0-9_-]*/)*[A-Za-z_][A-Za-z0-9_-]*", path) and path not in collections:
+            collections.append(path)
+    found = []
+    for collection in collections:
+        entry = next((e for e in _entries(surface) if e.method == "POST" and e.template == collection), None)
+        candidate = entry and Endpoint("POST", entry.template, entry.login)
+        if candidate and candidate not in endpoints and candidate not in found:
+            found.append(candidate)
+    return tuple(found)
 
 
 def login_endpoint(surface) -> str | None:

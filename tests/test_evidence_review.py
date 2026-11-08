@@ -38,7 +38,7 @@ def issue(code="comparison", variant="T-1", detail="Explain the contrast between
 
 
 def revision(text="The recorded response contains the test marker.", quote="marker"):
-    return {"explanation": text, "quotes": [{"step": 1, "part": "response", "text": quote}]}
+    return {"explanation": text, "quotes": [{"step": 1, "part": "response", "text": quote}], "page": None}
 
 
 class Host:
@@ -116,7 +116,8 @@ def test_feedback_returns_to_original_planner_then_independent_reviewer():
     assert len(host.calls) == 3 and len(original.requests) == 1 and len(reviewers[0].requests) == 2
     assert original.requests[0][0] is ctx
     assert original.requests[0][1]["feedback"] == issue()["issues"]
-    assert reviewers[0].requests[1][1]["variants"][0]["presentation"] == revision()
+    assert reviewers[0].requests[1][1]["variants"][0]["presentation"] == {
+        k: v for k, v in revision().items() if k != "page"}
     assert res.evidence_review["status"] == "clear" and res.evidence_review["rounds"] == 1
     assert res.proof == {"checked": True, "executed": True}
 
@@ -155,8 +156,8 @@ def test_repeated_issue_category_stops_even_if_model_rephrases_it():
         {"action": "http_request", "args_json": '{"path":"/new"}'},
         {**revision(), "verdict": "not-reproducible"},
         revision(quote="invented evidence"),
-        {"explanation": "new", "quotes": [{"step": 99, "part": "response", "text": "marker"}]},
-        {"explanation": "new", "quotes": [{"step": 1, "part": "body", "text": "marker"}]},
+        {"explanation": "new", "quotes": [{"step": 99, "part": "response", "text": "marker"}], "page": None},
+        {"explanation": "new", "quotes": [{"step": 1, "part": "body", "text": "marker"}], "page": None},
     ],
 )
 def test_invalid_revision_is_rejected_without_actions_or_changed_proof(bad):
@@ -301,9 +302,9 @@ def test_report_fences_untrusted_explanation_and_console_shows_rounds():
     finally:
         progress.close()
     text = stream.getvalue()
-    assert all(word in text for word in ("review", "revise", "quality", "T-1", "1/2", "image pixels"))
+    assert all(word in text for word in ("review", "revise", "quality", "T-1", "1/2", "no screenshot shown"))
     report = "\n".join(_poc_markdown({"evidence_review": res.evidence_review}))
-    assert "````text" in report and "Image pixels were not inspected" in report
+    assert "````text" in report and "No screenshot was shown to a model." in report
     assert "Technical verdict unchanged" in report and "not additional proof" in report
 
 
@@ -462,11 +463,13 @@ def test_review_receives_checked_browser_proof_without_pixels():
     supplied = host.calls[0][1]["variants"][0]
     assert supplied["code_checked_proof"]["executed"] is True
     assert supplied["browser_observations"][0]["executed_via"] == ["alert"]
-    assert supplied["image_pixels_reviewed"] is False
+    assert supplied["images"][0]["sent_to_model"] is False          # the host takes no images
+    assert res.evidence_review["visual_review"] == "not-performed" and res.evidence_review["images_reviewed"] == []
 
 
 def test_inconclusive_without_excerpts_can_be_explained_without_inventing_quotes():
-    ctx, res, host, *_ = pair([issue(), {"explanation": "No evidence was collected.", "quotes": []}, CLEAR])
+    ctx, res, host, *_ = pair([issue(), {"explanation": "No evidence was collected.", "quotes": [], "page": None},
+                               CLEAR])
     res.verdict, res.poc, res.proof = "inconclusive", None, None
     review_finding([(ctx, res)])
     assert res.evidence_review["status"] == "clear"
@@ -488,7 +491,7 @@ def test_application_image_precedes_http_and_review_in_report():
 
 
 def test_existing_excerpts_still_require_a_recorded_quote():
-    ctx, res, *_ = pair([issue(), {"explanation": "Unsupported correction.", "quotes": []}])
+    ctx, res, *_ = pair([issue(), {"explanation": "Unsupported correction.", "quotes": [], "page": None}])
     review_finding([(ctx, res)])
     assert res.evidence_review["status"] == "stopped"
     assert res.evidence_review["reason"] == "Evidence review stopped: missing recorded quote."

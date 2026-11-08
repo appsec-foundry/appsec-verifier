@@ -240,8 +240,11 @@ def _review_markdown(r: dict, level: int) -> list[str]:
     review = r.get("evidence_review")
     if not review:
         return []
+    shown = review.get("images_reviewed") or []
+    seen = ("Screenshots a model reviewed: " + ", ".join(f"`{p}`" for p in shown) + "." if shown
+            else "No screenshot was shown to a model.")
     out = ["", f"{'#' * level} Evidence presentation review", "",
-           "Technical verdict unchanged. Image pixels were not inspected by a model.", "",
+           f"Technical verdict unchanged. {seen}", "",
            _fenced(f"Status: {review['status']} · corrections: {review['rounds']}/2 · "
                    f"reviews: {review['reviews']}\n{review['reason']}", "text")]
     if review["issues"]:
@@ -266,6 +269,8 @@ def _poc_markdown(r: dict, level: int = 4) -> list[str]:
         out += ["", f"{'#' * level} Exploit in the application", ""]
         for ev in application:
             out += [f"![Application screenshot {ev['path']}]({ev['path']})", ""]
+            if ev.get("explanation"):      # model text: fenced, so it stays text (VER-035)
+                out += [_fenced(f"Test agent's explanation: {ev['explanation']}", "text"), ""]
     limitations = [o for o in r.get("observations") or []
                    if o.startswith("Application screenshot unavailable:")]
     if limitations:

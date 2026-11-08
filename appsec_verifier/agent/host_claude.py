@@ -21,7 +21,16 @@ import shutil
 import subprocess
 import tempfile
 
-from .hosts import HostReply, HostUnavailable, call_process, check_model_name, classify, host_env, run_process
+from .hosts import (
+    HostReply,
+    HostUnavailable,
+    call_process,
+    check_model_name,
+    classify,
+    host_env,
+    png_base64,
+    run_process,
+)
 from .steps import STEP_SCHEMA
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -74,7 +83,9 @@ class ClaudeHost:
             raise HostUnavailable(f"could not query Claude CLI: {type(exc).__name__}") from exc
         return cls(binary, version, model=model, auth=auth, environ=environ, run=run, api_billing=api_billing)
 
-    def command(self, system: str, max_usd: float | None, *, schema=None) -> list[str]:
+    supports_images = True   # through --input-format stream-json, for an evidence review (VER-042)
+
+    def command(self, system: str, max_usd: float | None, *, schema=None, images=False) -> list[str]:
         return [
             self.binary, "-p",
             "--model", self.model,
@@ -88,14 +99,21 @@ class ClaudeHost:
             "--permission-mode", "dontAsk",
             "--permission-prompts", "none",     # anything that would prompt is denied
             "--output-format", "stream-json", "--verbose",
+            *(["--input-format", "stream-json"] if images else []),   # one user message with image blocks
             "--json-schema", json.dumps(schema if schema is not None else STEP_SCHEMA),
             "--system-prompt", system,
             *(["--max-budget-usd", f"{max_usd:.2f}"] if max_usd is not None else []),
         ]
 
-    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None, images=()) -> HostReply:
+        if images:
+            prompt = json.dumps({"type": "user", "message": {"role": "user", "content": [
+                *({"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                               "data": png_base64(image)}} for image in images),
+                {"type": "text", "text": prompt}]}}) + "\n"
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-claude-") as cwd:
-            result = call_process(self, self.command(system, budget.remaining_cost(), schema=schema),
+            result = call_process(self, self.command(system, budget.remaining_cost(), schema=schema,
+                                                     images=bool(images)),
                                   input=prompt, cwd=cwd, timeout=timeout)
         if isinstance(result, HostReply):
             return result

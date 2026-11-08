@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from functools import partial
 from typing import Protocol
 
 from ..limits import LimitExceeded
@@ -92,11 +93,19 @@ class AgentProbe:
         self._max_steps = max_steps
 
     def run(self, ctx: ProbeContext) -> ProbeResult:
+        controller = Controller(ctx)
+        result = self._run(ctx, controller)
+        # Every preparation route the owner used outside the finding's own is a recorded deviation (VER-008).
+        result.observations = [*result.observations, *(
+            f"Deviation: the owner created its own test resource with {route}, a route the assessment names for "
+            "this resource outside this finding (VER-043)." for route in controller.deviations)]
+        return result
+
+    def _run(self, ctx: ProbeContext, controller: Controller) -> ProbeResult:
         planner = self._planner_factory()
         ctx.evidence_test_planner = planner
         ctx.evidence_reviewer_factory = self._planner_factory
         tools = AgentTools(ctx)
-        controller = Controller(ctx)
         history: list[dict] = []
         sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
@@ -166,11 +175,14 @@ class AgentProbe:
                 if last_rejected is not None and verdict.get("verdict") == "inconclusive":
                     result = last_rejected
                     verdict = {**verdict, "proof_steps": last_cited}
-                from ..verify.browser_evidence import capture_application
+                from ..verify.browser_evidence import attach_explanation, capture_application, recapture
 
                 capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
                                     verdict.get("proof_steps"))
                 result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
+                attach_explanation(ctx, result, verdict.get("image_explanation"))
+                # An evidence review may ask for another page for an unclear screenshot (VER-042).
+                ctx.recapture = partial(recapture, ctx, tools, history, sent, result, verdict.get("proof_steps"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
             if name == "run_experiment":

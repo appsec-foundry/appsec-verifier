@@ -415,7 +415,10 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
       }
     }
   }
-  return JSON.stringify({marks: marks.length, hidden, clip, crop, carrier: carrier && carrier.slice(0, 300)});
+  // What the page shows as text, with the values of its fields, for the check whether a model may see the image.
+  const text = ((root.innerText || '') + '\\n' + Array.from(root.querySelectorAll('input,textarea'))
+    .map((el) => el.value || '').join('\\n')).slice(0, 200000);
+  return JSON.stringify({marks: marks.length, hidden, clip, crop, carrier: carrier && carrier.slice(0, 300), text});
 }"""
 
 
@@ -495,8 +498,21 @@ class ProofBrowser:
                  screenshots=SCREENSHOT_CLASSES):
         self._http, self._dir, self._headless, self._launcher = http, Path(evidence_dir), headless, launcher
         self.screenshots = frozenset(screenshots)     # the classes that get screenshots (VER-035)
+        # Whether a text holds a credential value or marker-file content; set by the run. Without it no
+        # application screenshot is cleared for a model (VER-042).
+        self.private_text = None
         self._playwright = self._browser = None
         self._counts: dict[str, int] = {}
+
+    def _reviewable(self, marked, *texts) -> bool:
+        """Whether a model may see a screenshot (VER-042): only when the page's text and every text drawn around
+        it are known and none holds a credential value or the marker file's content. Fails closed."""
+        if self.private_text is None or not marked or not isinstance(marked.get("text"), str):
+            return False
+        try:
+            return not any(self.private_text(t) for t in (marked["text"], *texts) if t)
+        except Exception:  # noqa: BLE001 - a check that cannot decide clears nothing
+            return False
 
     @staticmethod
     def check_available() -> None:
@@ -643,14 +659,15 @@ class ProofBrowser:
             if observation is not None:
                 # A visible value alone could be unrelated page text: also require the cited resource
                 # to have been read successfully during this navigation, under the same identity.
+                values = list(observation["values"])[:3]
                 resource_seen = any(
                     e.get("method") == "GET" and e.get("url") == observation["resource_url"]
                     and 200 <= e.get("status", 0) < 300
-                    and observation["value"] in e.get("content", b"").decode("utf-8", errors="replace")
+                    and any(v in e.get("content", b"").decode("utf-8", errors="replace") for v in values)
                     for e in exchanges
                 )
                 result["evidence"] = []
-                result["error"] = "The browser did not read the cited resource and display its evidence value."
+                result["error"] = "The browser did not read the cited resource and display its evidence values."
                 application_page = any(
                     e.get("navigation") and any(k.lower() == "content-type" and "html" in v.lower()
                                                 for k, v in e.get("response_headers", []))
@@ -662,7 +679,7 @@ class ProofBrowser:
                                f"{url[:300]} as {role or 'anonymous'}",
                                f"captured {shown_time(datetime.now(timezone.utc).isoformat())}",
                                f"recorded proof step {observation['step']} · read-only browser observation"],
-                        values=[observation["value"]], label="value from the confirmed proof")
+                        values=values, label="values from the confirmed proof")
                     if marked and marked["marks"]:
                         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                         shot = self._dir / f"{self._stem(finding_id, 'application')}.png"
@@ -670,7 +687,8 @@ class ProofBrowser:
                         result["evidence"] = [self._entry(
                             shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
                             presentation="application", proof_step=observation["step"],
-                            marked=marked["marks"], source="live-browser")]
+                            marked=marked["marks"], source="live-browser",
+                            reviewable=self._reviewable(marked, url))]
                         result.pop("error", None)
             elif executed:
                 result["evidence"] = self._save(page, finding_id, url, status, events, marker, role,
@@ -707,9 +725,10 @@ class ProofBrowser:
                     and all(type(v) is int for v in crop.values())
                     and 0 <= crop["top"] and 0 < crop["height"] <= 760 and crop["top"] + crop["height"] <= 900):
                 crop = None
-            carrier = out.get("carrier")
+            carrier, text = out.get("carrier"), out.get("text")
             return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5],
-                    "clip": clip, "crop": crop, "carrier": carrier[:300] if isinstance(carrier, str) else None}
+                    "clip": clip, "crop": crop, "carrier": carrier[:300] if isinstance(carrier, str) else None,
+                    "text": text[:200000] if isinstance(text, str) else None}
         except Exception:  # noqa: BLE001 - the screenshot is still taken, unmarked
             return None
 
@@ -731,7 +750,7 @@ class ProofBrowser:
         via = sorted({k for k, m in events if m == joined})
         data = {"finding_id": finding_id, "url": url, "status": status, "marker": joined, "executed_via": via,
                 "captured": captured, "execution_contexts": execution_contexts or [], "attempt": attempt}
-        shot = None
+        shot, reviewable = None, False
         if "xss" in self.screenshots:
             # The page gets only the outline; address bar, dialog and caption are drawn around it (xss_frame).
             marked = self._mark(page, None, part=marker[0])
@@ -757,6 +776,7 @@ class ProofBrowser:
                 frame = xss_frame(url=url, image=image, crop=marked["crop"] if marked else None,
                                   dialog=(via[0], urlsplit(origin).netloc or origin, joined) if via else None,
                                   lines=lines)
+                reviewable = self._reviewable(marked, url, *lines)
                 shot = self._dir / f"{stem}.png"
                 try:
                     framed, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200,
@@ -772,7 +792,8 @@ class ProofBrowser:
         if shot is not None:
             entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
                                        presentation="application", source="live-browser",
-                                       executed_via=via, marked=data.get("marked_elements")))
+                                       executed_via=via, marked=data.get("marked_elements"),
+                                       reviewable=reviewable))
         return entries
 
     def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, finding_id: str,
@@ -825,7 +846,8 @@ class ProofBrowser:
                                                                 label="value named in the verdict"))
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
                                                     presentation="application", source="recorded-html",
-                                                    marked=marked["marks"] if marked else None)]
+                                                    marked=marked["marks"] if marked else None,
+                                                    reviewable=self._reviewable(marked, url))]
 
     def render_exchanges(self, *, html: str, finding_id: str, marked: int) -> list[dict]:
         """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035)."""

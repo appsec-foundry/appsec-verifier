@@ -17,7 +17,7 @@ import httpx
 import yaml
 
 from ..version_info import resource_root
-from .hosts import HostReply, HostUnavailable, check_model_name
+from .hosts import HostReply, HostUnavailable, check_model_name, png_base64
 from .steps import STEP_SCHEMA, strict_json
 
 ENDPOINT = "https://api.openai.com/v1/responses"
@@ -87,11 +87,16 @@ class OpenAIHost:
         if status != 200:
             raise HostUnavailable(f"model {self.model}: {_status_reason(status)} (HTTP {status})")
 
-    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
+    supports_images = True   # PNG screenshots of an evidence review (VER-042)
+
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None, images=()) -> HostReply:
         body = {
             "model": self.model,
             "instructions": system,
-            "input": prompt,
+            "input": prompt if not images else [{"role": "user", "content": [
+                {"type": "input_text", "text": prompt},
+                *({"type": "input_image", "image_url": "data:image/png;base64," + png_base64(image)}
+                  for image in images)]}],
             "store": False,
             "max_output_tokens": MAX_OUTPUT_TOKENS,
             "reasoning": {"effort": REASONING_EFFORT},

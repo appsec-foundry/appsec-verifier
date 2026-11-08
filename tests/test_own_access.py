@@ -110,11 +110,27 @@ def _change(history, step, **changes):
     (_change(owned(), 3, complete=False), "absence is not established"),
     (_change(owned(), 4, path="/api/Feedbacks/8"), "same resource with the same inputs"),
     (owned()[:3] + owned()[4:], "cite a read without a role"),
-    ([owned()[1], owned()[0], *owned()[2:]], "after the declared plan"),                        # write before plan
 ])
 def test_an_own_resource_without_the_full_contrast_stays_inconclusive(history, reason):
     result = _check(history)
     assert result.verdict == "inconclusive" and reason in result.rationale
+
+
+def test_steps_before_the_latest_plan_count_for_a_confirmation_but_not_for_a_negative_verdict():
+    """VER-043: the plan guides; a revised plan does not discard the contrast already recorded. A negative
+    verdict still needs attempts after its plan (VER-013)."""
+    assert _check([*owned()[1:], owned()[0]]).verdict == "confirmed"      # all sent before the (revised) plan
+    assert _check([owned()[1], owned()[0], *owned()[2:]]).verdict == "confirmed"
+    forbidden = owned('{"error":"forbidden"}', 403)
+    assert _check(forbidden, "blocked-by-control").verdict == "blocked-by-control"
+    result = _check([*forbidden[1:], forbidden[0]], "blocked-by-control")
+    assert result.verdict == "inconclusive" and "fresh test attempt" in result.rationale
+
+
+def test_an_assumption_still_listed_as_missing_does_not_block_the_proof():
+    history = owned()
+    history[0]["args"]["strategy"]["prerequisites"] = [{"condition": "no ownership predicate", "status": "missing"}]
+    assert _check(history).verdict == "confirmed"
 
 
 def test_an_operator_resource_takes_precedence_over_an_own_resource():

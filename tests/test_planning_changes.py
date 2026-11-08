@@ -222,6 +222,37 @@ def test_session_attributes_and_secret_redaction(tmp_path, secure):
     assert cookie_observations(httpx.Response(200, headers={"set-cookie": "sid=; Max-Age=0"}))[0]["active"] is False
 
 
+@pytest.mark.parametrize("secure", [False, True])
+def test_session_observations_before_the_plan_count_only_for_a_confirmation(tmp_path, secure):
+    """VER-043: the plan guides; for a negative verdict the observations must still follow it (VER-013)."""
+    def target(*a, **k):
+        return httpx.Response(200, text="ok", headers={
+            "Set-Cookie": "sid=fixture-session-value-12345; HttpOnly; SameSite=Lax" + ("; Secure" if secure else "")})
+
+    ctx = _ctx(tmp_path, target)
+    ctx.plan = replace(ctx.plan, cls="session", cwe="CWE-614")
+    ctx.scope = {**ctx.scope,
+                 "session_checks": [{"id": "s", "finding_id": "T-1", "path": "/session", "cookie_name": "sid"}]}
+    actions = [
+        *[{"tool": "http_request", "args": {"path": "/session"}} for _ in range(2)],
+        {"tool": "plan_test", "args": {"kind": "session", "hypothesis": "Session cookie lacks Secure",
+                                       "path": "/session", "resource": "s", "strategy": copy.deepcopy(STRATEGY)}},
+        {"verdict": {"verdict": "not-reproducible" if secure else "confirmed", "rationale": "cookie attributes",
+                     "proof_steps": [1, 2]}},
+        {"verdict": {"verdict": "inconclusive", "rationale": "no fresh observation"}},
+    ]
+
+    class Planner:
+        def next_step(self, context, history):
+            return actions.pop(0)
+
+    result = AgentProbe("session", Planner).run(ctx)
+    if secure:
+        assert result.verdict == "inconclusive" and "must follow the declared plan" in result.rationale
+    else:
+        assert result.verdict == "confirmed"
+
+
 @pytest.mark.parametrize("cwe", ["CWE-78", "CWE-1336", "CWE-643"])
 @pytest.mark.parametrize("evaluate", [False, True])
 def test_expression_challenges_require_computed_results(tmp_path, cwe, evaluate):

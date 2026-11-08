@@ -163,7 +163,23 @@ def test_xss_execution_counts_only_on_the_planned_route(checked_path, verdict):
     res = _check("xss", _xss_history(checked_path), [2], marker=("m1", "m2"))
     assert res.verdict == verdict
     if verdict == "inconclusive":
-        assert "no browser_check saw the marker execute" in res.rationale
+        assert "no browser_check saw the marker execute on the planned route /#/search?q=<test>" in res.rationale
+
+
+def test_an_execution_before_the_latest_plan_counts_and_a_missing_assumption_blocks_nothing():
+    """VER-043: a plan revised after the browser saw the marker execute does not discard the execution."""
+    plan, check = _xss_history("/#/search?q=<svg/onload=alert('m1'.concat('m2'))>")
+    plan["args"]["strategy"] = {"prerequisites": [{"condition": "q reaches the sink", "status": "missing"}]}
+    assert _check("xss", [check, plan], [1], marker=("m1", "m2")).verdict == "confirmed"
+
+
+def test_an_operator_resource_contrast_sent_before_the_plan_counts():
+    history, cited, extra = _access_fixture([_req("alice"), _req("bob")], [1, 2])
+    history = [*history[1:], history[0]]                    # the plan follows the requests it describes
+    responses = {n - 1: r for n, r in extra["responses"].items()}
+    res = check_proof(_ctx("access-control", scope=extra["scope"], responses=responses), history,
+                      ProbeResult(verdict="confirmed", confidence="high", rationale="claim"), [1, 2])
+    assert res.verdict == "confirmed"
 
 
 # ── open redirect (VER-012) ───────────────────────────────────────────────────

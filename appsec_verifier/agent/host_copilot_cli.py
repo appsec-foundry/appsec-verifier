@@ -20,7 +20,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .hosts import HostReply, HostUnavailable, call_process, check_model_name, classify, host_env, run_process
+from .hosts import (
+    HostReply,
+    HostUnavailable,
+    call_process,
+    check_model_name,
+    classify,
+    host_env,
+    run_process,
+    write_images,
+)
 from .steps import STEP_SCHEMA, strict_json
 
 SUPPORTED_VERSION = "1.0.101"
@@ -62,7 +71,9 @@ class CopilotCliHost:
             raise HostUnavailable(f"copilot-cli needs the reviewed GitHub Copilot CLI version {SUPPORTED_VERSION}")
         return cls(binary, SUPPORTED_VERSION, model=model, environ=environ, run=run)
 
-    def command(self, cwd: Path) -> list[str]:
+    supports_images = True   # `--attachment`, for an evidence review (VER-042)
+
+    def command(self, cwd: Path, images=()) -> list[str]:
         return [
             self.binary,
             "--no-auto-update", "--no-color", "--no-bash-env", "--no-custom-instructions", "--no-ask-user",
@@ -75,14 +86,16 @@ class CopilotCliHost:
             "--log-level", "none", "--log-dir", str(cwd / "logs"),
             "--silent", "--output-format", "text",
             "-C", str(cwd),
+            *[arg for path in images for arg in ("--attachment", path)],
         ]
 
-    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None, images=()) -> HostReply:
         instructions = (system + "\nReturn exactly one JSON value matching this JSON Schema. "
                         "Do not use Markdown fences or add prose.\n"
                         + json.dumps(schema if schema is not None else STEP_SCHEMA))
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-copilot-") as cwd:
-            result = call_process(self, self.command(Path(cwd)), input=instructions + "\n\n" + prompt,
+            result = call_process(self, self.command(Path(cwd), write_images(cwd, images)),
+                                  input=instructions + "\n\n" + prompt,
                                   cwd=cwd, timeout=timeout)
         if isinstance(result, HostReply):
             return result

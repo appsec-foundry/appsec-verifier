@@ -194,15 +194,17 @@ def experiment_groups(history, cited):
     signatures = set()
     for n in cited:
         if n <= start:
-            return plan, {}, "proof must be collected after the declared plan"
+            return plan, {}, (f"proof must be collected after the declared plan (VER-011): step {n} precedes the "
+                              f"plan in step {start} and must be repeated")
         h = history[n - 1]
         args, result = h.get("args", {}), h.get("result", {})
         if h.get("tool") != "http_request" or not isinstance(result.get("status"), int):
-            return plan, {}, "proof needs answered target requests"
+            return plan, {}, f"proof needs answered target requests; step {n} is none"
         if not planned_route(plan["path"], args.get("path") or "") or (
             (args.get("method") or "GET").upper() != plan.get("method", "GET")
         ):
-            return plan, {}, "proof requests do not match the declared target"
+            return plan, {}, (f"proof requests do not match the declared target: step {n} does not send "
+                              f"{plan.get('method', 'GET')} {plan['path']}")
         # A query in the path counts as params, as the controller sends it; the rest of the path stays fixed.
         path, _, query = (args.get("path") or "").partition("?")
         sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers")}
@@ -212,7 +214,7 @@ def experiment_groups(history, cited):
         signatures.add(token([args.get("role"), path, sent]))
         bucket = next((k for k in groups if token(value) == token(plan[k])), None)
         if bucket is None:
-            return plan, {}, "a cited request did not use a declared control value"
+            return plan, {}, f"a cited request did not use a declared control value: step {n}"
         groups[bucket].append((n, result))
     if len(signatures) != 1:
         return plan, {}, "only the declared input may change; identity and other inputs must stay fixed"
@@ -290,13 +292,11 @@ def injection_check(ctx, history, cited):
 
 
 def access_observations(ctx, history, cited):
-    start, plan = latest_plan(history)
+    _, plan = latest_plan(history)
     resources = (getattr(ctx, "scope", {}) or {}).get("test_resources", [])
     resource = next((r for r in resources if r["id"] == plan.get("resource") and r["finding_id"] == ctx.plan.id), None)
     if plan.get("kind") != "access-control" or resource is None:
         return [], None, "declare an access-control plan using an operator-supplied test resource"
-    if any(n <= start for n in cited):
-        return [], None, "proof must be collected after the declared plan"
     matched = []
     for n in cited:
         h = history[n - 1]
@@ -343,23 +343,23 @@ def _sent(args) -> str:
     return token({k: args.get(k) for k in ("path", "params", "json", "form")})
 
 
-def _access_steps(ctx, history, cited, plan, start):
+def _access_steps(ctx, history, cited, plan):
     """The cited steps of a self-made access proof, split into writes and reads. Every read is an answered GET
-    after the plan to one path that matches the plan's, with the same inputs: (step, role, response, result)."""
+    to one path that matches the plan's, with the same inputs: (step, role, response, result). The steps may
+    precede the latest plan (VER-043); a negative verdict is held to its plan in proof._negative."""
     writes, reads, shapes = [], [], set()
     for n in cited:
-        if n <= start:
-            return [], [], "proof must be collected after the declared plan"
         h = history[n - 1]
         args, res = h.get("args", {}), h.get("result", {})
         method = (args.get("method") or "GET").upper()
         if h.get("tool") != "http_request" or type(res.get("status")) is not int:
-            return [], [], "proof needs answered target requests"
+            return [], [], f"proof needs answered target requests; step {n} is none"
         if method in ("POST", "PUT", "PATCH"):
             writes.append((n, args.get("role") or None, res))
             continue
         if method != plan.get("method", "GET") or not route_matches(plan["path"], args.get("path", "")):
-            return [], [], "every read must request the planned path with the planned method"
+            return [], [], (f"every read must request the planned path with the planned method: step {n} does not "
+                            f"send {plan.get('method', 'GET')} {plan['path']}")
         shapes.add(token([args.get("path"), *((args.get(k) or {}) for k in ("params", "json", "form"))]))
         response = getattr(ctx, "responses", {}).get(n)
         if not response:
@@ -373,7 +373,7 @@ def _access_steps(ctx, history, cited, plan, start):
 def owned_check(ctx, history, cited, *, negative=False, blocked=False):
     """A resource the owner created with the finding's marker (VER-010, VER-014): the owner reads the marker back,
     a read without a role does not show it, and another normal account's read decides."""
-    start, plan = latest_plan(history)
+    _, plan = latest_plan(history)
     owner, marker = plan["owner"], "".join(getattr(ctx, "marker", None) or ())
     if not marker:
         return "this run has no marker for the finding"
@@ -381,7 +381,7 @@ def owned_check(ctx, history, cited, *, negative=False, blocked=False):
            and marker in _sent(h.get("args", {})) and (h.get("args", {}).get("role") or None) != owner
            for h in history):
         return "an identity other than the owner sent the marker"
-    writes, reads, error = _access_steps(ctx, history, cited, plan, start)
+    writes, reads, error = _access_steps(ctx, history, cited, plan)
     if error:
         return error
     if not writes or any(role != owner or not 200 <= res["status"] < 300 for _, role, res in writes):
@@ -424,7 +424,7 @@ def changed_check(ctx, history, cited, *, negative=False, blocked=False):
     another normal account writes the second marker to that record by the identifier its creation returned and
     the owner's read confirmed (ctx.owned), and the owner's next read decides: the second marker confirms, the
     first alone after a 403 or 404 gives blocked-by-control."""
-    start, plan = latest_plan(history)
+    _, plan = latest_plan(history)
     owner, change = plan["owner"], plan["change"]
     first, second = "".join(getattr(ctx, "marker", None) or ()), plan.get("second_marker") or ""
     if not first or not second:
@@ -437,7 +437,7 @@ def changed_check(ctx, history, cited, *, negative=False, blocked=False):
             return "an identity other than the owner sent the marker"
         if second in _sent(args) and (args.get("role") or None) == owner:
             return "the owner sent the second marker itself"
-    writes, reads, error = _access_steps(ctx, history, cited, plan, start)
+    writes, reads, error = _access_steps(ctx, history, cited, plan)
     if error:
         return error
     responses, created = getattr(ctx, "responses", {}), getattr(ctx, "owned", None) or set()
@@ -498,8 +498,8 @@ def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
     a list that names every user can be."""
     if negative and not blocked:
         return "a different answer for the normal account does not show that the function is protected"
-    start, plan = latest_plan(history)
-    writes, reads, error = _access_steps(ctx, history, cited, plan, start)
+    _, plan = latest_plan(history)
+    writes, reads, error = _access_steps(ctx, history, cited, plan)
     if error or writes:
         return error or "a privileged comparison only reads"
     reference = [(response.get("identity"), response["digest"]) for _, role, response, res in reads

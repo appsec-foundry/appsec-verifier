@@ -65,7 +65,9 @@ def session_check(ctx, history, cited, *, negative=False):
     if not isinstance(cited, list) or len(set(cited)) < 2:
         return "repeat the session observation using distinct requests"
     for step in cited:
-        if type(step) is not int or not start < step <= len(history):
+        if type(step) is not int or not 0 < step <= len(history):
+            return f"proof step {step!r} does not exist"
+        if negative and step <= start:     # a confirmation may cite earlier observations (VER-043)
             return "session observations must follow the declared plan"
         h = history[step - 1]
         args, result = h.get("args", {}), h.get("result", {})

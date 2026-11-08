@@ -1,10 +1,13 @@
-"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036).
+"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036,
+VER-043).
 
 ScopeGuard remains the connection authority. Assessment routes only narrow
 that scope; neither model plans nor target responses can add routes here.
 An accepted plan narrows requests to its route and method; under an
 own-resource access-control plan its owner may also write to the finding's
-routes, to create the resource it then reads back. Every write carries the
+routes, and to the POST collection route the assessment names for one of its
+record routes, to create the resource it then reads back; the latter is
+recorded as a deviation (VER-008, VER-043). Every write carries the
 finding's marker and names no existing record in its path (VER-014). The one
 exception is a write proof (VER-010): under a plan with a change, another
 normal account may send that change to the record the owner's write created
@@ -34,7 +37,9 @@ class Controller:
         self.failures = 0
         self.plan = None
         self.source_routes = []
+        self.deviations = []  # preparation routes the owner used outside the finding's own (VER-008, VER-043)
         self._counted = None  # the repetition key the last before() call charged
+        self._preparing = None  # the preparation route of the action before() last allowed
 
     def check(self):
         self.ctx.guard.check_window()
@@ -114,6 +119,7 @@ class Controller:
         if matching and all(r.get("preparation") for r in matching):
             if name != "http_request" or args.get("role") != (self.plan or {}).get("owner"):
                 raise ToolError("preparation is only for the accepted test resource owner")
+            self._preparing = f"{method} {matching[0]['path']}"   # a deviation once it is answered (observe)
         if not matching:
             raise ToolError("request has no matching route in this finding or its operator-declared resources")
         if name != "plan_test" and all(r.get("derived") for r in matching) and not self._created(change, path):
@@ -220,7 +226,7 @@ class Controller:
         return token([name, args])
 
     def before(self, name, args):
-        self._counted = None
+        self._counted = self._preparing = None
         self.check()
         if name in ("http_request", "browser_check", "plan_test"):
             self._target(name, args)
@@ -237,6 +243,9 @@ class Controller:
         self.failures += 1
 
     def observe(self, name, args, result):
+        if self._preparing and type(result.get("status")) is int and self._preparing not in self.deviations:
+            self.deviations.append(self._preparing)
+        self._preparing = None
         failed = bool(result.get("error")) or (type(result.get("status")) is int and result["status"] >= 500)
         if failed:
             self.failures += 1

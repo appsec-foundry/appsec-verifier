@@ -50,6 +50,17 @@ def _sha256(path: Path) -> str | None:
         return None
 
 
+def _private_text(sessions, scope):
+    """Whether a text holds a credential value or the marker file's content: such a screenshot never reaches a
+    model (VER-012, VER-016, VER-042)."""
+    marker = (scope.get("marker_file") or {}).get("content")
+
+    def check(text: str) -> bool:
+        return bool(marker and marker in text) or (sessions is not None and sessions.redact(text) != text)
+
+    return check
+
+
 def _iso(now: datetime) -> str:
     return now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -151,6 +162,8 @@ def run_verification(
     from ..tools.browser import new_marker
 
     guard = ScopeGuard(scope)
+    if browser is not None:
+        browser.private_text = _private_text(sessions, scope)
 
     contexts = {}
 
