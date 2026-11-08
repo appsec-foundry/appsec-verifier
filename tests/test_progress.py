@@ -171,12 +171,26 @@ def test_each_screenshot_of_a_finding_is_named_with_its_path_under_the_done_line
                 {"kind": "screenshot", "path": "evidence/T-1-xss-1.png"},
                 {"kind": "har", "path": "evidence/T-1-poc.har"},
                 {"kind": "screenshot", "path": "evidence/T-1-exchange-1.png"}]
-    progress.finished(_plan(), ProbeResult(verdict="confirmed", evidence=evidence))
+    progress.finished(_plan(), ProbeResult(verdict="confirmed", evidence=evidence, proof={"checked": True}))
     rows = _rows(out)[-3:]
     assert rows[0].split()[3] == "done"
-    assert [r.split()[3] for r in rows[1:]] == ["img", "img"]
+    assert [r.split()[3] for r in rows[1:]] == ["proof", "proof"]
     assert rows[1].endswith("screenshot verification/evidence/T-1-xss-1.png")
     assert rows[2].endswith("screenshot verification/evidence/T-1-exchange-1.png")
+
+
+@pytest.mark.parametrize("verdict, proof", [
+    ("inconclusive", {"checked": False, "missing": ["the browser did not complete an execution attempt"]}),
+    ("inconclusive", None),
+])
+def test_a_screenshot_without_a_checked_proof_is_no_proof_line(verdict, proof):
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={}, out_dir="verification")
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    evidence = [{"kind": "screenshot", "path": "evidence/T-1-exchange-1.png"}]
+    progress.finished(_plan(), ProbeResult(verdict=verdict, evidence=evidence, proof=proof))
+    assert _rows(out)[-1].split()[3] == "img"
 
 
 def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_done_line():
@@ -502,8 +516,11 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
     assert any(row.endswith(" · agent m via Fake API · ≤12 steps · no identities") for row in rows)
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
-    assert rows[-1].split()[3:5] == ["done", "100%"] and "inconclusive" in rows[-1]
-    assert " · $0.50 · run $0.50 of $10.00 · " in rows[-1]                 # API billing: costs shown
+    done = next(row for row in rows if row.split()[3:4] == ["done"])
+    assert done.split()[3:5] == ["done", "100%"] and "inconclusive" in done
+    assert " · $0.50 · run $0.50 of $10.00 · " in done                     # API billing: costs shown
+    # The verdict cites no step: the image of its requests follows, named img, not proof (VER-035).
+    assert rows[-1].split()[3] == "img" and "screenshot" in rows[-1]
     assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
 
 
@@ -520,7 +537,7 @@ def test_a_subscription_run_shows_costs_only_with_show_costs(tmp_path, monkeypat
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, *(["--show-costs"] if show else []),
                             usd=0.25 if profile == "claude" else 0.0)
     if done:
-        assert done in rows[-1]
+        assert done in next(row for row in rows if row.split()[3:4] == ["done"])
     else:
         assert "$" not in "\n".join(rows)
     assert run in out

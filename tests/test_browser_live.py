@@ -97,6 +97,14 @@ def test_executed_marker_is_proven_with_owner_only_evidence(browser):
     assert stat.S_IMODE((tmp / "evidence").stat().st_mode) == 0o700
 
 
+def test_the_marker_expression_survives_a_query_that_reads_plus_as_a_space(browser):
+    """Servers and client-side routers often decode + in a query string as a space, as /reflect does."""
+    b, _, _ = browser
+    joined_with_plus = f"<img src=x onerror=alert('{MARKER[0]}'+'{MARKER[1]}')>"
+    assert _check(b, "/reflect?q=" + joined_with_plus)["executed"] is False
+    assert _check(b, f"/reflect?q=<img src=x onerror=alert({marker_expression(MARKER)})>")["executed"] is True
+
+
 def test_encoded_reflection_is_not_execution(browser):
     b, _, _ = browser
     result = _check(b, "/safe?q=" + quote(f"<script>alert({marker_expression(MARKER)})</script>", safe=""))

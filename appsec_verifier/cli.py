@@ -1352,6 +1352,14 @@ _NEEDS = {
                 "parameter, declare that one in a scope file (--scope):",
                 "injection_inputs: [{finding_id: ID, path: /route, input_location: params, input_name: NAME, "
                 "semantics: literal}]"]),
+    "access": ("access request", "a test_resources entry in a scope file",
+               ["without a test_resources entry the proof reads the resource with a GET request the finding names, "
+                "and an account creates its own resource with a write request the finding names; declare a test "
+                "resource in a scope file (--scope) whose request returns a harmless value only the allowed roles "
+                "may see:",
+                "test_resources: [{id: NAME, finding_id: ID, path: /route, method: GET, allowed_roles: [ROLE], "
+                "denied_roles: [ROLE], pointer: /field, value: VALUE}]",
+                "(docs/cli.md, Scope file)"]),
     "route": ("route", "--source, or a scope entry for the finding that names its request",
               ["the assessment names no request for the finding: pass the application's source with --source when "
                "the file of the finding declares its route, or name the request in a scope entry for the finding "
@@ -1379,7 +1387,8 @@ def _run_hints(doc: dict, target: str, browser_missing: str | None) -> dict[str,
 def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) -> tuple[str, str] | None:
     """What this run lacks to confirm `plan` (a _NEEDS key and the reason for the
     report), or None when it can try: first what its class's proof needs (VER-009
-    to VER-012; injection also a read request, since its proof repeats controls),
+    to VER-012; injection also a read request, since its proof repeats controls; access control without a test
+    resource a read request and, for a resource an account creates, a write request),
     then the requests the assessment names (endpoints.py), when all of them write
     in safe mode or all need a login and there is no test identity.
     A finding that names no request is tried only with `source`, where a literal
@@ -1406,6 +1415,18 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
             set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles for r in resources
         ):
             return "resource", "a declared test resource names roles unavailable in this run"
+        # Without one, both proofs read with a GET request of the finding, and the account creates its resource
+        # with a write request of the finding (agent/tools.py); routes as agent/controller.py builds them.
+        variants = getattr(plan, "verification_context", {}).get("variants", [])
+        named = [v["request"].get("method", "GET") for v in variants] or [
+            *(e.method for e in plan.endpoints),
+            *(r.get("method", "GET") for key in ("injection_inputs", "session_checks")
+              for r in scope.get(key, []) if r["finding_id"] == plan.id)]
+        if named and "resource" not in methods:
+            if not any(m in ("GET", "PAGE", "ALL") for m in named):
+                return "access", "every request the assessment names writes or deletes; the proof reads with GET"
+            if methods == ["owner"] and not any(m in ("POST", "PUT", "PATCH", "ALL") for m in named):
+                return "access", "no write request to create the resource with, and no --admin-account"
     if plan.cls == "xss" and browser is None:
         return "browser", "no proof browser; XSS counts only when the payload executes"
     if plan.cls == "path-traversal" and not (scope.get("marker_file") or {}).get("path"):

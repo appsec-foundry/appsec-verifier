@@ -170,6 +170,11 @@ class Controller:
         self.repetitions[key] += 1
         self._counted = key
 
+    def refuse(self):
+        """A tool call the step contract refused (steps.py): nothing ran, and it counts as a failed action."""
+        self._counted = None
+        self.failures += 1
+
     def observe(self, name, args, result):
         failed = bool(result.get("error")) or (type(result.get("status")) is int and result["status"] >= 500)
         if failed:

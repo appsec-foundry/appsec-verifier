@@ -3,8 +3,9 @@
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
 verdict. Every action is validated against the strict tool schemas here,
-whichever planner produced it; an invalid one ends the finding inconclusive and
-nothing runs. The loop executes tool calls through the confined AgentTools,
+whichever planner produced it, and nothing invalid runs: a tool call with invalid
+arguments goes back to the planner as an error and counts as a failed action, any
+other invalid action ends the finding inconclusive. The loop executes tool calls through the confined AgentTools,
 enforces a step limit, the run budget and the authorisation window (checked
 before every planner call), and never lets a bad tool call escape
 — errors go back to the planner as data. Every tool result is redacted of
@@ -128,6 +129,15 @@ class AgentProbe:
             except LimitExceeded as exc:
                 return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
             action = check_action(proposal)  # VER-019: no unchecked arguments
+            if "refused" in action:
+                # VER-017: refused and logged, nothing runs; counted like a failed action (VER-036)
+                controller.refuse()
+                call = {"tool": action["refused"], "args": action["args"],
+                        **({"note": action["note"]} if action.get("note") else {})}
+                result = {"error": action["error"]}
+                _log(ctx, step, **call, result=result)
+                history.append({"tool": action["refused"], "args": action["args"], "result": result})
+                continue
             if "verdict" in action:
                 if action != proposal:  # the step contract refused what the planner proposed (VER-017)
                     _log(

@@ -394,19 +394,21 @@ def test_rejected_plans_leave_the_allowance_to_the_corrected_plan(tmp_path):
     ctx = xss_context(tmp_path)
     logs = []
     ctx.log = logs.append
+    revised = xss_plan(page_loads("assumed"))
+    revised["args"]["strategy"] = {**revised["args"]["strategy"], "revision_reason": "the page reads q after load"}
     script = Script([
-        {"tool": "read_context", "args": {"variant": "v-search"}},
-        xss_plan(page_loads("observed", 1)),  # a context step is no observation
-        xss_plan(page_loads("observed", 1)),
-        xss_plan(page_loads("assumed")),  # differs only in its strategy, so its repetition key is the same
-        {"tool": "browser_check", "args": {"path": "/#/search?q=<svg/onload=alert('m1'+'m2')>"}},
+        xss_plan(page_loads("assumed")),
+        xss_plan(page_loads("assumed")),  # a revision without its reason
+        xss_plan(page_loads("assumed")),
+        revised,  # differs only in its strategy, so its repetition key is the same
+        {"tool": "browser_check", "args": {"path": "/#/search?q=<svg/onload=alert('m1'.concat('m2'))>"}},
         {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [5]}},
     ])
     result = AgentProbe("xss", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.limits_hit is None
     errors = [r["result"]["error"] for r in logs if (r.get("result") or {}).get("error")]
     assert len(errors) == 2
-    assert all("prerequisite 1 is observed but cites step 1 without a recorded response" in e for e in errors)
+    assert all("a revised plan must explain the new observation" in e for e in errors)
 
 
 def test_identical_rejected_plans_still_stop_after_three_failures(tmp_path):
@@ -434,17 +436,27 @@ def test_accepted_plans_keep_using_the_allowance_and_a_refused_route_refunds_not
         c.before("plan_test", {**args, "hypothesis": "the same plan in other words"})
 
 
-def test_plan_names_every_problem_and_accepts_a_recorded_response(tmp_path):
+def test_an_observed_prerequisite_without_a_recorded_response_counts_as_assumed(tmp_path):
+    """Observed only with recorded responses of this finding; the plan is accepted rather than declared again."""
     ctx = xss_context(tmp_path)
     ctx.responses = {2: {"body": "", "complete": True}}
     tools = AgentTools(ctx)
-    with pytest.raises(ToolError) as rejected:
-        tools.plan_test(**xss_plan(page_loads("observed", 1, 2), page_loads("observed"), variant=None)["args"])
-    message = str(rejected.value)
-    assert "prerequisite 1 is observed but cites step 1 without a recorded response" in message
-    assert "prerequisite 2 is observed but cites no step" in message
-    assert "select an evidenced finding variant" in message
-    assert tools.plan_test(**xss_plan(page_loads("observed", 2))["args"])["accepted"] is True
+    args = xss_plan(page_loads("observed", 1, 2), page_loads("observed"), page_loads("observed", 2))["args"]
+    accepted = tools.plan_test(**args)
+    statuses = [p["status"] for p in accepted["experiment"]["strategy"]["prerequisites"]]
+    assert statuses == ["assumed", "assumed", "observed"]
+    assert accepted["note"].startswith("prerequisite 1, 2 counts as assumed")
+    assert args["strategy"]["prerequisites"][0]["status"] == "observed"  # the proposal itself stays as sent
+    assert "note" not in AgentTools(ctx).plan_test(**xss_plan(page_loads("observed", 2))["args"])
+
+
+def test_a_plan_names_its_variant_problem(tmp_path):
+    with pytest.raises(ToolError, match="select an evidenced finding variant"):
+        AgentTools(xss_context(tmp_path)).plan_test(**xss_plan(variant=None)["args"])
+    ctx = xss_context(tmp_path)
+    ctx.plan = replace(ctx.plan, verification_context={})
+    with pytest.raises(ToolError, match="this finding has no variants; omit variant"):
+        AgentTools(ctx).plan_test(**xss_plan()["args"])
 
 
 def test_an_experiment_on_a_write_is_refused_before_anything_is_sent(tmp_path):

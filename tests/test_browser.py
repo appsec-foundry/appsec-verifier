@@ -135,14 +135,15 @@ def test_marker_parts_are_random_and_the_page_hook_reports_dialogs_without_knowi
     a, b = new_marker()
     assert a.startswith("vrf") and (a, b) != new_marker()
     script = _init_script()
-    assert a not in script and b not in script and marker_expression((a, b)) == f"'{a}'+'{b}'"
+    assert a not in script and b not in script and marker_expression((a, b)) == f"'{a}'.concat('{b}')"
+    assert "+" not in marker_expression((a, b))  # a query string may carry + as a space
     assert "__appsecVerifierReport(name, text)" in script
 
 
 def test_system_prompt_gives_the_marker_only_for_xss_and_open_redirect():
     plan = SimpleNamespace(cls="xss")
     ctx = SimpleNamespace(plan=plan, identities=[], safe=True, marker=("vrfaa", "bb"))
-    assert "alert('vrfaa'+'bb')" in _system(ctx)
+    assert "alert('vrfaa'.concat('bb'))" in _system(ctx) and "'vrfaa'+'bb'" not in _system(ctx)
     ctx.plan = SimpleNamespace(cls="open-redirect")
     assert "https://vrfaabb.invalid/" in _system(ctx) and "alert(" not in _system(ctx)
     ctx.plan = SimpleNamespace(cls="access-control")

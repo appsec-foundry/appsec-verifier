@@ -38,14 +38,14 @@ def _plan_step(**extra):
 
 
 def _req(role, body="", status=200, method="GET", path="/api/Feedbacks/7", json=None, params=None, session=None,
-         complete=True, redacted=False):
+         complete=True):
     args = {"path": path, "method": method, **({"role": role} if role else {}), **({"json": json} if json else {}),
             **({"params": params} if params else {})}
     sha = hashlib.sha256(body.encode()).hexdigest()
     return {"tool": "http_request", "args": args,
             "result": {"role": role, "status": status, "length": len(body), "body_sha256": sha},
             "_response": {"body": body, "complete": complete, "identity": session or role or "anonymous",
-                          "redacted": redacted}}
+                          "digest": sha}}
 
 
 def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639"):
@@ -149,12 +149,15 @@ def test_a_privileged_comparison_without_the_full_contrast_stays_inconclusive(hi
     assert result.verdict == "inconclusive" and reason in result.rationale
 
 
-def test_answers_that_held_a_user_name_are_never_identical():
+def test_answers_alike_only_after_redaction_are_not_identical():
     history = privileged()
-    for h in history[1:]:
-        h["_response"]["redacted"] = True       # e.g. both named their own, redacted, user name
+    for h, name in ((history[1], "admin@shop"), (history[3], "jim@shop")):    # each names its own, redacted, user
+        h["_response"]["digest"] = hashlib.sha256(name.encode()).hexdigest()
     result = _check(history)
-    assert result.verdict == "inconclusive" and "credential or user name" in result.rationale
+    assert result.verdict == "inconclusive" and "identical answer" in result.rationale
+    history[1]["_response"].pop("digest")
+    history[3]["_response"].pop("digest")
+    assert "not answered with content" in _check(history).rationale  # without digests nothing counts as identical
 
 
 def test_privileged_negative_verdicts():
@@ -218,13 +221,26 @@ def test_exposure_findings_keep_needing_an_operator_resource(tmp_path):
         tools.plan_test(**_plan_args(owner="account-2"))
 
 
-def test_the_recorded_response_says_whether_it_held_a_credential_or_user_name(tmp_path):
-    tools = _tools(tmp_path, transport=lambda *a, **k: Resp(200, '{"token":"token-account-1"}'))
-    tools.http_request(role="account-1", path="/rest/basket/2")
-    assert tools.take_response()["redacted"] is True
-    tools = _tools(tmp_path, transport=lambda *a, **k: Resp(200, '{"basket":2}'))
-    tools.http_request(role="account-1", path="/rest/basket/2")
-    assert tools.take_response()["redacted"] is False
+def test_the_digest_tells_apart_answers_that_redaction_made_alike(tmp_path):
+    """Each account's answer names its own credential: the same after redaction, different underneath. A list
+    naming both is the same for both. Neither the value nor a plain hash of it is kept."""
+    def own(m, u, h, **k):
+        return Resp(200, '{"user":"token-admin-1"}' if "token-admin-1" in str(h) else '{"user":"token-account-1"}')
+
+    def answers(transport):
+        tools = _tools(tmp_path, transport=transport)
+        out = []
+        for role in ("account-1", "admin-1"):
+            tools.http_request(role=role, path="/rest/basket/2")
+            out.append(tools.take_response())
+        return out
+
+    mine, theirs = answers(own)
+    assert mine["body"] == theirs["body"] and mine["digest"] != theirs["digest"]
+    assert "token-account-1" not in str(mine) and hashlib.sha256(b'{"user":"token-account-1"}').hexdigest() \
+        not in str(mine)
+    listing = answers(lambda *a, **k: Resp(200, '{"users":["token-account-1","token-admin-1"]}'))
+    assert listing[0]["digest"] == listing[1]["digest"]
 
 
 # ── who may write under the plan ──────────────────────────────────────────────
@@ -268,6 +284,21 @@ def test_the_test_plan_follows_the_accounts_and_the_mode():
     assert _blocker(replace(plan, cwe="CWE-306"), identities=normal + admin, safe=False)[0] == "resource"
     assert _blocker(plan, identities=normal, scope={"test_resources": [RESOURCE]}) is None
     assert _blocker(plan, identities=normal[1:], scope={"test_resources": [RESOURCE]})[0] == "resource"
+
+
+def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
+    """Without a test resource the proof reads with a GET request of the finding, and an own resource is created
+    with one of its writes; a DELETE is never sent (VER-014)."""
+    put, delete, get = (Endpoint(m, "/api/Items/:id", True) for m in ("PUT", "DELETE", "GET"))
+    two, admin = ROLES[:2], ROLES[2:]
+    for endpoints in ((put,), (delete,), (put, delete)):
+        plan = _plan("access-control", *endpoints)
+        assert _blocker(plan, identities=two + admin, safe=False)[0] == "access"
+        assert _blocker(plan, identities=two, safe=False, scope={"test_resources": [RESOURCE]}) is None
+    assert _blocker(_plan("access-control", put, get), identities=two, safe=False) is None
+    assert _blocker(_plan("access-control", get), identities=two, safe=False)[0] == "access"  # nothing creates it
+    assert _blocker(_plan("access-control", get), identities=two[:1] + admin, safe=False) is None
+    assert _blocker(_plan("access-control"), identities=two + admin, safe=False) is None  # the route rule decides
 
 
 @pytest.mark.parametrize("identities, safe, scope, expected", [

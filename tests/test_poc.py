@@ -414,10 +414,34 @@ def test_exchange_image_escapes_everything_the_target_sent(tmp_path):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
 
 
-def test_no_exchange_image_without_decisive_steps(tmp_path):
-    _, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
-                    [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
-    assert shot is None
+def test_a_verdict_that_cites_no_step_gets_an_image_that_says_it_proves_nothing(tmp_path):
+    """VER-035: e.g. a finding a limit stopped; the report still shows no step as one the verdict rests on."""
+    result, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
+                         [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
+    assert "Step 1 · GET as anonymous" in shot["html"]
+    assert "cites no step" in shot["html"] and "proves nothing" in shot["html"]
+    assert "what the verdict rests on" not in shot["html"]
+    assert result.poc["shown"] == [] and not any(s["decisive"] for s in result.poc["steps"])
+
+
+def test_a_finding_a_limit_stopped_gets_the_image_of_its_requests(tmp_path):
+    browser = RenderBrowser()
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(500, "{}"), cls="injection", browser=browser)
+    result, _ = _run(ctx, [_get(None, "/search", q=str(n)) for n in range(5)])   # three server errors stop it
+    assert result.limits_hit == "stagnation" and len(browser.exchanges) == 1
+    assert "cites no step" in browser.exchanges[0]["html"]
+
+
+def test_the_uncited_image_shows_only_answered_requests_after_the_last_plan():
+    history = [{"tool": "http_request", "result": {"status": 200}},
+               {"tool": "plan_test", "result": {"accepted": True}},
+               {"tool": "http_request", "result": {"error": "request refused"}},
+               {"tool": "http_request", "result": {"status": 401}},
+               {"tool": "plan_test", "result": {"error": "rejected"}},
+               {"tool": "browser_check", "result": {"status": 200}}]
+    steps = [{"step": n, "entries": [{"n": n}]} for n in (1, 3, 4, 6)]
+    assert [n for n, _ in poc._tried(history, steps)] == [4, 6]
+    assert [n for n, _ in poc._tried(history[2:], [{"step": 2, "entries": [{}]}])] == [2]   # no plan: all
 
 
 def test_an_executed_xss_gets_the_exchange_image_beside_the_page_with_the_opened_page_marked(tmp_path):

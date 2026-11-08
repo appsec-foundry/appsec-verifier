@@ -209,25 +209,64 @@ def test_planner_and_report_never_see_a_credential_value(tmp_path):
 def test_every_step_is_logged_with_its_outcome_and_refusals(tmp_path):
     """VER-017: tool calls with their outcome, guard refusals, a proposal the step
     contract refused, and the verdict all reach the log; bodies and source text do not."""
-    records = []
-    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, '{"basket":"private"}'))
+    records, sent = [], []
+
+    def transport(m, u, h, **k):
+        sent.append(u)
+        return Resp(200, '{"basket":"private"}')
+
+    ctx = _ctx(tmp_path, transport)
     ctx.log = records.append
     planner = ScriptedPlanner([
         {"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": 1}},
         {"tool": "http_request", "args": {"role": "customer-a", "path": "/rest/basket/2"}},
         {"tool": "http_request", "args": {"path": "/rest/%2e%2e/admin"}},
         {"tool": "http_request", "args": {"path": "/", "headers": {"X-Forwarded-For": "127.0.0.1"}}},
+        {"verdict": {"verdict": "owned", "rationale": "x"}},
     ])
     res = AgentProbe("access-control", lambda: planner, max_steps=10).run(ctx)
     assert res.verdict == "inconclusive"
-    read, ok, refused_by_guard, refused_proposal, verdict = records
+    read, ok, refused_by_guard, refused_args, refused_verdict, verdict = records
     assert read["result"] == {"path": "routes/basket.ts", "start_line": 1}
     assert ok["args"]["role"] == "customer-a" and ok["result"] == {"status": 200, "length": 20}
     assert "out of scope" in refused_by_guard["result"]["error"]
-    assert "invalid http_request" in refused_proposal["refused"] and "X-Forwarded-For" in refused_proposal["proposal"]
-    assert verdict["verdict"] == "inconclusive" and verdict["step"] == 4
+    assert "invalid http_request" in refused_args["result"]["error"] and "X-Forwarded-For" in str(refused_args["args"])
+    assert len(sent) == 1  # neither the guard's refusal nor the invalid arguments reached the target
+    assert "invalid submit_verdict" in refused_verdict["refused"] and "owned" in refused_verdict["proposal"]
+    assert verdict["verdict"] == "inconclusive" and verdict["step"] == 5
     assert all(r["finding"] == "T-001" for r in records)
     assert "private" not in str(records) and "db.basket" not in str(records)
+
+
+def test_invalid_arguments_go_back_to_the_planner_which_can_correct_them(tmp_path):
+    sent, seen = [], []
+
+    class Planner(ScriptedPlanner):
+        def next_step(self, ctx, history):
+            seen.append([h.get("result") for h in history])
+            return super().next_step(ctx, history)
+
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(m) or Resp())
+    planner = Planner([
+        {"tool": "http_request", "args": {"role": "customer-a", "method": "DELETE", "path": "/rest/basket/2",
+                                          "body": "x"}},
+        {"tool": "http_request", "args": {"role": "customer-a", "path": "/rest/basket/2"}},
+    ])
+    AgentProbe("access-control", lambda: planner, max_steps=5).run(ctx)
+    assert "invalid http_request arguments" in seen[1][0]["error"]
+    assert sent == ["GET"]  # the refused call never ran, the corrected one did
+
+
+def test_three_refused_calls_stop_the_finding_before_another_model_call(tmp_path):
+    calls = []
+
+    class Planner:
+        def next_step(self, ctx, history):
+            calls.append(1)
+            return {"tool": "plan_test", "args": {"kind": "access-control", "path": "/rest/basket/:id"}}
+
+    res = AgentProbe("access-control", Planner, max_steps=10).run(_ctx(tmp_path, lambda m, u, h, **k: Resp()))
+    assert res.verdict == "inconclusive" and res.limits_hit == "stagnation" and len(calls) == 3
 
 
 def test_a_stopping_limit_is_logged(tmp_path):

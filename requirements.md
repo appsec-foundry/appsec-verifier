@@ -169,9 +169,10 @@ optional hardening.
   page in which an XSS marker executed (VER-009), and of a confirmed
   access-control finding's contested response when that is an HTML page,
   rendered from the recorded response without a new request (VER-010). Every
-  finding with steps its verdict rests on (VER-034) also gets an image of
-  those exchanges, request and response side by side, also rendered
-  from the record. The operator chooses per run whether and for which classes
+  tested finding also gets an image of its exchanges, request and response
+  side by side, also rendered from the record: of the steps its verdict rests
+  on (VER-034), or, where it cites none, such as a finding a limit stopped, of
+  its answered requests after its last test plan. The operator chooses per run whether and for which classes
   screenshots are taken, by default for all. Each screenshot shows what the
   proof rests on: a caption names the finding, URL, identity and time, and
   what the code can locate is marked and labelled, such as the executed payload, the

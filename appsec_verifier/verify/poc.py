@@ -27,7 +27,9 @@ which its marker executed (tools/browser.py). For a confirmed access-control
 finding whose response is an HTML page, the proof browser renders that
 recorded response without a new request and marks the values the verdict
 names. Every finding with decisive steps also gets an image of those
-exchanges, request and response side by side, built here as escaped HTML with
+exchanges, and one whose verdict cites none (a limit stopped it) an image of its
+answered requests after the last test plan, whose header says it proves nothing:
+request and response side by side, built here as escaped HTML with
 what the code can locate marked, each kind labelled by a red tag: the
 identities an access-control proof compares, the XSS or SSRF marker, the
 redirect host and Location header, the marker file and its content, the input
@@ -573,17 +575,20 @@ mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}.hit{display:inline
 
 
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                      highlight=None) -> tuple[str, int]:
+                      highlight=None, *, cited: bool = True) -> tuple[str, int]:
     """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): request and
-    response side by side per step, what the verdict rests on marked. Returns the page and the number of
-    marks. Every recorded value is escaped; the page has no script."""
+    response side by side per step, what the verdict rests on marked. Without `cited` they are the answered
+    requests after the last test plan of a verdict that cites no step, and the header says so. Returns the page
+    and the number of marks. Every recorded value is escaped; the page has no script."""
     cls = getattr(ctx.plan, "cls", None) or "finding"
     captured = shown[0][1].get("startedDateTime", "") if shown else ""
     head = (f"<b>AppSec Verifier · {html.escape(str(ctx.plan.id))} · {html.escape(cls)} · "
             f"{html.escape(verdict)}</b>\nRecorded, redacted exchanges"
             f"{' from ' + html.escape(har_path) if har_path else ''}; no new request. "
             f"First captured {html.escape(shown_time(captured))}.\n"
-            "Marked: what the verdict rests on, as the code locates it.")
+            + ("Marked: what the verdict rests on, as the code locates it." if cited else
+               "The verdict cites no step: the answered requests after the last test plan. Marked: what the code "
+               "locates in them; it proves nothing."))
     parts, total = [f"<header>{head}</header>"], 0
     for n, e in shown[:6]:
         req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, shown, highlight)
@@ -602,9 +607,22 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     return page, total
 
 
+def _tried(history: list[dict], steps: list[dict]) -> list[tuple[int, dict]]:
+    """For a verdict that cites no step (VER-035): the answered requests after the last accepted test plan."""
+    start = max((n for n, h in enumerate(history, 1)
+                 if h.get("tool") == "plan_test" and (h.get("result") or {}).get("accepted") is True), default=0)
+    out = []
+    for s in steps:
+        h = history[s["step"] - 1] if 1 <= s["step"] <= len(history) else {}
+        e = _shown_entry(s)
+        if s["step"] > start and e is not None and type((h.get("result") or {}).get("status")) is int:
+            out.append((s["step"], e))
+    return out
+
+
 def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                         highlight) -> list[dict]:
-    page, marked = exchange_document(ctx, history, shown, verdict, har_path, highlight)
+                         highlight, *, cited: bool = True) -> list[dict]:
+    page, marked = exchange_document(ctx, history, shown, verdict, har_path, highlight, cited=cited)
     try:
         return ctx.browser.render_exchanges(html=page, finding_id=evidence_id(ctx.plan), marked=marked)
     except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
@@ -648,10 +666,11 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
 
 
 def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
-    result.planning = [{"step": n, "path": h["args"].get("path"),
-                        "hypothesis": h["args"].get("hypothesis"), "strategy": h["args"].get("strategy")}
-                       for n, h in enumerate(history, 1) if h.get("tool") == "plan_test"
-                       and h.get("result", {}).get("accepted") is True]
+    # The plan as accepted: plan_test may have counted an unsupported observed prerequisite as assumed.
+    accepted = [(n, h["result"].get("experiment") or h["args"]) for n, h in enumerate(history, 1)
+                if h.get("tool") == "plan_test" and h.get("result", {}).get("accepted") is True]
+    result.planning = [{"step": n, "path": p.get("path"), "hypothesis": p.get("hypothesis"),
+                        "strategy": p.get("strategy")} for n, p in accepted]
     if ctx.sessions is not None:
         result.planning = ctx.sessions.redact(result.planning)
     """Write the finding's proof of concept and add it to `result` (VER-034, VER-035)."""
@@ -680,5 +699,7 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
             shots = _page_screenshots(ctx, steps, highlight)
         if shown_entries:                        # the exchanges, also beside a page that shows the proof
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight)
+        elif not decisive and (tried := _tried(history, steps)):     # e.g. a finding a limit stopped
+            shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False)
     result.evidence = [*(result.evidence or []), *shots]
     return result

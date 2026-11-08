@@ -184,7 +184,8 @@ def new_marker() -> tuple[str, str]:
 
 
 def marker_expression(parts: tuple[str, str]) -> str:
-    return f"'{parts[0]}'+'{parts[1]}'"
+    """Without +, which a query string may carry as a space."""
+    return f"'{parts[0]}'.concat('{parts[1]}')"
 
 
 @dataclass
@@ -257,10 +258,12 @@ def _init_script() -> str:
 
 # Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
 # payload, also quoted in the caption), text that equals one of `values` (access control), and a caption
-# that says what is marked (`label`). The page moves clear of the caption, so it hides no mark; whatever of
-# the page still covers the first mark (a dialog, a backdrop) is hidden and named in the caption.
-# All text is set as text, never parsed as HTML. Returns the number of marks and what was hidden, as JSON.
-_MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
+# that says what is marked (`label`). `tag` is set in the flow right after the first mark, so it covers nothing
+# (the XSS call that ran); without a mark it goes to the caption. The page moves clear of the caption, so it
+# hides no mark; whatever of the page still covers the first mark (a dialog, a backdrop) is hidden and named in
+# the caption. All text is set as text, never parsed as HTML. Returns the number of marks and what was hidden,
+# as JSON.
+_MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
   const marks = [];
   const root = document.body || document.documentElement;
   const ours = (el) => el.hasAttribute('data-appsec-verifier');
@@ -300,9 +303,17 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
       }
     }
   }
+  if (tag && marks.length) {
+    const t = document.createElement('span');
+    t.setAttribute('data-appsec-verifier', 'tag');
+    t.textContent = tag;
+    t.style.cssText = 'display:inline-block;margin:0 0 0 10px;padding:2px 8px;border-radius:3px;background:'
+      + color + ';color:#fff;font:bold 13px/1.5 monospace;vertical-align:middle;white-space:nowrap';
+    marks[0].insertAdjacentElement('afterend', t);
+  }
   const box = document.createElement('div');
   box.setAttribute('data-appsec-verifier', 'caption');
-  const extra = (marks.length && label ? ['marked: ' + label] : [])
+  const extra = (tag && !marks.length ? [tag] : []).concat(marks.length && label ? ['marked: ' + label] : [])
     .concat(carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]));
   box.textContent = lines.concat(extra).join('\\n');
   box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;white-space:pre-wrap;'
@@ -531,7 +542,7 @@ class ProofBrowser:
 
     @staticmethod
     def _mark(page, lines: list[str], *, part: str = "", values=(), none: str | None = None,
-              label: str | None = None) -> dict | None:
+              label: str | None = None, tag: str | None = None) -> dict | None:
         """Caption and highlights drawn over the page before its screenshot, as
         {"marks": n, "hidden": [what was hidden because it covered the first mark]}; None if the page refused
         them or did not answer in time. Unlike evaluate(), wait_for_function() has a timeout, so a page script
@@ -539,7 +550,7 @@ class ProofBrowser:
         try:
             done = page.wait_for_function(f"(arg) => ({_MARK_SCRIPT})(arg)",
                                           arg={"part": part, "values": list(values), "lines": lines, "none": none,
-                                               "color": _HIGHLIGHT, "label": label},
+                                               "color": _HIGHLIGHT, "label": label, "tag": tag},
                                           timeout=EVIDENCE_TIMEOUT_MS)
             out = json.loads(done.json_value())
             return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5]}
@@ -566,12 +577,13 @@ class ProofBrowser:
                 "captured": captured, "execution_contexts": execution_contexts or [], "attempt": attempt}
         shot = None
         if "xss" in self.screenshots:
+            # What ran stands beside the element that carries the payload, so the caption does not repeat it.
             marked = self._mark(
-                page, [f"AppSec Verifier · {finding_id} · XSS marker {joined} executed via {', '.join(via)}",
+                page, [f"AppSec Verifier · {finding_id} · XSS",
                        f"{unquote(url)[:300]} as {role or 'anonymous'} → {status}",
                        f"captured {shown_time(captured)}"],
                 part=marker[0], none="(the element that carries the payload was not found in the page)",
-                label="payload that executed")
+                tag="executed: " + ", ".join(f"{kind}('{joined}')" for kind in via))
             data["marked_elements"] = marked["marks"] if marked else None
             if marked and marked["hidden"]:
                 data["hidden_for_screenshot"] = marked["hidden"]

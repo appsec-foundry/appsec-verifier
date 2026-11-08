@@ -37,8 +37,8 @@ def _tool_defs() -> list[dict]:
             "Use boolean with baseline/positive/negative inputs and a JSON pointer to a meaningful response field; "
             "repeat each twice. Timing uses two baseline and two positive inputs, alternating. Both use a GET "
             "request, because a write is never repeated. Access-control "
-            "uses an operator-supplied resource, an owner or a privileged reference, as the access-control proof "
-            "instructions say. A new plan requires fresh observations. "
+            "uses exactly one of resource (the id of an operator-supplied test resource), owner or reference, as the "
+            "access-control proof instructions say. A new plan requires fresh observations. "
             "If the finding lists variants, set variant to the one you test. Prerequisite status: observed only "
             "with http_request steps of this finding whose recorded response shows it; assumed for what analysis, "
             "source or context suggests, or what the test itself will show; missing for what does not hold or "
@@ -200,7 +200,7 @@ def _system(ctx) -> str:
         "Before proof collection, record strategy in plan_test: the evidenced data flow, prerequisites "
         "(observed, assumed or missing, as plan_test defines them), why this approach is informative, the alternative "
         "normal explanation, expected observation and stop condition. Harmless diagnostic requests can come first. "
-        "For a revision, include revision_reason explaining the new observation and one justified change. "
+        "For a revision, include strategy.revision_reason explaining the new observation and one justified change. "
         "Do not repeat identical failed attempts. Missing prerequisites remain open, never automatically satisfied. "
         "The controller permits at most two executions of an identical read action or control, and one of a write. "
         "Three consecutive tool errors or server errors stop this finding before another model call. "
@@ -292,8 +292,9 @@ def _marker_hint(ctx) -> str:
         return _access_hint(ctx)
     if cls == "xss" and all(marker):
         return (
-            f"\nXSS proof: your payload must call alert('{marker[0]}'+'{marker[1]}') — the two parts joined at "
-            "runtime (quotes may change to fit the context). Only that evaluated value counts as execution, and "
+            f"\nXSS proof: your payload must call alert('{marker[0]}'.concat('{marker[1]}')) — the two parts joined "
+            "at runtime (quotes may change to fit the context). Do not join them with +: many applications read + "
+            "in a query string as a space. Only that evaluated value counts as execution, and "
             "only browser_check observes it; confirmed without an executed marker is downgraded. Never send the "
             "joined value itself: a request that carries it voids the proof, since a page could merely echo it."
         )

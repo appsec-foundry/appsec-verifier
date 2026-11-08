@@ -32,6 +32,7 @@ STEP_SCHEMA = {
     "additionalProperties": False,
 }
 NOTE_CAP = 160
+ERROR_CAP = 400  # a schema message can quote the whole proposal
 
 
 def _strict(schema: dict) -> dict:
@@ -117,14 +118,19 @@ def _with_note(action: dict, note) -> dict:
     if not isinstance(note, str):
         return inconclusive("agent sent a note that is not a string")
     note = " ".join(note.split())[:NOTE_CAP]
-    return {**action, "note": note} if note and "tool" in action else action
+    return {**action, "note": note} if note and ("tool" in action or "refused" in action) else action
 
 
 def _validated(name: str, args) -> dict:
+    """A verdict, a tool call, or an inconclusive verdict. A tool call whose arguments break its schema becomes
+    {"refused": name, "args", "error"}, without a "tool" key, so nothing takes it for a call: the loop runs
+    nothing and returns the error to the planner."""
     if not isinstance(args, dict):
         return inconclusive(f"agent sent {name} arguments that are not a JSON object")
     error = next(iter(sorted(_ARG_VALIDATORS[name].iter_errors(args), key=str)), None)
     if error is not None:
+        if name != "submit_verdict":
+            return {"refused": name, "args": args, "error": f"invalid {name} arguments: {error.message}"[:ERROR_CAP]}
         return inconclusive(f"agent proposed invalid {name} arguments: {error.message}")
     if name == "submit_verdict":
         return {"verdict": args}
@@ -135,9 +141,12 @@ def check_action(action) -> dict:
     """Validate a loop action from ANY planner against the strict tool schemas
     before anything acts on it (VER-017, VER-019): a tool call or a verdict,
     otherwise an inconclusive verdict. The loop applies this to every action,
-    so no planner can pass unchecked arguments to the tools."""
+    so no planner can pass unchecked arguments to the tools. A refused call that
+    parse_step passed on is checked again like any other."""
     if isinstance(action, dict) and set(action) == {"verdict"}:
         return _validated("submit_verdict", action["verdict"])
+    if isinstance(action, dict) and "refused" in action and set(action) <= {"refused", "args", "error", "note"}:
+        action = {"tool": action["refused"], "args": action.get("args", {}), "note": action.get("note", "")}
     if isinstance(action, dict) and "tool" in action and set(action) <= {"tool", "args", "note"}:
         name = action["tool"]
         if not isinstance(name, str) or name == "submit_verdict" or name not in _ARG_VALIDATORS:

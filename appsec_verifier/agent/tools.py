@@ -39,8 +39,10 @@ the exchange, for a timing proof of injection (VER-011).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json as jsonlib
 import re
+import secrets
 from pathlib import PurePosixPath
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
@@ -139,6 +141,7 @@ class AgentTools:
         self._last_response = None
         self._identities = {}
         self._response_chars = 0
+        self._digest_key = secrets.token_bytes(32)
 
     def take_response(self):
         response, self._last_response = self._last_response, None
@@ -147,20 +150,24 @@ class AgentTools:
     def plan_test(self, **plan) -> dict:
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
-        # Name every declaration problem at once, so one revision can fix them all.
+        # An observed prerequisite needs recorded responses of this finding; one without them counts as assumed,
+        # which grants nothing (only a missing one matters, proof.py), so the plan need not be declared again.
         responses = getattr(self.ctx, "responses", {})
-        problems = []
+        prerequisites, assumed = [], []
         for i, prerequisite in enumerate(plan["strategy"]["prerequisites"], 1):
             steps = prerequisite.get("steps", [])
-            unrecorded = [str(n) for n in steps if n not in responses]
-            if prerequisite["status"] == "observed" and (not steps or unrecorded):
-                cited = "step " + ", ".join(unrecorded) + " without a recorded response" if unrecorded else "no step"
-                problems.append(f"prerequisite {i} is observed but cites {cited}")
-        if problems:
-            problems.append("observed cites only http_request steps of this finding; mark the others assumed")
+            if prerequisite["status"] == "observed" and (not steps or any(n not in responses for n in steps)):
+                prerequisite = {**prerequisite, "status": "assumed"}
+                assumed.append(str(i))
+            prerequisites.append(prerequisite)
+        plan = {**plan, "strategy": {**plan["strategy"], "prerequisites": prerequisites}}
+        # Name every declaration problem at once, so one revision can fix them all.
+        problems = []
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
         if variants and not plan.get("variant"):
             problems.append("select an evidenced finding variant for this plan")
+        if plan.get("variant") and not variants:
+            problems.append("this finding has no variants; omit variant")
         if plan["kind"] in ("boolean", "timing") and (
             plan.get("method", "GET") not in SAFE_METHODS or plan.get("input_location") == "form"
         ):
@@ -289,6 +296,8 @@ class AgentTools:
             "kind": plan["kind"],
             "experiment": plan,
             **({"marker": marker} if marker else {}),
+            **({"note": f"prerequisite {', '.join(assumed)} counts as assumed: observed needs http_request steps "
+                        "of this finding with a recorded response"} if assumed else {}),
             "next": "collect observations; run_experiment repeats read-only injection controls within the budget",
         }
 
@@ -616,13 +625,15 @@ class AgentTools:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
         text = _body_text(resp)
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
-        held_secret = redacted != text  # a credential or user name: equal hashes need not mean equal answers
         redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
         identity_key = tuple(sorted(headers.items()))
         identity = self._identities.setdefault(identity_key, len(self._identities))
         cap = min(64000, max(0, 256000 - self._response_chars))
+        # Whether two answers are the same, also where redaction made them look alike (each naming its own user):
+        # keyed with this finding's random key, held in memory only, so it is no hash of a credential.
+        digest = hmac.new(self._digest_key, text.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
         self._last_response = {"body": redacted[:cap], "complete": len(redacted) <= cap, "identity": identity,
-                               "redacted": held_secret}
+                               "digest": digest}
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
         out = {

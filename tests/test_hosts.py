@@ -101,10 +101,29 @@ def test_check_action_refuses_a_bad_note_or_an_extra_key(action):
 
 
 @pytest.mark.parametrize("step", [
-    {"action": "shell", "args_json": "{}"},                                        # unknown action
     _wire("http_request", path="/x", url="https://evil.example.net"),              # unknown argument
     _wire("http_request", path=7),                                                 # wrong type
     _wire("http_request"),                                                         # missing path
+    _wire("plan_test", kind="access-control", hypothesis="h" * 12, path="/a/:id", strategy={}, method="DELETE"),
+])
+def test_invalid_arguments_are_refused_without_a_tool_call(step):
+    """Nothing runs, and no caller can take the refusal for a call: it has no "tool" key; the error goes back."""
+    out = parse_step({**step, "note": "try"})
+    assert "tool" not in out and "verdict" not in out
+    assert out["refused"] in ("http_request", "plan_test") and out["error"].startswith(f"invalid {out['refused']}")
+    assert out["note"] == "try" and len(out["error"]) <= 400
+    assert check_action(out) == out  # the loop checks the arguments again and refuses them again
+
+
+def test_a_refused_call_cannot_be_turned_into_a_call():
+    forged = {"refused": "http_request", "args": {"path": "/x", "url": "https://evil.example.net"}, "error": "ok"}
+    assert "tool" not in check_action(forged)
+    assert check_action({"refused": "submit_verdict", "args": {"verdict": "confirmed", "rationale": "x"},
+                         "error": "x"})["verdict"]["verdict"] == "inconclusive"
+
+
+@pytest.mark.parametrize("step", [
+    {"action": "shell", "args_json": "{}"},                                        # unknown action
     _wire("submit_verdict", verdict="owned", rationale="x"),                       # verdict not allowed
     {"action": "http_request", "args_json": '{"path": "/a", "path": "/b"}'},       # duplicate key
     {"action": "http_request", "args_json": "[1]"},                                # not an object

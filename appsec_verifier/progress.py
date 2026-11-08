@@ -14,10 +14,10 @@ query and body, the result and how long the model took to propose the step; the 
 verdict, then the agent's rationale. When the run shows costs (API billing, or ``--show-costs`` as in
 AppSec Analyzer), each step gives its model cost, the ``done`` entry the finding's cost and the run's
 spend against its cost limit, and the status line the run's spend as it grows; on a terminal the amounts
-are highlighted. Under the ``done`` entry an ``img`` line names each screenshot the finding produced, with
-its path in the output directory. PROGRESS counts finished findings, ELAPSED is the run's time. LEFT
-extrapolates the time the finished findings took, never beyond the run's time limit; until the first
-finding has finished it shows that limit (``≤29m``).
+are highlighted. Under the ``done`` entry a line names each screenshot the finding produced, with its path in
+the output directory: ``proof`` when the Verifier checked the verdict's proof, otherwise ``img``. PROGRESS
+counts finished findings, ELAPSED is the run's time. LEFT extrapolates the time the finished findings took,
+never beyond the run's time limit; until the first finding has finished it shows that limit (``≤29m``).
 
 On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
 long row wraps under its column; a status line under the grid is redrawn every ``TICK_SECONDS`` with a
@@ -344,10 +344,12 @@ class RunProgress:
             self.done += 1
             self._activity = ""
             self._record("done", _line(*parts), *([_line(why)] if why else []), role=role)
+            # A screenshot shows proof only where the Verifier checked the verdict's proof (proof.py).
+            event = "proof" if isinstance(result.proof, dict) and result.proof.get("checked") is True else "img"
             for entry in result.evidence or []:
                 if isinstance(entry, dict) and entry.get("kind") == "screenshot" and entry.get("path"):
                     path = os.path.join(self._out_dir, entry["path"]) if self._out_dir else entry["path"]
-                    self._record("img", _line(f"screenshot {printable(path)}"))
+                    self._record(event, _line(f"screenshot {printable(path)}"))
 
     def close(self) -> None:
         """Stop the ticker and remove the status line; the run's last message follows on a clean line."""

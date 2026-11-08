@@ -256,7 +256,7 @@ def test_timeout_is_the_remaining_run_time():
 def test_an_invalid_step_is_refused_before_anything_runs():
     host, _ = _host([_msg(_wire("http_request", path="/x", headers={"X-Forwarded-For": "127.0.0.1"}))])
     action = HostPlanner(host).next_step(_ctx(), [])
-    assert action["verdict"]["verdict"] == "inconclusive" and "invalid http_request" in action["verdict"]["rationale"]
+    assert "tool" not in action and "invalid http_request" in action["error"]
 
 
 def test_agent_registry_covers_classes():

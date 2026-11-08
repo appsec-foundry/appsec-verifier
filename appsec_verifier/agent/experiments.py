@@ -407,26 +407,28 @@ def owned_check(ctx, history, cited, *, negative=False, blocked=False):
 
 def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
     """A privileged function (VER-010, VER-041): the privileged account gets 2xx, a request without a role 401 or
-    403, and a normal account the identical answer (confirmed) or 403/404 (blocked-by-control)."""
+    403, and a normal account the identical answer (confirmed) or 403/404 (blocked-by-control). Identical means the
+    same unredacted bytes (the recorded response's digest): an answer that names its own user is never identical,
+    a list that names every user can be."""
     if negative and not blocked:
         return "a different answer for the normal account does not show that the function is protected"
     start, plan = latest_plan(history)
     writes, reads, error = _access_steps(ctx, history, cited, plan, start)
     if error or writes:
         return error or "a privileged comparison only reads"
-    if any(response.get("redacted") for _, _, response, _ in reads):
-        return "a response holds a credential or user name, so the answers cannot be compared"
-    reference = [(response.get("identity"), res.get("body_sha256")) for _, role, response, res in reads
-                 if role == plan["reference"] and 200 <= res["status"] < 300 and res.get("length")]
+    reference = [(response.get("identity"), response["digest"]) for _, role, response, res in reads
+                 if role == plan["reference"] and 200 <= res["status"] < 300 and res.get("length")
+                 and response.get("digest")]
     if not reference:
         return "the privileged account's request was not answered with content"
     statuses = [res["status"] for _, role, _, res in reads if role is None]
     if not blocked and (not statuses or any(s not in (401, 403) for s in statuses)):
         return "a request without a role must be refused with 401 or 403"
     ids, roles = {i for i, _ in reference}, normal_roles(getattr(ctx, "identities", None))
-    normal = [(response.get("identity"), res["status"], res.get("body_sha256")) for _, role, response, res in reads
+    normal = [(response.get("identity"), res["status"], response.get("digest")) for _, role, response, res in reads
               if role in roles and response.get("identity") not in ids]
-    same = [i for i, status, sha in normal if 200 <= status < 300 and sha in {s for _, s in reference}]
+    same = [i for i, status, digest in normal
+            if 200 <= status < 300 and digest and digest in {d for _, d in reference}]
     if blocked:
         if same:
             return "a normal account received the privileged answer"
