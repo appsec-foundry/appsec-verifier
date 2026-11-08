@@ -295,9 +295,12 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
     }
 
 
-def annotate_assessment(assessment: dict, doc: dict) -> dict:
-    """Return a copy of the assessment with an additive `verification` block on
-    each matched finding (VER-027). Never changes or removes a finding."""
+def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str) -> dict:
+    """Return a copy of the assessment with an additive `dynamic_verification`
+    block on each matched finding and a top-level `dynamic_verification` record
+    of the run that wrote them (VER-027). Never changes or removes a finding.
+    The key is the Verifier's own: AppSec Analyzer uses `threats[].verification`
+    for its static verification findings (REQ-040)."""
     from ..matchkey import match_key
 
     by_id = {r["finding_ref"]["id"]: r for r in doc["results"] if r["finding_ref"].get("id")}
@@ -309,13 +312,18 @@ def annotate_assessment(assessment: dict, doc: dict) -> dict:
 
     import copy
     out = copy.deepcopy(assessment)
+    out["dynamic_verification"] = {
+        "generated": doc["meta"].get("generated"),
+        "verifier_version": doc["meta"].get("verifier_version"),
+        "verification_report": verification_report,
+    }
     for t in out.get("threats") or []:
         if not isinstance(t, dict):
             continue
         r = by_id.get(t.get("id")) or by_key.get(match_key(t) or "")
         if not r:
             continue
-        t["verification"] = {
+        t["dynamic_verification"] = {
             "verdict": r["verdict"],
             "confidence": r.get("confidence"),
             "verified_at": doc["meta"].get("generated"),
@@ -330,7 +338,7 @@ def annotate_assessment(assessment: dict, doc: dict) -> dict:
             expected = {v["id"] for v in (t.get("verification_context") or {}).get("variants", [])}
             completed = {(row.get("proof") or {}).get("variant") for row in variants
                          if (row.get("proof") or {}).get("checked") is True}
-            t["verification"].update({
+            t["dynamic_verification"].update({
                 "verdict": "confirmed" if any(row["verdict"] == "confirmed" for row in variants) else "inconclusive",
                 "coverage": "complete" if expected and expected <= completed else "partial",
                 "variants": [{"variant": row["finding_ref"].get("variant"), "verdict": row["verdict"],

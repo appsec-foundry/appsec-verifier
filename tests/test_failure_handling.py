@@ -104,11 +104,11 @@ def _write(path, doc):
     return path
 
 
-def _verify(tmp_path, monkeypatch, planner, *extra, target=None):
+def _verify(tmp_path, monkeypatch, planner, *extra, target=None, threats=None):
     target = target or Target(default=Resp())
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (planner, dict(INFO)))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
-    argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": THREATS})),
+    argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": threats or THREATS})),
             "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--test-all",
             "--output", str(tmp_path / "out"),
             "--rate", "0", "--screenshots", "none", *extra]
@@ -540,6 +540,16 @@ def test_a_failed_in_place_write_leaves_the_assessment_whole(tmp_path, monkeypat
         _verify(tmp_path, monkeypatch, Checked, "--annotate", "--in-place")
     assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": THREATS}
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_annotating_in_place_keeps_the_analyzers_verification_block(tmp_path, monkeypatch):
+    block = {"finding_ids": ["TCF-001"], "test_case_ids": ["TC-IDOR-01"]}   # AppSec Analyzer REQ-040
+    threats = [dict(t, verification=block) for t in THREATS]
+    assert _verify(tmp_path, monkeypatch, Checked, "--annotate", "--in-place", threats=threats)[0] == cli.EXIT_OK
+    annotated = yaml.safe_load((tmp_path / "a.yaml").read_text())
+    assert [t["verification"] for t in annotated["threats"]] == [block] * len(THREATS)
+    assert all(t["dynamic_verification"]["verdict"] == "not-attempted" for t in annotated["threats"])
+    assert annotated["dynamic_verification"]["verification_report"] == str(tmp_path / "out" / "verification.yaml")
 
 
 def test_a_replaced_file_keeps_its_permissions(tmp_path):

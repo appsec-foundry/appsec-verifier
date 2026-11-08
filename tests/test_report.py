@@ -90,10 +90,44 @@ def test_build_annotations_keyed_by_id_and_match_key():
 def test_annotate_assessment_is_additive():
     assessment = {"threats": [{"id": "T-037", "cwe": "CWE-79", "severity": "High",
                                "evidence": [{"file": "about.ts", "line": 119}], "scenario": "orig"}]}
-    out = annotate_assessment(assessment, _doc())
+    doc = _doc()
+    out = annotate_assessment(assessment, doc, verification_report="verification/verification.yaml")
     t = out["threats"][0]
     assert t["scenario"] == "orig"          # original untouched
-    assert t["verification"]["verdict"] == "not-attempted"
+    assert t["dynamic_verification"]["verdict"] == "not-attempted"
     assert "T-037" == t["id"]               # identity preserved
+    assert out["dynamic_verification"] == {"generated": doc["meta"]["generated"], "verifier_version": "test",
+                                           "verification_report": "verification/verification.yaml"}
     # original dict not mutated
-    assert "verification" not in assessment["threats"][0]
+    assert "dynamic_verification" not in assessment["threats"][0] and "dynamic_verification" not in assessment
+
+
+# AppSec Analyzer's own `threats[].verification` (REQ-040) must survive annotation unchanged (VER-027).
+ANALYZER_BLOCK = {"finding_ids": ["TCF-001"], "test_case_ids": ["TC-SQLI-01"]}
+
+
+def test_annotation_leaves_the_analyzers_verification_block_alone():
+    assessment = {"threats": [
+        {"id": "T-037", "cwe": "CWE-79", "verification": dict(ANALYZER_BLOCK)},
+        {"id": "T-099", "cwe": "CWE-89", "verification": dict(ANALYZER_BLOCK)},   # not in this run
+    ]}
+    out = annotate_assessment(assessment, _doc(), verification_report="v.yaml")
+    tested, untested = out["threats"]
+    assert tested["verification"] == ANALYZER_BLOCK and untested["verification"] == ANALYZER_BLOCK
+    assert tested["dynamic_verification"]["result_ref"] == "VF-001"
+    assert "dynamic_verification" not in untested
+
+
+def test_variant_annotation_goes_to_the_verifiers_own_block():
+    doc = _doc()
+    r = doc["results"][0]
+    r.update(verdict="confirmed")
+    r["finding_ref"]["variant"] = "v1"
+    r["proof"] = {"checked": True, "variant": "v1"}
+    assessment = {"threats": [{"id": "T-037", "cwe": "CWE-79", "verification": dict(ANALYZER_BLOCK),
+                               "verification_context": {"variants": [{"id": "v1"}, {"id": "v2"}]}}]}
+    t = annotate_assessment(assessment, doc, verification_report="v.yaml")["threats"][0]
+    assert t["verification"] == ANALYZER_BLOCK
+    assert t["dynamic_verification"]["verdict"] == "confirmed"
+    assert t["dynamic_verification"]["coverage"] == "partial"
+    assert [v["variant"] for v in t["dynamic_verification"]["variants"]] == ["v1"]

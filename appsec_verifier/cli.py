@@ -719,7 +719,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     if args.annotate:
         import yaml
 
-        annotated = annotate_assessment(_load_yaml(assessment), doc)
+        annotated = annotate_assessment(_load_yaml(assessment), doc, verification_report=str(paths["yaml"]))
         dest = assessment if args.in_place else (out_dir / "security-assessment.annotated.yaml")
         write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
         extra.append(("Annotated", f"{dest}" + (" (in place)" if args.in_place else "")))
