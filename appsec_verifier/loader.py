@@ -10,7 +10,7 @@ Offline: no network, no model calls.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -18,6 +18,7 @@ from jsonschema.validators import validator_for
 
 from .endpoints import Endpoint, finding_brief, finding_endpoints
 from .matchkey import match_key
+from .verification_context import context_errors, finding_context
 from .version_info import resource_root
 
 _SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -62,6 +63,8 @@ class FindingPlan:
     technique: str | None = None    # finer category (e.g. idor, sqli) when dynamic
     endpoints: tuple[Endpoint, ...] = ()    # requests the finding names (endpoints.py)
     brief: str = ""                 # its scenario and attack steps, for the agent
+    context: dict = field(default_factory=dict)
+    verification_context: dict = field(default_factory=dict)
 
 
 def _first_location(threat: dict) -> str | None:
@@ -104,6 +107,8 @@ def classify(threat: dict, catalog: dict[str, dict], surface=None) -> FindingPla
         technique=(entry.get("technique") if entry else None),
         endpoints=finding_endpoints(threat, surface),
         brief=finding_brief(threat),
+        context=finding_context(threat),
+        verification_context=threat.get("verification_context") or {},
     )
 
 
@@ -138,6 +143,9 @@ def assessment_errors(doc: dict) -> list[str]:
     if not errors:
         ids = [t["id"] for t in doc["threats"]]
         errors = [f"threats: id {i[:40]!r} is used {n} times" for i, n in Counter(ids).items() if n > 1]
+        for n, threat in enumerate(doc["threats"]):
+            if "verification_context" in threat:
+                errors += [f"threats/{n}/{e}" for e in context_errors(threat["verification_context"])]
     return errors[:_MAX_ERRORS] + ([f"… {len(errors) - _MAX_ERRORS} more"] if len(errors) > _MAX_ERRORS else [])
 
 

@@ -67,7 +67,12 @@ def test_idor_two_identity_contrast_confirms():
     from pathlib import Path
     with tempfile.TemporaryDirectory() as d:
         ctx = _ctx(Path(d), transport)
+        ctx.scope = {**ctx.scope, "test_resources": [{"id": "basket", "finding_id": "T-001",
+                     "path": "/rest/basket/2", "allowed_roles": ["customer-b"], "denied_roles": ["customer-a"],
+                     "pointer": "/UserId", "value": 2}]}
         planner = ScriptedPlanner([
+            {"tool": "plan_test", "args": {"kind": "access-control", "hypothesis": "A can read B's basket",
+                                          "path": "/rest/basket/2", "resource": "basket"}},
             {"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": 1}},
             {"tool": "http_request", "args": {"role": "customer-a", "method": "GET", "path": "/rest/basket/2"}},
             {"tool": "http_request", "args": {"role": "customer-b", "method": "GET", "path": "/rest/basket/2"}},
@@ -76,7 +81,7 @@ def test_idor_two_identity_contrast_confirms():
                          "identities_used": ["customer-a", "customer-b"],
                          "proof": {"identity_a": "customer-a", "identity_b": "customer-b",
                                    "observed_difference": "a received b's basket (UserId 2)"},
-                         "proof_steps": [2, 3]}},
+                         "proof_steps": [3, 4]}},
         ])
         ctx.evidence_dir = Path(d) / "evidence"
         res = AgentProbe("access-control", lambda: planner, max_steps=10).run(ctx)
@@ -90,7 +95,7 @@ def test_idor_two_identity_contrast_confirms():
     # the code's record of the cited exchanges is the evidence, not the model's word
     assert res.evidence[0]["kind"] == "exchange" and res.evidence[0]["path"] == "evidence/T-001-exchanges.json"
     assert [(e["step"], e["role"], e["status"]) for e in record["exchanges"]] == [
-        (2, "customer-a", 200), (3, "customer-b", 200)]
+        (3, "customer-a", 200), (4, "customer-b", 200)]
     assert "UserId" not in json.dumps(record) and mode == 0o600      # no response body in the evidence
 
 

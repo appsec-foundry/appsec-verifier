@@ -176,6 +176,20 @@ def _validate_scope(scope: dict) -> list[str]:
     networks = scope.get("networks") if isinstance(scope, dict) else None
     if isinstance(networks, list):
         errors += [f"networks: {n!r} is not an IP network (CIDR)" for n in networks if parse_network(n) is None]
+    if not errors:
+        resources = scope.get("test_resources", [])
+        ids = [r["id"] for r in resources]
+        if len(ids) != len(set(ids)):
+            errors.append("test_resources: ids must be unique")
+        for r in resources:
+            if "json" in r and "form" in r:
+                errors.append("test_resources: choose either json or form for the request body")
+            if set(r["allowed_roles"]) & set(r["denied_roles"]):
+                errors.append("test_resources: allowed and denied roles must be disjoint")
+            if not ScopeGuard(scope).authorize(r["path"] if "://" in r["path"] else
+                                              scope["base_url"].rstrip("/") + "/" + r["path"].lstrip("/"),
+                                              "target").allowed:
+                errors.append("test_resources: a resource is outside the target scope")
     return errors
 
 
@@ -867,6 +881,10 @@ def _identities_note(identities, sel):
 # What a finding this run cannot test needs: its name in the test plan, and how the operator provides it.
 # The browser's and the identity's lines are replaced by ones that fit this run (_run_hints).
 _NEEDS = {
+    "resource": ("test resource", ["add an operator-owned test_resources entry to the scope file, with the "
+                                     "finding ID, allowed and denied roles, and a harmless response marker"]),
+    "capability": ("test capability", ["the reported variant needs a tool this run does not provide; "
+                                        "keep it unresolved or test that variant separately"]),
     "identity": ("test identity", ["create an identities file with two test accounts and pass it with "
                                    "--identities FILE (docs/cli.md, Identities file)"]),
     "browser": ("proof browser", ["install Playwright and Google Chrome"]),
@@ -905,15 +923,30 @@ def _blocker(plan, *, identities, browser, listener, scope, safe) -> tuple[str, 
     of them write in safe mode or all need a login and there is no test identity.
     A finding that names no request is tried."""
     from .endpoints import WRITE_METHODS
+    from .verification_context import missing_capabilities
 
     if plan.cls == "access-control" and not identities:
         return "identity", "no test identity; the proof compares two identities"
+    if plan.cls == "access-control" and not any(r["finding_id"] == plan.id for r in scope.get("test_resources", [])):
+        return "resource", "no declared test resource with allowed and denied identities"
+    if plan.cls == "access-control":
+        roles = {i["role"] for i in identities} | {"anonymous"}
+        resources = [r for r in scope.get("test_resources", []) if r["finding_id"] == plan.id]
+        if not any(set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles for r in resources):
+            return "resource", "a declared test resource names roles unavailable in this run"
     if plan.cls == "xss" and browser is None:
         return "browser", "no proof browser; XSS counts only when the payload executes"
     if plan.cls == "path-traversal" and not (scope.get("marker_file") or {}).get("path"):
         return "marker", "no marker_file in the scope"
     if plan.cls == "ssrf" and listener is None:
         return "callback", "no callback in the scope"
+    variants = getattr(plan, "verification_context", {}).get("variants", [])
+    missing = [missing_capabilities(v, safe=safe, browser=browser is not None) for v in variants]
+    if missing and all(missing):
+        needs = sorted({need for row in missing for need in row})
+        if needs == ["state-change"]:
+            return "intrusive", "safe mode; every declared variant needs a state change"
+        return "capability", "declared variants need unavailable capabilities: " + ", ".join(needs)
     requests = [e for e in plan.endpoints if e.method != "PAGE"]
     if requests and safe and all(e.method in WRITE_METHODS for e in requests):
         return "intrusive", "safe mode; every request the assessment names writes"

@@ -84,7 +84,8 @@ def _ctx(limits=None, clock=None):
 
 def test_tool_defs_expose_only_the_confined_tools():
     names = {t["name"] for t in _tool_defs()}
-    assert names == {"http_request", "read_source", "browser_check", "submit_verdict"}
+    assert names == {"http_request", "read_source", "browser_check", "submit_verdict",
+                     "read_context", "read_response", "plan_test"}
     verdict = next(t for t in _tool_defs() if t["name"] == "submit_verdict")
     assert "confirmed" in verdict["input_schema"]["properties"]["verdict"]["enum"]
 
@@ -272,14 +273,18 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
         return Resp()
 
     host, client = _host([
+        _msg(_wire("plan_test", kind="access-control", hypothesis="A reads the known basket of B",
+                   path="/rest/basket/2", resource="basket")),
         _msg(_wire("http_request", role="customer-a", path="/rest/basket/2")),
         _msg(_wire("http_request", role="customer-b", path="/rest/basket/2")),
         _msg(_wire("submit_verdict", verdict="confirmed", confidence="high", rationale="a read b",
-                   identities_used=["customer-a", "customer-b"], proof_steps=[1, 2])),
+                   identities_used=["customer-a", "customer-b"], proof_steps=[2, 3])),
     ])
     ctx = _full_ctx(tmp_path, transport)
+    ctx.scope = {**ctx.scope, "test_resources": [{"id": "basket", "finding_id": "T-001", "path": "/rest/basket/2",
+                 "allowed_roles": ["customer-b"], "denied_roles": ["customer-a"], "pointer": "/UserId", "value": 2}]}
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=8).run(ctx)
     assert res.verdict == "confirmed" and res.identities_used == ["customer-a", "customer-b"]
     assert calls == ["Bearer AAAA", "Bearer BBBB"]
-    assert ctx.budget.calls == 3 and ctx.budget.cost == pytest.approx(3 * 0.008)
-    assert '\\"status\\": 200' in client.calls[1]["messages"][0]["content"]   # results reach the model as data
+    assert ctx.budget.calls == 4 and ctx.budget.cost == pytest.approx(4 * 0.008)
+    assert '"status": 200' in client.calls[2]["messages"][0]["content"]   # results reach the model as data

@@ -17,6 +17,7 @@ schemas/verification.schema.yaml first.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import secrets
@@ -56,7 +57,8 @@ def resume_problems(existing: dict, assessment_sha256: str | None, target: str) 
 
 def verified_findings(existing: dict) -> set[str]:
     """The findings a resumed run keeps: those with a definite verdict."""
-    return {r["finding_ref"]["id"] for r in existing.get("results") or [] if r.get("verdict") in VERIFIED}
+    return {r["finding_ref"]["id"] for r in existing.get("results") or [] if r.get("verdict") in VERIFIED
+            and (r.get("proof") or {}).get("checked") is True and (r.get("proof") or {}).get("contract") == 2}
 
 
 def merge_reports(existing: dict, new: dict) -> dict:
@@ -188,6 +190,14 @@ def to_markdown(doc: dict) -> str:
         lines.append(f"- class: {r.get('class')} · CWE: {fr.get('cwe')} · match_key: `{fr.get('match_key')}`")
         if r.get("rationale"):
             lines.append(f"- {r['rationale']}")
+        proof = r.get("proof") or {}
+        if proof.get("checked"):
+            detail = {k: proof[k] for k in ("variant", "tested_path", "hypothesis", "observation_pointer", "steps")
+                      if proof.get(k) is not None}
+            lines += ["", "Checked scope: cited requests only; other variants remain untested.",
+                      _fenced(json.dumps(detail, ensure_ascii=False, indent=2), "json")]
+        if proof.get("missing"):
+            lines += ["", "Missing evidence:", _fenced("\n".join(proof["missing"]), "text")]
         if r.get("deviation"):
             lines.append(f"- deviation: {r['deviation']}")
         for ev in r.get("evidence") or []:
@@ -240,6 +250,9 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
             "verdict": r["verdict"],
             "confidence": r.get("confidence"),
             "rationale": r.get("rationale"),
+            "tested_scope": {k: (r.get("proof") or {})[k]
+                             for k in ("checked", "contract", "variant", "tested_path", "scope")
+                             if k in (r.get("proof") or {})},
             "verified_at": meta.get("generated"),
             "result_ref": r.get("result_id"),
             # Screenshots and recorded responses can show target data and stay out of the export (VER-022).
@@ -290,5 +303,8 @@ def annotate_assessment(assessment: dict, doc: dict) -> dict:
             "verified_at": doc["meta"].get("generated"),
             "verifier_version": doc["meta"].get("verifier_version"),
             "result_ref": r.get("result_id"),
+            "tested_scope": {k: (r.get("proof") or {})[k]
+                             for k in ("checked", "contract", "variant", "tested_path", "scope")
+                             if k in (r.get("proof") or {})},
         }
     return out

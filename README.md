@@ -12,6 +12,10 @@ inside the scope you define, and accepts a finding as confirmed only when the
 proof holds up in a check in code. It does not repeat the static analysis and
 does not change severities.
 
+The agent can use the assessment’s optional `verification_context` to choose tests from the query construction, input processing, filter order and cited controls. It records a hypothesis and controls before collecting injection or access-control proof, can inspect recorded responses, and receives concrete feedback when evidence is insufficient. Older assessments remain readable.
+
+Access-control tests need `test_resources` in the scope: a known harmless resource, the roles allowed and denied access, and a response marker. See the [scope example](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001). A negative result applies only to the recorded test and variant.
+
 This is an early version; see [Limitations](#limitations).
 
 ## Quick start
@@ -87,8 +91,8 @@ A finding counts as confirmed only with the proof in the right column.
 | Class | CWEs | Confirmed when |
 | --- | --- | --- |
 | Cross-site scripting | CWE-79 | a marker script runs in a real browser; text that is only reflected does not count |
-| Broken access control / IDOR | CWE-639, 862, 863 | the same request succeeds with content for two different identities, or for one identity and without login |
-| SQL / NoSQL injection | CWE-89, 943 | a different input changes the answer, or a delay input slows it by at least 2 seconds, measured twice; no data is extracted |
+| Broken access control / IDOR | CWE-639, 862, 863 | an operator-declared protected resource is returned to both an allowed and an independently authenticated denied identity |
+| SQL / NoSQL injection | CWE-89, 943 | a declared baseline and true/false experiment repeats a selected JSON observation, or alternating controls show a repeated 2–5 second delay with identical responses |
 | Path traversal | CWE-22 | the target returns a marker file you placed on it |
 | Open redirect | CWE-601 | the target redirects to a marker host that does not exist; the redirect is not followed |
 | SSRF | CWE-918 | the target calls a listener the Verifier runs on your machine |
@@ -267,6 +271,9 @@ login) and [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a
 company proxy, OIDC login).
 
 ## Limitations
+
+- Boolean injection checks currently need a stable JSON field; arbitrary HTML observations, custom request headers and browser interactions such as clicks are unavailable. Declared variants that need them are shown as untestable. POST, PUT and PATCH with JSON or form bodies require intrusive mode. Timing checks require identical response bodies, so changing timestamps can leave a test inconclusive.
+- The new context and proof workflow has offline coverage; its test selection quality has not been evaluated with live models against a running application.
 
 - The proof browser has only been tested against a local fake target, and the
   `codex-cli` and `copilot-cli` profiles only with simulated answers.

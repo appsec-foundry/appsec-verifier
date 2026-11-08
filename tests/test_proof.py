@@ -3,6 +3,7 @@ code against the cited steps (VER-009 to VER-013, VER-022)."""
 
 from __future__ import annotations
 
+import copy
 import json
 from types import SimpleNamespace
 
@@ -28,7 +29,26 @@ def _req(role="alice", path="/rest/basket/2", status=200, length=40, sha="h1", m
 
 def _check(cls, history, cited, verdict="confirmed", **ctx):
     result = ProbeResult(verdict=verdict, confidence="high", rationale="the model says so")
+    if cls == "access-control":
+        history, cited, extra = _access_fixture(history, cited)
+        ctx = {**extra, **ctx}
     return check_proof(_ctx(cls, **ctx), history, result, cited)
+
+
+def _access_fixture(history, cited):
+    history = copy.deepcopy(history)
+    first = next((h["args"] for h in history if h.get("tool") == "http_request"), {})
+    plan = {"tool": "plan_test", "args": {"kind": "access-control", "hypothesis": "Other account reads owner data",
+            "path": "/rest/basket/2", "resource": "basket"}, "result": {"accepted": True}}
+    resource = {"id": "basket", "finding_id": "T-1", "path": "/rest/basket/2", "allowed_roles": ["alice"],
+                "denied_roles": ["bob", "anonymous"], "pointer": "/marker", "value": "owner-test-marker",
+                "params": first.get("params") or {}, "json": first.get("json") or {}}
+    history.insert(0, plan)
+    responses = {n: {"body": '{"marker":"owner-test-marker"}', "complete": True,
+                     "identity": h.get("args", {}).get("role", "anonymous")}
+                 for n, h in enumerate(history, 1) if h.get("tool") == "http_request"}
+    cited = [n + 1 if type(n) is int and n > 0 else n for n in cited] if isinstance(cited, list) else cited
+    return history, cited, {"scope": {"test_resources": [resource]}, "responses": responses}
 
 
 READ = {"tool": "read_source", "args": {"path": "r.ts"}, "result": {"path": "r.ts", "start_line": 1}}
@@ -51,16 +71,17 @@ def test_access_control_contrast_confirms(history, cited):
     ([_req("alice"), _req("bob")], [1], "at least two steps"),
     ([_req("alice"), _req("bob")], [1, 9], "does not exist"),
     ([_req("alice"), _req("bob")], [0, 1], "does not exist"),
-    ([_req("alice"), _req("bob")], [1, True], "does not exist"),
+    ([_req("alice"), _req("bob")], [1, True], "distinct integer"),
     ([READ, _req("bob")], [1, 2], "not an answered http_request"),
     ([_req("alice"), {"tool": "http_request", "args": {"path": "/x"}, "result": {"error": "refused"}}], [1, 2],
      "not an answered http_request"),
-    ([_req("alice"), _req("alice")], [1, 2], "two different identities"),          # no contrast
-    ([_req("alice"), _req("bob", status=403)], [1, 2], "two different identities"),  # the control held
-    ([_req("alice"), _req("bob", length=0)], [1, 2], "two different identities"),   # nothing was read
-    ([_req("alice"), _req("bob", path="/rest/basket/3")], [1, 2], "two different identities"),
-    ([_req("alice", params={"id": 2}), _req("bob", params={"id": 3})], [1, 2], "two different identities"),
-    ([_req("alice"), _req("bob", method="POST")], [1, 2], "two different identities"),
+    ([_req("alice"), _req("alice")], [1, 2], "independent denied identity"),          # no contrast
+    ([_req("alice"), _req("bob", status=403)], [1, 2], "independent denied identity"),  # the control held
+    ([_req("alice"), _req("bob", length=0)], [1, 2], "independent denied identity"),   # nothing was read
+    ([_req("alice"), _req("bob", path="/rest/basket/3")], [1, 2], "declared resource with the same inputs"),
+    ([_req("alice", params={"id": 2}), _req("bob", params={"id": 3})], [1, 2],
+     "declared resource with the same inputs"),
+    ([_req("alice"), _req("bob", method="POST")], [1, 2], "declared resource with the same inputs"),
 ])
 def test_access_control_without_the_contrast_is_downgraded(history, cited, reason):
     res = _check("access-control", history, cited)
@@ -75,8 +96,9 @@ def test_access_control_without_the_contrast_is_downgraded(history, cited, reaso
     [_req(params={"q": "x"}, status=200), _req(params={"q": "x'"}, status=500, sha="h1")],
     [_req(method="POST", body={"q": "a"}, sha="h1"), _req(method="POST", body={"q": "a'--"}, sha="h3")],
 ])
-def test_injection_flip_confirms(history):
-    assert _check("injection", history, [1, 2]).verdict == "confirmed"
+def test_a_bare_status_or_body_flip_no_longer_confirms(history):
+    res = _check("injection", history, [1, 2])
+    assert res.verdict == "inconclusive" and "declare a plan_test" in res.rationale
 
 
 @pytest.mark.parametrize("history", [
@@ -87,7 +109,7 @@ def test_injection_flip_confirms(history):
 ])
 def test_injection_without_a_flip_is_downgraded(history):
     res = _check("injection", history, [1, 2])
-    assert res.verdict == "inconclusive" and "response changes with the input" in res.rationale
+    assert res.verdict == "inconclusive" and "declare a plan_test" in res.rationale
 
 
 def _timed(q, ms, path="/rest/search", role="alice"):
@@ -100,11 +122,10 @@ def _timed(q, ms, path="/rest/search", role="alice"):
     [_timed("a", 80), _timed("a' AND SLEEP(3)--", 3100), _timed("b", 95), _timed("b' AND SLEEP(3)--", 3050)],
     [_timed("a", 80), _timed("a", 120), _timed("x' OR SLEEP(3)--", 3200), _timed("x' OR SLEEP(3)--", 3150)],
 ])
-def test_injection_timing_difference_confirms(history, tmp_path):
+def test_undeclared_timing_samples_are_insufficient(history, tmp_path):
     res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence"), history,
                       ProbeResult(verdict="confirmed"), list(range(1, len(history) + 1)))
-    record = json.loads((tmp_path / "evidence" / "T-1-exchanges.json").read_text())
-    assert res.verdict == "confirmed" and sorted(e["elapsed_ms"] for e in record["exchanges"])[-1] >= 3050
+    assert res.verdict == "inconclusive" and "declare a plan_test" in res.rationale
 
 
 @pytest.mark.parametrize("history", [
@@ -120,7 +141,7 @@ def test_injection_timing_difference_confirms(history, tmp_path):
 ])
 def test_injection_without_a_clear_delay_is_downgraded(history):
     res = _check("injection", history, list(range(1, len(history) + 1)))
-    assert res.verdict == "inconclusive" and "response changes with the input" in res.rationale
+    assert res.verdict == "inconclusive" and "declare a plan_test" in res.rationale
 
 
 # ── open redirect (VER-012) ───────────────────────────────────────────────────
@@ -255,7 +276,10 @@ def test_an_unknown_class_is_never_confirmed():
 @pytest.mark.parametrize("verdict", ["not-reproducible", "blocked-by-control", "inconclusive"])
 def test_other_verdicts_pass_unchanged(verdict):
     res = _check("ssrf", [], None, verdict=verdict)
-    assert res.verdict == verdict and res.rationale == "the model says so"
+    if verdict == "inconclusive":
+        assert res.verdict == verdict and res.rationale == "the model says so"
+    else:
+        assert res.verdict == "not-attempted" and "no answered target request" in res.rationale
 
 
 # ── evidence record (VER-022) ─────────────────────────────────────────────────
@@ -265,8 +289,9 @@ def test_the_evidence_record_is_the_codes_redacted_and_owner_only(tmp_path):
     history = [_req("alice", params=secret), _req("bob", params=secret)]
     sessions = SimpleNamespace(redact=lambda v: json.loads(json.dumps(v).replace("s3cret-value", "[redacted]")))
     result = ProbeResult(verdict="confirmed", rationale="r", evidence=[{"kind": "note", "path": "model-made.txt"}])
-    res = check_proof(_ctx("access-control", sessions=sessions, evidence_dir=tmp_path / "evidence"), history, result,
-                      [1, 2])
+    history, cited, extra = _access_fixture(history, [1, 2])
+    res = check_proof(_ctx("access-control", sessions=sessions, evidence_dir=tmp_path / "evidence", **extra),
+                      history, result, cited)
     path = tmp_path / "evidence" / "T-1-exchanges.json"
     assert [e["path"] for e in res.evidence] == ["evidence/T-1-exchanges.json"]   # the model's evidence is replaced
     assert "s3cret-value" not in path.read_text() and (path.stat().st_mode & 0o777) == 0o600

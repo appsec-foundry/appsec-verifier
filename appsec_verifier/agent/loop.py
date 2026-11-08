@@ -34,7 +34,7 @@ from .tools import AgentTools, ToolError
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
 _LOGGED_RESULT = ("status", "length", "executed", "blocked", "error", "path", "start_line", "marker_read",
-                  "callback_hit")
+                  "callback_hit", "accepted", "elapsed_ms")
 _PROPOSAL_CAP = 500
 
 
@@ -51,9 +51,9 @@ def _result_from_verdict(v: dict) -> ProbeResult:
                            rationale=f"agent returned an invalid verdict {verdict!r}")
     return ProbeResult(
         verdict=verdict,
-        confidence=v.get("confidence"),
+        confidence="low",
         rationale=v.get("rationale"),
-        proof=v.get("proof"),
+        proof=None,  # only the checker may create the evidence contract
         identities_used=v.get("identities_used", []),
         state_changes=v.get("state_changes", []),
         deviation=v.get("deviation"),
@@ -94,8 +94,15 @@ class AgentProbe:
         tools = AgentTools(ctx)
         history: list[dict] = []
         sent: list[dict] = []          # per step what went to the target and came back, never shown to the planner
+        ctx.responses = {}
+        last_rejected = None
+        last_cited = None
+        repairs = 0
 
         def keep(step: int, name: str) -> None:
+            response = tools.take_response()
+            if response is not None:
+                ctx.responses[step] = response
             entries = tools.take_exchanges()
             if entries:
                 sent.append({"step": step, "tool": name, "entries": entries})
@@ -116,6 +123,18 @@ class AgentProbe:
                          proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP])
                 verdict = action["verdict"]
                 result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
+                if (result.proof or {}).get("checked") is False and repairs < 2 and step < self._max_steps:
+                    repairs += 1
+                    last_rejected = result
+                    last_cited = verdict.get("proof_steps")
+                    feedback = {"status": "insufficient", "missing": result.proof["missing"],
+                                "remaining_steps": self._max_steps - step}
+                    _log(ctx, step, tool="proof_feedback", result=feedback)
+                    history.append({"tool": "proof_feedback", "args": {}, "result": feedback})
+                    continue
+                if last_rejected is not None and verdict.get("verdict") == "inconclusive":
+                    result = last_rejected
+                    verdict = {**verdict, "proof_steps": last_cited}
                 result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]

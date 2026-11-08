@@ -52,6 +52,7 @@ class ProbeContext:
     log: object | None = None          # callable(record) for the action log (VER-017), or None
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
     progress: object | None = None     # RunProgress that shows each step on the console, or None
+    responses: dict = field(default_factory=dict)  # bounded redacted responses, private to this finding
 
 
 @runtime_checkable

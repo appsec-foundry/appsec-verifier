@@ -394,7 +394,7 @@ def test_the_agent_loop_announces_each_call_before_it_runs_and_reports_each_step
     AgentProbe("access-control", Planner, max_steps=5).run(ctx)
     assert recorder.events == [("activity", 1, 5, None), ("activity", 1, 5, "read_source"),
                                ("step", 1, "read_source"), ("activity", 2, 5, None),
-                               ("step", 2, "not-reproducible")]
+                               ("step", 2, "not-attempted")]
 
 
 def test_the_agent_loop_logs_and_shows_the_planner_note_and_ignores_it_for_a_verdict():
@@ -436,7 +436,7 @@ def _verify_run(tmp_path, monkeypatch, capsys, info, *extra, usd=0.0):
             ctx.budget.note_cost(usd)
             if not history:
                 return {"tool": "http_request", "args": {"path": "/rest/basket/2"}}
-            return {"verdict": {"verdict": "not-reproducible", "rationale": "owner checked"}}
+            return {"verdict": {"verdict": "inconclusive", "rationale": "rejection alone is insufficient"}}
 
     def transport(method, url, headers, **k):
         return SimpleNamespace(status_code=200 if url.endswith(".com") else 403, headers={}, text="no",
@@ -458,7 +458,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, usd=0.25)
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
-    assert rows[-1].split()[3:5] == ["done", "100%"] and "not reproducible" in rows[-1]
+    assert rows[-1].split()[3:5] == ["done", "100%"] and "inconclusive" in rows[-1]
     assert " · $0.50 · run $0.50 of $10.00 · " in rows[-1]                 # API billing: costs shown
     assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
 

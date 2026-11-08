@@ -80,7 +80,7 @@ ALICE = [{"role": "alice"}]
 
 def test_a_class_without_its_proof_prerequisite_is_not_tested():
     assert _blocker(_plan("access-control")) == ("identity", "no test identity; the proof compares two identities")
-    assert _blocker(_plan("access-control"), identities=ALICE) is None
+    assert _blocker(_plan("access-control"), identities=ALICE)[0] == "resource"
     assert _blocker(_plan("xss"))[0] == "browser"
     assert _blocker(_plan("xss"), browser=object()) is None
     assert _blocker(_plan("path-traversal")) == ("marker", "no marker_file in the scope")
@@ -157,11 +157,12 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     assert "  intrusive mode   1  T-2\n" in out and "→ run with --allow-intrusive" in out
     assert "Identities  :" not in out            # what is missing is said once, in the test plan
     listed = out[out.index("\nResults\n"):]
-    assert "  ✗ T-1  critical  injection       not reproducible      sqli in search\n    checked\n" in listed
+    assert "T-1  critical  injection       not attempted (low)" in listed
+    assert "no answered target request" in listed
     assert "  · T-2  high      injection       needs intrusive mode  sqli in login\n" in listed
     assert "  · T-3  high      access-control  needs test identity   idor\n" in listed
-    assert "Verdicts   : 1 not reproducible · 2 not tested\n" in out
-    assert results["T-1"] == ("not-reproducible", "checked")
+    assert "Verdicts   : 3 not tested\n" in out
+    assert results["T-1"][0] == "not-attempted"
     assert results["T-3"] == ("not-attempted", "not tested: no test identity; the proof compares two identities")
 
 

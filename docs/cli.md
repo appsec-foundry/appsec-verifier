@@ -271,7 +271,7 @@ far and `meta.interrupted: true`, and the run exits with 130.
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
 | `--print` | List every finding in the results at the end, code-only ones included, with the whole reason. | VER-013 |
 | `--show-costs` | Show model costs on the console also with subscription billing; by default only with API billing (see the `Run` row above). Changes no limit and nothing in the report. | VER-015 |
-| `--resume` | Continue the report in `--output`: findings with the verdict confirmed, not-reproducible or blocked-by-control keep it; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. Cannot be combined with `--overwrite`. | VER-027 |
+| `--resume` | Continue the report in `--output`: findings with confirmed, not-reproducible or blocked-by-control and a code-checked proof contract 2 keep it; older or unchecked results are tested again; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. Cannot be combined with `--overwrite`. | VER-027 |
 | `--overwrite` | Replace a report already in `--output` (`verification.md` or `verification.yaml`). Without it, and without `--resume`, such a report stops the run (exit 2) before anything is contacted. | VER-027 |
 | `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each finding. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |
@@ -317,15 +317,8 @@ isolation rests on the pinned version and its flags. `codex-cli` and
 steps that prove it in `proof_steps` (step numbers as in `agent-log.jsonl`).
 The code checks them against what the tools returned (`agent/proof.py`):
 
-- Access control: two cited requests with the same method, path, parameters and
-  body, sent as two different identities (no role counts as anonymous), both
-  answered 2xx with a non-empty body.
-- Injection: two cited requests with the same method, path and identity but a
-  different input, answered with a different status or body. Or, by timing: at
-  least two delayed and two undelayed answers, every delayed one at least 2 s
-  slower than every undelayed one. The time is measured per exchange, without
-  the wait for `--rate`; the model is told to keep delays between 2 and 5
-  seconds.
+- Access control: declare a test with an operator-supplied `test_resources` entry. The same method, path and inputs must return its known harmless marker both for an allowed role and a denied role with independent credentials. Two successful responses alone do not establish unauthorized access.
+- Injection: declare the hypothesis, one input to change and the observation before collecting evidence. Repeat a working baseline, a true condition and a false condition at least twice each. All other inputs and the identity stay fixed. A selected JSON field must be stable, reproduce the nonempty baseline for the true condition and differ for the false condition. Reflected input, status changes and generic errors are insufficient. Alternatively, alternate at least two baseline and two delay requests: every delayed answer must be 2–5 seconds slower than every baseline answer, with identical successful response bodies. Repeated citations to one request never count as repetitions.
 - XSS: a `browser_check` in which the marker executed (see below).
 - Open redirect: a cited request answered 301, 302, 303, 307 or 308 whose
   `Location` leads to `<marker>.invalid`, a host drawn at random per finding.
@@ -338,8 +331,7 @@ The code checks them against what the tools returned (`agent/proof.py`):
 - SSRF: a request with the finding's marker reached the callback listener. No
   `proof_steps` are needed.
 
-A `confirmed` verdict that fails its check becomes `inconclusive` ("indicative,
-not proven: …"), with the model's claim kept in the rationale. Evidence the
+When a firm verdict lacks its required evidence, the agent receives the missing checks and may correct its experiment within the remaining step, request and model budgets. At most two correction rounds are allowed. An unresolved claim ends `inconclusive`, with the missing evidence in the report. Confidence is assigned by the checker: medium for injection and checked negative results, high for other confirmed proofs, low for unresolved or unattempted findings. Evidence the
 model lists itself is never taken over. When the check passes, the code adds
 the record it checked. For access control, injection, open redirect and path
 traversal that is `evidence/<finding>-exchanges.json` (owner-only): per cited
@@ -347,6 +339,12 @@ step the method, path, parameters, body, identity, status, length and a hash
 of the redacted response body. For SSRF it is
 `evidence/<finding>-callback-hits.json` with time, method and source address of
 each hit.
+
+Negative verdicts also need evidence. Without an answered request the result is `not-attempted`. Injection needs the same repeated controls, either with a stable nonempty observation or a repeatable rejection against a working baseline. Access control needs the declared resource visible to its allowed role and absent for an independent denied role; a 403 or 404 supports `blocked-by-control`. A timeout, scope refusal, missing capability or server error establishes no control. XSS needs a completed browser attempt carrying the marker parts; other marker classes currently retain unsuccessful attempts as `inconclusive`. Every checked result and exported annotation states that it covers only its cited requests and variant.
+
+The assessment’s optional `verification_context` version 1 carries per-variant input locations, query construction, dialect and driver where known, processing and filter order, controls, prerequisites, observations, negative controls, unknowns and sources. The agent reads this context on demand; legacy mechanism traces, scenarios, attack steps and evidence are also retained with explicit size limits. This context supplies hypotheses, never target authorization. A `plan_test` declaration binds its variant to the method and route. Missing header or browser-interaction support is reported before testing when all declared variants require it. Form bodies are supported with POST, PUT and PATCH under the existing intrusive-mode controls.
+
+The agent can use `read_response` to inspect or compare a JSON field or a 1,500-character window from this finding’s recorded, redacted responses, without sending another request. Inspection retains at most 64,000 characters per response and 256,000 per finding; incomplete bodies cannot support field comparisons. Context and result fields stay structured, so long text does not remove measured durations or statuses.
 
 **Proof of concept (VER-034).** Every finding the agent tested gets a proof of
 concept, whatever the verdict, also when a limit stopped it. The code records
@@ -669,6 +667,23 @@ record.
 | `proxy` | HTTP(S) proxy for target and login traffic; credentials are named as environment variables (`username_env`, `password_env`), never in the URL. `no_proxy` lists hosts reached directly. |
 | `callback` | Listener for SSRF proofs (see above). |
 | `marker_file` | Path and token of the marker file for path-traversal proofs. |
+| `test_resources` | Known harmless resources for access-control checks, bound to a finding, concrete request, allowed and denied roles, and expected response marker. |
+
+For access-control checks, create a harmless resource in the test application and declare its ownership. This example states that `customer-b` may read `/rest/basket/2` and `customer-a` must not receive its marker:
+
+```yaml
+test_resources:
+  - id: basket-b
+    finding_id: T-001
+    path: /rest/basket/2
+    method: GET
+    allowed_roles: [customer-b]
+    denied_roles: [customer-a]
+    pointer: /test_marker
+    value: verifier-owned-basket
+```
+
+Use the actual finding ID, path, roles and a non-sensitive marker from your test setup. `pointer` selects a JSON response field using JSON Pointer syntax. An empty pointer checks a literal text marker instead; that marker must not occur in the request. `anonymous` names a caller without credentials. Optional `params`, `json` or `form` bind fixed inputs; choose one body format. Role lists must be disjoint, and the resource must be inside the target scope. These entries establish expected access, not additional request permissions.
 
 Anything outside the scope, whether target, login host or proxy, is refused
 and not attempted. A path that a server could resolve to another resource (a

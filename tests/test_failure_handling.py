@@ -119,7 +119,7 @@ class Checked:
 
     def next_step(self, ctx, history):
         Checked.asked.append(ctx.plan.id)
-        return {"verdict": {"verdict": "not-reproducible", "rationale": "checked"}}
+        return {"verdict": {"verdict": "not-attempted", "rationale": "checked"}}
 
 
 # ── Ctrl-C still writes the report (VER-015, VER-020, VER-024) ─────────────────
@@ -129,13 +129,13 @@ def test_an_interrupted_run_writes_what_it_found_and_exits_130(tmp_path, monkeyp
         def next_step(self, ctx, history):
             if ctx.plan.id == "T-3":
                 raise KeyboardInterrupt
-            return {"verdict": {"verdict": "not-reproducible", "rationale": "checked"}}
+            return {"verdict": {"verdict": "not-attempted", "rationale": "checked"}}
 
     rc, _ = _verify(tmp_path, monkeypatch, Interrupted)
     assert rc == cli.EXIT_INTERRUPTED and "interrupted" in capsys.readouterr().err
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
     assert doc["meta"]["interrupted"] is True
-    assert [r["verdict"] for r in doc["results"]] == ["not-reproducible", "not-reproducible", "inconclusive",
+    assert [r["verdict"] for r in doc["results"]] == ["not-attempted", "not-attempted", "inconclusive",
                                                       "not-attempted"]
     assert "interrupted" in doc["results"][2]["rationale"] and "interrupted" in doc["results"][3]["rationale"]
     log = [json.loads(line) for line in (tmp_path / "out" / "agent-log.jsonl").read_text().splitlines()]
@@ -173,8 +173,18 @@ def test_resume_of_an_unusable_report_is_refused_before_any_contact(tmp_path, mo
     assert (tmp_path / "out" / "verification.yaml").read_text() == existing
 
 
+def _saved_checked_results(tmp_path, count):
+    """Resume fixtures model already checked results, independently of the planner stub."""
+    path = tmp_path / "out" / "verification.yaml"
+    doc = yaml.safe_load(path.read_text())
+    for row in doc["results"][:count]:
+        row.update(verdict="blocked-by-control", rationale="first run", proof={"checked": True, "contract": 2})
+    path.write_text(yaml.safe_dump(doc))
+
+
 def test_resume_tests_only_the_findings_without_a_verdict_and_keeps_the_rest(tmp_path, monkeypatch, capsys):
     assert _verify(tmp_path, monkeypatch, InterruptedAtT3)[0] == cli.EXIT_INTERRUPTED
+    _saved_checked_results(tmp_path, 2)
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
     assert Checked.asked == ["T-3", "T-4"]
@@ -189,6 +199,7 @@ def test_resume_tests_only_the_findings_without_a_verdict_and_keeps_the_rest(tmp
 
 def test_resume_with_nothing_left_contacts_nothing(tmp_path, monkeypatch, capsys):
     assert _verify(tmp_path, monkeypatch, Checked)[0] == cli.EXIT_OK
+    _saved_checked_results(tmp_path, 4)
     Checked.asked = []
     rc, target = _verify(tmp_path, monkeypatch, Checked, "--resume")
     assert rc == cli.EXIT_OK and Checked.asked == [] and target.calls == []

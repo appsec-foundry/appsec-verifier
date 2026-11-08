@@ -215,7 +215,9 @@ class Scripted:
         self.actions = list(actions)
 
     def next_step(self, ctx, history):
-        return self.actions.pop(0)
+        if self.actions:
+            return self.actions.pop(0)
+        return {"verdict": {"verdict": "inconclusive", "rationale": "no further proof"}}
 
 
 CONFIRM = {"verdict": {"verdict": "confirmed", "rationale": "payload reflected",

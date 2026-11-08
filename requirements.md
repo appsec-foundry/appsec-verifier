@@ -114,7 +114,9 @@ optional hardening.
   assessment names them. A finding the run cannot confirm, because its proof needs
   what the run lacks (VER-009 to VER-012) or every request it names writes in safe
   mode or needs a login without a test identity, is not tested unless the operator
-  asks; the plan names what is missing, the report the reason.
+  asks; the plan names what is missing, the report the reason. Optional versioned
+  analysis context preserves source-cited input processing, controls, hypotheses
+  and unknowns per variant. Missing capabilities never count as a negative test.
 
 - **VER-009: Require real execution as proof of XSS.** An XSS finding counts as
   confirmed only when a unique, harmless marker payload actually executes in a
@@ -131,13 +133,19 @@ optional hardening.
   reaches a protected operation. This requires at least two independent test
   identities (see VER-016). The result records which identity saw what, with the
   requests and responses as evidence. A single successful request without the
-  cross-identity contrast is not sufficient.
+  cross-identity contrast is not sufficient. The operator declares the known
+  harmless resource, expected marker, allowed and denied roles. Different role
+  labels backed by the same credentials do not establish independent identities.
 
 - **VER-011: Prove injection without exfiltration.** Injection findings are
   confirmed through controlled, observable behavioural differences — a boolean
   condition flipping a response, or a bounded, clearly-marked timing difference —
   not by dumping database contents. The Verifier never attempts to read, copy, or
-  exfiltrate real application data to prove a point.
+  exfiltrate real application data to prove a point. Declare the hypothesis,
+  changed input and observation before gathering proof. Repeat baseline and
+  true/false controls; compare a stable non-reflected field, not arbitrary
+  response differences. Timing needs alternating independent controls with
+  identical responses and repeated separations of 2–5 seconds.
 
 - **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path
   traversal is confirmed by reading a pre-placed, non-sensitive marker file;
@@ -153,7 +161,10 @@ optional hardening.
   inconclusive — with the concrete evidence behind it and a short, honest reason.
   The Verifier distinguishes "I could not reproduce it" from "it is not
   exploitable" and never reports a weakness as confirmed without the evidence
-  class its finding type requires.
+  class its finding type requires. Negative verdicts also cite completed,
+  comparable attempts. A missing prerequisite or an unperformed request is
+  not a security control. The code assigns confidence and bounds corrections
+  of insufficient proof. Results cover only the cited requests and variants.
 
 - **VER-034: Record a proof of concept for every tested finding.** Every
   finding the Verifier tested carries its proof of concept, whatever the

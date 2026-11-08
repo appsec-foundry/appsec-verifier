@@ -413,7 +413,9 @@ def run(tmp_path, monkeypatch):
     monkeypatch.setenv("AP", SECRET)
     files = {"assessment": _write(tmp_path / "a.yaml", {"meta": {"project": "shop", "generated": "2026-11-01"},
                                                         "threats": [THREAT]}),
-             "scope": _write(tmp_path / "s.yaml", SCOPE),
+             "scope": _write(tmp_path / "s.yaml", {**SCOPE, "test_resources": [{"id": "owned", "finding_id": "T-1",
+                       "path": "/resource", "allowed_roles": ["alice"], "denied_roles": ["anonymous"],
+                       "pointer": "/marker", "value": "fixture-resource"}]}),
              "identities": _write(tmp_path / "i.yaml", {"identities": [FORM]})}
     state = SimpleNamespace(target=Target({("GET", BASE): _resp(200),
                                            ("POST", f"{BASE}/rest/user/login"): _resp(200, {"token": "T0K3N"})}),

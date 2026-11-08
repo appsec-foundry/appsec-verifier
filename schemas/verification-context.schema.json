@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Finding verification context v1",
+  "description": "Source-grounded test hypotheses, never execution authorization or runtime proof.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "variants": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "method": {
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "inputs": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "enum": [
+                        "query",
+                        "json",
+                        "form",
+                        "header",
+                        "path"
+                      ]
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "required": [
+                    "location",
+                    "name"
+                  ]
+                }
+              },
+              "content_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "method",
+              "path"
+            ]
+          },
+          "hypothesis": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "mechanism": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expression": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000
+              },
+              "dialect": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "driver": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "binding": {
+                "enum": [
+                  "concatenated",
+                  "parameterized",
+                  "mixed",
+                  "unknown"
+                ]
+              }
+            },
+            "required": []
+          },
+          "processing": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "enum": [
+                    "decode",
+                    "normalize",
+                    "validate",
+                    "filter",
+                    "escape",
+                    "query",
+                    "render",
+                    "store",
+                    "other"
+                  ]
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "evidence": {
+                  "type": "array",
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "file": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512
+                      },
+                      "line": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "repository_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    },
+                    "required": [
+                      "file",
+                      "line"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "operation",
+                "description"
+              ]
+            }
+          },
+          "controls": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "status": {
+                  "enum": [
+                    "observed",
+                    "inferred",
+                    "unknown"
+                  ]
+                },
+                "limitation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "evidence": {
+                  "type": "array",
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "file": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512
+                      },
+                      "line": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "repository_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    },
+                    "required": [
+                      "file",
+                      "line"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "description",
+                "status"
+              ]
+            }
+          },
+          "prerequisites": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "expected_observations": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "negative_controls": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "unknowns": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "repository_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "file",
+                "line"
+              ]
+            },
+            "minItems": 1
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "required_capabilities": {
+            "type": "array",
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "query",
+                "json",
+                "form",
+                "header",
+                "browser-navigation",
+                "browser-interaction",
+                "state-change"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "request",
+          "hypothesis",
+          "prerequisites",
+          "expected_observations",
+          "negative_controls",
+          "unknowns",
+          "evidence"
+        ]
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    }
+  },
+  "required": [
+    "version",
+    "variants"
+  ],
+  "$id": "https://appsec-advisor/schemas/verification-context.schema.json"
+}

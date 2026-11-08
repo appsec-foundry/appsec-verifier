@@ -241,6 +241,22 @@ properties:
           additionalProperties: true
           properties:
             marker:         { type: [string, "null"] }
+            checked:        { type: boolean }
+            contract:       { type: integer, minimum: 1 }
+            steps:
+              type: array
+              maxItems: 64
+              uniqueItems: true
+              items: {type: integer, minimum: 1}
+            variant:        { type: [string, "null"] }
+            tested_path:    { type: [string, "null"] }
+            hypothesis:     { type: [string, "null"] }
+            observation_pointer: { type: [string, "null"] }
+            scope:          { type: string }
+            missing:
+              type: array
+              maxItems: 12
+              items: {type: string, maxLength: 2000}
             executed:       { type: [boolean, "null"] }
             trigger:        { type: [string, "null"] }
             identity_a:     { type: [string, "null"] }

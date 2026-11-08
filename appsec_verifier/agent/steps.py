@@ -17,7 +17,8 @@ import math
 
 from jsonschema import Draft202012Validator
 
-from .prompts import _RESULT_CAP, _seed, _system, _tool_defs
+from ..verification_context import bounded
+from .prompts import _seed, _system, _tool_defs
 
 STEP_SCHEMA = {
     "type": "object",
@@ -61,7 +62,7 @@ def system_prompt(ctx) -> str:
 
 def prompt(ctx, history: list[dict]) -> str:
     steps = [{"step": n, "action": h.get("tool"), "args": h.get("args"),
-              "result": json.dumps(h.get("result"), default=str)[:_RESULT_CAP]} for n, h in enumerate(history, 1)]
+              "result": bounded(h.get("result"))} for n, h in enumerate(history, 1)]
     return _seed(ctx) + "\n\nSteps so far (JSON):\n" + json.dumps(steps) + "\n\nReply with the next step."
 
 

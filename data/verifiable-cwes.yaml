@@ -8,8 +8,8 @@
 #   browser-execution       marker payload actually executes in a real headless
 #                           browser; a merely reflected payload is NOT confirmed (VER-009)
 #   cross-identity-contrast identity A reaches/alters what belongs to identity B,
-#                           or an anonymous caller reaches a protected operation (VER-010)
-#   behavioural-difference  a controlled, observable response/timing difference,
+#                           using an operator-declared resource and independent credentials (VER-010)
+#   behavioural-difference  declared, repeated semantic controls or alternating timing controls,
 #                           never exfiltrated data (VER-011)
 #   marker-file             a pre-placed, non-sensitive marker file is read back (VER-012)
 #   controlled-redirect     the response lands on an operator-controlled benign URL (VER-012)

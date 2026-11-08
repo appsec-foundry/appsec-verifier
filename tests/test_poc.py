@@ -6,6 +6,7 @@ without a new request and mark only values found in it."""
 
 from __future__ import annotations
 
+import copy
 import json
 import stat
 from types import SimpleNamespace
@@ -61,6 +62,16 @@ def _ctx(tmp_path, transport, cls="access-control", browser=None, scope=None):
 
 
 def _run(ctx, steps, max_steps=12):
+    steps = copy.deepcopy(steps)
+    if ctx.plan.cls == "access-control":
+        ctx.scope = {**ctx.scope, "test_resources": [{"id": "basket", "finding_id": "T-001",
+                     "path": "/rest/basket/2", "allowed_roles": ["customer-b"], "denied_roles": ["customer-a"],
+                     "pointer": "", "value": "bob@shop.test"}]}
+        for step in steps:
+            if "verdict" in step and "proof_steps" in step["verdict"]:
+                step["verdict"]["proof_steps"] = [n + 1 for n in step["verdict"]["proof_steps"]]
+        steps.insert(0, {"tool": "plan_test", "args": {"kind": "access-control", "hypothesis": "A reads B's basket",
+                         "path": "/rest/basket/2", "resource": "basket"}})
     planner = Planner(steps)
     return AgentProbe(ctx.plan.cls, lambda: planner, max_steps=max_steps).run(ctx), planner
 
@@ -151,7 +162,7 @@ def test_confirmed_idor_writes_the_cited_exchanges_owner_only_and_hides_them_fro
     assert result.verdict == "confirmed"
     path, har = _har(tmp_path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert [e["_step"] for e in har["log"]["entries"]] == [1, 2]
+    assert [e["_step"] for e in har["log"]["entries"]] == [2, 3]
     assert all(e["_decisive"] for e in har["log"]["entries"])
     first = har["log"]["entries"][0]
     assert {"name": "Authorization", "value": "[identity customer-a]"} in first["request"]["headers"]
@@ -160,7 +171,7 @@ def test_confirmed_idor_writes_the_cited_exchanges_owner_only_and_hides_them_fro
     kinds = [e["kind"] for e in result.evidence]
     assert "har" in kinds and "exchange" in kinds
     assert all(e["path"] != "evidence/made-up.png" for e in result.evidence)   # the model's account is not taken
-    assert [s["step"] for s in result.poc["shown"]] == [1, 2]
+    assert [s["step"] for s in result.poc["shown"]] == [2, 3]
     assert result.poc["shown"][0]["request"].startswith("GET /rest/basket/2 HTTP/1.1\nHost: shop.example.com\n")
     assert "HTTP/1.1 200 OK" in result.poc["shown"][0]["response"]
     assert all("_step" not in seen and "headers" not in seen for seen in planner.seen)   # history stays as it was
@@ -172,10 +183,10 @@ def test_a_refuted_finding_still_gets_its_proof_of_concept(tmp_path):
     result, _ = _run(ctx, [_get("customer-a"), _get("customer-b"),
                            {"verdict": {"verdict": "blocked-by-control", "rationale": "403 for a",
                                         "proof_steps": [1, 99]}}])
-    assert result.verdict == "blocked-by-control"
+    assert result.verdict == "inconclusive"
     _, har = _har(tmp_path)
     assert [e["_decisive"] for e in har["log"]["entries"]] == [True, False]
-    assert [s["step"] for s in result.poc["shown"]] == [1]
+    assert [s["step"] for s in result.poc["shown"]] == [2]
     assert "HTTP/1.1 403 Forbidden" in result.poc["shown"][0]["response"]
     assert [s["decisive"] for s in result.poc["steps"]] == [True, False]
     assert "customer-b" in result.poc["steps"][1]["line"]
@@ -183,7 +194,7 @@ def test_a_refuted_finding_still_gets_its_proof_of_concept(tmp_path):
 
 def test_a_finding_stopped_by_a_limit_keeps_what_it_sent(tmp_path):
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp())
-    result, _ = _run(ctx, [_get("customer-a"), _get("customer-b")], max_steps=1)
+    result, _ = _run(ctx, [_get("customer-a"), _get("customer-b")], max_steps=2)
     assert result.limits_hit == "attempts"
     _, har = _har(tmp_path)
     assert len(har["log"]["entries"]) == 1 and result.poc["shown"] == []
@@ -266,8 +277,11 @@ def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, p
     if exchanges:
         page = browser.exchanges[0]["html"]
         assert "<mark>[identity customer-a]</mark>" in page and "<mark>[identity customer-b]</mark>" in page
-        assert "<mark>bob@shop.test</mark>" in page and "not on the page" not in page
-        assert "<span class=tag>named in the verdict ▸</span><mark>bob@shop.test</mark>" in page
+        if verdict == "confirmed":
+            assert "<mark>bob@shop.test</mark>" in page and "not on the page" not in page
+            assert "<span class=tag>named in the verdict ▸</span><mark>bob@shop.test</mark>" in page
+        else:
+            assert result.verdict == "inconclusive" and "protected resource is present" in result.rationale
 
 
 # ── the exchange image (VER-035) ─────────────────────────────────────────────
@@ -383,7 +397,7 @@ def test_an_executed_xss_gets_the_exchange_image_beside_the_page_with_the_opened
 # ── report and export ────────────────────────────────────────────────────────
 
 def _doc(tmp_path):
-    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, 'see ```` here'))
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, 'bob@shop.test see ```` here'))
     result, _ = _run(ctx, [_get("customer-a"), _get("customer-b"),
                            {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2]}}])
     r = {"result_id": "VF-001", "finding_ref": {"id": "T-001", "cwe": "CWE-639", "match_key": "k"},

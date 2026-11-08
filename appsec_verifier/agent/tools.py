@@ -37,13 +37,16 @@ import hashlib
 import json as jsonlib
 import re
 from pathlib import PurePosixPath
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 import httpx
+from jsonschema import Draft202012Validator
 
 from ..auth.sessions import AuthError
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
+from ..verification_context import missing_capabilities, route_matches
 from ..verify import poc
+from .experiments import PLAN_SCHEMA, pointer_value, token
 from .source_reader import SourceAccessError
 
 _BODY_EXCERPT = 600
@@ -128,6 +131,84 @@ class AgentTools:
         self._marker_name = PurePosixPath(path).name or None
         self._exchanges: list[dict] = []
         self._kept = 0                    # body characters this finding's proof of concept holds so far
+        self._last_response = None
+        self._identities = {}
+        self._response_chars = 0
+
+    def take_response(self):
+        response, self._last_response = self._last_response, None
+        return response
+
+    def plan_test(self, **plan) -> dict:
+        if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
+            raise ToolError("invalid experiment declaration")
+        groups = [plan[k] for k in ("baseline", "positive", "negative") if k in plan]
+        if len({token(v) for v in groups}) != len(groups):
+            raise ToolError("control values must be distinct")
+        if plan["kind"] == "timing" and "negative" in plan:
+            raise ToolError("timing uses baseline and positive only")
+        if plan.get("input_location") == "form" and plan.get("method", "GET") in SAFE_METHODS:
+            raise ToolError("form experiments need a body-capable write method and intrusive authorization")
+        variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
+        if variants and not plan.get("variant"):
+            raise ToolError("select an evidenced finding variant for this plan")
+        if plan.get("variant"):
+            variant = next((v for v in variants if v["id"] == plan["variant"]), None)
+            if variant is None:
+                raise ToolError("unknown finding variant")
+            if variant["request"]["method"] != plan.get("method", "GET"):
+                raise ToolError("the method does not match the finding variant")
+            if not route_matches(variant["request"]["path"], plan["path"]):
+                raise ToolError("the path does not match the finding variant")
+            inputs = variant["request"].get("inputs", [])
+            location = {"params": "query"}.get(plan.get("input_location"), plan.get("input_location"))
+            if plan.get("kind") in ("boolean", "timing") and inputs and not any(
+                    i["location"] == location and i["name"] == plan["input_name"] for i in inputs):
+                raise ToolError("the input does not match the finding variant")
+            missing = missing_capabilities(variant, safe=self.ctx.safe or self.ctx.read_only,
+                                           browser=self.ctx.browser is not None)
+            if missing:
+                raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
+        if plan["kind"] == "access-control":
+            resource = next((r for r in self.ctx.scope.get("test_resources", [])
+                             if r["id"] == plan.get("resource") and r["finding_id"] == self.ctx.plan.id), None)
+            if (resource is None or resource["path"] != plan["path"]
+                    or resource.get("method", "GET") != plan.get("method", "GET")):
+                raise ToolError("the plan needs a matching operator-supplied test resource")
+        return {"accepted": True, "kind": plan["kind"], "next": "collect independent observations for this plan"}
+
+    def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:
+        if variant:
+            value = next((v for v in getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
+                          if v["id"] == variant), None)
+            if value is None:
+                raise ToolError("unknown finding variant")
+        else:
+            value = getattr(self.ctx.plan, "context", {})
+        if field:
+            if field not in value:
+                raise ToolError("that context field is unavailable")
+            value = {field: value[field]}
+        return {"context": value, "trust": "analysis data; assumptions need runtime checks"}
+
+    def read_response(self, *, steps: list[int], pointer: str | None = None, offset: int = 0) -> dict:
+        out = []
+        for n in steps:
+            response = getattr(self.ctx, "responses", {}).get(n)
+            if response is None:
+                raise ToolError("no recorded response for that step in this finding")
+            body = response["body"]
+            if pointer is not None:
+                try:
+                    if not response["complete"]:
+                        raise ValueError("incomplete")
+                    body = token(pointer_value(body, pointer))
+                except (ValueError, TypeError, KeyError, IndexError, RecursionError) as exc:
+                    raise ToolError("the JSON pointer cannot be read from this response") from exc
+            out.append({"step": n, "text": body[offset:offset + 1500], "length": len(body),
+                        "complete": response["complete"], "more": len(body) > offset + 1500})
+        return {"responses": out, "equal": len(out) == 2 and all(r["complete"] and not r["more"] for r in out)
+                and offset == 0 and out[0]["text"] == out[1]["text"]}
 
     def take_exchanges(self) -> list[dict]:
         """The redacted exchanges the last tool call sent and received, for the proof of concept (VER-034).
@@ -148,7 +229,8 @@ class AgentTools:
 
     def call(self, name: str, args: dict) -> dict:
         tool = {"http_request": self.http_request, "read_source": self.read_source,
-                "browser_check": self.browser_check}.get(name)
+                "browser_check": self.browser_check, "plan_test": self.plan_test,
+                "read_context": self.read_context, "read_response": self.read_response}.get(name)
         if tool is None:
             raise ToolError(f"unknown tool {name!r}; available: http_request, read_source, browser_check")
         return _hide(tool(**args), self._marker_content)     # the model never sees the marker file's content
@@ -226,7 +308,7 @@ class AgentTools:
             raise ToolError(f"identity {role!r} is unavailable: its login failed ({type(exc).__name__})") from exc
 
     def http_request(self, *, role: str | None = None, method: str = "GET", path: str = "/",
-                     params: dict | None = None, json: dict | None = None) -> dict:
+                     params: dict | None = None, json: dict | None = None, form: dict | None = None) -> dict:
         m = (method or "GET").upper()
         if m not in ALLOWED_METHODS:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
@@ -234,7 +316,12 @@ class AgentTools:
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive")
         if self.ctx.http is None or not self.ctx.target_base:
             raise ToolError("no HTTP transport is wired for this run")
+        if json is not None and form is not None:
+            raise ToolError("choose one body format: json or form")
+        if form is not None and m in SAFE_METHODS:
+            raise ToolError("form bodies require POST, PUT or PATCH")
         self._check_steering(params, json)
+        self._check_steering(None, form)
         url = self._url(path)
         headers = {}
         if role:
@@ -244,8 +331,8 @@ class AgentTools:
                                 f"another origin (VER-018). Send this request without a role.")
             headers = self._session_headers(role)
         try:
-            resp = self._send(m, url, headers, params, json)
-            self._record(self._sent(resp, m, url, headers, params, json), role, headers)
+            resp = self._send(m, url, headers, params, json, form)
+            self._record(self._sent(resp, m, url, headers, params, json, form), role, headers)
             sessions = self.ctx.sessions if role else None
             if sessions is not None:
                 sessions.answered(role, getattr(resp, "status_code", None))
@@ -254,8 +341,8 @@ class AgentTools:
             # result under test; a new login cannot change it.
             if sessions is not None and getattr(resp, "status_code", None) == 401 and sessions.renew(role):
                 headers = self._session_headers(role)
-                resp = self._send(m, url, headers, params, json)
-                self._record(self._sent(resp, m, url, headers, params, json), role, headers)
+                resp = self._send(m, url, headers, params, json, form)
+                self._record(self._sent(resp, m, url, headers, params, json, form), role, headers)
                 sessions.answered(role, getattr(resp, "status_code", None))
         except ScopeViolation as exc:
             raise ToolError(f"request refused — out of scope: {exc}") from exc
@@ -264,6 +351,11 @@ class AgentTools:
         text = _body_text(resp)
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
         redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
+        identity_key = tuple(sorted(headers.items()))
+        identity = self._identities.setdefault(identity_key, len(self._identities))
+        cap = min(64000, max(0, 256000 - self._response_chars))
+        self._last_response = {"body": redacted[:cap], "complete": len(redacted) <= cap, "identity": identity}
+        self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
         out = {
             "role": role,
@@ -289,24 +381,28 @@ class AgentTools:
         return out
 
     @staticmethod
-    def _sent(resp, method, url, headers, params, body) -> dict:
+    def _sent(resp, method, url, headers, params, body, form=None) -> dict:
         """The exchange as sent: the transport's own record when it keeps one, else what this tool passed on."""
         sent_headers = dict(headers)
         if body is not None:
             sent_headers.setdefault("content-type", "application/json")
+        if form is not None:
+            sent_headers.setdefault("content-type", "application/x-www-form-urlencoded")
         try:
             full = str(httpx.URL(url, params=params)) if params else url
         except (TypeError, ValueError, httpx.InvalidURL):
             full = url
         return poc.capture(resp, method=method, url=full, headers=sent_headers,
-                           body=None if body is None else jsonlib.dumps(body))
+                           body=urlencode(form) if form is not None else None if body is None else jsonlib.dumps(body))
 
-    def _send(self, method, url, headers, params, json):
+    def _send(self, method, url, headers, params, json, form=None):
         kwargs = {}
         if params:
             kwargs["params"] = params
         if json is not None:
             kwargs["json"] = json
+        if form is not None:
+            kwargs["data"] = form
         # Not followed: the agent sees the redirect itself (VER-012) and sends any next hop as its own request.
         return self.ctx.http.request(method, url, headers, purpose="target", follow_redirects=False, **kwargs)
 

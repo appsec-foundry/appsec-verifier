@@ -4,7 +4,14 @@
 from __future__ import annotations
 
 from appsec_verifier.loader import FindingPlan, list_categories, select
-from appsec_verifier.verify.report import merge_reports
+from appsec_verifier.verify.report import merge_reports, verified_findings
+
+
+def test_resume_repeats_old_or_unchecked_proofs():
+    rows = [{"finding_ref": {"id": "T-1"}, "verdict": "confirmed"},
+            {"finding_ref": {"id": "T-2"}, "verdict": "not-reproducible", "proof": {"checked": True, "contract": 1}},
+            {"finding_ref": {"id": "T-3"}, "verdict": "blocked-by-control", "proof": {"checked": True, "contract": 2}}]
+    assert verified_findings({"results": rows}) == {"T-3"}
 
 
 def _p(id, cls, technique, sev="High"):

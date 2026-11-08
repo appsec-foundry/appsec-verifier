@@ -96,6 +96,11 @@ def finding_endpoints(threat: dict, surface) -> tuple[Endpoint, ...]:
                for e in found):
             found.append(endpoint)
 
+    for variant in (threat.get("verification_context") or {}).get("variants", []):
+        request = variant["request"]
+        entry = next((e for e in entries if e.method in (request["method"], "ALL")
+                      and _fits(e.template, request["path"])), None)
+        add(Endpoint(request["method"], request["path"], entry.login if entry else None))
     for text in texts:
         for match in _REQUEST.finditer(text):
             method, path = match.group(1), match.group(2).rstrip(".:")
