@@ -283,7 +283,8 @@ def run_verification(
             "mode": "safe" if safe else "intrusive",
             "read_only": bool(read_only),
             "destructive_actions": "forbidden",
-            "state_changes_cleaned": None if read_only else True,
+            # Nothing is cleaned up: marked records a write created stay on the target (VER-010, VER-014).
+            "state_changes_cleaned": None if read_only else False,
         },
         "contacted_target": bool(contacted),
         "interrupted": interrupted,

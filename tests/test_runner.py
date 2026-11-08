@@ -62,6 +62,12 @@ def test_safe_mode_forces_read_only_in_report():
     assert doc["meta"]["safety"]["read_only"] is True
 
 
+def test_an_intrusive_run_never_claims_its_writes_were_cleaned_up():
+    """The Verifier removes nothing it wrote; marked records stay on the target (VER-010, VER-014)."""
+    safety = _run([_plan("T-1", "xss")], safe=False, read_only=False)["meta"]["safety"]
+    assert safety["mode"] == "intrusive" and safety["state_changes_cleaned"] is False
+
+
 def test_registered_probe_runs_and_sees_safe_flag():
     seen = {}
 
