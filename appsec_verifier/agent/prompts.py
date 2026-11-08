@@ -14,7 +14,7 @@ import json
 
 from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
 from ..verification_context import missing_capabilities
-from .experiments import PLAN_SCHEMA
+from .experiments import PLAN_SCHEMA, access_methods
 from .proof import redirect_host
 
 _RESULT_CAP = 4000  # bound tool-result text fed back to the model (tokens/cost)
@@ -36,7 +36,8 @@ def _tool_defs() -> list[dict]:
             "description": "Declare the hypothesis and controls BEFORE proof requests. "
             "Use boolean with baseline/positive/negative inputs and a JSON pointer to a meaningful response field; "
             "repeat each twice. Timing uses two baseline and two positive inputs, alternating. Access-control "
-            "uses an operator-supplied resource. A new plan requires fresh observations.",
+            "uses an operator-supplied resource, an owner or a privileged reference, as the access-control proof "
+            "instructions say. A new plan requires fresh observations.",
             "input_schema": PLAN_SCHEMA,
         },
         {
@@ -220,9 +221,8 @@ def _system(ctx) -> str:
         "Legacy boolean differences and timing alone cannot confirm injection; "
         "unimplemented mechanisms stay inconclusive. "
         "For timing, alternate two baseline and two delayed requests with the same response; use only a "
-        "2 to 5 second delay supported by the evidenced dialect. For access-control, use a configured "
-        "test_resource: show its declared protected value to both an allowed and a denied independent "
-        "identity. Without that mapping, report the missing prerequisite. "
+        "2 to 5 second delay supported by the evidenced dialect. For access-control, follow the access-control "
+        "proof instructions below. "
         "A filter rejection tests only that attempt: inspect the evidenced filter behavior and decoding "
         "order before choosing a justified follow-up. Do not spray payloads. Use read_response to inspect "
         "or compare recorded answers beyond the excerpt. proof_feedback names missing evidence; repair "
@@ -245,9 +245,46 @@ def _system(ctx) -> str:
     )
 
 
+def _access_hint(ctx) -> str:
+    """The access-control proofs this run allows (VER-010); the marker itself comes with an accepted owner plan."""
+    plan = ctx.plan
+    methods = access_methods(getattr(plan, "id", None), getattr(plan, "cwe", None), getattr(ctx, "scope", None),
+                             getattr(ctx, "identities", None),
+                             writes=not (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True)))
+    if "resource" in methods:
+        return ("\nAccess-control proof: use the configured test_resource: show its declared protected value to "
+                "both an allowed and a denied independent identity.")
+    if not methods:
+        return ("\nAccess-control cannot be confirmed in this run: there is no configured test_resource and no "
+                "pair of accounts this finding's proof can use. Report the missing prerequisite.")
+    hint = ""
+    if "owner" in methods:
+        hint += (
+            "\nOwn-resource proof: call plan_test with kind access-control, owner set to one normal account and "
+            "path the GET that reads the resource back (a placeholder such as :id may stand for its id). The "
+            "accepted plan returns a marker. Then, as the owner and no one else, create something that belongs to "
+            "that account and holds the marker in a field the target returns, with one write to a route of this "
+            "finding. Read it back with the same GET and inputs as the owner, without a role, and as another normal "
+            "account; never send the marker in a read. Confirmed needs the owner to see the marker, the read "
+            "without a role not to see it, and the other account to see it. Cite the write and the reads. The "
+            "record stays on the target."
+        )
+    if "reference" in methods:
+        hint += (
+            "\nPrivileged-function proof: call plan_test with kind access-control, reference set to a privileged "
+            "role and path the GET of the privileged function. Send it with the same inputs as that role, without "
+            "a role, and as a normal account. Confirmed needs a 2xx with content for the privileged role, 401 or "
+            "403 without a role, and the identical answer for the normal account; an answer that names the "
+            "signed-in user is never identical. Cite the three requests."
+        )
+    return hint
+
+
 def _marker_hint(ctx) -> str:
     plan, marker = getattr(ctx, "plan", None), getattr(ctx, "marker", ("", ""))
     cls = getattr(plan, "cls", None)
+    if cls == "access-control":
+        return _access_hint(ctx)
     if cls == "xss" and all(marker):
         return (
             f"\nXSS proof: your payload must call alert('{marker[0]}'+'{marker[1]}') — the two parts joined at "

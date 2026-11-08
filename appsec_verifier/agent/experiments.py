@@ -1,4 +1,4 @@
-"""Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013)."""
+"""Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import secrets
 
 from ..planning import STRATEGY_SCHEMA
+from ..verification_context import route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
@@ -25,6 +26,8 @@ PLAN_SCHEMA = {
         "negative": SCALAR,
         "pointer": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^/"},
         "resource": {"type": "string", "maxLength": 80},
+        "owner": {"type": "string", "minLength": 1, "maxLength": 80},
+        "reference": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
         "expression_template": {"type": "string", "minLength": 5, "maxLength": 3000},
         "operator_challenge": {"enum": ["nosql"]},
@@ -41,9 +44,36 @@ PLAN_SCHEMA = {
             "if": {"properties": {"kind": {"const": "timing"}}},
             "then": {"required": ["input_location", "input_name", "baseline", "positive"]},
         },
-        {"if": {"properties": {"kind": {"const": "access-control"}}}, "then": {"required": ["resource"]}},
+        {
+            "if": {"properties": {"kind": {"const": "access-control"}}},
+            "then": {"oneOf": [{"required": ["resource"]}, {"required": ["owner"]}, {"required": ["reference"]}]},
+        },
     ],
 }
+
+# Exposure and missing authentication are proven only with an operator-declared resource (verifiable-cwes.yaml).
+_RESOURCE_ONLY_CWES = ("CWE-200", "CWE-306")
+
+
+def normal_roles(identities) -> list[str]:
+    return [i["role"] for i in identities or [] if i.get("role") and not i.get("privileged")]
+
+
+def privileged_roles(identities) -> list[str]:
+    return [i["role"] for i in identities or [] if i.get("role") and i.get("privileged")]
+
+
+def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[str]:
+    """How this run can prove an access-control finding (VER-010): `resource`, the operator's test resource,
+    which takes precedence; else `owner`, a resource a normal account creates (two normal accounts and writes),
+    and `reference`, a comparison with a privileged account (VER-041)."""
+    if any(r["finding_id"] == finding_id for r in (scope or {}).get("test_resources", [])):
+        return ["resource"]
+    if cwe in _RESOURCE_ONLY_CWES:
+        return []
+    normal = normal_roles(identities)
+    return [m for m, ok in (("owner", writes and len(normal) >= 2),
+                            ("reference", bool(normal and privileged_roles(identities)))) if ok]
 
 
 def sql_controls(plan):
@@ -295,7 +325,125 @@ def access_observations(ctx, history, cited):
     return matched, resource, None
 
 
+def _sent(args) -> str:
+    return token({k: args.get(k) for k in ("path", "params", "json", "form")})
+
+
+def _access_steps(ctx, history, cited, plan, start):
+    """The cited steps of a self-made access proof, split into writes and reads. Every read is an answered GET
+    after the plan to one path that matches the plan's, with the same inputs: (step, role, response, result)."""
+    writes, reads, shapes = [], [], set()
+    for n in cited:
+        if n <= start:
+            return [], [], "proof must be collected after the declared plan"
+        h = history[n - 1]
+        args, res = h.get("args", {}), h.get("result", {})
+        method = (args.get("method") or "GET").upper()
+        if h.get("tool") != "http_request" or type(res.get("status")) is not int:
+            return [], [], "proof needs answered target requests"
+        if method in ("POST", "PUT", "PATCH"):
+            writes.append((n, args.get("role") or None, res))
+            continue
+        if method != plan.get("method", "GET") or not route_matches(plan["path"], args.get("path", "")):
+            return [], [], "every read must request the planned path with the planned method"
+        shapes.add(token([args.get("path"), *((args.get(k) or {}) for k in ("params", "json", "form"))]))
+        response = getattr(ctx, "responses", {}).get(n)
+        if not response:
+            return [], [], "the resource observation is missing"
+        reads.append((n, args.get("role") or None, response, res))
+    if len(shapes) > 1:
+        return [], [], "every read must request the same resource with the same inputs"
+    return writes, reads, None
+
+
+def owned_check(ctx, history, cited, *, negative=False, blocked=False):
+    """A resource the owner created with the finding's marker (VER-010, VER-014): the owner reads the marker back,
+    a read without a role does not show it, and another normal account's read decides."""
+    start, plan = latest_plan(history)
+    owner, marker = plan["owner"], "".join(getattr(ctx, "marker", None) or ())
+    if not marker:
+        return "this run has no marker for the finding"
+    if any(h.get("tool") == "http_request" and type(h.get("result", {}).get("status")) is int
+           and marker in _sent(h.get("args", {})) and (h.get("args", {}).get("role") or None) != owner
+           for h in history):
+        return "an identity other than the owner sent the marker"
+    writes, reads, error = _access_steps(ctx, history, cited, plan, start)
+    if error:
+        return error
+    if not writes or any(role != owner or not 200 <= res["status"] < 300 for _, role, res in writes):
+        return "cite the owner's answered write that carries the marker"
+    if not any(marker in _sent(history[n - 1]["args"]) for n, _, _ in writes):
+        return "no cited write of the owner carries the marker"
+    if any(n < min(w for w, _, _ in writes) for n, *_ in reads):
+        return "the reads must follow the owner's write"
+    if any(marker in _sent(history[n - 1]["args"]) for n, *_ in reads):
+        return "a read that sends the marker itself does not count"
+    seen = []
+    for _, role, response, res in reads:
+        present = marker in response.get("body", "")
+        if not present and not response.get("complete"):
+            return "a response is incomplete, so the marker's absence is not established"
+        seen.append((role, response.get("identity"), res["status"], present and 200 <= res["status"] < 300))
+    owners = {i for role, i, _, present in seen if role == owner and present}
+    if not owners:
+        return "the owner's read does not show the marker"
+    anonymous = [present for role, *_, present in seen if role is None]
+    if not anonymous:
+        return "cite a read without a role"
+    if any(anonymous):
+        return "the marker is visible without a login, so the resource is public"
+    normal = normal_roles(getattr(ctx, "identities", None))
+    others = [(i, status, present) for role, i, status, present in seen
+              if role in normal and role != owner and i is not None and i not in owners]
+    if negative:
+        if any(present for _, _, present in others):
+            return "the marker is present for the other account"
+        if any(status in (403, 404) if blocked else 200 <= status < 300 for _, status, _ in others):
+            return None
+    elif any(present for _, _, present in others):
+        return None
+    return "the resource lacks a valid contrast between its owner and an independent other normal account"
+
+
+def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
+    """A privileged function (VER-010, VER-041): the privileged account gets 2xx, a request without a role 401 or
+    403, and a normal account the identical answer (confirmed) or 403/404 (blocked-by-control)."""
+    if negative and not blocked:
+        return "a different answer for the normal account does not show that the function is protected"
+    start, plan = latest_plan(history)
+    writes, reads, error = _access_steps(ctx, history, cited, plan, start)
+    if error or writes:
+        return error or "a privileged comparison only reads"
+    if any(response.get("redacted") for _, _, response, _ in reads):
+        return "a response holds a credential or user name, so the answers cannot be compared"
+    reference = [(response.get("identity"), res.get("body_sha256")) for _, role, response, res in reads
+                 if role == plan["reference"] and 200 <= res["status"] < 300 and res.get("length")]
+    if not reference:
+        return "the privileged account's request was not answered with content"
+    statuses = [res["status"] for _, role, _, res in reads if role is None]
+    if not blocked and (not statuses or any(s not in (401, 403) for s in statuses)):
+        return "a request without a role must be refused with 401 or 403"
+    ids, roles = {i for i, _ in reference}, normal_roles(getattr(ctx, "identities", None))
+    normal = [(response.get("identity"), res["status"], res.get("body_sha256")) for _, role, response, res in reads
+              if role in roles and response.get("identity") not in ids]
+    same = [i for i, status, sha in normal if 200 <= status < 300 and sha in {s for _, s in reference}]
+    if blocked:
+        if same:
+            return "a normal account received the privileged answer"
+        if any(status in (403, 404) for _, status, _ in normal):
+            return None
+    elif same:
+        return None
+    return "no independent normal account received the identical answer"
+
+
 def access_check(ctx, history, cited, *, negative=False, blocked=False):
+    _, plan = latest_plan(history)
+    if plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")):
+        if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
+            return "the operator-declared test resource takes precedence"
+        check = owned_check if plan.get("owner") else privileged_check
+        return check(ctx, history, cited, negative=negative, blocked=blocked)
     matched, resource, error = access_observations(ctx, history, cited)
     if error:
         return error

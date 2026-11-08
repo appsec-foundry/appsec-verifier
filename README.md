@@ -6,7 +6,7 @@ An AI model plans each test step. The Verifier sends every request itself, only 
 
 The agent can use the assessment’s optional `verification_context` to choose tests from the query construction, input processing, filter order and cited controls. It records a hypothesis and controls before collecting injection or access-control proof, can inspect recorded responses, and receives concrete feedback when evidence is insufficient. Older assessments remain readable.
 
-Access-control tests need `test_resources` in the scope: a known harmless resource, the roles allowed and denied access, and a response marker. See the [scope example](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001). A negative result applies only to the recorded test and variant.
+Access-control tests use `test_resources` from the scope when it names one for the finding: a known harmless resource, the roles allowed and denied access, and a response marker. See the [scope example](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001). Without one, IDOR and missing-authorisation findings are tested with two accounts and `--allow-intrusive`, where one account creates a marked record that the other must not read, or with an `--admin-account` for a privileged function; these results have confidence `medium`, and created records stay on the target. A negative result applies only to the recorded test and variant.
 
 This is an early version; see [Limitations](#limitations).
 
@@ -30,7 +30,7 @@ You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an assessme
    owner: {name: Your Name}   # who is responsible for the test
    ```
 
-3. Optional: add test accounts. Access-control findings need two of them. For a login that answers a JSON POST with a token, name them on the command line, e.g. `--account jim@juice-sh.op --account bender@juice-sh.op`: the Verifier asks for the passwords hidden and takes the login endpoint from the assessment; see [Test accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041). For anything else, use `identities.yaml`. The file names environment variables, never the passwords themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml). With SSO, the accounts can sign in in your browser, or a login program of your own provides the session. Without a file, the guided run can take each account's session from a request you copy in the browser, when the scope declares test resources for the selected access-control findings.
+3. Optional: add test accounts. Access-control findings need two of them; with `--allow-intrusive` the Verifier creates the resource it tests, or add `--admin-account` for privileged functions. For a login that answers a JSON POST with a token, name them on the command line, e.g. `--account jim@juice-sh.op --account bender@juice-sh.op`: the Verifier asks for the passwords hidden and takes the login endpoint from the assessment; see [Test accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041). For anything else, use `identities.yaml`. The file names environment variables, never the passwords themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml). With SSO, the accounts can sign in in your browser, or a login program of your own provides the session. Without a file, the guided run can take each account's session from a request you copy in the browser, when the scope declares test resources for the selected access-control findings.
 
 4. Start the guided run with the assessment:
 
@@ -64,7 +64,7 @@ A finding counts as confirmed only with the proof in the right column.
 | Class | CWEs | Confirmed when |
 | --- | --- | --- |
 | Cross-site scripting | CWE-79 | a marker script runs in a real browser; text that is only reflected does not count |
-| Broken access control / IDOR | CWE-639, 862, 863 | an operator-declared protected resource is returned to both an allowed and an independently authenticated denied identity |
+| Broken access control / IDOR | CWE-639, 862, 863 | an operator-declared protected resource is returned to both an allowed and an independently authenticated denied identity; without one, another account reads a record the first account created with a random marker, or a normal account receives a privileged account's answer while a caller without login is refused (confidence `medium`) |
 | SQL / NoSQL injection | CWE-89, 943 | a declared baseline and true/false experiment repeats a selected JSON observation, or alternating controls show a repeated 2–5 second delay with identical responses |
 | Path traversal | CWE-22 | the target returns a marker file you placed on it |
 | Open redirect | CWE-601 | the target redirects to a marker host that does not exist; the redirect is not followed |

@@ -1316,7 +1316,9 @@ def _identities_note(identities, sel):
 # The browser's and the identity's lines are replaced by ones that fit this run (_run_hints).
 _NEEDS = {
     "resource": ("test resource", ["add an operator-owned test_resources entry to the scope file, with the "
-                                     "finding ID, allowed and denied roles, and a harmless response marker"]),
+                                     "finding ID, allowed and denied roles, and a harmless response marker",
+                                     "for IDOR and missing authorisation also: two accounts (--account) with "
+                                     "--allow-intrusive, or an --admin-account for a privileged function"]),
     "capability": ("test capability", ["the reported variant needs a tool this run does not provide; "
                                         "keep it unresolved or test that variant separately"]),
     "identity": ("test identity", ["create an identities file with two test accounts and pass it with "
@@ -1356,6 +1358,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe) -> tuple[str, 
     to VER-012), then the requests the assessment names (endpoints.py), when all
     of them write in safe mode or all need a login and there is no test identity.
     A finding that names no request is tried."""
+    from .agent.experiments import access_methods
     from .endpoints import WRITE_METHODS
     from .verification_context import missing_capabilities
 
@@ -1363,12 +1366,19 @@ def _blocker(plan, *, identities, browser, listener, scope, safe) -> tuple[str, 
         return "resource", "no operator-identified session cookie in session_checks"
     if plan.cls == "access-control" and not identities:
         return "identity", "no test identity; the proof compares two identities"
-    if plan.cls == "access-control" and not any(r["finding_id"] == plan.id for r in scope.get("test_resources", [])):
-        return "resource", "no declared test resource with allowed and denied identities"
     if plan.cls == "access-control":
+        # VER-010: the operator's test resource first; else one a normal account creates, or a privileged reference
+        methods = access_methods(plan.id, plan.cwe, scope, identities, writes=not safe)
+        if not methods and access_methods(plan.id, plan.cwe, scope, identities, writes=True):
+            return "intrusive", "safe mode; without a declared test resource the Verifier creates one, which writes"
+        if not methods:
+            return "resource", ("no declared test resource, and neither two normal accounts with --allow-intrusive "
+                                "nor a privileged account")
         roles = {i["role"] for i in identities} | {"anonymous"}
         resources = [r for r in scope.get("test_resources", []) if r["finding_id"] == plan.id]
-        if not any(set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles for r in resources):
+        if "resource" in methods and not any(
+            set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles for r in resources
+        ):
             return "resource", "a declared test resource names roles unavailable in this run"
     if plan.cls == "xss" and browser is None:
         return "browser", "no proof browser; XSS counts only when the payload executes"

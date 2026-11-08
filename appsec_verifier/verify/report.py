@@ -214,7 +214,8 @@ def to_markdown(doc: dict) -> str:
         if proof.get("checked"):
             detail = {k: proof[k] for k in ("variant", "tested_path", "hypothesis", "observation_pointer", "steps")
                       if proof.get(k) is not None}
-            lines += ["", "Checked scope: cited requests only; other variants remain untested.",
+            scope = proof.get("scope") or "cited requests only"
+            lines += ["", f"Checked scope: {scope}; other variants remain untested.",
                       _fenced(json.dumps(detail, ensure_ascii=False, indent=2), "json")]
         if proof.get("missing"):
             lines += ["", "Missing evidence:", _fenced("\n".join(proof["missing"]), "text")]

@@ -10,7 +10,11 @@ An identity's credentials go only to the origin it is bound to (its
 scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode; DELETE and every other method are
 never sent (VER-014). A privileged account (--admin-account) only reads, in any
-mode (VER-041). A failing identity or transport ends the call as a tool
+mode (VER-041). An access-control plan without an operator test resource is
+accepted only when the run allows its proof: a resource a normal account
+creates (two normal accounts, intrusive mode), for which plan_test returns the
+finding's marker, or a comparison with a privileged account (VER-010). A
+failing identity or transport ends the call as a tool
 error for the agent, never as an exception past the loop. A response body is
 redacted of every credential value before it is cut to the excerpt (VER-016).
 The agent's path is appended to the target base URL as written, without
@@ -47,7 +51,7 @@ from ..auth.sessions import AuthError
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
 from ..verification_context import missing_capabilities, route_matches
 from ..verify import poc
-from .experiments import PLAN_SCHEMA, pointer_value, token
+from .experiments import PLAN_SCHEMA, access_methods, normal_roles, pointer_value, privileged_roles, token
 from .source_reader import SourceAccessError
 
 _BODY_EXCERPT = 600
@@ -229,7 +233,26 @@ class AgentTools:
             )
             if missing:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
-        if plan["kind"] == "access-control":
+        marker = None
+        if plan["kind"] == "access-control" and not plan.get("resource"):
+            methods = access_methods(self.ctx.plan.id, getattr(self.ctx.plan, "cwe", None), self.ctx.scope,
+                                     self.ctx.identities, writes=not (self.ctx.safe or self.ctx.read_only))
+            if "resource" in methods:
+                raise ToolError("the operator-declared test resource takes precedence; plan with its resource id")
+            if plan.get("method", "GET") != "GET":
+                raise ToolError("the resource or function is read with GET")
+            if plan.get("owner"):
+                if "owner" not in methods:
+                    raise ToolError("creating a resource needs two normal accounts and --allow-intrusive (VER-010)")
+                if plan["owner"] not in normal_roles(self.ctx.identities):
+                    raise ToolError("the owner must be a normal account; a privileged account only reads (VER-041)")
+                marker = "".join(self.ctx.marker)
+            else:
+                if "reference" not in methods:
+                    raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
+                if plan["reference"] not in privileged_roles(self.ctx.identities):
+                    raise ToolError("the reference must be a privileged account")
+        elif plan["kind"] == "access-control":
             resource = next(
                 (
                     r
@@ -251,6 +274,7 @@ class AgentTools:
             "accepted": True,
             "kind": plan["kind"],
             "experiment": plan,
+            **({"marker": marker} if marker else {}),
             "next": "collect observations; run_experiment repeats read-only injection controls within the budget",
         }
 
@@ -578,11 +602,13 @@ class AgentTools:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
         text = _body_text(resp)
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
+        held_secret = redacted != text  # a credential or user name: equal hashes need not mean equal answers
         redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
         identity_key = tuple(sorted(headers.items()))
         identity = self._identities.setdefault(identity_key, len(self._identities))
         cap = min(64000, max(0, 256000 - self._response_chars))
-        self._last_response = {"body": redacted[:cap], "complete": len(redacted) <= cap, "identity": identity}
+        self._last_response = {"body": redacted[:cap], "complete": len(redacted) <= cap, "identity": identity,
+                               "redacted": held_secret}
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
         out = {

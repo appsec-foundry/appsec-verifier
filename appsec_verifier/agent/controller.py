@@ -1,7 +1,10 @@
-"""Deterministic action authority and finite repetition allowances (VER-008, VER-015, VER-036).
+"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-015, VER-036).
 
 ScopeGuard remains the connection authority. Assessment routes only narrow
 that scope; neither model plans nor target responses can add routes here.
+An accepted plan narrows requests to its route and method; under an
+own-resource access-control plan its owner may also write to the finding's
+routes, to create the resource it then reads back.
 """
 
 from __future__ import annotations
@@ -88,7 +91,10 @@ class Controller:
                     and self._matches(r["path"], route_path)]
         if not matching:
             raise ToolError("request has no matching route in this finding or its operator-declared resources")
-        if name != "plan_test" and self.plan and (
+        # Under an own-resource plan the owner, and only the owner, may also write to the finding's routes (VER-010).
+        owner_write = (name == "http_request" and self.plan and self.plan.get("owner") and method not in SAFE_METHODS
+                       and args.get("role") == self.plan["owner"])
+        if name != "plan_test" and self.plan and not owner_write and (
             not self._matches(self.plan["path"], route_path) or method != self.plan.get("method", "GET")
         ):
             raise ToolError("request does not match the accepted test plan")
@@ -107,7 +113,7 @@ class Controller:
                 if (set(selected) != {plan["input_name"]} or any(supplied.values())
                         or token(selected.get(plan["input_name"])) not in {token(v) for v in controls}):
                     raise ToolError("request must use the accepted experiment's input and control values")
-            if plan.get("kind") == "access-control":
+            if plan.get("kind") == "access-control" and plan.get("resource"):
                 resource = next((r for r in self.ctx.scope.get("test_resources", [])
                                  if r["finding_id"] == self.ctx.plan.id and r["id"] == plan.get("resource")), None)
                 if (parsed.query != urlsplit(plan["path"]).query or resource is None

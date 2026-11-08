@@ -13,6 +13,11 @@ against what the tools actually returned:
   alert(), so it does not count.
 - access-control (VER-010): a declared operator-owned resource is present for
   an allowed identity and an independently authenticated denied identity.
+  Without one, at medium confidence: a resource a normal account created with
+  the finding's marker, which its owner reads back, a request without a role
+  does not see, and another normal account sees; or a privileged function
+  whose answer a normal account receives identically to a privileged account
+  while a request without a role is refused (VER-041).
 - injection (VER-011): a declared experiment repeats baseline and true/false
   conditions twice, holding every other input and identity fixed. A selected
   JSON value reproduces the nonempty baseline only for the true condition.
@@ -116,17 +121,27 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     if problem is not None:
         return _downgrade(result, problem)
     result.evidence = _write_record(ctx, "exchanges", exchanges)
-    return _checked(result, history, cited)
+    return _checked(result, history, cited, ctx)
 
 
-def _checked(result, history, cited):
+def _checked(result, history, cited, ctx=None):
     if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
         return result
     _, plan = latest_plan(history)
+    own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference"))
     result.confidence = (
-        "high" if result.verdict == "confirmed" and plan.get("kind") not in ("boolean", "timing") else "medium"
+        "high" if result.verdict == "confirmed" and plan.get("kind") not in ("boolean", "timing") and not own
+        else "medium"
     )
     events = {k: v for k, v in (result.proof or {}).items() if k in ("executed", "callback_hit")}
+    scope = "cited requests only"
+    if plan.get("owner"):
+        scope = (f"cited requests only, on a resource {plan['owner']} created; the record with the marker stays "
+                 "on the target")
+        events["marker"] = "".join(getattr(ctx, "marker", None) or ())
+    elif plan.get("reference"):
+        scope = (f"cited requests only; the same answer as for {plan['reference']} does not show that the "
+                 "function is meant for privileged accounts only")
     result.proof = {
         **events,
         "checked": True,
@@ -137,7 +152,7 @@ def _checked(result, history, cited):
         "variant": plan.get("variant"),
         "hypothesis": plan.get("hypothesis"),
         "observation_pointer": plan.get("pointer"),
-        "scope": "cited requests only",
+        "scope": scope,
     }
     result.identities_used = sorted(
         {
@@ -192,9 +207,12 @@ def _negative(ctx, history, result, cited):
     start, plan = latest_plan(history)
     if not start or len(cited) < 2 or any(n <= start for n in cited):
         return _downgrade(result, "declare a hypothesis and cite a reference plus a fresh test attempt")
+    # An own-resource proof also cites the owner's write, and its plan path may hold a placeholder: access_check
+    # matches those paths itself.
+    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference"))
     if any(
         h.get("tool") != "http_request"
-        or h.get("args", {}).get("path") != plan.get("path")
+        or (not own and h.get("args", {}).get("path") != plan.get("path"))
         or type(h.get("result", {}).get("status")) is not int
         for h in selected
     ):
@@ -251,7 +269,7 @@ def _negative(ctx, history, result, cited):
     if error:
         return _downgrade(result, error)
     result.evidence = _write_record(ctx, "exchanges", exchanges)
-    return _checked(result, history, cited)
+    return _checked(result, history, cited, ctx)
 
 
 def _downgrade(result: ProbeResult, reason: str, label: str = "indicative, not proven") -> ProbeResult:
