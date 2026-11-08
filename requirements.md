@@ -314,6 +314,8 @@ optional hardening.
   non-interactive runs; annotating the source file in place requires an explicit
   instruction, never a default.
 
+- **VER-037: Update an earlier report.** A run can continue the report of an earlier run against the same assessment and target. It keeps each checked verdict, tests the selected findings that have none, and tests again the findings the operator names, for example after a fix, replacing their earlier result. Each result states when it was tested. A report for another assessment or target is not continued.
+
 - **VER-021: Offer a result for the Analyzer to re-ingest.** The verdicts can
   also be emitted in a form keyed by finding identifier and the cross-run key
   (VER-007), meant for AppSec Analyzer to read back and annotate findings with
