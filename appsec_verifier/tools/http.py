@@ -2,8 +2,9 @@
 
 Every request, each redirect hop included, is authorised by the ScopeGuard and
 checked against the authorisation window before it is sent, paced to the
-run's request rate, and counted against the RunBudget. Credentials (Authorization, Cookie, proxy auth) are
-dropped, never forwarded, when a redirect leads to a different origin. Only
+run's request rate, and counted against the RunBudget. Credentials (Authorization, Cookie, proxy auth and
+every header a test identity adds, `protect_headers`) are dropped, never forwarded, when a redirect leads to a
+different origin. Only
 the methods in ALLOWED_METHODS are ever sent, whoever asks; DELETE and every
 other method are refused here (VER-014). Safe mode narrows this further to
 SAFE_METHODS at the callers. The actual transport is injected:
@@ -47,12 +48,13 @@ def same_origin(a: str, b: str) -> bool:
     return oa is not None and oa == ob
 
 
-def strip_cross_origin_auth(headers: dict, from_url: str, to_url: str) -> dict:
+def strip_cross_origin_auth(headers: dict, from_url: str, to_url: str, extra: frozenset | set = frozenset()) -> dict:
     """Return headers safe to send to `to_url`: when it is a different origin
-    than `from_url`, sensitive credential headers are removed (VER-018)."""
+    than `from_url`, sensitive credential headers, and those named in `extra`
+    (lower case), are removed (VER-018)."""
     if same_origin(from_url, to_url):
         return dict(headers)
-    return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE}
+    return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE and k.lower() not in extra}
 
 
 class GuardedHttpClient:
@@ -63,6 +65,16 @@ class GuardedHttpClient:
         self._transport = transport
         self._default_purpose = default_purpose
         self._max_redirects = max_redirects
+        self._protected: set[str] = set()
+
+    def protect_headers(self, names) -> None:
+        """Treat these header names like Authorization: never forwarded across origins (VER-018)."""
+        self._protected.update(str(n).lower() for n in names)
+
+    def authorize(self, url: str, purpose: str):
+        """The scope's decision for `url`, for a caller that hands the URL to someone else (the operator's
+        browser) instead of sending a request itself."""
+        return self._guard.authorize(url, purpose)
 
     def request(self, method: str, url: str, headers: dict | None = None, *,
                 purpose: str | None = None, follow_redirects: bool = True, **kwargs):
@@ -110,7 +122,7 @@ class GuardedHttpClient:
                     target = urljoin(url, location)
                 except ValueError as exc:
                     raise ScopeViolation("unparseable redirect target") from exc
-                headers = strip_cross_origin_auth(headers, url, target)  # VER-018
+                headers = strip_cross_origin_auth(headers, url, target, self._protected)  # VER-018
                 url = target
                 req_kwargs = {}            # never resend the body across a redirect
                 hops += 1

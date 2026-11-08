@@ -1,4 +1,4 @@
-"""Session acquisition for test identities (VER-016, VER-028)."""
+"""Session acquisition for test identities (VER-016, VER-028, VER-040)."""
 
 from __future__ import annotations
 

@@ -13,7 +13,10 @@ that contact something:
   scope, address check, proxy and budget apply as in the run (VER-003, VER-029).
 - `check_identities`: one login per identity that has one, never retried, and
   one request with its credentials to its `check_url`, only on the origin the
-  credentials belong to (VER-028).
+  credentials belong to (VER-028). A sign-in that needs a person happens here,
+  before the first finding; a login program starts here (VER-040).
+- `check_accounts`: two roles whose tokens name the same account cannot show an
+  access-control contrast, so the run stops (VER-010, VER-032).
 - `generation_test`: only on request, one fixed prompt without target data,
   findings or credentials; the reply must pass the host's confinement checks
   and `parse_step` (VER-017, VER-019).
@@ -37,11 +40,11 @@ from urllib.parse import urlsplit
 import httpx
 
 from .auth import AuthError
+from .auth.sessions import LOGIN_METHODS
 from .limits import LimitExceeded
 from .term_style import Style, columns
 from .tools import ScopeViolation, same_origin
 
-LOGIN_METHODS = ("form", "oidc-password", "oidc-client-credentials")
 GENERATION_TIMEOUT_S = 60.0
 _MARKS = {"ok": ("✓", "ok"), "warn": ("⚠", "warn"), "fail": ("✗", "critical"), "info": ("·", "muted")}
 _LABEL_WIDTH = 12
@@ -217,7 +220,7 @@ def check_identities(sessions, identities: list[dict], http, target: str, *, sco
             checks.append(Check(label, "fail", f"{method}: {exc}"))
             continue
         except _REQUEST_ERRORS as exc:
-            endpoint = auth.get("login_url") or auth.get("token_url") or ""
+            endpoint = auth.get("login_url") or auth.get("token_url") or auth.get("issuer") or ""
             checks.append(Check(label, "fail", f"{method} login: {_cause(exc, proxy_for(scope, endpoint))}"))
             continue
         done = "logged in" if method in LOGIN_METHODS else "credentials set"
@@ -229,6 +232,19 @@ def check_identities(sessions, identities: list[dict], http, target: str, *, sco
         checks.append(_check_url(label, method, done, check_url, headers, sessions.origin_for(label) or target,
                                  http, scope))
     return checks
+
+
+def check_accounts(sessions) -> list[Check]:
+    """A failing check when two roles are signed in as the same account: their tokens name the same issuer
+    and subject. Roles whose session does not say (cookies, opaque tokens) are not compared (VER-032)."""
+    seen: dict[tuple[str, str], str] = {}
+    for role, account in sessions.accounts().items():
+        if account in seen:
+            return [Check("Identities", "fail", f"{seen[account]} and {role} are signed in as the same account; "
+                                                "an access-control proof needs two independent accounts (VER-010). "
+                                                "Sign in as the second user, e.g. in a private window")]
+        seen[account] = role
+    return []
 
 
 def _check_url(label, method, done, url, headers, origin, http, scope) -> Check:
