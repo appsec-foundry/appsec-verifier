@@ -168,22 +168,7 @@ optional hardening.
   cites, such as the refused request behind *blocked by a control*.
   Screenshots show it (VER-035).
 
-- **VER-035: Show the proof in a screenshot.** A screenshot is taken of the
-  page in which an XSS marker executed (VER-009), and of a confirmed
-  access-control finding's contested response when that is an HTML page,
-  rendered from the recorded response without a new request (VER-010). Every
-  tested finding also gets an image of its exchanges, request and response
-  side by side, also rendered from the record: of the steps its verdict rests
-  on (VER-034), or, where it cites none, such as a finding a limit stopped, of
-  its answered requests after its last test plan. The operator chooses per run whether and for which classes
-  screenshots are taken, by default for all. Each screenshot shows what the
-  proof rests on: a caption names the finding, URL, identity and time, and
-  what the code can locate is marked and labelled, such as the executed payload, the
-  contested data, the redirect target, the marker file's content, the input
-  and answer that differ, or the answer times. What of the page covers the
-  executed payload is hidden and named. Marks leave the recorded
-  exchange unchanged. A screenshot illustrates the proof; no verdict depends
-  on it.
+- **VER-035: Show the successful exploit and its HTTP proof.** For UI findings, the central evidence is ideally a browser screenshot showing the successful exploit or its visible effect, marked and with enough application context to understand it. The corresponding recorded HTTP requests and responses always accompany the proof (VER-034), presented in the report only as relevant code-block excerpts with the decisive parts marked. HTTP screenshots are saved under `evidence/` for later use and are not embedded in the report. For API-only findings, requests and responses are the primary evidence; no artificial browser view is required. If an application screenshot cannot be obtained, the report states why. The operator chooses which classes receive screenshots, by default all. Additional browser requests obey scope, identity, mode and budget controls. Screenshots never replace the code-checked proof (VER-009 to VER-013); saved exchanges remain unchanged.
 
 - **VER-042: Review evidence clarity.** After each tested finding, a separate evidence reviewer checks whether the evidence presentation is understandable and returns concrete issues to the original test agent for at most two correction rounds shared by all variants of that finding. Technical verdict and presentation quality stay separate. Corrections use recorded evidence and never send new target requests. Repeated issues without improvement and the existing cost and time limits stop the loop. The console and report show progress, completion and unresolved issues. The first stage reviews redacted evidence text and deterministic presentation checks; it explicitly states that no model inspected image pixels.
 

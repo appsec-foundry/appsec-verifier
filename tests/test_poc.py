@@ -540,7 +540,7 @@ def _doc(tmp_path):
 def test_report_shows_the_proof_of_concept_as_raw_http_that_target_content_cannot_break(tmp_path):
     md = to_markdown(_doc(tmp_path))
     assert "#### Proof of concept" in md and "evidence/T-001-poc.har" in md
-    assert "Authorization: [identity customer-a]" in md and TA not in md
+    assert "Authorization: identity ▸⟦[identity customer-a]⟧" in md and TA not in md
     assert "`````http\nHTTP/1.1 200 OK" in md          # a fence longer than the body's four backticks
     assert "review before sharing" in md.split("## Summary")[0]
 
@@ -658,3 +658,24 @@ def test_compact_error_response_omits_css_and_preserves_original_record():
     assert '401' in text and 'Unauthorized' in text
     assert 'height:99999px' not in text and 'evil()' not in text
     assert e == before
+
+
+def test_report_excerpts_are_marked_while_http_images_stay_saved(tmp_path):
+    browser = RenderBrowser()
+    ctx = _ctx(tmp_path, lambda *a, **kw: Resp(), browser=browser)
+    result, _ = _run(ctx, [_get("customer-a"), _get("customer-b"),
+                          {"verdict": {"verdict": "confirmed", "rationale": "cross-account read",
+                                       "proof_steps": [1, 2], "highlight": ["bob@shop.test"]}}])
+    from dataclasses import asdict
+
+    from appsec_verifier.verify.report import _poc_markdown
+
+    text = "\n".join(_poc_markdown(asdict(result)))
+    assert "⟦[identity customer-a]⟧" in text
+    assert "⟦bob@shop.test⟧" in text
+    assert "```http" in text
+    assert "![" not in text  # API-only: neither HTTP screenshots nor a manufactured UI
+    assert any(e["path"].endswith("-exchange-1.png") for e in result.evidence)
+    har = json.loads((tmp_path / result.poc["file"]).read_text())
+    assert "⟦" not in json.dumps(har)
+    assert "bob@shop.test" in result.poc["shown"][0]["response"]

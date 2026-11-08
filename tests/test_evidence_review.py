@@ -452,3 +452,44 @@ def test_too_many_variants_do_not_create_unbounded_model_context():
     group = [(replace(ctx, plan=replace(ctx.plan, variant_digest=str(i))), copy.deepcopy(res)) for i in range(17)]
     review_finding(group)
     assert not host.calls and group[0][1].evidence_review["status"] == "not-reviewed"
+
+
+def test_review_receives_checked_browser_proof_without_pixels():
+    ctx, res, host, *_ = pair([CLEAR])
+    res.evidence = [{"kind": "screenshot", "path": "evidence/x.png", "presentation": "application",
+                     "source": "live-browser", "executed_via": ["alert"], "marked": 1}]
+    review_finding([(ctx, res)])
+    supplied = host.calls[0][1]["variants"][0]
+    assert supplied["code_checked_proof"]["executed"] is True
+    assert supplied["browser_observations"][0]["executed_via"] == ["alert"]
+    assert supplied["image_pixels_reviewed"] is False
+
+
+def test_inconclusive_without_excerpts_can_be_explained_without_inventing_quotes():
+    ctx, res, host, *_ = pair([issue(), {"explanation": "No evidence was collected.", "quotes": []}, CLEAR])
+    res.verdict, res.poc, res.proof = "inconclusive", None, None
+    review_finding([(ctx, res)])
+    assert res.evidence_review["status"] == "clear"
+    assert res.evidence_review["presentations"][0]["quotes"] == []
+    assert ctx.budget.requests == 0
+
+
+def test_application_image_precedes_http_and_review_in_report():
+    ctx, res, *_ = pair([CLEAR])
+    res.evidence = [{"kind": "screenshot", "path": "evidence/app.png", "presentation": "application"},
+                    {"kind": "screenshot", "path": "evidence/exchange.png"}]
+    review_finding([(ctx, res)])
+    from dataclasses import asdict
+
+    text = "\n".join(_poc_markdown(asdict(res)))
+    assert text.index("![Application") < text.index("Evidence review") < text.index("GET /x HTTP")
+    assert text.count("](evidence/app.png)") == 1
+    assert "](evidence/exchange.png)" not in text
+
+
+def test_existing_excerpts_still_require_a_recorded_quote():
+    ctx, res, *_ = pair([issue(), {"explanation": "Unsupported correction.", "quotes": []}])
+    review_finding([(ctx, res)])
+    assert res.evidence_review["status"] == "stopped"
+    assert res.evidence_review["reason"] == "Evidence review stopped: missing recorded quote."
+    assert not res.evidence_review["presentations"]

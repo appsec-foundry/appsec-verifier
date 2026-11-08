@@ -352,6 +352,9 @@ properties:
                   request:    { type: string }
                   response:   { type: string }
                   elapsed_ms: { type: [integer, "null"], description: How long the answer took. }
+                  request_excerpt: { type: string, description: Relevant request excerpt with labelled proof marks. }
+                  response_excerpt: { type: string, description: Relevant response excerpt with labelled proof marks. }
+                  facts: { type: array, items: { type: string }, description: Recorded observations for this step. }
 
         evidence_review:
           anyOf:
@@ -442,7 +445,7 @@ $defs:
             explanation: *id001
             quotes:
               type: array
-              minItems: 1
+              minItems: 0
               maxItems: 3
               items:
                 type: object

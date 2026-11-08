@@ -143,7 +143,9 @@ def _tool_defs() -> list[dict]:
             "them as the proof of concept, and for a confirmed verdict the Verifier checks them. "
             "For a confirmed access-control verdict, highlight may name up to three short values "
             "copied from a cited response that show data the requesting identity must not see "
-            "(e.g. the other identity's id or email); the screenshot marks them.",
+            "(e.g. the other identity's id or email); the screenshot marks them. "
+            "For an access-control finding with a known UI route, supply browser_evidence so the "
+            "successful effect is captured on the application page. HTTP evidence always accompanies it.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -155,6 +157,22 @@ def _tool_defs() -> list[dict]:
                         "maxItems": 64,
                         "uniqueItems": True,
                         "items": {"type": "integer", "minimum": 1},
+                    },
+                    "browser_evidence": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 2000},
+                            "step": {"type": "integer", "minimum": 1},
+                            "value": {"type": "string", "minLength": 3, "maxLength": 200},
+                        },
+                        "required": ["path", "step", "value"],
+                        "description": "For confirmed access-control UI findings: the evidenced application route, "
+                        "a decisive successful GET proof step and an exact visible value from its response. "
+                        "The browser opens that route read-only as the cited step's identity and must read "
+                        "the same resource and display that value. Use the owner's read-back step for a "
+                        "confirmed write effect. Never guess a UI route or substitute an API endpoint. "
+                        "Omit for API-only findings. XSS already captures the page where its marker executed.",
                     },
                     "highlight": {
                         "type": "array",

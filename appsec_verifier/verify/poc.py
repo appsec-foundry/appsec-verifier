@@ -26,7 +26,9 @@ Screenshots (VER-035), for the classes the run enables: XSS keeps the page in
 which its marker executed (tools/browser.py). For a confirmed access-control
 finding whose response is an HTML page, the proof browser renders that
 recorded response without a new request and marks the values the verdict
-names. Every finding with decisive steps also gets an image of those
+names. Live application observations are attached before this renderer. The
+report displays application images and marked HTTP excerpts; exchange images
+are saved for later use, not embedded. Every finding with decisive steps also gets an image of those
 exchanges, and one whose verdict cites none (a limit stopped it) an image of its
 answered requests after the last test plan, whose header says it proves nothing:
 request and response side by side, built here as escaped HTML with
@@ -470,6 +472,43 @@ def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
     return "".join(out), len(merged)
 
 
+class _CodeMarks(HTMLParser):
+    """Reuse deterministic proof locations as plain code-block annotations (VER-035)."""
+
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "mark":
+            self.parts.append("⟦")
+
+    def handle_endtag(self, tag):
+        if tag == "mark":
+            self.parts.append("⟧")
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def _code_excerpt(text, needles=(), lines=()):
+    parser = _CodeMarks()
+    parser.feed(_marked(text, needles, lines)[0])
+    return "".join(parser.parts)
+
+
+def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path):
+    req, res, lines, facts = _exchange_marks(ctx, history, n, entry, shown, highlight)
+    response = _raw_response(entry, _focus(ctx, [e for _, e in shown], entry), har_path)
+    headers, _, body = response.partition("\n\n")
+    kept = [line for i, line in enumerate(headers.splitlines())
+            if i == 0 or line.lower().startswith(("content-type:", "location:", "www-authenticate:", "set-cookie:"))]
+    response = "\n".join(kept) + "\n\n" + _image_excerpt(body, res, limit=1000)
+    return {"request_excerpt": _code_excerpt(_image_request(entry, req), req),
+            "response_excerpt": _code_excerpt(response, res, lines),
+            "facts": [fact for fact, decisive in facts if decisive]}
+
+
 def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]],
                     highlight) -> tuple[list[tuple], list[tuple], list[tuple[str, str]], list[tuple[str, bool]]]:
     """What the image of step `n` marks, as the code can locate it, each with its label: needles in the
@@ -814,17 +853,30 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
         "file": har_path,
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
         "shown": [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
-                   "response": _raw_response(e, _focus(ctx, others, e), har_path)}
+                   "response": _raw_response(e, _focus(ctx, others, e), har_path),
+                   **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path)}
                   for n, e in shown_entries],
     }
     shots: list[dict] = []
     cls, browser = getattr(ctx.plan, "cls", None), getattr(ctx, "browser", None)
     if browser is not None and cls in getattr(browser, "screenshots", ()):
-        if result.verdict == "confirmed" and cls == "access-control":
+        if result.verdict == "confirmed" and cls == "access-control" and not any(
+                e.get("presentation") == "application" for e in result.evidence):
             shots = _page_screenshots(ctx, steps, highlight)
         if shown_entries:                        # the exchanges, also beside a page that shows the proof
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight)
         elif not decisive and (tried := _tried(history, steps)):     # e.g. a finding a limit stopped
             shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False)
     result.evidence = [*(result.evidence or []), *shots]
+    if result.verdict == "confirmed" and not any(
+        e.get("presentation") == "application" for e in result.evidence
+    ):
+        if browser is None:
+            reason = "the proof browser is unavailable"
+        elif cls not in getattr(browser, "screenshots", ()):
+            reason = "screenshots are disabled for this class"
+        else:
+            reason = ("no application page showing the confirmed effect was captured; "
+                      "for API-only findings the recorded HTTP exchanges are the primary evidence")
+        result.observations.append("Application screenshot unavailable: " + reason + ".")
     return result

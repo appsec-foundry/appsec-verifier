@@ -214,7 +214,7 @@ def test_screenshot_marks_the_payload_and_names_the_proof(browser):
     event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
     assert event["marked_elements"] == 1
     width, height = struct.unpack(">II", (tmp / kinds["screenshot"]["path"]).read_bytes()[16:24])
-    assert width <= 1280 and 0 < height < 720  # payload and caption, not a full viewport
+    assert (width, height) == (1280, 900)  # application context, not a payload strip
     pages = [x for x in result["_exchanges"] if x["navigation"]]
     assert len(pages) == 1 and pages[0]["status"] == 200 and b"Results for" in pages[0]["content"]
 
@@ -297,3 +297,42 @@ def test_evidence_revision_panel_is_compact_and_sends_no_requests(browser):
     assert target.seen == []
     width, height = struct.unpack(">II", (tmp / shot["path"]).read_bytes()[16:24])
     assert width <= 1280 and 0 < height <= 1200
+
+
+@pytest.mark.parametrize("case, captured", [("visible", True), ("hidden", False), ("unrelated", False),
+                                          ("api-only", False), ("blocked", False)])
+def test_application_capture_requires_visible_effect_and_matching_resource(tmp_path, case, captured):
+    calls = []
+
+    def target(method, url, headers, **kw):
+        calls.append((method, url))
+        if url.endswith("/api/proof"):
+            body, mime = '{"effect":"verifier-test-effect"}', "application/json"
+        else:
+            load = "fetch('/api/proof')" if case != "unrelated" else "Promise.resolve()"
+            style = ' style="display:none"' if case == "hidden" else ""
+            body = (f'<html><body><h1>Application</h1><div id=result{style}></div><script>'
+                    f'{load}.then(() => document.querySelector("#result").textContent="verifier-test-effect");'
+                    "fetch('/write', {method:'POST', body:'must not send'});"
+                    "fetch('https://outside.example/private');</script></body></html>")
+            mime = "text/html"
+        return SimpleNamespace(status_code=200, headers={"content-type": mime}, content=body.encode())
+
+    http = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target)
+    b = ProofBrowser(http, tmp_path / "evidence")
+    path = "/api/proof" if case == "api-only" else "/ui"
+    url = "https://outside.example/ui" if case == "blocked" else BASE + path
+    try:
+        result = b.check(url, identity_headers={}, target_base=BASE, marker=MARKER,
+                         finding_id="T-UI", wait_ms=200, safe=True, role="customer-a",
+                         observation={"resource_url": BASE + "/api/proof", "value": "verifier-test-effect", "step": 2})
+    finally:
+        b.close()
+    assert bool(result["evidence"]) is captured
+    assert all(method == "GET" and url.startswith(BASE + "/") for method, url in calls)
+    if captured:
+        shot = result["evidence"][0]
+        assert shot["presentation"] == "application" and shot["proof_step"] == 2
+        assert (tmp_path / shot["path"]).is_file()
+    else:
+        assert "error" in result

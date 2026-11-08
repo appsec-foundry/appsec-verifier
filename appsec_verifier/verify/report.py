@@ -258,7 +258,19 @@ def _review_markdown(r: dict, level: int) -> list[str]:
 def _poc_markdown(r: dict, level: int = 4) -> list[str]:
     """The proof of concept (VER-034): one line per step, then the steps the verdict rests on as raw HTTP."""
     poc = r.get("poc") or {}
-    out = _review_markdown(r, level)
+    application = [e for e in r.get("evidence") or []
+                   if e.get("kind") == "screenshot" and (e.get("presentation") == "application" or
+                       re.search(r"-(?:xss|access-control)-[0-9]+\.png$", e.get("path", ""))) and e.get("path")]
+    out = []
+    if application:
+        out += ["", f"{'#' * level} Exploit in the application", ""]
+        for ev in application:
+            out += [f"![Application screenshot {ev['path']}]({ev['path']})", ""]
+    limitations = [o for o in r.get("observations") or []
+                   if o.startswith("Application screenshot unavailable:")]
+    if limitations:
+        out += ["", _fenced("\n".join(dict.fromkeys(limitations)), "text")]
+    out += _review_markdown(r, level)
     if not poc.get("steps"):
         return out
     out += ["", f"{'#' * level} Proof of concept", ""]
@@ -267,13 +279,16 @@ def _poc_markdown(r: dict, level: int = 4) -> list[str]:
     # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.
     out.append(_fenced("\n".join(f"step {s['step']}: {s['line']}" + (" (shown below)" if s.get("decisive") else "")
                                  for s in poc["steps"]), "text"))
+    if any("request_excerpt" in s for s in poc.get("shown") or []):
+        out += ["", "Relevant HTTP excerpts; labels and ⟦…⟧ mark evidence added by the Verifier. "
+                "The complete unmarked exchanges are saved in the HAR."]
     for shown in poc.get("shown") or []:
         took = f" (answered in {shown['elapsed_ms']} ms)" if shown.get("elapsed_ms") else ""
-        out += ["", f"Step {shown['step']}{took}, request:", "", _fenced(shown["request"]), "",
-                "Response:", "", _fenced(shown["response"])]
-    for ev in r.get("evidence") or []:
-        if ev.get("kind") == "screenshot" and ev.get("path"):
-            out += ["", f"![Screenshot {ev['path']}]({ev['path']})"]
+        if shown.get("facts"):
+            out += ["", _fenced("\n".join(shown["facts"]), "text")]
+        out += ["", f"Step {shown['step']}{took}, request:", "",
+                _fenced(shown.get("request_excerpt", shown["request"])), "", "Response:", "",
+                _fenced(shown.get("response_excerpt", shown["response"]))]
     return out
 
 

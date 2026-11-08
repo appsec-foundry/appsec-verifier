@@ -27,6 +27,12 @@ The page is moved clear of the caption, so the caption hides none of it. Each re
 the guarded client answered is handed back for the proof of concept (VER-034),
 bodies only for documents, XHR and fetch.
 
+A post-proof observation can also capture an access-control effect on a known
+application route (VER-035), read-only under the decisive response's identity.
+It requires a successful read of that same resource and its selected value in
+visible page text; it never establishes or changes a verdict. Live captures
+retain the application viewport. Requests remain guarded and are recorded.
+
 `render` screenshots a recorded HTML response for an access-control proof,
 `render_exchanges` the page verify/poc.py builds from a finding's recorded
 exchanges for every other screenshot (VER-035). Either page is answered from
@@ -287,7 +293,14 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
   if (values && values.length) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes = [];
-    while (walker.nextNode()) nodes.push(walker.currentNode);
+    while (walker.nextNode()) {
+      const node = walker.currentNode, el = node.parentElement;
+      if (!el || el.closest('script,style,noscript,[data-appsec-verifier]')) continue;
+      const style = getComputedStyle(el);
+      if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) continue;
+      if (!el.getClientRects().length || !el.checkVisibility({checkOpacity:true, checkVisibilityCSS:true})) continue;
+      nodes.push(node);
+    }
     for (const node of nodes) {
       for (const value of values) {
         const at = node.nodeValue.indexOf(value);
@@ -452,7 +465,8 @@ class ProofBrowser:
         return self._guarded(self._check, url, **kwargs)
 
     def _check(self, url: str, *, identity_headers: dict, target_base: str, marker: tuple[str, str],
-               finding_id: str, wait_ms: int, safe: bool, role: str | None = None) -> dict:
+               finding_id: str, wait_ms: int, safe: bool, role: str | None = None,
+               observation: dict | None = None) -> dict:
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -508,7 +522,8 @@ class ProofBrowser:
                         isolated_documents.add(request.url)
                 route.fulfill(status=outcome.status, headers=outcome.headers, body=outcome.body)
 
-        context = browser.new_context(service_workers="block", accept_downloads=False)
+        context = browser.new_context(service_workers="block", accept_downloads=False,
+                                      viewport={"width": 1280, "height": 900}, device_scale_factor=1)
         try:
             context.route_web_socket(re.compile(".*"), _leave_unconnected)
             context.route("**/*", on_route)
@@ -544,7 +559,39 @@ class ProofBrowser:
                       "blocked": blocked[:20], "_exchanges": exchanges}
             if error:
                 result["error"] = error
-            if executed:
+            if observation is not None:
+                # A visible value alone could be unrelated page text: also require the cited resource
+                # to have been read successfully during this navigation, under the same identity.
+                resource_seen = any(
+                    e.get("method") == "GET" and e.get("url") == observation["resource_url"]
+                    and 200 <= e.get("status", 0) < 300
+                    and observation["value"] in e.get("content", b"").decode("utf-8", errors="replace")
+                    for e in exchanges
+                )
+                result["evidence"] = []
+                result["error"] = "The browser did not read the cited resource and display its evidence value."
+                application_page = any(
+                    e.get("navigation") and any(k.lower() == "content-type" and "html" in v.lower()
+                                                for k, v in e.get("response_headers", []))
+                    for e in exchanges
+                )
+                if resource_seen and application_page and same_origin(page.url, url):
+                    marked = self._mark(
+                        page, [f"AppSec Verifier · {finding_id} · observed exploit effect",
+                               f"{url[:300]} as {role or 'anonymous'}",
+                               f"captured {shown_time(datetime.now(timezone.utc).isoformat())}",
+                               f"recorded proof step {observation['step']} · read-only browser observation"],
+                        values=[observation["value"]], label="value from the confirmed proof")
+                    if marked and marked["marks"]:
+                        self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        shot = self._dir / f"{self._stem(finding_id, 'application')}.png"
+                        page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
+                        result["evidence"] = [self._entry(
+                            shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
+                            presentation="application", proof_step=observation["step"],
+                            marked=marked["marks"], source="live-browser")]
+                        result.pop("error", None)
+            elif executed:
                 result["evidence"] = self._save(page, finding_id, url, status, events, marker, role,
                                                execution_contexts=contexts, attempt=attempt)
             return result
@@ -610,14 +657,16 @@ class ProofBrowser:
                 data["hidden_for_screenshot"] = marked["hidden"]
             shot = self._dir / f"{stem}.png"
             try:
-                page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS,
-                                **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
+                # Keep the application recognisable; a tiny payload crop is not the primary evidence.
+                page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
             except PlaywrightError:      # a page that does not answer: the event record still proves execution
                 shot = None
         record.write_text(json.dumps(data, indent=2), encoding="utf-8")
         entries = [self._entry(record, "browser-event")]
         if shot is not None:
-            entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE))
+            entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
+                                       presentation="application", source="live-browser",
+                                       executed_via=via, marked=data.get("marked_elements")))
         return entries
 
     def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, finding_id: str,
@@ -668,6 +717,7 @@ class ProofBrowser:
             kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none,
                                                                 label="value named in the verdict"))
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
+                                                    presentation="application", source="recorded-html",
                                                     marked=marked["marks"] if marked else None)]
 
     def render_exchanges(self, *, html: str, finding_id: str, marked: int) -> list[dict]:

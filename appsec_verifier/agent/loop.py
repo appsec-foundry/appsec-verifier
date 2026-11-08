@@ -166,6 +166,10 @@ class AgentProbe:
                 if last_rejected is not None and verdict.get("verdict") == "inconclusive":
                     result = last_rejected
                     verdict = {**verdict, "proof_steps": last_cited}
+                from ..verify.browser_evidence import capture_application
+
+                capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
+                                    verdict.get("proof_steps"))
                 result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
