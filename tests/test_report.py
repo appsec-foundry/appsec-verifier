@@ -3,8 +3,10 @@ additive assessment annotation, and the Analyzer re-ingest export (VER-020/021/0
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import pytest
 import yaml
 
 from appsec_verifier.limits import Limits
@@ -173,6 +175,35 @@ def test_annotation_adds_only_its_own_key():
         "meta": {"project": "p"}, "threats": out["threats"]}
     for before, after in zip(assessment["threats"], out["threats"], strict=True):
         assert {k: v for k, v in after.items() if k != "dynamic_verification"} == before
+
+
+# Opt-in: AppSec Analyzer's schema is not part of this repository, so the comparison needs its path.
+ANALYZER_SCHEMA = os.environ.get("APPSEC_VERIFIER_ANALYZER_SCHEMA")
+
+
+@pytest.mark.skipif(not ANALYZER_SCHEMA, reason="set APPSEC_VERIFIER_ANALYZER_SCHEMA to the path of AppSec "
+                    "Analyzer's schemas/threat-model.output.schema.yaml")
+def test_annotation_adds_no_error_under_the_analyzers_schema():
+    """The copy stays valid against the Analyzer's current assessment schema (VER-027): the added fields
+    cause no error the original does not have. The original holds only a finding id, so that no field of
+    its own hides an error about added ones; the errors of an incomplete assessment are the same in both."""
+    from jsonschema.validators import validator_for
+
+    schema = yaml.safe_load(Path(ANALYZER_SCHEMA).read_text(encoding="utf-8"))
+    cls = validator_for(schema)
+    cls.check_schema(schema)
+    validator = cls(schema)
+
+    def where(e):
+        return tuple(e.absolute_path), tuple(e.schema_path)
+
+    assessment = {"threats": [{"id": "T-037"}]}
+    out = annotate_assessment(assessment, _confirmed_doc(), verification_report="v.yaml")
+    assert "dynamic_verification" in out and "dynamic_verification" in out["threats"][0]
+    before = {where(e) for e in validator.iter_errors(assessment)}
+    added = [f"{'/'.join(map(str, e.absolute_path)) or 'root'}: {e.message}"
+             for e in validator.iter_errors(out) if where(e) not in before]
+    assert not added
 
 
 def test_annotation_points_to_the_proof_but_carries_none_of_it():

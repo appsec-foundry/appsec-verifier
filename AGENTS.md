@@ -65,7 +65,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 
 ## Relation to AppSec Analyzer
 
-The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts of its code and data. The Analyzer is the reference: where the two differ, the Verifier follows, and the Analyzer repository is not changed for the Verifier unless the maintainer asks for it. The Analyzer does not mention the Verifier, so a change there raises no flag here. When you work on a row below, compare it with the Analyzer's current file. Deliberate differences are noted in the Verifier file's docstring or comment.
+The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts of its code and data. The Analyzer is the reference: where the two differ, the Verifier follows, and the Analyzer repository is not changed for the Verifier unless the maintainer asks for it. The Analyzer does not mention the Verifier, so a change there raises no flag here. When you work on a row below, compare it with the Analyzer's current file. For the `annotate_assessment` row, `APPSEC_VERIFIER_ANALYZER_SCHEMA=<analyzer>/schemas/threat-model.output.schema.yaml python -m pytest -q tests/test_report.py -k analyzers_schema` does that check. Deliberate differences are noted in the Verifier file's docstring or comment.
 
 | Verifier | AppSec Analyzer (reference) |
 | --- | --- |
