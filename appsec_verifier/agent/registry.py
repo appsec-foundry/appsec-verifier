@@ -12,7 +12,7 @@ from collections.abc import Callable
 from ..verify.probes import ProbeRegistry
 from .loop import AgentProbe, Planner
 
-AGENT_CLASSES = ("access-control", "xss", "injection", "path-traversal", "open-redirect", "ssrf")
+AGENT_CLASSES = ("access-control", "xss", "injection", "path-traversal", "open-redirect", "ssrf", "session")
 
 
 def agent_registry(make_planner: Callable[[], Planner], *, classes=None, max_steps: int = 12) -> ProbeRegistry:

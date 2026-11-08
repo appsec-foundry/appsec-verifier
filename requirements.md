@@ -86,8 +86,13 @@ optional hardening.
   - **Cross-site scripting** (CWE-79): reflected, stored, and DOM-based.
   - **Broken access control / IDOR** (CWE-639, CWE-862, CWE-863): missing object-
     and function-level authorisation.
-  - **Injection** (CWE-89 SQL, CWE-943 NoSQL): confirmed through observable
-    behavioural differences, not data exfiltration.
+  - **Injection** (CWE-89 SQL, CWE-943 NoSQL, CWE-78 command, CWE-1336
+    template, CWE-643 XPath, CWE-90 LDAP): mechanism-specific harmless controls.
+    NoSQL uses JSON operator controls; LDAP uses complementary filter predicates.
+  - **Authentication and exposure** (CWE-306, CWE-200): operator-declared
+    harmless protected resources with an independent allowed/denied contrast.
+  - **Session-cookie attributes** (CWE-614, CWE-1004, CWE-1275): repeated
+    observations of an operator-identified session cookie, without cookie values.
   - **Path traversal, open redirect, SSRF** (CWE-22, CWE-601, CWE-918):
     confirmed through harmless marker files or operator-controlled callbacks.
 
@@ -145,7 +150,10 @@ optional hardening.
   changed input and observation before gathering proof. Repeat baseline and
   true/false controls; compare a stable non-reflected field, not arbitrary
   response differences. Timing needs alternating independent controls with
-  identical responses and repeated separations of 2–5 seconds.
+  identical responses and repeated separations of 2–5 seconds, but timing alone
+  remains inconclusive because ordinary computation can cause the same effect.
+  SQL confirmation requires fresh complementary predicate controls. Command,
+  template and XPath confirmation requires fresh computed arithmetic results.
 
 - **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path
   traversal is confirmed by reading a pre-placed, non-sensitive marker file;
@@ -337,8 +345,9 @@ optional hardening.
   VER-006), shows how many findings it holds, how many are dynamically
   verifiable, and how they split by weakness class and severity, and then sets
   up the run, asking only where no usable default exists:
-  - **Selection** (VER-026): findings of severity high and above, of every
-    verifiable class present, unless options change that; the run prints the
+  - **Selection** (VER-026): findings of severity high and above, with up to eight additional
+    declared prerequisites or management-access/exposure findings within other
+    explicit filters, unless --strict-severity keeps the floor exact; the run prints the
     floor. If nothing of high or above can be verified dynamically, it asks
     whether to verify the next lower severity that has findings.
   - **Target** (VER-001, VER-004): a scope file given or found next to the

@@ -60,6 +60,7 @@ class SessionManager:
             env = os.environ
         self._env = env
         self._cache: dict[str, dict] = {}
+        self._cookie_secrets: set[str] = set()
         self._issued: set[str] = set()         # header values and tokens obtained, kept after invalidate()
         self._refused: dict[str, str] = {}     # role -> why its session could not be obtained
         self._renewed: set[str] = set()        # roles renewed after a 401 and not accepted since
@@ -93,6 +94,11 @@ class SessionManager:
     def invalidate(self, role: str) -> None:
         self._cache.pop(role, None)
 
+    def remember_secret(self, value: str) -> None:
+        """Keep observed session values out of later responses, prompts and evidence (VER-016)."""
+        self._issued.add(value)
+        self._cookie_secrets.add(value)
+
     def renew(self, role: str) -> bool:
         """After a 401 for `role`: drop its session so the next headers_for() logs in again, and return True;
         False, keeping the session, while a renewal was already answered 401 and nothing accepted since (VER-028)."""
@@ -119,7 +125,7 @@ class SessionManager:
                     values.add(self._env[name])
         forms = set()
         for v in values:
-            if len(v) >= _MIN_SECRET_LEN:
+            if len(v) >= _MIN_SECRET_LEN or v in self._cookie_secrets:
                 forms.update((v, json.dumps(v)[1:-1], quote(v, safe=""), quote_plus(v)))
         return sorted(forms, key=len, reverse=True)      # longest first, so no fragment of a value is left
 

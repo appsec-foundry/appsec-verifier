@@ -59,7 +59,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from ..verify.poc import BODY_RESOURCE_TYPES, MAX_BROWSER_EXCHANGES, MAX_RAW_BYTES, TARGET_DATA_NOTE, capture
 from .http import ScopeViolation, same_origin
@@ -79,7 +79,7 @@ _CHROME_ARGS = ["--host-resolver-rules=MAP * ~NOTFOUND", "--no-pings", "--disabl
 # Chrome is not root inside it, so its own sandbox still starts.
 _NETNS_ARGS = ("--user", "--net", "--map-current-user")
 SCREENSHOT_NOTE = TARGET_DATA_NOTE
-SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf")
+SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf", "session")
 _EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves; answered from the record
 _HIGHLIGHT = "#b00020"
 
@@ -149,6 +149,23 @@ def _playwright_install_command(prefix: str | None = None, root: Path | None = N
 
 class BrowserUnavailable(Exception):
     """The proof browser cannot run here (what is missing is the message); XSS findings cannot be proven."""
+
+
+def execution_context(source, page, target, isolated=False):
+    """Only execution in this check's page and effective application origin is attributable."""
+    try:
+        frame = source["frame"]
+        # Child-frame sandbox/inheritance cannot be established from its URL alone.
+        # Do not trust a page-defined window.origin property as a browser security fact.
+        valid = (not isolated and source.get("page") is page and frame is page.main_frame
+                 and same_origin(frame.url, target))
+        parsed = urlsplit(frame.url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        return {"verified": bool(valid), "origin": origin if valid else "other or opaque",
+                "frame": "main" if frame is page.main_frame else "child",
+                "document": urlsplit(frame.url).path[:300]}
+    except Exception:  # noqa: BLE001 - a detached or uninspectable frame is not proof
+        return {"verified": False, "origin": "unknown", "frame": "unknown"}
 
 
 class BrowserError(Exception):
@@ -441,6 +458,9 @@ class ProofBrowser:
 
         browser = self._ensure()
         events: list[tuple[str, str]] = []
+        contexts: list[dict] = []
+        attempt = secrets.token_hex(12)
+        isolated_documents = set()
         blocked: list[dict] = []
         limits: list[Exception] = []
         exchanges: list[dict] = []
@@ -484,14 +504,24 @@ class ProofBrowser:
                 route.abort("blockedbyclient")
             else:
                 keep(request, outcome)
+                for key, value in outcome.headers.items():
+                    if key.lower() == "content-security-policy" and re.search(r"(?:^|;)\s*sandbox\b", value):
+                        isolated_documents.add(request.url)
                 route.fulfill(status=outcome.status, headers=outcome.headers, body=outcome.body)
 
         context = browser.new_context(service_workers="block", accept_downloads=False)
         try:
             context.route_web_socket(re.compile(".*"), _leave_unconnected)
             context.route("**/*", on_route)
-            context.expose_binding("__appsecVerifierReport",
-                                   lambda source, kind, message: events.append((str(kind), str(message)[:300])))
+            def on_marker(source, kind, message):
+                if len(contexts) >= 20:
+                    return
+                observed = execution_context(source, page, url, page.url in isolated_documents)
+                contexts.append({**observed, "attempt": attempt, "is_marker": message == "".join(marker)})
+                if observed["verified"]:
+                    events.append((str(kind), str(message)[:300]))
+
+            context.expose_binding("__appsecVerifierReport", on_marker)
             context.add_init_script(_init_script(marker))
             page = context.new_page()
             page.on("dialog", lambda dialog: dialog.dismiss())
@@ -510,12 +540,14 @@ class ProofBrowser:
             joined = marker[0] + marker[1]
             executed = any(message == joined for _, message in events)
             result = {"executed": executed, "status": status, "final_url": page.url[:300],
+                      "context_verified": executed, "attempt": attempt, "execution_contexts": contexts,
                       "dialogs": [{"kind": k, "is_marker": m == joined} for k, m in events][:20],
                       "blocked": blocked[:20], "_exchanges": exchanges}
             if error:
                 result["error"] = error
             if executed:
-                result["evidence"] = self._save(page, finding_id, url, status, events, marker, role)
+                result["evidence"] = self._save(page, finding_id, url, status, events, marker, role,
+                                               execution_contexts=contexts, attempt=attempt)
             return result
         finally:
             _quietly(context.close)
@@ -548,7 +580,7 @@ class ProofBrowser:
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **extra}
 
     def _save(self, page, finding_id: str, url: str, status, events, marker: tuple[str, str],
-              role: str | None) -> list[dict]:
+              role: str | None, *, execution_contexts=None, attempt=None) -> list[dict]:
         from playwright.sync_api import Error as PlaywrightError
 
         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -558,7 +590,7 @@ class ProofBrowser:
         captured = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         via = sorted({k for k, m in events if m == joined})
         data = {"finding_id": finding_id, "url": url, "status": status, "marker": joined, "executed_via": via,
-                "captured": captured}
+                "captured": captured, "execution_contexts": execution_contexts or [], "attempt": attempt}
         shot = None
         if "xss" in self.screenshots:
             marked = self._mark(

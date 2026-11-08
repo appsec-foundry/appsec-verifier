@@ -184,6 +184,7 @@ properties:
             - path-traversal
             - open-redirect
             - ssrf
+            - session
             - null
 
         eligibility:

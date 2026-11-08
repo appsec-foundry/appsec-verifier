@@ -66,6 +66,7 @@ def _answer(transport, method="GET", url=BASE + "/p", headers=None, body=None, i
 
 # ── every browser request goes through the guarded client ─────────────────────
 
+
 def test_in_scope_request_is_answered_with_identity_headers_on_the_target_origin():
     t = Transport()
     out = _answer(t, headers={"accept": "text/html", "host": "x", "cookie": "app=1"},
@@ -128,6 +129,7 @@ def test_guarded_client_can_hand_redirects_back():
 
 # ── marker: only the evaluated join counts ────────────────────────────────────
 
+
 def test_marker_parts_are_random_and_only_their_join_is_in_the_page_hook():
     a, b = new_marker()
     assert a.startswith("vrf") and (a, b) != new_marker()
@@ -162,6 +164,7 @@ def test_system_prompt_names_the_traversal_and_ssrf_markers_but_never_the_file_c
 
 
 # ── agent tool ────────────────────────────────────────────────────────────────
+
 
 class FakeBrowser:
     def __init__(self, result=None, error=None):
@@ -201,14 +204,21 @@ def test_browser_check_attaches_identity_only_to_its_declared_origin():
     assert browser.calls[0]["target_base"] == "https://cdn.example.com"
 
 
-@pytest.mark.parametrize("ctx", [_ctx(cls="access-control", browser=FakeBrowser()), _ctx(browser=None),
-                                 _ctx(browser=FakeBrowser(error=BrowserError("could not start")))])
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        _ctx(cls="access-control", browser=FakeBrowser()),
+        _ctx(browser=None),
+        _ctx(browser=FakeBrowser(error=BrowserError("could not start"))),
+    ],
+)
 def test_browser_check_refusals_become_tool_errors(ctx):
     with pytest.raises(ToolError):
         AgentTools(ctx).call("browser_check", {"path": "/"})
 
 
 # ── VER-009: confirmed XSS needs an executed marker ───────────────────────────
+
 
 class Scripted:
     def __init__(self, actions):
@@ -231,22 +241,29 @@ def test_confirmed_xss_without_executed_marker_is_downgraded():
 
 
 def test_confirmed_xss_with_executed_marker_keeps_browser_evidence_only():
-    proof = [{"kind": "browser-event", "path": "evidence/T-9-xss-1.json"},
-             {"kind": "screenshot", "path": "evidence/T-9-xss-1.png", "note": SCREENSHOT_NOTE}]
-    browser = FakeBrowser({"executed": True, "evidence": proof})
+    proof = [
+        {"kind": "browser-event", "path": "evidence/T-9-xss-1.json"},
+        {"kind": "screenshot", "path": "evidence/T-9-xss-1.png", "note": SCREENSHOT_NOTE},
+    ]
+    browser = FakeBrowser({"executed": True, "context_verified": True, "evidence": proof})
     planner = Scripted([{"tool": "browser_check", "args": {"path": "/s?q=p"}}, CONFIRM])
     res = AgentProbe("xss", lambda: planner).run(_ctx(browser=browser))
     assert res.verdict == "confirmed" and res.evidence == proof
 
 
-@pytest.mark.parametrize("sent", [
-    {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaabb"}},                    # pre-joined in the URL
-    {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaa%2562b"}},                # and encoded
-    {"tool": "http_request", "args": {"method": "POST", "path": "/msg", "json": {"text": "vrfaabb"}}},  # stored
-])
+@pytest.mark.parametrize(
+    "sent",
+    [
+        {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaabb"}},  # pre-joined in the URL
+        {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaa%2562b"}},  # and encoded
+        {"tool": "http_request", "args": {"method": "POST", "path": "/msg", "json": {"text": "vrfaabb"}}},  # stored
+    ],
+)
 def test_an_executed_marker_that_was_sent_joined_does_not_confirm(sent):
     """A page that legitimately shows a parameter with alert() would echo a joined marker (VER-009)."""
-    browser = FakeBrowser({"executed": True, "evidence": [{"kind": "screenshot", "path": "evidence/x.png"}]})
+    browser = FakeBrowser(
+        {"executed": True, "context_verified": True, "evidence": [{"kind": "screenshot", "path": "evidence/x.png"}]}
+    )
     http = SimpleNamespace(request=lambda *a, **k: SimpleNamespace(status_code=200, text="", headers={}))
     planner = Scripted([sent, {"tool": "browser_check", "args": {"path": "/notify"}}, CONFIRM])
     ctx = _ctx(browser=browser, safe=False)
@@ -256,9 +273,10 @@ def test_an_executed_marker_that_was_sent_joined_does_not_confirm(sent):
 
 
 def test_an_executed_marker_joined_at_runtime_confirms():
-    browser = FakeBrowser({"executed": True, "evidence": []})
-    planner = Scripted([{"tool": "browser_check", "args": {"path": "/s?q=<script>alert('vrfaa'+'bb')</script>"}},
-                        CONFIRM])
+    browser = FakeBrowser({"executed": True, "context_verified": True, "evidence": []})
+    planner = Scripted(
+        [{"tool": "browser_check", "args": {"path": "/s?q=<script>alert('vrfaa'+'bb')</script>"}}, CONFIRM]
+    )
     assert AgentProbe("xss", lambda: planner).run(_ctx(browser=browser)).verdict == "confirmed"
 
 
@@ -268,6 +286,7 @@ def test_other_classes_need_their_own_proof_not_the_browser():
 
 
 # ── report and export ─────────────────────────────────────────────────────────
+
 
 def _doc():
     ev = [{"kind": "screenshot", "path": "evidence/T-9-xss-1.png", "note": SCREENSHOT_NOTE},
@@ -287,6 +306,7 @@ def test_screenshot_is_marked_in_the_report_and_kept_out_of_the_export():
 
 
 # ── wiring ────────────────────────────────────────────────────────────────────
+
 
 def _sel(cls):
     return [SimpleNamespace(status="dynamic", cls=cls)]
@@ -331,8 +351,15 @@ def test_screenshots_need_the_browser_only_for_the_classes_they_are_on_for(monke
     assert browser.screenshots == frozenset() and "screenshots: none" in note
 
 
-@pytest.mark.parametrize("value, parsed", [("xss", "xss"), ("access-control, XSS", "xss,access-control"),
-                                           ("ssrf,open-redirect", "open-redirect,ssrf"), ("none", "none")])
+@pytest.mark.parametrize(
+    "value, parsed",
+    [
+        ("xss", "xss"),
+        ("access-control, XSS", "xss,access-control"),
+        ("ssrf,open-redirect", "open-redirect,ssrf"),
+        ("none", "none"),
+    ],
+)
 def test_screenshot_option_accepts_known_classes(value, parsed):
     assert screenshot_option(value) == parsed
 
@@ -371,6 +398,7 @@ def test_launch_failure_leaves_xss_unproven(tmp_path):
 
 # ── Chrome gets no network of its own (VER-018) ──────────────────────────────
 
+
 def test_chrome_is_started_inside_a_network_namespace():
     script = _wrapper_script("/usr/bin/unshare", "/opt/google chrome/chrome")
     assert script.startswith("#!/bin/sh\nexec /usr/bin/unshare --user --net --map-current-user ")
@@ -381,12 +409,15 @@ def _which(present):
     return lambda name: f"/usr/bin/{name}" if name in present else None
 
 
-@pytest.mark.parametrize("platform, present, rc, reason", [
-    ("darwin", {"unshare", "google-chrome"}, 0, "needs Linux"),
-    ("linux", {"google-chrome"}, 0, "unshare"),
-    ("linux", {"unshare"}, 0, "Google Chrome"),
-    ("linux", {"unshare", "google-chrome"}, 1, "network namespace"),
-])
+@pytest.mark.parametrize(
+    "platform, present, rc, reason",
+    [
+        ("darwin", {"unshare", "google-chrome"}, 0, "needs Linux"),
+        ("linux", {"google-chrome"}, 0, "unshare"),
+        ("linux", {"unshare"}, 0, "Google Chrome"),
+        ("linux", {"unshare", "google-chrome"}, 1, "network namespace"),
+    ],
+)
 def test_without_network_isolation_the_browser_is_unavailable(monkeypatch, platform, present, rc, reason):
     import appsec_verifier.tools.browser as browser_mod
 
@@ -418,10 +449,13 @@ def test_check_available_refuses_when_chrome_cannot_be_isolated(monkeypatch):
         ProofBrowser.check_available()
 
 
-@pytest.mark.parametrize("chrome, expected", [
-    ("/usr/bin/google-chrome", "Playwright is not installed; run `"),
-    (None, "Playwright and Google Chrome are not installed; run `"),
-])
+@pytest.mark.parametrize(
+    "chrome, expected",
+    [
+        ("/usr/bin/google-chrome", "Playwright is not installed; run `"),
+        (None, "Playwright and Google Chrome are not installed; run `"),
+    ],
+)
 def test_check_available_names_what_is_missing_and_how_to_add_it(monkeypatch, chrome, expected):
     import sys as _sys
 

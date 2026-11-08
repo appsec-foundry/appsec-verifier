@@ -248,8 +248,11 @@ class FakeListener:
 def test_ssrf_confirms_on_a_listener_hit_and_records_it(tmp_path):
     hit = {"at": "2026-11-07T10:00:00Z", "method": "GET", "source": "127.0.0.1"}
     listener = FakeListener({"vrf0a1b2c3d4e5f6a7b": [hit]})
-    res = check_proof(_ctx("ssrf", listener=listener, marker=MARKER, evidence_dir=tmp_path / "evidence"), [],
-                      ProbeResult(verdict="confirmed"), None)
+    ctx = _ctx("ssrf", listener=listener, marker=MARKER, evidence_dir=tmp_path / "evidence")
+    ctx.scope = {"callback": {"expect_rejected": True}}
+    ctx.callback_records = {"fresh-attempt": [hit]}
+    history = [{"tool": "http_request", "result": {"callback_hit": True, "callback_attempt": "fresh-attempt"}}]
+    res = check_proof(ctx, history, ProbeResult(verdict="confirmed"), None)
     path = tmp_path / "evidence" / "T-1-callback-hits.json"
     assert res.verdict == "confirmed" and res.evidence[0]["kind"] == "callback"
     assert json.loads(path.read_text())["callback_hits"] == [hit] and (path.stat().st_mode & 0o777) == 0o600
@@ -258,8 +261,8 @@ def test_ssrf_confirms_on_a_listener_hit_and_records_it(tmp_path):
 @pytest.mark.parametrize("listener, marker, reason", [
     (None, MARKER, "no callback listener"),
     (FakeListener({}), ("", ""), "no callback listener"),
-    (FakeListener({}), MARKER, "reached the callback listener"),
-    (FakeListener({"vrf00000000ffffffff": [{"at": "t"}]}), MARKER, "reached the callback listener"),  # other finding
+    (FakeListener({}), MARKER, "observation window"),
+    (FakeListener({"vrf00000000ffffffff": [{"at": "t"}]}), MARKER, "observation window"),  # other finding
 ])
 def test_ssrf_without_a_hit_is_downgraded(listener, marker, reason):
     res = _check("ssrf", [_req(None)], [1], listener=listener, marker=marker)

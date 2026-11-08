@@ -63,6 +63,8 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
             "instance": plan.instance,
             "title": plan.title or None,
             "cwe": plan.cwe or None,
+            "variant": plan.variant_id,
+            "variant_digest": plan.variant_digest,
         },
         "class": plan.cls,
         "eligibility": {"status": plan.status, "reason": plan.reason},
@@ -77,9 +79,10 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
         "limits_hit": res.limits_hit,
         "evidence": res.evidence,
         "poc": res.poc,
-        "target_location": res.target_location or (
-            {"source_file": plan.instance.rsplit(":", 1)[0], "source_line": None} if plan.instance else None
-        ),
+        "planning": res.planning,
+        "selection_reason": plan.selection_reason,
+        "target_location": res.target_location
+        or ({"source_file": plan.instance.rsplit(":", 1)[0], "source_line": None} if plan.instance else None),
     }
 
 
@@ -139,35 +142,67 @@ def run_verification(
     """`skipped` maps a finding id to why this run cannot confirm it; such a
     finding is not tested and reports that reason (not-attempted)."""
     now = now or datetime.now(timezone.utc)
+    from ..planning import evidence_id
+
     skipped = skipped or {}
     budget = budget or RunBudget(limits)
     from ..scope import ScopeGuard
     from ..tools.browser import new_marker
+
     guard = ScopeGuard(scope)
 
     def ctx_factory(plan: FindingPlan) -> ProbeContext:
+        related = set(plan.context.get("dependencies", []))
         return ProbeContext(
-            plan=plan, scope=scope, guard=guard, budget=budget, http=http,
-            identities=identities, callback=scope.get("callback") or {},
-            safe=safe, read_only=read_only, sessions=sessions, source=source,
-            target_base=target_base, browser=browser, marker=new_marker(), listener=listener, log=log,
-            evidence_dir=evidence_dir, progress=progress,
+            plan=plan,
+            scope=scope,
+            guard=guard,
+            budget=budget,
+            http=http,
+            identities=identities,
+            callback=scope.get("callback") or {},
+            safe=safe,
+            read_only=read_only,
+            sessions=sessions,
+            source=source,
+            target_base=target_base,
+            browser=browser,
+            marker=new_marker(),
+            listener=listener,
+            log=log,
+            evidence_dir=evidence_dir,
+            progress=progress,
+            prior_results=[
+                {
+                    "finding": r["finding_ref"]["id"],
+                    "verdict": r["verdict"],
+                    "tested_scope": r.get("proof"),
+                    "transition": "unverified; this result does not establish the next prerequisite",
+                }
+                for r in results
+                if r["finding_ref"]["id"] in related
+            ][-12:],
         )
 
-    probed = [p.status == "dynamic" and registry.get(p.cls) is not None and p.id not in skipped for p in plans]
+    probed = [
+        p.status == "dynamic" and registry.get(p.cls) is not None and evidence_id(p) not in skipped for p in plans
+    ]
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
     results = []
-    stopped: str | None = None        # the run-wide limit that stopped an earlier finding
+    stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
-        if plan.id in skipped:
-            res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[plan.id]}")
+        if evidence_id(plan) in skipped:
+            res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[evidence_id(plan)]}")
         elif shown and interrupted:
             res = ProbeResult(verdict="not-attempted", rationale="not tested: the run was interrupted")
         elif shown and stopped:
-            res = ProbeResult(verdict="not-attempted", limits_hit=stopped,
-                              rationale=f"not tested: the run's {stopped} limit was reached by an earlier finding")
+            res = ProbeResult(
+                verdict="not-attempted",
+                limits_hit=stopped,
+                rationale=f"not tested: the run's {stopped} limit was reached by an earlier finding",
+            )
             if progress is not None:
                 progress.finding(plan)
                 progress.finished(plan, res)
@@ -180,8 +215,9 @@ def run_verification(
                 interrupted = True
                 if log is not None:
                     log({"finding": plan.id, "step": None, "interrupted": True})
-                res = ProbeResult(verdict="inconclusive", rationale="the run was interrupted while this finding "
-                                                                    "was tested")
+                res = ProbeResult(
+                    verdict="inconclusive", rationale="the run was interrupted while this finding was tested"
+                )
             else:
                 if shown and progress is not None:
                     progress.finished(plan, res)
@@ -189,12 +225,15 @@ def run_verification(
                 stopped = res.limits_hit
         results.append(_result_entry(i, plan, res))
     if sessions is not None:
-        results = sessions.redact(results)      # VER-016: model text never carries a credential into the report
+        results = sessions.redact(results)  # VER-016: model text never carries a credential into the report
 
     tally = {"confirmed": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0, "not_attempted": 0}
     _key = {
-        "confirmed": "confirmed", "not-reproducible": "not_reproducible",
-        "blocked-by-control": "blocked", "inconclusive": "inconclusive", "not-attempted": "not_attempted",
+        "confirmed": "confirmed",
+        "not-reproducible": "not_reproducible",
+        "blocked-by-control": "blocked",
+        "inconclusive": "inconclusive",
+        "not-attempted": "not_attempted",
     }
     for r in results:
         tally[_key[r["verdict"]]] += 1
@@ -217,7 +256,7 @@ def run_verification(
             "build_match": (target_status or {}).get("build_match", "unknown"),
         },
         "scope": {
-            "file": str(scope_path) if scope_path else None,     # None: the target URL alone (VER-001)
+            "file": str(scope_path) if scope_path else None,  # None: the target URL alone (VER-001)
             "sha256": _sha256(scope_path) if scope_path else None,
             "owner": (scope.get("owner") or {}).get("name"),
             "window_from": window.get("from"),
@@ -237,8 +276,7 @@ def run_verification(
             "cost_limit_usd": limits.cost_limit_usd,
         },
         "identities": [
-            {"role": i.get("role"), "authenticated": (i.get("method") not in (None, "none"))}
-            for i in identities
+            {"role": i.get("role"), "authenticated": (i.get("method") not in (None, "none"))} for i in identities
         ],
         "summary": tally,
         "safety": {

@@ -10,6 +10,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from test_experiments import STRATEGY
 
 from appsec_verifier.agent import AgentProbe, HostPlanner, HostUnavailable, agent_registry
 from appsec_verifier.agent.host_anthropic import AnthropicHost
@@ -84,8 +85,16 @@ def _ctx(limits=None, clock=None):
 
 def test_tool_defs_expose_only_the_confined_tools():
     names = {t["name"] for t in _tool_defs()}
-    assert names == {"http_request", "read_source", "browser_check", "submit_verdict",
-                     "read_context", "read_response", "plan_test"}
+    assert names == {
+        "http_request",
+        "read_source",
+        "browser_check",
+        "submit_verdict",
+        "read_context",
+        "read_response",
+        "plan_test",
+        "run_experiment",
+    }
     verdict = next(t for t in _tool_defs() if t["name"] == "submit_verdict")
     assert "confirmed" in verdict["input_schema"]["properties"]["verdict"]["enum"]
 
@@ -113,21 +122,32 @@ class APITimeoutError(Exception):
     pass
 
 
-@pytest.mark.parametrize("answer, expected", [
-    (StatusError(401), "authentication_failed (HTTP 401)"),
-    (StatusError(429), "rate_limit (HTTP 429)"),
-    (StatusError(529), "server_error (HTTP 529)"),
-    (APITimeoutError("slow"), "timeout"),
-    (_msg(_wire("http_request", path="/x"), stop="refusal"), "refused"),
-    (_msg(_wire("http_request", path="/x"), stop="max_tokens"), "output_truncated"),
-    (_msg(blocks=[SimpleNamespace(type="text", text="{}"), SimpleNamespace(type="text", text="{}")]),
-     "invalid_response"),
-    (_msg(blocks=[SimpleNamespace(type="tool_use", name="bash", input={}),
-                  SimpleNamespace(type="text", text=json.dumps(_wire("http_request", path="/x")))]),
-     "invalid_response"),
-    (_msg(blocks=[SimpleNamespace(type="text", text="not json")]), "invalid_response"),
-    (_msg(_wire("http_request", path="/x"), usage=(-1, 200, None, None)), "invalid_response"),
-])
+@pytest.mark.parametrize(
+    "answer, expected",
+    [
+        (StatusError(401), "authentication_failed (HTTP 401)"),
+        (StatusError(429), "rate_limit (HTTP 429)"),
+        (StatusError(529), "server_error (HTTP 529)"),
+        (APITimeoutError("slow"), "timeout"),
+        (_msg(_wire("http_request", path="/x"), stop="refusal"), "refused"),
+        (_msg(_wire("http_request", path="/x"), stop="max_tokens"), "output_truncated"),
+        (
+            _msg(blocks=[SimpleNamespace(type="text", text="{}"), SimpleNamespace(type="text", text="{}")]),
+            "invalid_response",
+        ),
+        (
+            _msg(
+                blocks=[
+                    SimpleNamespace(type="tool_use", name="bash", input={}),
+                    SimpleNamespace(type="text", text=json.dumps(_wire("http_request", path="/x"))),
+                ]
+            ),
+            "invalid_response",
+        ),
+        (_msg(blocks=[SimpleNamespace(type="text", text="not json")]), "invalid_response"),
+        (_msg(_wire("http_request", path="/x"), usage=(-1, 200, None, None)), "invalid_response"),
+    ],
+)
 def test_failures_end_the_finding_with_a_fixed_reason(answer, expected):
     host, _ = _host([answer])
     reply = host.call("s", "p", 10, _ctx().budget)
@@ -141,12 +161,15 @@ HAIKU = {"input_usd_per_million": 0.10, "output_usd_per_million": 0.50, "cache_w
                          "cache_write_usd_per_million": 1.00, "cache_read_usd_per_million": 0.05}}
 
 
-@pytest.mark.parametrize("usage, rates", [
-    ((100_000, 500, None, None), (0.10, 0.50, 0.20, 0.01)),            # exactly at the threshold: short rates
-    ((100_001, 500, None, None), (0.50, 2.50, 1.00, 0.05)),            # over it: long rates for every token
-    ((1_000, 500, 40_000, 60_000), (0.50, 2.50, 1.00, 0.05)),          # cache reads and writes count
-    ((1_000, 500, 39_000, 60_000), (0.10, 0.50, 0.20, 0.01)),
-])
+@pytest.mark.parametrize(
+    "usage, rates",
+    [
+        ((100_000, 500, None, None), (0.10, 0.50, 0.20, 0.01)),  # exactly at the threshold: short rates
+        ((100_001, 500, None, None), (0.50, 2.50, 1.00, 0.05)),  # over it: long rates for every token
+        ((1_000, 500, 40_000, 60_000), (0.50, 2.50, 1.00, 0.05)),  # cache reads and writes count
+        ((1_000, 500, 39_000, 60_000), (0.10, 0.50, 0.20, 0.01)),
+    ],
+)
 def test_a_long_prompt_is_priced_at_the_long_prompt_rates(usage, rates):
     host = AnthropicHost(model="claude-haiku-5-5", prices=HAIKU,
                          client=FakeClient([_msg(_wire("http_request", path="/x"), usage=usage)]))
@@ -199,6 +222,7 @@ def test_profile_selection_builds_a_host_planner(monkeypatch):
 
 # ── the run's bounds now apply to this profile (they did not before) ──────────
 
+
 def test_call_cap_stops_further_model_calls():
     host, client = _host([_msg(_wire("http_request", path="/x"))] * 2)
     ctx = _ctx(Limits(max_calls=1))
@@ -240,6 +264,7 @@ def test_agent_registry_covers_classes():
 
 # ── integration: scripted model drives a real two-identity IDOR contrast ──────
 
+
 class Resp:
     def __init__(self, status=200, text='{"id":2,"UserId":2}'):
         self.status_code = status
@@ -272,19 +297,49 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
         calls.append(h.get("Authorization"))
         return Resp()
 
-    host, client = _host([
-        _msg(_wire("plan_test", kind="access-control", hypothesis="A reads the known basket of B",
-                   path="/rest/basket/2", resource="basket")),
-        _msg(_wire("http_request", role="customer-a", path="/rest/basket/2")),
-        _msg(_wire("http_request", role="customer-b", path="/rest/basket/2")),
-        _msg(_wire("submit_verdict", verdict="confirmed", confidence="high", rationale="a read b",
-                   identities_used=["customer-a", "customer-b"], proof_steps=[2, 3])),
-    ])
+    host, client = _host(
+        [
+            _msg(
+                _wire(
+                    "plan_test",
+                    kind="access-control",
+                    strategy=STRATEGY,
+                    hypothesis="A reads the known basket of B",
+                    path="/rest/basket/2",
+                    resource="basket",
+                )
+            ),
+            _msg(_wire("http_request", role="customer-a", path="/rest/basket/2")),
+            _msg(_wire("http_request", role="customer-b", path="/rest/basket/2")),
+            _msg(
+                _wire(
+                    "submit_verdict",
+                    verdict="confirmed",
+                    confidence="high",
+                    rationale="a read b",
+                    identities_used=["customer-a", "customer-b"],
+                    proof_steps=[2, 3],
+                )
+            ),
+        ]
+    )
     ctx = _full_ctx(tmp_path, transport)
-    ctx.scope = {**ctx.scope, "test_resources": [{"id": "basket", "finding_id": "T-001", "path": "/rest/basket/2",
-                 "allowed_roles": ["customer-b"], "denied_roles": ["customer-a"], "pointer": "/UserId", "value": 2}]}
+    ctx.scope = {
+        **ctx.scope,
+        "test_resources": [
+            {
+                "id": "basket",
+                "finding_id": "T-001",
+                "path": "/rest/basket/2",
+                "allowed_roles": ["customer-b"],
+                "denied_roles": ["customer-a"],
+                "pointer": "/UserId",
+                "value": 2,
+            }
+        ],
+    }
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=8).run(ctx)
     assert res.verdict == "confirmed" and res.identities_used == ["customer-a", "customer-b"]
     assert calls == ["Bearer AAAA", "Bearer BBBB"]
     assert ctx.budget.calls == 4 and ctx.budget.cost == pytest.approx(4 * 0.008)
-    assert '"status": 200' in client.calls[2]["messages"][0]["content"]   # results reach the model as data
+    assert '"status": 200' in client.calls[2]["messages"][0]["content"]  # results reach the model as data

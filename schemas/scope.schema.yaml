@@ -145,6 +145,7 @@ properties:
       redirect itself, which is not followed.
     additionalProperties: false
     properties:
+      expect_rejected: {type: boolean, default: false, description: Operator expects the target to reject this callback destination.}
       base_url: { type: [string, "null"], description: URL the target uses to reach the listener. }
       host:     { type: [string, "null"], description: Local bind host (loopback) for the built-in listener. }
       port:     { type: [integer, "null"], minimum: 1, maximum: 65535, description: Local bind port. }
@@ -207,6 +208,35 @@ properties:
 
   notes:
     type: [string, "null"]
+
+  injection_inputs:
+    type: array
+    maxItems: 100
+    description: Inputs whose documented contract treats user values as literal data, not expressions.
+    items:
+      type: object
+      additionalProperties: false
+      required: [finding_id, path, input_location, input_name, semantics]
+      properties:
+        finding_id: {type: string, minLength: 1, maxLength: 80}
+        path: {type: string, minLength: 1, maxLength: 2000}
+        input_location: {enum: [params, json, form]}
+        input_name: {type: string, minLength: 1, maxLength: 128}
+        semantics: {const: literal}
+
+  session_checks:
+    type: array
+    maxItems: 50
+    items:
+      type: object
+      additionalProperties: false
+      required: [id, finding_id, path, cookie_name]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 80}
+        finding_id: {type: string, minLength: 1, maxLength: 80}
+        path: {type: string, minLength: 1, maxLength: 2000}
+        cookie_name: {type: string, minLength: 1, maxLength: 128}
+        role: {type: string, minLength: 1, maxLength: 80}
 
   test_resources:
     type: array

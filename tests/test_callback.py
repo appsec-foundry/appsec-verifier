@@ -117,7 +117,7 @@ def test_verify_confirms_ssrf_when_the_target_calls_the_listener(tmp_path, monke
     port = _free_port()
     scope = {"schema_version": 1, "base_url": "http://localhost:3000", "schemes": ["http"],
              "owner": {"name": "tester"}, "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"},
-             "callback": {"host": "127.0.0.1", "port": port, "base_url": f"http://127.0.0.1:{port}"}}
+             "callback": {"expect_rejected": True, "host": "127.0.0.1", "port": port, "base_url": f"http://127.0.0.1:{port}"}}
     (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))
     (tmp_path / "assessment.yaml").write_text(yaml.safe_dump({"threats": [
         {"id": "T-9", "cwe": "CWE-918", "severity": "high", "title": "ssrf",

@@ -16,10 +16,20 @@ from appsec_verifier.loader import assessment_errors, plans_from
 from appsec_verifier.verification_context import context_errors
 from appsec_verifier.verify.probes import ProbeResult
 
+STRATEGY = dict(
+    data_flow="Input reaches the evidenced operation",
+    prerequisites=[],
+    choice="Compare independent controls on the same route",
+    counter_hypothesis="Ordinary application behavior explains the difference",
+    expected="Only the mechanism-specific controls change the observation",
+    stop="Stop when the responses cannot distinguish the hypothesis",
+)
+
 
 def plan(kind="boolean", **extra):
     values = dict(
         kind=kind,
+        strategy=copy.deepcopy(STRATEGY),
         hypothesis="The selected query condition controls the result",
         path="/search",
         input_location="params",
@@ -88,9 +98,8 @@ def boolean_history():
 
 def test_repeated_declared_semantic_flip_confirms():
     result = check(boolean_history())
-    assert result.verdict == "confirmed"
-    assert result.proof["checked"] and result.proof["tested_path"] == "/search"
-    assert result.confidence == "medium"
+    assert result.verdict == "inconclusive"
+    assert "ordinary input-dependent" in result.rationale
 
 
 @pytest.mark.parametrize(
@@ -147,7 +156,7 @@ def timing_history():
 
 
 def test_timing_requires_independent_alternating_repetitions():
-    assert check(timing_history()).verdict == "confirmed"
+    assert check(timing_history()).verdict == "inconclusive"
     history = timing_history()[:3]
     assert check(history, [2, 2, 3, 3]).verdict == "inconclusive"
     history = timing_history()

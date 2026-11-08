@@ -74,7 +74,7 @@ def _elapsed_ms(resp) -> int | None:
     try:
         elapsed = getattr(resp, "elapsed", None)
         return round(elapsed.total_seconds() * 1000) if elapsed is not None else None
-    except (AttributeError, RuntimeError):      # httpx raises RuntimeError before the body is read
+    except (AttributeError, RuntimeError):  # httpx raises RuntimeError before the body is read
         return None
 
 
@@ -130,7 +130,7 @@ class AgentTools:
         path = str(marker_file.get("path") or "").replace("\\", "/")
         self._marker_name = PurePosixPath(path).name or None
         self._exchanges: list[dict] = []
-        self._kept = 0                    # body characters this finding's proof of concept holds so far
+        self._kept = 0  # body characters this finding's proof of concept holds so far
         self._last_response = None
         self._identities = {}
         self._response_chars = 0
@@ -142,7 +142,62 @@ class AgentTools:
     def plan_test(self, **plan) -> dict:
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
+        for prerequisite in plan["strategy"]["prerequisites"]:
+            steps = prerequisite.get("steps", [])
+            if prerequisite["status"] == "observed" and (
+                not steps or any(n not in getattr(self.ctx, "responses", {}) for n in steps)
+            ):
+                raise ToolError("observed prerequisites must cite recorded response steps from this finding")
+        from .experiments import expression_controls, ldap_controls, operator_controls, sql_controls
+
+        if any(
+            plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge")
+        ):
+            if not any(
+                r["finding_id"] == self.ctx.plan.id
+                and r["path"] == plan["path"]
+                and r["input_location"] == plan.get("input_location")
+                and r["input_name"] == plan.get("input_name")
+                and r["semantics"] == "literal"
+                for r in self.ctx.scope.get("injection_inputs", [])
+            ):
+                raise ToolError("declare literal input semantics in scope.injection_inputs before expression proof")
+        if plan.get("operator_challenge"):
+            if self.ctx.plan.cwe != "CWE-943" or plan.get("input_location") != "json" or plan["kind"] != "boolean":
+                raise ToolError("NoSQL operator challenges need a JSON boolean experiment for CWE-943")
+            plan = operator_controls(plan)
+        if plan.get("predicate_template"):
+            if self.ctx.plan.cwe != "CWE-90" or plan["kind"] != "boolean":
+                raise ToolError("LDAP predicate controls need a boolean experiment for CWE-90")
+            try:
+                plan = ldap_controls(plan)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+        if plan.get("expression_template"):
+            if self.ctx.plan.cwe == "CWE-78":
+                baseline = plan.get("baseline")
+                if (
+                    not isinstance(baseline, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_. -]{1,100}", baseline)
+                    or plan["expression_template"] != baseline + "; printf '%s' \"$(({{expression}}))\""
+                ):
+                    raise ToolError("command proof uses only a plain baseline followed by harmless printf arithmetic")
+            if self.ctx.plan.cwe not in ("CWE-78", "CWE-1336", "CWE-643") or plan["kind"] != "boolean":
+                raise ToolError("expression challenges need a command, template or XPath injection finding")
+            try:
+                plan = expression_controls(plan)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+        if plan.get("sql_template") and not plan.get("predicate_template"):
+            if plan["kind"] != "boolean" or getattr(self.ctx.plan, "cwe", "") != "CWE-89":
+                raise ToolError("SQL challenges apply only to boolean SQL injection experiments")
+            try:
+                plan = sql_controls(plan)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
         groups = [plan[k] for k in ("baseline", "positive", "negative") if k in plan]
+        if plan["kind"] == "boolean" and not all(k in plan for k in ("positive", "negative")):
+            raise ToolError("boolean experiments need sql_template or explicit positive and negative controls")
         if len({token(v) for v in groups}) != len(groups):
             raise ToolError("control values must be distinct")
         if plan["kind"] == "timing" and "negative" in plan:
@@ -162,29 +217,75 @@ class AgentTools:
                 raise ToolError("the path does not match the finding variant")
             inputs = variant["request"].get("inputs", [])
             location = {"params": "query"}.get(plan.get("input_location"), plan.get("input_location"))
-            if plan.get("kind") in ("boolean", "timing") and inputs and not any(
-                    i["location"] == location and i["name"] == plan["input_name"] for i in inputs):
+            if (
+                plan.get("kind") in ("boolean", "timing")
+                and inputs
+                and not any(i["location"] == location and i["name"] == plan["input_name"] for i in inputs)
+            ):
                 raise ToolError("the input does not match the finding variant")
-            missing = missing_capabilities(variant, safe=self.ctx.safe or self.ctx.read_only,
-                                           browser=self.ctx.browser is not None)
+            missing = missing_capabilities(
+                variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None
+            )
             if missing:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
         if plan["kind"] == "access-control":
-            resource = next((r for r in self.ctx.scope.get("test_resources", [])
-                             if r["id"] == plan.get("resource") and r["finding_id"] == self.ctx.plan.id), None)
-            if (resource is None or resource["path"] != plan["path"]
-                    or resource.get("method", "GET") != plan.get("method", "GET")):
+            resource = next(
+                (
+                    r
+                    for r in self.ctx.scope.get("test_resources", [])
+                    if r["id"] == plan.get("resource") and r["finding_id"] == self.ctx.plan.id
+                ),
+                None,
+            )
+            if (
+                resource is None
+                or resource["path"] != plan["path"]
+                or resource.get("method", "GET") != plan.get("method", "GET")
+            ):
                 raise ToolError("the plan needs a matching operator-supplied test resource")
-        return {"accepted": True, "kind": plan["kind"], "next": "collect independent observations for this plan"}
+        if getattr(self, "_experiment", None) and not plan["strategy"].get("revision_reason"):
+            raise ToolError("a revised plan must explain the new observation and the next change")
+        self._experiment = plan
+        return {
+            "accepted": True,
+            "kind": plan["kind"],
+            "experiment": plan,
+            "next": "collect observations; run_experiment repeats read-only injection controls within the budget",
+        }
+
+    def experiment_requests(self, *, role=None):
+        plan = getattr(self, "_experiment", {})
+        if plan.get("kind") != "boolean" or not (
+            plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
+        ):
+            raise ToolError("run_experiment needs an accepted SQL challenge plan")
+        if plan.get("method", "GET") not in SAFE_METHODS:
+            raise ToolError("automatic repetitions are read-only; writes are never automatically repeated")
+        return [
+            {
+                "path": plan["path"],
+                "method": plan.get("method", "GET"),
+                **({"role": role} if role else {}),
+                plan["input_location"]: {plan["input_name"]: plan[group]},
+            }
+            for _ in range(2)
+            for group in ("baseline", "positive", "negative", "positive_other", "negative_other")
+        ]
 
     def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:
         if variant:
-            value = next((v for v in getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
-                          if v["id"] == variant), None)
+            value = next(
+                (
+                    v
+                    for v in getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
+                    if v["id"] == variant
+                ),
+                None,
+            )
             if value is None:
                 raise ToolError("unknown finding variant")
         else:
-            value = getattr(self.ctx.plan, "context", {})
+            value = {**getattr(self.ctx.plan, "context", {}), "prior_results": getattr(self.ctx, "prior_results", [])}
         if field:
             if field not in value:
                 raise ToolError("that context field is unavailable")
@@ -205,10 +306,22 @@ class AgentTools:
                     body = token(pointer_value(body, pointer))
                 except (ValueError, TypeError, KeyError, IndexError, RecursionError) as exc:
                     raise ToolError("the JSON pointer cannot be read from this response") from exc
-            out.append({"step": n, "text": body[offset:offset + 1500], "length": len(body),
-                        "complete": response["complete"], "more": len(body) > offset + 1500})
-        return {"responses": out, "equal": len(out) == 2 and all(r["complete"] and not r["more"] for r in out)
-                and offset == 0 and out[0]["text"] == out[1]["text"]}
+            out.append(
+                {
+                    "step": n,
+                    "text": body[offset : offset + 1500],
+                    "length": len(body),
+                    "complete": response["complete"],
+                    "more": len(body) > offset + 1500,
+                }
+            )
+        return {
+            "responses": out,
+            "equal": len(out) == 2
+            and all(r["complete"] and not r["more"] for r in out)
+            and offset == 0
+            and out[0]["text"] == out[1]["text"],
+        }
 
     def take_exchanges(self) -> list[dict]:
         """The redacted exchanges the last tool call sent and received, for the proof of concept (VER-034).
@@ -216,35 +329,59 @@ class AgentTools:
         out, self._exchanges = self._exchanges, []
         return out
 
-    def _record(self, raw: dict, role: str | None, identity: dict, *, keep_body: bool = True,
-                navigation: bool = False) -> None:
+    def _record(
+        self, raw: dict, role: str | None, identity: dict, *, keep_body: bool = True, navigation: bool = False
+    ) -> None:
         omit = None if keep_body else "body not kept for this resource type"
         if omit is None and self._kept >= poc.MAX_FINDING_BODY_CHARS:
             omit = "body not kept: the finding's proof of concept reached its size limit"
         sessions = self.ctx.sessions
-        e = poc.entry(raw, redact=sessions.redact if sessions is not None else None, identity=identity, role=role,
-                      omit_body=omit, navigation=navigation)
+        e = poc.entry(
+            raw,
+            redact=sessions.redact if sessions is not None else None,
+            identity=identity,
+            role=role,
+            omit_body=omit,
+            navigation=navigation,
+        )
         self._kept += len(e["response"]["content"].get("text") or "")
         self._exchanges.append(e)
 
     def call(self, name: str, args: dict) -> dict:
-        tool = {"http_request": self.http_request, "read_source": self.read_source,
-                "browser_check": self.browser_check, "plan_test": self.plan_test,
-                "read_context": self.read_context, "read_response": self.read_response}.get(name)
+        tool = {
+            "http_request": self.http_request,
+            "read_source": self.read_source,
+            "browser_check": self.browser_check,
+            "plan_test": self.plan_test,
+            "read_context": self.read_context,
+            "read_response": self.read_response,
+        }.get(name)
         if tool is None:
             raise ToolError(f"unknown tool {name!r}; available: http_request, read_source, browser_check")
-        return _hide(tool(**args), self._marker_content)     # the model never sees the marker file's content
+        return _hide(tool(**args), self._marker_content)  # the model never sees the marker file's content
 
     def _check_steering(self, params, body) -> None:
         """Path-traversal and SSRF probes aim only at the marker file and the callback listener (VER-012)."""
         cls, values = self.ctx.plan.cls, [*_strings(params), *_strings(body)]
+        if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
+            plan = getattr(self, "_experiment", {})
+            allowed = {
+                plan[k]
+                for k in ("baseline", "positive", "negative", "positive_other", "negative_other")
+                if k in plan and isinstance(plan[k], str)
+            }
+            if any(value not in allowed for value in values):
+                raise ToolError("command probes use only the accepted harmless arithmetic controls")
         if cls == "path-traversal":
             name = self._marker_name
             for value in values:
                 path = _file_path(value)
                 if path is not None and not (name and (path == name or path.endswith("/" + name))):
-                    raise ToolError("a path-traversal probe may name only the scope's marker file"
-                                    + (f" ({name})" if name else "; this scope names none") + " (VER-012)")
+                    raise ToolError(
+                        "a path-traversal probe may name only the scope's marker file"
+                        + (f" ({name})" if name else "; this scope names none")
+                        + " (VER-012)"
+                    )
         elif cls == "ssrf":
             base = self.ctx.listener.base_url if self.ctx.listener is not None else None
             for value in values:
@@ -252,8 +389,11 @@ class AgentTools:
                 if d.startswith("//") and base:
                     d = urlsplit(base).scheme + ":" + d
                 if ("://" in d or d.startswith("//")) and not (base and same_origin(d, base)):
-                    raise ToolError("an SSRF probe may point the target only at the callback listener"
-                                    + (f" ({base}/…)" if base else "; this run has none") + " (VER-012)")
+                    raise ToolError(
+                        "an SSRF probe may point the target only at the callback listener"
+                        + (f" ({base}/…)" if base else "; this run has none")
+                        + " (VER-012)"
+                    )
 
     def browser_check(self, *, path: str, role: str | None = None, wait_ms: int = 1500) -> dict:
         from ..tools.browser import BrowserError
@@ -271,14 +411,22 @@ class AgentTools:
             raise ToolError("wait_ms must be an integer number of milliseconds")
         try:
             # The browser attaches the identity headers only to requests for `origin` (VER-018).
-            result = self.ctx.browser.check(url, identity_headers=headers, target_base=origin,
-                                            marker=self.ctx.marker, finding_id=self.ctx.plan.id, wait_ms=wait_ms,
-                                            safe=self.ctx.safe or self.ctx.read_only, role=role)
+            result = self.ctx.browser.check(
+                url,
+                identity_headers=headers,
+                target_base=origin,
+                marker=self.ctx.marker,
+                finding_id=self.ctx.plan.id,
+                wait_ms=wait_ms,
+                safe=self.ctx.safe or self.ctx.read_only,
+                role=role,
+            )
         except BrowserError as exc:
             raise ToolError(str(exc)) from exc
         for raw in result.pop("_exchanges", None) or []:
-            self._record(raw, role, headers, keep_body=raw.get("keep_body", True),
-                         navigation=raw.get("navigation", False))
+            self._record(
+                raw, role, headers, keep_body=raw.get("keep_body", True), navigation=raw.get("navigation", False)
+            )
         return result
 
     def _url(self, path) -> str:
@@ -304,12 +452,53 @@ class AgentTools:
             return self.ctx.sessions.headers_for(role)
         except (AuthError, ScopeViolation) as exc:
             raise ToolError(f"identity {role!r} is unavailable: {exc}") from exc
-        except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:     # the message can carry a proxy URL
+        except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:  # the message can carry a proxy URL
             raise ToolError(f"identity {role!r} is unavailable: its login failed ({type(exc).__name__})") from exc
 
-    def http_request(self, *, role: str | None = None, method: str = "GET", path: str = "/",
-                     params: dict | None = None, json: dict | None = None, form: dict | None = None) -> dict:
+    def http_request(
+        self,
+        *,
+        role: str | None = None,
+        method: str = "GET",
+        path: str = "/",
+        params: dict | None = None,
+        json: dict | None = None,
+        form: dict | None = None,
+    ) -> dict:
         m = (method or "GET").upper()
+        if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
+            experiment = getattr(self, "_experiment", {})
+            supplied = {"params": params, "json": json, "form": form}
+            selected = supplied.get(experiment.get("input_location")) or {}
+            if (
+                path != experiment.get("path")
+                or urlsplit(path).query
+                or urlsplit(path).fragment
+                or m != experiment.get("method", "GET")
+                or set(selected) != {experiment.get("input_name")}
+                or any(v for k, v in supplied.items() if k != experiment.get("input_location"))
+            ):
+                raise ToolError("command proof requests must match the declared arithmetic input exactly")
+        if self.ctx.plan.cls == "session" and not any(
+            r["finding_id"] == self.ctx.plan.id
+            and r["path"] == path
+            and m == "GET"
+            and r.get("role") == role
+            and not any((params, json, form))
+            for r in self.ctx.scope.get("session_checks", [])
+        ):
+            raise ToolError("session checks use only the operator-declared read-only cookie observation")
+        if getattr(self.ctx.plan, "cwe", "") in ("CWE-200", "CWE-306"):
+            resources = self.ctx.scope.get("test_resources", [])
+            if not any(
+                r["finding_id"] == self.ctx.plan.id
+                and r["path"] == path
+                and r.get("method", "GET") == m
+                and m in SAFE_METHODS
+                and all((r.get(k) or {}) == (v or {}) for k, v in (("params", params), ("json", json), ("form", form)))
+                for r in resources
+            ):
+                raise ToolError("exposure checks use only the operator-declared harmless read-only resource")
         if m not in ALLOWED_METHODS:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
         if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only):
@@ -322,16 +511,40 @@ class AgentTools:
             raise ToolError("form bodies require POST, PUT or PATCH")
         self._check_steering(params, json)
         self._check_steering(None, form)
+        attempt_marker = None
+        if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:
+            from ..tools.browser import new_marker
+
+            marker = "".join(self.ctx.marker)
+            values = [*_strings(params), *_strings(json), *_strings(form)]
+            if marker and any(marker in v for v in values):
+                attempt_marker = "".join(new_marker())
+
+                def replace_marker(value):
+                    if isinstance(value, str):
+                        return value.replace(marker, attempt_marker)
+                    if isinstance(value, dict):
+                        return {k: replace_marker(v) for k, v in value.items()}
+                    if isinstance(value, list):
+                        return [replace_marker(v) for v in value]
+                    return value
+
+                params, json, form = (replace_marker(v) for v in (params, json, form))
         url = self._url(path)
         headers = {}
         if role:
             origin = self._bound_origin(role)
             if not same_origin(url, origin):
-                raise ToolError(f"identity {role!r} is bound to {origin}; its credentials are not sent to "
-                                f"another origin (VER-018). Send this request without a role.")
+                raise ToolError(
+                    f"identity {role!r} is bound to {origin}; its credentials are not sent to "
+                    f"another origin (VER-018). Send this request without a role."
+                )
             headers = self._session_headers(role)
         try:
             resp = self._send(m, url, headers, params, json, form)
+            from .session_proof import cookie_observations
+
+            session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
             self._record(self._sent(resp, m, url, headers, params, json, form), role, headers)
             sessions = self.ctx.sessions if role else None
             if sessions is not None:
@@ -342,6 +555,7 @@ class AgentTools:
             if sessions is not None and getattr(resp, "status_code", None) == 401 and sessions.renew(role):
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json, form)
+                session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
                 self._record(self._sent(resp, m, url, headers, params, json, form), role, headers)
                 sessions.answered(role, getattr(resp, "status_code", None))
         except ScopeViolation as exc:
@@ -360,10 +574,10 @@ class AgentTools:
         out = {
             "role": role,
             "status": status,
-            "length": len(text),                         # of the whole body, not of the excerpt
+            "length": len(text),  # of the whole body, not of the excerpt
             # of the redacted body, so no hash of a credential exists; lets the proof check compare answers
             "body_sha256": hashlib.sha256(redacted.encode("utf-8", "replace")).hexdigest(),
-            "body_excerpt": redacted[:_BODY_EXCERPT],    # redacted before the cut: no partial token (VER-016)
+            "body_excerpt": redacted[:_BODY_EXCERPT],  # redacted before the cut: no partial token (VER-016)
         }
         resp_headers = getattr(resp, "headers", None) or {}
         location = resp_headers.get("Location") or resp_headers.get("location")
@@ -371,13 +585,20 @@ class AgentTools:
             location = str(location)
             location = self.ctx.sessions.redact(location) if self.ctx.sessions is not None else location
             out["location"] = _hide(location, self._marker_content)[:_LOCATION_CAP]
+        if self.ctx.plan.cls == "session":
+            out["session_cookies"] = session_cookies
         elapsed = _elapsed_ms(resp)
         if elapsed is not None:
-            out["elapsed_ms"] = elapsed                  # transport time, without the rate limit's wait (VER-011)
+            out["elapsed_ms"] = elapsed  # transport time, without the rate limit's wait (VER-011)
         if self.ctx.plan.cls == "path-traversal" and self._marker_content:
-            out["marker_read"] = self._marker_content in text           # the raw body, checked in code
+            out["marker_read"] = self._marker_content in text  # the raw body, checked in code
         if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:
-            out["callback_hit"] = self.ctx.listener.wait_for("".join(self.ctx.marker), _CALLBACK_WAIT_S)
+            out["callback_hit"] = bool(attempt_marker and self.ctx.listener.wait_for(attempt_marker, _CALLBACK_WAIT_S))
+            if attempt_marker:
+                out["callback_attempt"] = attempt_marker
+                records = getattr(self.ctx, "callback_records", {})
+                records[attempt_marker] = self.ctx.listener.hits(attempt_marker) if out["callback_hit"] else []
+                self.ctx.callback_records = records
         return out
 
     @staticmethod
@@ -392,8 +613,13 @@ class AgentTools:
             full = str(httpx.URL(url, params=params)) if params else url
         except (TypeError, ValueError, httpx.InvalidURL):
             full = url
-        return poc.capture(resp, method=method, url=full, headers=sent_headers,
-                           body=urlencode(form) if form is not None else None if body is None else jsonlib.dumps(body))
+        return poc.capture(
+            resp,
+            method=method,
+            url=full,
+            headers=sent_headers,
+            body=urlencode(form) if form is not None else None if body is None else jsonlib.dumps(body),
+        )
 
     def _send(self, method, url, headers, params, json, form=None):
         kwargs = {}

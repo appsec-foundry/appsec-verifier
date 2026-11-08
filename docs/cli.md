@@ -798,3 +798,100 @@ Written to `--output` (default `./verification`):
 
 The `export` command writes `analyzer-verification.json` for AppSec Analyzer
 (VER-021).
+
+`--strict-severity` disables additional selection below `--min-severity`.
+Otherwise at most eight findings are added within the other selection filters:
+explicit prerequisites and access or exposure findings on `/actuator`,
+`/management`, `/admin`, `/metrics` or `/debug` routes. Health, readiness and
+liveness routes do not qualify on their own. The additions are shown with their
+reason before confirmation. Missing operator resources still block their tests.
+
+A finding can name `verification_dependencies: [T-002]` in the assessment.
+Those findings run first when selected. `attack_steps`, optional
+`attack_walkthrough`, related `components`, `data_flows`, `trust_boundaries`,
+`security_controls` and optional `compound_chains` supply bounded planning
+context. Chains use `findings` IDs or `keystones`/`contributors` entries with
+`ref` IDs. Chain membership supplies context; only explicit dependencies impose
+an order. Rendered Markdown walkthrough fragments are not automatically imported.
+Prior results cover individual requests; transitions between findings remain
+unverified. Cyclic dependencies do not establish prerequisites.
+
+Before collecting injection or access-control proof the agent declares its
+strategy, prerequisites and counter-hypothesis. Plan revisions explain the new
+observation and next change. A new plan requires fresh evidence. The console
+shows accepted plans; the report retains them with their assumptions.
+`run_experiment` collects five read-only controls twice under the existing request,
+time and per-finding attempt limits. It never automatically repeats writes.
+SQL controls use `sql_template` with one `{{predicate}}` placeholder. Command,
+template and XPath controls use `expression_template` with one `{{expression}}`
+placeholder and verify fresh products and sums in a selected JSON field.
+Arbitrary response changes and timing alone cannot confirm injection. NoSQL checks compare fresh equality and membership operators; LDAP checks
+compare complementary filter predicates. Both require a declared literal-input
+contract. The planner should use source-supported processing order and
+filter behavior to justify any encoding or syntax adaptation.
+
+For session-cookie attributes, identify the cookie and a harmless GET that
+issues it in the scope file:
+
+```yaml
+session_checks:
+  - id: customer-session
+    finding_id: T-042
+    path: /session-status
+    cookie_name: sessionid
+    role: customer-a
+```
+
+Omit `role` for an anonymous observation. The agent declares a `session` plan
+with this resource ID and repeats the observation. CWE-614 checks Secure,
+CWE-1004 HttpOnly and CWE-1275 SameSite (Lax or Strict). An absent, expired
+or ambiguous cookie remains inconclusive in this check. Cookie values
+never reach the model or report. Session fixation, logout, expiry enforcement
+and token-validation weaknesses require separate lifecycle checks.
+`--screenshots` also accepts `session`; its exchange image shows redacted
+Set-Cookie attributes. The screenshot does not determine the verdict.
+
+Each declared finding variant runs separately. Resume accepts checked proof
+contract 3 for the matching variant content; older proofs are tested again.
+Merging preserves different variants and their evidence. Annotation distinguishes
+a confirmed weakness from incomplete variant coverage. The assessment and target
+must still match the prior report.
+
+XSS confirmation currently requires execution in the checked page's main frame
+and origin without a sandbox response policy. Child-frame execution stays
+unconfirmed because its effective permissions are not established. SSRF uses a
+fresh callback marker per request and records hits only within that attempt's
+observation window. A callback proves that retrieval, not arbitrary internal
+reachability.
+
+SQL and expression confirmation also require the operator to identify an input
+that must treat its value as literal data. This distinguishes injection from an
+intended calculator, template editor or query language. The declaration supplies
+the expected contract; fresh runtime observations must still prove evaluation:
+
+```yaml
+injection_inputs:
+  - finding_id: T-012
+    path: /search
+    input_location: params
+    input_name: q
+    semantics: literal
+```
+
+Without that declaration the agent can inspect the context and run bounded
+controls, but the expression proof plan is refused and the finding stays open.
+
+NoSQL uses `operator_challenge: nosql` with `input_location: json`. It compares
+literal baseline lookup with fresh equality and membership operators. LDAP uses
+`predicate_template` with one `{{predicate}}` placeholder and an evidenced
+`predicate_attribute`; generated complementary filters must repeat the baseline
+for true predicates and suppress it for false predicates. Both use the same
+operator-declared `injection_inputs` contract and ten recorded requests.
+Command templates are confined to a plain baseline followed by
+`; printf '%s' "$(({{expression}}))"`. Other commands and extra inputs are refused.
+
+SSRF confirmation additionally requires `callback.expect_rejected: true` in the
+operator's scope: fetching this controlled destination must violate the intended
+access policy. Without that declaration a hit is recorded as retrieval observed
+and the finding remains inconclusive. An intended URL-fetch feature alone is
+not a confirmed SSRF boundary violation.

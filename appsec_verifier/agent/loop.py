@@ -93,7 +93,7 @@ class AgentProbe:
         planner = self._planner_factory()
         tools = AgentTools(ctx)
         history: list[dict] = []
-        sent: list[dict] = []          # per step what went to the target and came back, never shown to the planner
+        sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
         last_rejected = None
         last_cited = None
@@ -107,28 +107,36 @@ class AgentProbe:
             if entries:
                 sent.append({"step": step, "tool": name, "entries": entries})
 
-        for step in range(1, self._max_steps + 1):
+        for decision in range(1, self._max_steps + 1):
+            step = len(history) + 1
             try:
                 ctx.budget.check_time()
-                ctx.guard.check_window()       # no model call once the authorisation window has closed
+                ctx.guard.check_window()  # no model call once the authorisation window has closed
                 if ctx.progress is not None:
                     ctx.progress.activity(step, self._max_steps)
                 proposal = planner.next_step(ctx, history)
             except LimitExceeded as exc:
                 return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
-            action = check_action(proposal)   # VER-019: no unchecked arguments
+            action = check_action(proposal)  # VER-019: no unchecked arguments
             if "verdict" in action:
-                if action != proposal:        # the step contract refused what the planner proposed (VER-017)
-                    _log(ctx, step, refused=action["verdict"]["rationale"],
-                         proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP])
+                if action != proposal:  # the step contract refused what the planner proposed (VER-017)
+                    _log(
+                        ctx,
+                        step,
+                        refused=action["verdict"]["rationale"],
+                        proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP],
+                    )
                 verdict = action["verdict"]
                 result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
-                if (result.proof or {}).get("checked") is False and repairs < 2 and step < self._max_steps:
+                if (result.proof or {}).get("checked") is False and repairs < 2 and decision < self._max_steps:
                     repairs += 1
                     last_rejected = result
                     last_cited = verdict.get("proof_steps")
-                    feedback = {"status": "insufficient", "missing": result.proof["missing"],
-                                "remaining_steps": self._max_steps - step}
+                    feedback = {
+                        "status": "insufficient",
+                        "missing": result.proof["missing"],
+                        "remaining_steps": self._max_steps - decision,
+                    }
                     _log(ctx, step, tool="proof_feedback", result=feedback)
                     history.append({"tool": "proof_feedback", "args": {}, "result": feedback})
                     continue
@@ -138,10 +146,48 @@ class AgentProbe:
                 result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
+            if name == "run_experiment":
+                try:
+                    requests = tools.experiment_requests(**args)
+                except ToolError as exc:
+                    result = {"error": str(exc)}
+                    history.append({"tool": name, "args": args, "result": result})
+                    _log(ctx, step, tool=name, args=args, result=result)
+                    continue
+                for request in requests:
+                    step = len(history) + 1
+                    try:
+                        ctx.budget.check_time()
+                        ctx.guard.check_window()
+                        if sum(h.get("tool") in ("http_request", "browser_check") for h in history) >= self._max_steps:
+                            raise LimitExceeded("attempts", "per-finding request attempt limit reached")
+                        result = tools.http_request(**request)
+                    except ToolError as exc:
+                        result = {"error": str(exc)}
+                    except LimitExceeded as exc:
+                        keep(step, "http_request")
+                        return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
+                    keep(step, "http_request")
+                    if ctx.sessions is not None:
+                        result = ctx.sessions.redact(result)
+                    history.append({"tool": "http_request", "args": request, "result": result})
+                    _log(
+                        ctx,
+                        step,
+                        tool="http_request",
+                        args=request,
+                        result={k: result[k] for k in _LOGGED_RESULT if k in result},
+                    )
+                    if result.get("error") or not 200 <= result.get("status", 0) < 300:
+                        break
+                continue
             call = {"tool": name, "args": args, **({"note": action["note"]} if action.get("note") else {})}
             if ctx.progress is not None:
                 ctx.progress.activity(step, self._max_steps, name, args)
             try:
+                if name in ("http_request", "browser_check") and sum(
+                        h.get("tool") in ("http_request", "browser_check") for h in history) >= self._max_steps:
+                    raise LimitExceeded("attempts", "per-finding request attempt limit reached")
                 result = tools.call(name, args)
             except ToolError as exc:
                 result = {"error": str(exc)}
@@ -150,9 +196,19 @@ class AgentProbe:
                 return poc.attach(ctx, history, sent, _stopped(ctx, step, exc, **call), None)
             keep(step, name)
             if ctx.sessions is not None:
-                result = ctx.sessions.redact(result)       # VER-016: no credential value reaches the planner
+                result = ctx.sessions.redact(result)  # VER-016: no credential value reaches the planner
             _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})
             history.append({"tool": name, "args": args, "result": result})
-        return _finish(ctx, self._max_steps, poc.attach(ctx, history, sent, ProbeResult(
-            verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"),
-            None))
+        return _finish(
+            ctx,
+            self._max_steps,
+            poc.attach(
+                ctx,
+                history,
+                sent,
+                ProbeResult(
+                    verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"
+                ),
+                None,
+            ),
+        )

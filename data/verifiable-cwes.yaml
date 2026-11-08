@@ -54,6 +54,21 @@ verifiable_cwes:
     may_require_state_change: false
 
   # --- Injection --------------------------------------------------------
+  - cwe: CWE-306
+    name: Missing Authentication for Critical Function
+    class: access-control
+    technique: missing-authn
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: Requires an operator-declared harmless protected resource and an allowed/anonymous contrast.
+  - cwe: CWE-200
+    name: Exposure of Sensitive Information to an Unauthorized Actor
+    class: access-control
+    technique: information-exposure
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: Only declared harmless protected resources; never retrieve dumps or real secrets.
+
   - cwe: CWE-89
     name: SQL Injection
     class: injection
@@ -89,3 +104,50 @@ verifiable_cwes:
     proof_method: out-of-band-callback
     may_require_state_change: false
     notes: Confirmed by a hit on scope.callback; never reach internal/metadata hosts.
+
+  - cwe: CWE-614
+    name: Session Cookie Without Secure
+    class: session
+    technique: cookie-secure
+    proof_method: cookie-attribute
+    may_require_state_change: false
+  - cwe: CWE-1004
+    name: Session Cookie Without HttpOnly
+    class: session
+    technique: cookie-httponly
+    proof_method: cookie-attribute
+    may_require_state_change: false
+  - cwe: CWE-1275
+    name: Session Cookie With Improper SameSite
+    class: session
+    technique: cookie-samesite
+    proof_method: cookie-attribute
+    may_require_state_change: false
+
+  - cwe: CWE-78
+    name: OS Command Injection
+    class: injection
+    technique: command-injection
+    proof_method: mechanism-specific
+    may_require_state_change: false
+
+  - cwe: CWE-1336
+    name: Template Injection
+    class: injection
+    technique: template-injection
+    proof_method: mechanism-specific
+    may_require_state_change: false
+
+  - cwe: CWE-643
+    name: XPath Injection
+    class: injection
+    technique: xpath-injection
+    proof_method: mechanism-specific
+    may_require_state_change: false
+
+  - cwe: CWE-90
+    name: LDAP Injection
+    class: injection
+    technique: ldap-injection
+    proof_method: mechanism-specific
+    may_require_state_change: false

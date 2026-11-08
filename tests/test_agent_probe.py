@@ -8,6 +8,7 @@ import json
 import stat
 
 import pytest
+from test_experiments import STRATEGY
 
 from appsec_verifier.agent import AgentProbe, SourceReader
 from appsec_verifier.auth import SessionManager
@@ -65,24 +66,54 @@ def test_idor_two_identity_contrast_confirms():
 
     import tempfile
     from pathlib import Path
+
     with tempfile.TemporaryDirectory() as d:
         ctx = _ctx(Path(d), transport)
-        ctx.scope = {**ctx.scope, "test_resources": [{"id": "basket", "finding_id": "T-001",
-                     "path": "/rest/basket/2", "allowed_roles": ["customer-b"], "denied_roles": ["customer-a"],
-                     "pointer": "/UserId", "value": 2}]}
-        planner = ScriptedPlanner([
-            {"tool": "plan_test", "args": {"kind": "access-control", "hypothesis": "A can read B's basket",
-                                          "path": "/rest/basket/2", "resource": "basket"}},
-            {"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": 1}},
-            {"tool": "http_request", "args": {"role": "customer-a", "method": "GET", "path": "/rest/basket/2"}},
-            {"tool": "http_request", "args": {"role": "customer-b", "method": "GET", "path": "/rest/basket/2"}},
-            {"verdict": {"verdict": "confirmed", "confidence": "high",
-                         "rationale": "customer-a read customer-b's basket",
-                         "identities_used": ["customer-a", "customer-b"],
-                         "proof": {"identity_a": "customer-a", "identity_b": "customer-b",
-                                   "observed_difference": "a received b's basket (UserId 2)"},
-                         "proof_steps": [3, 4]}},
-        ])
+        ctx.scope = {
+            **ctx.scope,
+            "test_resources": [
+                {
+                    "id": "basket",
+                    "finding_id": "T-001",
+                    "path": "/rest/basket/2",
+                    "allowed_roles": ["customer-b"],
+                    "denied_roles": ["customer-a"],
+                    "pointer": "/UserId",
+                    "value": 2,
+                }
+            ],
+        }
+        planner = ScriptedPlanner(
+            [
+                {
+                    "tool": "plan_test",
+                    "args": {
+                        "kind": "access-control",
+                        "strategy": STRATEGY,
+                        "hypothesis": "A can read B's basket",
+                        "path": "/rest/basket/2",
+                        "resource": "basket",
+                    },
+                },
+                {"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": 1}},
+                {"tool": "http_request", "args": {"role": "customer-a", "method": "GET", "path": "/rest/basket/2"}},
+                {"tool": "http_request", "args": {"role": "customer-b", "method": "GET", "path": "/rest/basket/2"}},
+                {
+                    "verdict": {
+                        "verdict": "confirmed",
+                        "confidence": "high",
+                        "rationale": "customer-a read customer-b's basket",
+                        "identities_used": ["customer-a", "customer-b"],
+                        "proof": {
+                            "identity_a": "customer-a",
+                            "identity_b": "customer-b",
+                            "observed_difference": "a received b's basket (UserId 2)",
+                        },
+                        "proof_steps": [3, 4],
+                    }
+                },
+            ]
+        )
         ctx.evidence_dir = Path(d) / "evidence"
         res = AgentProbe("access-control", lambda: planner, max_steps=10).run(ctx)
         record = json.loads((Path(d) / "evidence" / "T-001-exchanges.json").read_text())
@@ -95,8 +126,10 @@ def test_idor_two_identity_contrast_confirms():
     # the code's record of the cited exchanges is the evidence, not the model's word
     assert res.evidence[0]["kind"] == "exchange" and res.evidence[0]["path"] == "evidence/T-001-exchanges.json"
     assert [(e["step"], e["role"], e["status"]) for e in record["exchanges"]] == [
-        (3, "customer-a", 200), (4, "customer-b", 200)]
-    assert "UserId" not in json.dumps(record) and mode == 0o600      # no response body in the evidence
+        (3, "customer-a", 200),
+        (4, "customer-b", 200),
+    ]
+    assert "UserId" not in json.dumps(record) and mode == 0o600  # no response body in the evidence
 
 
 def test_planner_never_submits_is_inconclusive_not_refuted():
@@ -114,17 +147,20 @@ def test_planner_never_submits_is_inconclusive_not_refuted():
     assert res.limits_hit == "attempts"
 
 
-@pytest.mark.parametrize("action", [
-    {"tool": "http_request", "args": {"path": "/", "headers": {"X-Forwarded-For": "127.0.0.1"}}},  # extra arg
-    {"tool": "http_request", "args": {"path": 5}},                                                  # wrong type
-    {"tool": "http_request", "args": {"path": "/", "params": {"q": {"nested": 1}}}},                # nested param
-    {"tool": "http_request", "args": "path=/"},                                                     # not an object
-    {"tool": "shell", "args": {"cmd": "id"}},                                                       # unknown tool
-    {"tool": "submit_verdict", "args": {"verdict": "confirmed", "rationale": "x"}},                 # verdict as tool
-    {"tool": "http_request", "args": {"path": "/"}, "extra": True},                                 # extra key
-    {"verdict": {"verdict": "confirmed", "rationale": "x", "identities_used": "customer-a"}},       # bad verdict
-    "GET /",                                                                                        # not a dict
-])
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"tool": "http_request", "args": {"path": "/", "headers": {"X-Forwarded-For": "127.0.0.1"}}},  # extra arg
+        {"tool": "http_request", "args": {"path": 5}},  # wrong type
+        {"tool": "http_request", "args": {"path": "/", "params": {"q": {"nested": 1}}}},  # nested param
+        {"tool": "http_request", "args": "path=/"},  # not an object
+        {"tool": "shell", "args": {"cmd": "id"}},  # unknown tool
+        {"tool": "submit_verdict", "args": {"verdict": "confirmed", "rationale": "x"}},  # verdict as tool
+        {"tool": "http_request", "args": {"path": "/"}, "extra": True},  # extra key
+        {"verdict": {"verdict": "confirmed", "rationale": "x", "identities_used": "customer-a"}},  # bad verdict
+        "GET /",  # not a dict
+    ],
+)
 def test_every_action_is_schema_checked_whichever_planner_sent_it(tmp_path, action):
     sent = []
     ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp())

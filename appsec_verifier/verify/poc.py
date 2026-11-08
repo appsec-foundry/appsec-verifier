@@ -50,6 +50,8 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlencode, urlsplit, 
 
 import httpx
 
+from ..planning import evidence_id
+
 REDACTED = "[redacted]"
 TARGET_DATA_NOTE = "may show target data; review before sharing"
 MAX_BODY_CHARS = 256 * 1024
@@ -336,7 +338,7 @@ def _write_har(ctx, steps: list[dict]) -> list[dict]:
                    "entries": entries}}
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = directory / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', ctx.plan.id)}-poc.har"
+    path = directory / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', evidence_id(ctx.plan))}-poc.har"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(har, indent=1, default=str))
@@ -370,7 +372,7 @@ def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
         try:
             out += browser.render(url=e["request"]["url"], status=e["response"]["status"],
                                   content_type=e["response"]["content"]["mimeType"], html=text,
-                                  finding_id=ctx.plan.id, caption=caption, highlight=values)
+                                  finding_id=evidence_id(ctx.plan), caption=caption, highlight=values)
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             continue
     return out
@@ -487,7 +489,7 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
         if "marker_read" in res:
             facts.append((f"marker file read: {'yes' if res['marker_read'] is True else 'no'}", True))
     elif cls == "ssrf":
-        joined = "".join(marker)
+        joined = res.get("callback_attempt") or "".join(marker)
         req_marks += [("callback marker", joined)] if joined else []
         if "callback_hit" in res:
             facts.append((f"callback listener received the marker: {'yes' if res['callback_hit'] is True else 'no'}",
@@ -560,12 +562,18 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
                          highlight) -> list[dict]:
     page, marked = exchange_document(ctx, history, shown, verdict, har_path, highlight)
     try:
-        return ctx.browser.render_exchanges(html=page, finding_id=ctx.plan.id, marked=marked)
+        return ctx.browser.render_exchanges(html=page, finding_id=evidence_id(ctx.plan), marked=marked)
     except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
         return []
 
 
 def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
+    result.planning = [{"step": n, "path": h["args"].get("path"),
+                        "hypothesis": h["args"].get("hypothesis"), "strategy": h["args"].get("strategy")}
+                       for n, h in enumerate(history, 1) if h.get("tool") == "plan_test"
+                       and h.get("result", {}).get("accepted") is True]
+    if ctx.sessions is not None:
+        result.planning = ctx.sessions.redact(result.planning)
     """Write the finding's proof of concept and add it to `result` (VER-034, VER-035)."""
     if not steps:
         return result

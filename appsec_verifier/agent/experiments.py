@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import secrets
+
+from ..planning import STRATEGY_SCHEMA
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["kind", "hypothesis", "path"],
+    "required": ["kind", "hypothesis", "path", "strategy"],
     "properties": {
-        "kind": {"enum": ["boolean", "timing", "access-control", "control", "execution"]},
+        "kind": {"enum": ["boolean", "timing", "access-control", "control", "execution", "session"]},
         "hypothesis": {"type": "string", "minLength": 10, "maxLength": 1000},
         "variant": {"type": "string", "maxLength": 80},
         "path": {"type": "string", "minLength": 1, "maxLength": 2000},
@@ -22,11 +25,17 @@ PLAN_SCHEMA = {
         "negative": SCALAR,
         "pointer": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^/"},
         "resource": {"type": "string", "maxLength": 80},
+        "strategy": STRATEGY_SCHEMA,
+        "expression_template": {"type": "string", "minLength": 5, "maxLength": 3000},
+        "operator_challenge": {"enum": ["nosql"]},
+        "predicate_template": {"type": "string", "minLength": 15, "maxLength": 3000},
+        "predicate_attribute": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"},
+        "sql_template": {"type": "string", "minLength": 15, "maxLength": 3000},
     },
     "allOf": [
         {
             "if": {"properties": {"kind": {"const": "boolean"}}},
-            "then": {"required": ["input_location", "input_name", "baseline", "positive", "negative", "pointer"]},
+            "then": {"required": ["input_location", "input_name", "baseline", "pointer"]},
         },
         {
             "if": {"properties": {"kind": {"const": "timing"}}},
@@ -35,6 +44,71 @@ PLAN_SCHEMA = {
         {"if": {"properties": {"kind": {"const": "access-control"}}}, "then": {"required": ["resource"]}},
     ],
 }
+
+
+def sql_controls(plan):
+    """Fresh complementary equality/inequality challenges; the model cannot choose their answers."""
+    template = plan.get("sql_template", "")
+    if template.count("{{predicate}}") != 1:
+        raise ValueError("SQL proof needs a template containing exactly one {{predicate}} placeholder")
+    a = 100000 + secrets.randbelow(800000)
+    b = a + 1 + secrets.randbelow(9999)
+    predicates = {
+        "positive": f"({a}={a})",
+        "negative": f"({a}={b})",
+        "positive_other": f"({b}<>{a})",
+        "negative_other": f"({b}<>{b})",
+    }
+    return {**plan, **{k: template.replace("{{predicate}}", v) for k, v in predicates.items()}}
+
+
+def operator_controls(plan):
+    baseline = plan["baseline"]
+    absent = "vrf" + secrets.token_hex(16)
+    return {
+        **plan,
+        "positive": {"$eq": baseline},
+        "negative": {"$eq": absent},
+        "positive_other": {"$in": [baseline]},
+        "negative_other": {"$in": [absent]},
+    }
+
+
+def ldap_controls(plan):
+    attribute = plan.get("predicate_attribute", "")
+    template = plan["predicate_template"]
+    if not attribute or template.count("{{predicate}}") != 1:
+        raise ValueError("LDAP proof needs an evidenced attribute and exactly one {{predicate}}")
+    a, b = secrets.token_hex(12), secrets.token_hex(12)
+    predicates = {
+        "positive": f"(|({attribute}={a})(!({attribute}={a})))",
+        "negative": f"(&({attribute}={a})(!({attribute}={a})))",
+        "positive_other": f"(|({attribute}={b})(!({attribute}={b})))",
+        "negative_other": f"(&({attribute}={b})(!({attribute}={b})))",
+    }
+    return {
+        **plan,
+        "sql_template": template,
+        **{k: template.replace("{{predicate}}", v) for k, v in predicates.items()},
+    }
+
+
+def expression_controls(plan):
+    template = plan.get("expression_template", "")
+    if template.count("{{expression}}") != 1:
+        raise ValueError("expression proof needs exactly one {{expression}} placeholder")
+    a, b = 1000 + secrets.randbelow(8000), 1000 + secrets.randbelow(8000)
+    expressions = {
+        "positive": (f"{a}*{b}", a * b),
+        "negative": (f"{a}+{b}", a + b),
+        "positive_other": (f"{a}*{b + 1}", a * (b + 1)),
+        "negative_other": (f"{a}+{b + 1}", a + b + 1),
+    }
+    return {
+        **plan,
+        **{k: template.replace("{{expression}}", v[0]) for k, v in expressions.items()},
+        "expected_values": {k: v[1] for k, v in expressions.items()},
+    }
 
 
 def pointer_value(body: str, pointer: str):
@@ -61,7 +135,7 @@ def latest_plan(history: list[dict]):
     for n in range(len(history), 0, -1):
         h = history[n - 1]
         if h.get("tool") == "plan_test" and h.get("result", {}).get("accepted") is True:
-            return n, h["args"]
+            return n, h.get("result", {}).get("experiment") or h["args"]
     return 0, {}
 
 
@@ -76,7 +150,7 @@ def experiment_groups(history, cited):
     start, plan = latest_plan(history)
     if not start:
         return {}, {}, "declare a plan_test before collecting proof"
-    groups = {k: [] for k in ("baseline", "positive", "negative") if k in plan}
+    groups = {k: [] for k in ("baseline", "positive", "negative", "positive_other", "negative_other") if k in plan}
     signatures = set()
     for n in cited:
         if n <= start:
@@ -127,7 +201,27 @@ def injection_check(ctx, history, cited):
         # Timing proof cannot rely on different result types or an ordinary expensive result set.
         if len({(r.get("body_sha256"), r["status"]) for g in groups.values() for _, r in g}) != 1:
             return "timing controls must return the same response"
+        return "timing separation alone cannot distinguish injection from ordinary computation; use SQL challenges"
+    if plan.get("expression_template"):
+        try:
+            expected = plan["expected_values"]
+            if any(str(value) in plan[name] for name, value in expected.items()):
+                return "computed answers must not appear in the supplied expression"
+            for name, group in groups.items():
+                if name == "baseline":
+                    continue
+                if any(str(observation(ctx, n, plan["pointer"])) != str(expected[name]) for n, _ in group):
+                    return "fresh arithmetic expressions were not evaluated to the expected distinct answers"
+            if len({str(observation(ctx, n, plan["pointer"])) for n, _ in groups["baseline"]}) != 1:
+                return "the baseline observation is unstable"
+        except (ValueError, KeyError, IndexError, TypeError):
+            return "the expression observation is unavailable"
         return None
+    if (
+        not (plan.get("sql_template") or plan.get("operator_challenge"))
+        or not {"positive_other", "negative_other"} <= groups.keys()
+    ):
+        return "ordinary input-dependent results are not proof; use fresh complementary SQL predicate challenges"
     observed = {}
     try:
         for name, group in groups.items():
@@ -135,7 +229,7 @@ def injection_check(ctx, history, cited):
             encoded = {token(v) for v in values}
             if len(encoded) != 1:
                 return "the selected observation is unstable across repetitions"
-            if any(str(plan[k]) in token(v) for k in ("positive", "negative") for v in values):
+            if any(str(plan[k]) in token(v) for k in groups if k != "baseline" for v in values):
                 return "the selected observation reflects the test input"
             observed[name] = values[0]
     except (ValueError, KeyError, IndexError, TypeError, RecursionError):
@@ -144,6 +238,10 @@ def injection_check(ctx, history, cited):
         return "the true condition must reproduce the nonempty baseline observation"
     if token(observed["negative"]) == token(observed["positive"]):
         return "the false condition did not change the selected observation"
+    if token(observed["positive_other"]) != token(observed["baseline"]) or token(observed["negative_other"]) != token(
+        observed["negative"]
+    ):
+        return "complementary SQL predicates did not reproduce the same true and false observations"
     return None
 
 

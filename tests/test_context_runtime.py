@@ -10,7 +10,7 @@ from urllib.parse import unquote
 
 import pytest
 from test_agent_tools import Resp, _ctx
-from test_experiments import verification_context
+from test_experiments import STRATEGY, verification_context
 
 from appsec_verifier.agent.loop import AgentProbe
 from appsec_verifier.agent.tools import AgentTools, ToolError
@@ -33,12 +33,26 @@ def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
         return Resp(200, json.dumps({"ids": [r[0] for r in rows], "noise": len(seen), "echo": value}))
 
     ctx = _ctx(tmp_path, target)
-    ctx.plan = replace(ctx.plan, cls="injection", verification_context=verification_context())
+    ctx.scope = {
+        **ctx.scope,
+        "injection_inputs": [
+            {
+                "finding_id": "T-1",
+                "path": "/search",
+                "input_location": "params",
+                "input_name": "q",
+                "semantics": "literal",
+            }
+        ],
+    }
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", verification_context=verification_context())
     variant = ctx.plan.verification_context["variants"][0]
     variant["mechanism"]["expression"] = "SELECT id FROM items WHERE name = '<q>'"
     variant["processing"][0]["description"] = "Reject uppercase AND before percent-decoding"
     declared = {
         "kind": "boolean",
+        "strategy": STRATEGY,
+        "sql_template": "pear' %41%4e%44 {{predicate}} -- ",
         "hypothesis": "Decoding introduces a predicate after the keyword filter",
         "variant": "search",
         "path": "/search",
@@ -53,18 +67,14 @@ def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
     declared["variant"] = variant_id
     actions = [{"tool": "read_context", "args": {"variant": variant_id}}, {"tool": "plan_test", "args": declared}]
     actions += [
-        {"tool": "http_request", "args": {"path": "/search", "params": {"q": declared[name]}}}
-        for _ in range(2)
-        for name in ("baseline", "positive", "negative")
-    ]
-    actions += [
+        {"tool": "run_experiment", "args": {}},
         {
             "verdict": {
                 "verdict": "confirmed",
-                "rationale": "Repeatable selected records",
-                "proof_steps": list(range(3, 9)),
+                "rationale": "Repeatable query controls",
+                "proof_steps": list(range(3, 13)),
             }
-        }
+        },
     ]
 
     class Planner:
@@ -76,7 +86,7 @@ def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
 
     try:
         result = AgentProbe("injection", Planner).run(ctx)
-        assert result.verdict == "confirmed" and len(seen) == 6
+        assert result.verdict == "confirmed" and len(seen) == 10
         assert result.proof["variant"] == variant_id and result.proof["observation_pointer"] == "/ids"
         assert target("GET", "/search", {}, params={"q": "pear' AND '1'='1"}).status_code == 400
     finally:
@@ -85,6 +95,18 @@ def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
 
 def test_feedback_allows_a_missing_plan_to_be_repaired(tmp_path):
     ctx = _ctx(tmp_path, lambda *a, **k: Resp(200, '{"result":"stable"}'))
+    ctx.scope = {
+        **ctx.scope,
+        "injection_inputs": [
+            {
+                "finding_id": "T-1",
+                "path": "/search",
+                "input_location": "params",
+                "input_name": "q",
+                "semantics": "literal",
+            }
+        ],
+    }
     ctx.plan = replace(ctx.plan, cls="injection")
     from test_experiments import plan
 

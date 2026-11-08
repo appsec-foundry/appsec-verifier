@@ -253,6 +253,9 @@ class FakeListener:
         self.hit = hit
         self.waited = []
 
+    def hits(self, marker):
+        return [{"at": "fixture-time", "method": "GET", "source": "127.0.0.1"}] if self.hit else []
+
     def url_for(self, marker):
         return f"{self.base_url}/{marker}"
 
@@ -339,7 +342,13 @@ def test_ssrf_values_that_point_at_the_listener_are_sent(tmp_path, value):
     tools = AgentTools(_probe_ctx(tmp_path, "ssrf", lambda m, u, h, **k: sent.append(u) or Resp(),
                                   listener=listener))
     out = tools.http_request(path="/fetch", params={"url": value})
-    assert len(sent) == 1 and out["callback_hit"] is True and listener.waited == ["vrf0a1b2c3d4e5f6a7b"]
+    assert len(sent) == 1
+    if "vrf0a1b2c3d4e5f6a7b" in value:
+        assert out["callback_hit"] is True
+        assert listener.waited == [out["callback_attempt"]]
+        assert out["callback_attempt"] != "vrf0a1b2c3d4e5f6a7b"
+    else:
+        assert out["callback_hit"] is False and not listener.waited
 
 
 @pytest.mark.parametrize("value", [

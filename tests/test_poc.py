@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from test_experiments import STRATEGY
 
 from appsec_verifier.agent import AgentProbe, AgentTools
 from appsec_verifier.auth import SessionManager
@@ -64,14 +65,36 @@ def _ctx(tmp_path, transport, cls="access-control", browser=None, scope=None):
 def _run(ctx, steps, max_steps=12):
     steps = copy.deepcopy(steps)
     if ctx.plan.cls == "access-control":
-        ctx.scope = {**ctx.scope, "test_resources": [{"id": "basket", "finding_id": "T-001",
-                     "path": "/rest/basket/2", "allowed_roles": ["customer-b"], "denied_roles": ["customer-a"],
-                     "pointer": "", "value": "bob@shop.test"}]}
+        ctx.scope = {
+            **ctx.scope,
+            "test_resources": [
+                {
+                    "id": "basket",
+                    "finding_id": "T-001",
+                    "path": "/rest/basket/2",
+                    "allowed_roles": ["customer-b"],
+                    "denied_roles": ["customer-a"],
+                    "pointer": "",
+                    "value": "bob@shop.test",
+                }
+            ],
+        }
         for step in steps:
             if "verdict" in step and "proof_steps" in step["verdict"]:
                 step["verdict"]["proof_steps"] = [n + 1 for n in step["verdict"]["proof_steps"]]
-        steps.insert(0, {"tool": "plan_test", "args": {"kind": "access-control", "hypothesis": "A reads B's basket",
-                         "path": "/rest/basket/2", "resource": "basket"}})
+        steps.insert(
+            0,
+            {
+                "tool": "plan_test",
+                "args": {
+                    "kind": "access-control",
+                    "strategy": STRATEGY,
+                    "hypothesis": "A reads B's basket",
+                    "path": "/rest/basket/2",
+                    "resource": "basket",
+                },
+            },
+        )
     planner = Planner(steps)
     return AgentProbe(ctx.plan.cls, lambda: planner, max_steps=max_steps).run(ctx), planner
 
@@ -87,6 +110,7 @@ def _har(tmp_path, finding="T-001"):
 
 
 # ── redaction of a recorded exchange (VER-016) ───────────────────────────────
+
 
 def _raw(**over):
     raw = {"method": "GET", "url": "https://shop.example.com/a?id=2&access_token=abc123&q=x",
@@ -152,6 +176,7 @@ def test_capture_takes_the_request_as_httpx_sent_it():
 
 
 # ── every verdict gets its proof of concept (VER-034) ────────────────────────
+
 
 def test_confirmed_idor_writes_the_cited_exchanges_owner_only_and_hides_them_from_the_model(tmp_path):
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp())
@@ -235,6 +260,7 @@ def test_browser_exchanges_are_redacted_and_kept_out_of_the_tool_result(tmp_path
 
 # ── access-control screenshots (VER-035) ─────────────────────────────────────
 
+
 class RenderBrowser:
     def __init__(self, screenshots=SCREENSHOT_CLASSES):
         self.screenshots, self.calls, self.exchanges = frozenset(screenshots), [], []
@@ -253,12 +279,15 @@ def _html(m, u, h, **k):
                 {"content-type": "text/html; charset=utf-8"})
 
 
-@pytest.mark.parametrize("transport, screenshots, verdict, pages, exchanges", [
-    (_html, SCREENSHOT_CLASSES, "confirmed", 2, 1),                     # the pages, and the exchanges beside them
-    (lambda m, u, h, **k: Resp(), SCREENSHOT_CLASSES, "confirmed", 0, 1),   # JSON: the exchanges instead
-    (_html, ("xss",), "confirmed", 0, 0),                               # turned off for the class
-    (_html, SCREENSHOT_CLASSES, "not-reproducible", 0, 1),              # no page proof: the exchanges
-])
+@pytest.mark.parametrize(
+    "transport, screenshots, verdict, pages, exchanges",
+    [
+        (_html, SCREENSHOT_CLASSES, "confirmed", 2, 1),  # the pages, and the exchanges beside them
+        (lambda m, u, h, **k: Resp(), SCREENSHOT_CLASSES, "confirmed", 0, 1),  # JSON: the exchanges instead
+        (_html, ("xss",), "confirmed", 0, 0),  # turned off for the class
+        (_html, SCREENSHOT_CLASSES, "not-reproducible", 0, 1),  # no page proof: the exchanges
+    ],
+)
 def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, pages, exchanges):
     browser = RenderBrowser(screenshots)
     sent = []
@@ -285,6 +314,7 @@ def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, p
 
 
 # ── the exchange image (VER-035) ─────────────────────────────────────────────
+
 
 def _shot(tmp_path, cls, transport, steps, scope=None, listener=None):
     browser = RenderBrowser()
@@ -349,12 +379,23 @@ def test_exchange_image_marks_the_times_of_a_timing_proof(tmp_path):
 
 
 def test_exchange_image_marks_the_callback_marker(tmp_path):
-    listener = SimpleNamespace(base_url="http://127.0.0.1:4444", wait_for=lambda marker, timeout: True,
-                               hits=lambda marker: [{"time": "t", "method": "GET", "source": "127.0.0.1"}])
-    _, shot = _shot(tmp_path, "ssrf", lambda m, u, h, **k: Resp(200, "{}"),
-                    [_get(None, "/fetch", url="http://127.0.0.1:4444/vrfaa11bb22"),
-                     {"verdict": {"verdict": "confirmed", "rationale": "r"}}], listener=listener)
-    assert "<mark>vrfaa11bb22</mark>" in shot["html"]
+    listener = SimpleNamespace(
+        base_url="http://127.0.0.1:4444",
+        wait_for=lambda marker, timeout: True,
+        hits=lambda marker: [{"time": "t", "method": "GET", "source": "127.0.0.1"}],
+    )
+    _, shot = _shot(
+        tmp_path,
+        "ssrf",
+        lambda m, u, h, **k: Resp(200, "{}"),
+        [
+            _get(None, "/fetch", url="http://127.0.0.1:4444/vrfaa11bb22"),
+            {"verdict": {"verdict": "confirmed", "rationale": "r"}},
+        ],
+        listener=listener,
+        scope={**SCOPE, "callback": {"expect_rejected": True}},
+    )
+    assert "callback" in shot["html"] and "<mark>vrf" in shot["html"]
     assert "<mark>callback listener received the marker: yes</mark>" in shot["html"]
 
 
@@ -376,25 +417,42 @@ def test_no_exchange_image_without_decisive_steps(tmp_path):
 
 
 def test_an_executed_xss_gets_the_exchange_image_beside_the_page_with_the_opened_page_marked(tmp_path):
-    raw = poc.capture(Resp(200, "<html><app-root></app-root></html>", {"content-type": "text/html"}),
-                      method="GET", url="https://shop.example.com/")       # the fragment never reaches the server
-    page = {"executed": True, "evidence": [{"kind": "screenshot", "path": "evidence/T-001-xss-1.png"}],
-            "_exchanges": [{**raw, "navigation": True}]}
+    raw = poc.capture(
+        Resp(200, "<html><app-root></app-root></html>", {"content-type": "text/html"}),
+        method="GET",
+        url="https://shop.example.com/",
+    )  # the fragment never reaches the server
+    page = {
+        "executed": True,
+        "context_verified": True,
+        "evidence": [{"kind": "screenshot", "path": "evidence/T-001-xss-1.png"}],
+        "_exchanges": [{**raw, "navigation": True}],
+    }
     browser = RenderBrowser()
     browser.check = lambda url, **kw: {**page, "_exchanges": list(page["_exchanges"])}
     ctx = _ctx(tmp_path, None, cls="xss", browser=browser)
-    result, _ = _run(ctx, [{"tool": "browser_check", "args": {"path": "/#/search?q=%3Ciframe%20src%3D%22javascript:"
-                                                                      "alert('vrfaa11'%2B'bb22')%22%3E"}},
-                           {"verdict": {"verdict": "confirmed", "rationale": "r"}}])
+    result, _ = _run(
+        ctx,
+        [
+            {
+                "tool": "browser_check",
+                "args": {"path": "/#/search?q=%3Ciframe%20src%3D%22javascript:alert('vrfaa11'%2B'bb22')%22%3E"},
+            },
+            {"verdict": {"verdict": "confirmed", "rationale": "r"}},
+        ],
+    )
     assert result.verdict == "confirmed" and len(browser.exchanges) == 1
     assert [e["kind"] for e in result.evidence].count("screenshot") == 2
     html = browser.exchanges[0]["html"]
-    assert ("<mark>opened in the browser: /#/search?q=&lt;iframe src=&quot;javascript:alert(&#x27;vrfaa11&#x27;+"
-            "&#x27;bb22&#x27;)&quot;&gt;</mark>") in html
+    assert (
+        "<mark>opened in the browser: /#/search?q=&lt;iframe src=&quot;javascript:alert(&#x27;vrfaa11&#x27;+"
+        "&#x27;bb22&#x27;)&quot;&gt;</mark>"
+    ) in html
     assert "<mark>marker executed in the browser: yes</mark>" in html
 
 
 # ── report and export ────────────────────────────────────────────────────────
+
 
 def _doc(tmp_path):
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, 'bob@shop.test see ```` here'))

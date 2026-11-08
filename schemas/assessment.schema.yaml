@@ -25,6 +25,12 @@ properties:
         cwe:                { type: [string, "null"] }
         severity:           { type: [string, "null"] }
         effective_severity: { type: [string, "null"] }
+        verification_dependencies:
+          type: array
+          maxItems: 12
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 128}
+        attack_walkthrough: {type: [object, array, string]}
         evidence:
           type: [array, object, "null"]
           items: { $ref: "#/$defs/location" }

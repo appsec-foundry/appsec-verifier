@@ -293,3 +293,33 @@ only tests the findings it is given.
 
 Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements
 VER-001 to VER-035: [`requirements.md`](requirements.md).
+
+With `--min-severity`, the selection also includes up to eight additional
+findings: declared prerequisites and access or exposure findings on concrete
+management routes. The test plan names each addition and its reason before
+confirmation. `--strict-severity` keeps the severity floor exact; `--severity`,
+`--only`, category and CWE filters remain explicit boundaries. Health responses
+alone do not trigger this additional selection.
+
+The agent records a test plan with the relevant data flow, prerequisites,
+choice of test, alternative explanation, expected observation and stop condition.
+The console and report show this plan and justified revisions. Related architecture,
+walkthroughs and earlier prerequisite results are available as context. A verified
+finding does not establish a complete attack chain.
+
+SQL confirmation uses fresh complementary predicate controls. Command, template
+and XPath injection can be checked with harmless arithmetic evaluation and fresh
+expected results. Ordinary search differences, reflected inputs and timing alone
+remain inconclusive. NoSQL JSON-operator and LDAP filter-predicate checks use fresh controls against
+the declared literal-input contract. Scope and all run limits
+apply to each request, including requests collected by `run_experiment`.
+
+Missing authentication and information exposure use declared harmless resources
+and an allowed-versus-denied identity comparison. Session-cookie checks support
+Secure, HttpOnly and SameSite for cookies identified by the operator in
+`session_checks`. Session lifecycle properties such as fixation, expiration and
+logout require additional proof and are not inferred from these attributes.
+Screenshots are available for every supported class, including `session`,
+regardless of severity. Screenshots illustrate recorded observations.
+SQL and expression proofs require the expected literal-data input contract in
+scope `injection_inputs`; intended expression evaluation is not injection.

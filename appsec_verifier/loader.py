@@ -65,6 +65,9 @@ class FindingPlan:
     brief: str = ""                 # its scenario and attack steps, for the agent
     context: dict = field(default_factory=dict)
     verification_context: dict = field(default_factory=dict)
+    selection_reason: str | None = None
+    variant_id: str | None = None
+    variant_digest: str | None = None
 
 
 def _first_location(threat: dict) -> str | None:
@@ -159,8 +162,10 @@ def read_assessment(assessment_path: Path) -> dict:
 
 
 def plans_from(doc: dict) -> list[FindingPlan]:
+    from .planning import enrich
+
     catalog = load_verifiable_cwes()
-    return [classify(t, catalog, doc.get("attack_surface")) for t in doc["threats"]]
+    return enrich([classify(t, catalog, doc.get("attack_surface")) for t in doc["threats"]], doc)
 
 
 def load_plans(assessment_path: Path) -> list[FindingPlan]:

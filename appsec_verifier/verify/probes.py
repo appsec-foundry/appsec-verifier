@@ -29,6 +29,7 @@ class ProbeResult:
     target_location: dict | None = None
     limits_hit: str | None = None
     poc: dict | None = None            # proof of concept recorded by the code (VER-034, verify/poc.py)
+    planning: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -53,6 +54,7 @@ class ProbeContext:
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
     progress: object | None = None     # RunProgress that shows each step on the console, or None
     responses: dict = field(default_factory=dict)  # bounded redacted responses, private to this finding
+    prior_results: list[dict] = field(default_factory=list)
 
 
 @runtime_checkable

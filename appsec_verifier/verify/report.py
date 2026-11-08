@@ -61,6 +61,17 @@ def verified_findings(existing: dict) -> set[str]:
             and (r.get("proof") or {}).get("checked") is True and (r.get("proof") or {}).get("contract") == 2}
 
 
+def remaining_variants(plans, existing):
+    """Old aggregate results never invent coverage for a named variant."""
+    from ..planning import expand_variants
+
+    completed = {(r["finding_ref"]["id"], r["finding_ref"].get("variant_digest"))
+                 for r in existing.get("results", []) if r.get("verdict") in VERIFIED
+                 and (r.get("proof") or {}).get("checked") is True
+                 and (r.get("proof") or {}).get("contract") == 3}
+    return [p for p in expand_variants(plans) if (p.id, p.variant_digest) not in completed]
+
+
 def merge_reports(existing: dict, new: dict) -> dict:
     """Continue a prior report with a new run's results (VER-027, `--resume`): a
     finding tested again replaces its earlier result; findings not re-tested are
@@ -69,7 +80,9 @@ def merge_reports(existing: dict, new: dict) -> dict:
     by_id: dict[str, dict] = {}
     order: list[str] = []
     for r in (existing.get("results") or []) + (new.get("results") or []):
-        key = r.get("finding_ref", {}).get("id") or r.get("result_id")
+        ref = r.get("finding_ref", {})
+        key = (ref.get("id") or r.get("result_id"), ref.get("variant_digest") or
+               (r.get("proof") or {}).get("variant"))
         if key not in by_id:
             order.append(key)
         by_id[key] = r
@@ -190,6 +203,11 @@ def to_markdown(doc: dict) -> str:
         lines.append(f"- class: {r.get('class')} · CWE: {fr.get('cwe')} · match_key: `{fr.get('match_key')}`")
         if r.get("rationale"):
             lines.append(f"- {r['rationale']}")
+        if r.get("selection_reason"):
+            lines.append(f"- Additionally selected: {r['selection_reason']}")
+        if r.get("planning"):
+            lines += ["", "Test planning (assumptions are not proof):",
+                      _fenced(json.dumps(r["planning"], ensure_ascii=False, indent=2), "json")]
         proof = r.get("proof") or {}
         if proof.get("checked"):
             detail = {k: proof[k] for k in ("variant", "tested_path", "hypothesis", "observation_pointer", "steps")
@@ -307,4 +325,16 @@ def annotate_assessment(assessment: dict, doc: dict) -> dict:
                              for k in ("checked", "contract", "variant", "tested_path", "scope")
                              if k in (r.get("proof") or {})},
         }
+        variants = [row for row in doc["results"] if row["finding_ref"].get("id") == t.get("id")]
+        if any(row["finding_ref"].get("variant") for row in variants):
+            expected = {v["id"] for v in (t.get("verification_context") or {}).get("variants", [])}
+            completed = {(row.get("proof") or {}).get("variant") for row in variants
+                         if (row.get("proof") or {}).get("checked") is True}
+            t["verification"].update({
+                "verdict": "confirmed" if any(row["verdict"] == "confirmed" for row in variants) else "inconclusive",
+                "coverage": "complete" if expected and expected <= completed else "partial",
+                "variants": [{"variant": row["finding_ref"].get("variant"), "verdict": row["verdict"],
+                              "result_ref": row["result_id"], "tested_scope": row.get("proof")}
+                             for row in variants],
+            })
     return out

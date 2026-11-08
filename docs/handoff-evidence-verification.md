@@ -1,5 +1,25 @@
 # Übergabe zur Verbesserung der Evidence Prüfungen
 
+
+Aktualisierung der Umsetzung: Die folgenden Empfehlungen wurden im Verifier
+weiterbearbeitet. Der aktuelle Code enthält strukturierte Prüfplanung mit
+Konsolen- und Berichtsausgabe, begrenzte Zusatzauswahl unterhalb der
+Schweregradgrenze, aufgelösten Architekturkontext und explizite Abhängigkeiten,
+Varianten-Resume mit Proof-Vertrag 3 sowie Zuordnung von Browser- und
+Callback-Belegen. Injection verwendet frische Kontrollwerte für SQL, NoSQL,
+LDAP und arithmetische Auswertungen für Command-, Template- und XPath-Fälle.
+Ein Literal-Eingabevertrag in der Scope-Datei ist Voraussetzung; Timing allein
+bestätigt keine Injection mehr. Authentifizierungs-/Expositionsprüfungen nutzen
+deklarierte harmlose Ressourcen, Session-Prüfungen deklarierte Sitzungscookies.
+
+Die historischen Reproduktionen und Testzahlen weiter unten beschreiben den
+vorherigen Stand. Eine Live-Modell-Evaluation ist weiterhin offen. Die neue
+Browser-Zuordnung ist konservativ: Unterframes bleiben unbestätigt. Session-
+Fixierung, Logout und Ablaufdurchsetzung benötigen eigene Ablaufnachweise.
+Walkthrough-Markdown-Fragmente werden nicht automatisch eingelesen; vorhandene
+`attack_steps` und optionaler strukturierter Kontext werden genutzt. Die
+aktuellen Bedienhinweise und Scope-Felder stehen in `docs/cli.md`.
+
 Stand: 8. November 2026. Zuerst die Zuverlässigkeit der Beweise verbessern, danach weitere Testfähigkeiten ergänzen. Eine sichere, parametrisierte SQL-Suche kann aktuell als bestätigte Injection gelten. Das ist der erste zu bearbeitende Fehler; mehr Kontext oder zusätzliche Payloads allein beheben ihn nicht.
 
 ## Ausgangsstand und Umfang

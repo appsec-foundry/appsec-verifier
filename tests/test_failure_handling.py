@@ -178,7 +178,7 @@ def _saved_checked_results(tmp_path, count):
     path = tmp_path / "out" / "verification.yaml"
     doc = yaml.safe_load(path.read_text())
     for row in doc["results"][:count]:
-        row.update(verdict="blocked-by-control", rationale="first run", proof={"checked": True, "contract": 2})
+        row.update(verdict="blocked-by-control", rationale="first run", proof={"checked": True, "contract": 3})
     path.write_text(yaml.safe_dump(doc))
 
 
@@ -188,7 +188,7 @@ def test_resume_tests_only_the_findings_without_a_verdict_and_keeps_the_rest(tmp
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
     assert Checked.asked == ["T-3", "T-4"]
-    assert "2 findings keep their verdict" in capsys.readouterr().out
+    assert "remaining variants are tested separately" in capsys.readouterr().out
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
     assert [(r["finding_ref"]["id"], r["rationale"]) for r in doc["results"]] == [
         ("T-1", "first run"), ("T-2", "first run"), ("T-3", "checked"), ("T-4", "checked")]
