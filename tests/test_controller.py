@@ -445,3 +445,23 @@ def test_plan_names_every_problem_and_accepts_a_recorded_response(tmp_path):
     assert "prerequisite 2 is observed but cites no step" in message
     assert "select an evidenced finding variant" in message
     assert tools.plan_test(**xss_plan(page_loads("observed", 2))["args"])["accepted"] is True
+
+
+def test_an_experiment_on_a_write_is_refused_before_anything_is_sent(tmp_path):
+    """Every control is sent twice and a write never repeats, so the plan could only fail (VER-036)."""
+    sent = []
+    ctx = context(tmp_path, lambda *a, **kw: sent.append(a) or Resp())
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", endpoints=(Endpoint("POST", "/login", None),))
+    ctx.scope = {**ctx.scope, "injection_inputs": [{"finding_id": ctx.plan.id, "path": "/login",
+                 "input_location": "json", "input_name": "email", "semantics": "literal"}]}
+    tools = AgentTools(ctx)
+    plan = {"kind": "boolean", "hypothesis": "The email is part of the SQL text", "path": "/login",
+            "method": "POST", "strategy": STRATEGY, "input_location": "json", "input_name": "email",
+            "baseline": "plain", "pointer": "/result", "sql_template": "plain' AND {{predicate}} -- "}
+    timing = {k: v for k, v in plan.items() if k != "sql_template"}
+    form = {**plan, "method": "GET", "input_location": "form"}                 # a form field needs a write
+    for refused in (plan, {**timing, "kind": "timing", "method": "PATCH", "positive": "slow"}, form):
+        with pytest.raises(ToolError, match="an experiment sends every control twice and a write is never repeated"):
+            tools.plan_test(**refused)
+    assert sent == []
+    assert tools.plan_test(**{**plan, "method": "GET"})["accepted"] is True               # the same plan as a read

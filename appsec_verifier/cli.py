@@ -1339,8 +1339,12 @@ _NEEDS = {
                                         "injection_inputs: [{finding_id: ID, path: /route, input_location: params, "
                                         "input_name: NAME, semantics: literal}]",
                                         "(docs/cli.md, Scope file)"]),
-    "repeat": ("repeatable request", ["the injection proof sends every control twice and never repeats a write; "
-                                      "every request these findings name writes, so no run can confirm them"]),
+    "repeat": ("repeatable request", ["the injection proof sends every control twice and never repeats a write, "
+                                      "and every request these findings name writes; if a GET request of the "
+                                      "application carries the same input as a query parameter, declare that "
+                                      "one in a scope file (--scope):",
+                                      "injection_inputs: [{finding_id: ID, path: /route, input_location: params, "
+                                      "input_name: NAME, semantics: literal}]"]),
     "route": ("route", ["the assessment names no request for the finding: pass the application's source with "
                         "--source when the file of the finding declares its route, or name the request in a scope "
                         "entry for the finding (injection_inputs, test_resources)"]),
@@ -1367,8 +1371,9 @@ def _run_hints(doc: dict, target: str, browser_missing: str | None) -> dict[str,
 def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) -> tuple[str, str] | None:
     """What this run lacks to confirm `plan` (a _NEEDS key and the reason for the
     report), or None when it can try: first what its class's proof needs (VER-009
-    to VER-012), then the requests the assessment names (endpoints.py), when all
-    of them write in safe mode or all need a login and there is no test identity.
+    to VER-012; injection also a read request, since its proof repeats controls),
+    then the requests the assessment names (endpoints.py), when all of them write
+    in safe mode or all need a login and there is no test identity.
     A finding that names no request is tried only with `source`, where a literal
     route near its location can supply one (agent/controller.py)."""
     from .agent.experiments import access_methods
@@ -1406,15 +1411,21 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         if needs == ["state-change"]:
             return "intrusive", "safe mode; every declared variant needs a state change"
         return "capability", "declared variants need unavailable capabilities: " + ", ".join(needs)
-    if plan.cls == "injection" and not any(r["finding_id"] == plan.id for r in scope.get("injection_inputs", [])):
-        # VER-011: every injection proof needs the operator's contract and repeats its controls; writes never repeat.
+    if plan.cls == "injection":
+        # VER-011: the proof needs the operator's contract and sends every control twice, but a write never
+        # repeats (VER-014, VER-036), with or without --allow-intrusive. A contracted query parameter travels in a
+        # read request on its path (agent/controller.py); a JSON or form field in the body of a named request.
+        contracts = [r for r in scope.get("injection_inputs", []) if r["finding_id"] == plan.id]
         methods = [e.method for e in plan.endpoints if e.method != "PAGE"]
         methods += [v["request"].get("method", "GET") for v in variants]
+        methods += ["GET" for r in contracts if r["input_location"] == "params"]
         if methods and all(m in WRITE_METHODS for m in methods):
             return "repeat", "the proof repeats each control, and every request the assessment names writes"
-        return "contract", "no literal-input contract for this finding in injection_inputs"
+        if not contracts:
+            return "contract", "no literal-input contract for this finding in injection_inputs"
     requests = [e for e in plan.endpoints if e.method != "PAGE"]
-    if requests and safe and all(e.method in WRITE_METHODS for e in requests):
+    # An injection finding that gets here has a read request, and its proof never writes.
+    if requests and safe and plan.cls != "injection" and all(e.method in WRITE_METHODS for e in requests):
         return "intrusive", "safe mode; every request the assessment names writes"
     if requests and not identities and all(e.login for e in requests):
         return "identity", "no test identity; every request the assessment names requires a login"

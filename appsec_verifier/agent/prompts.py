@@ -35,7 +35,8 @@ def _tool_defs() -> list[dict]:
             "name": "plan_test",
             "description": "Declare the hypothesis and controls BEFORE proof requests. "
             "Use boolean with baseline/positive/negative inputs and a JSON pointer to a meaningful response field; "
-            "repeat each twice. Timing uses two baseline and two positive inputs, alternating. Access-control "
+            "repeat each twice. Timing uses two baseline and two positive inputs, alternating. Both use a GET "
+            "request, because a write is never repeated. Access-control "
             "uses an operator-supplied resource, an owner or a privileged reference, as the access-control proof "
             "instructions say. A new plan requires fresh observations. "
             "If the finding lists variants, set variant to the one you test. Prerequisite status: observed only "

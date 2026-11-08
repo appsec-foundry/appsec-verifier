@@ -93,17 +93,17 @@ def test_a_class_without_its_proof_prerequisite_is_not_tested():
 
 
 def test_the_requests_a_finding_names_decide_whether_safe_mode_or_a_missing_login_rule_it_out():
-    def blocker(plan, **kw):
-        return _blocker(plan, scope=CONTRACT, **kw)                   # an injection proof needs its contract
+    blocker = _blocker                                       # open redirect: no proof prerequisite of its own
 
-    assert blocker(_plan("injection", POST)) == ("intrusive", "safe mode; every request the assessment names writes")
-    assert blocker(_plan("injection", POST), safe=False) is None
-    assert blocker(_plan("injection", GET_LOGIN)) == ("identity", "no test identity; every request the "
-                                                                  "assessment names requires a login")
-    assert blocker(_plan("injection", GET_LOGIN), identities=ALICE) is None
-    assert blocker(_plan("injection", GET_LOGIN, Endpoint("GET", "/c", None))) is None     # one needs no login
-    assert blocker(_plan("injection", POST, Endpoint("PAGE", "/#/x", None)))[0] == "intrusive"
-    assert blocker(_plan("injection")) is None                                             # nothing named: tried
+    assert blocker(_plan("open-redirect", POST)) == ("intrusive", "safe mode; every request the assessment names "
+                                                                  "writes")
+    assert blocker(_plan("open-redirect", POST), safe=False) is None
+    assert blocker(_plan("open-redirect", GET_LOGIN)) == ("identity", "no test identity; every request the "
+                                                                      "assessment names requires a login")
+    assert blocker(_plan("open-redirect", GET_LOGIN), identities=ALICE) is None
+    assert blocker(_plan("open-redirect", GET_LOGIN, Endpoint("GET", "/c", None))) is None     # one needs no login
+    assert blocker(_plan("open-redirect", POST, Endpoint("PAGE", "/#/x", None)))[0] == "intrusive"
+    assert blocker(_plan("open-redirect")) is None                                             # nothing named: tried
 
 
 def test_injection_without_its_contract_or_with_only_writes_is_not_tested():
@@ -121,6 +121,21 @@ def test_injection_without_its_contract_or_with_only_writes_is_not_tested():
     written.verification_context = {"variants": [{"id": "v", "request": {"method": "PATCH", "path": "/b"}}]}
     assert _blocker(written, safe=False)[0] == "repeat"
     assert _blocker(_plan("injection", POST, get), safe=False)[0] == "contract"            # a read can carry it
+
+
+def test_a_contract_does_not_make_writes_repeatable_but_a_declared_query_parameter_is_read():
+    """A JSON or form field travels in the body of the write the finding names; a query parameter the
+    contract declares travels in a GET on its path, which the proof may repeat, also in safe mode."""
+    body = {"injection_inputs": [{**CONTRACT["injection_inputs"][0], "path": "/b", "input_location": "json",
+                                  "input_name": "email"}]}
+    for safe in (True, False):
+        assert _blocker(_plan("injection", POST), scope=body, safe=safe)[0] == "repeat"
+        form = {"injection_inputs": [{**body["injection_inputs"][0], "input_location": "form"}]}
+        assert _blocker(_plan("injection", POST), scope=form, safe=safe)[0] == "repeat"
+        query = {"injection_inputs": [{**body["injection_inputs"][0], "input_location": "params"}]}
+        assert _blocker(_plan("injection", POST), scope=query, safe=safe) is None
+    assert _blocker(_plan("injection", GET_LOGIN), scope=body)[0] == "identity"            # the read needs a login
+    assert _blocker(_plan("injection"), scope=body) is None                    # nothing named: the contract's path
 
 
 def test_a_finding_without_any_route_is_tested_only_with_the_source():
@@ -194,16 +209,19 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     assert out.index("Test plan     1 of 3 findings will be tested") < out.index("Preflight")   # before contact
     assert "  T-1  critical  injection       GET /rest/products/search · sqli in search" in out
     assert "Not testable  2 findings need what this run does not have (--test-all tries anyway)" in out
-    assert "  test identity    1  T-3\n" in out and "→ create an identities file with two test accounts" in out
-    assert "  intrusive mode   1  T-2\n" in out and "→ run with --allow-intrusive" in out
+    assert "  test identity        1  T-3\n" in out and "→ create an identities file with two test accounts" in out
+    # T-2's contract declares a JSON field of the login POST: no read request carries it, so no mode helps.
+    assert "  repeatable request   1  T-2\n" in out and "→ the injection proof sends every control twice" in out
     assert "Identities  :" not in out            # what is missing is said once, in the test plan
     listed = out[out.index("\nResults\n"):]
     assert "T-1  critical  injection       not attempted (low)" in listed
     assert "no answered target request" in listed
-    assert "  · T-2  high      injection       needs intrusive mode  sqli in login\n" in listed
-    assert "  · T-3  high      access-control  needs test identity   idor\n" in listed
+    assert "  · T-2  high      injection       needs repeatable request  sqli in login\n" in listed
+    assert "  · T-3  high      access-control  needs test identity       idor\n" in listed
     assert "Verdicts   : 3 not tested\n" in out
     assert results["T-1"][0] == "not-attempted"
+    assert results["T-2"] == ("not-attempted", "not tested: the proof repeats each control, and every request the "
+                                               "assessment names writes")
     assert results["T-3"] == ("not-attempted", "not tested: no test identity; the proof compares two identities")
 
 

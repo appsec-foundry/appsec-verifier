@@ -161,6 +161,13 @@ class AgentTools:
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
         if variants and not plan.get("variant"):
             problems.append("select an evidenced finding variant for this plan")
+        if plan["kind"] in ("boolean", "timing") and (
+            plan.get("method", "GET") not in SAFE_METHODS or plan.get("input_location") == "form"
+        ):
+            # Each control is sent twice and a write never repeats (VER-036), so such a plan could only fail;
+            # a form field travels only in a write (below).
+            problems.append("an experiment sends every control twice and a write is never repeated; use a GET "
+                            "request that carries the input as a query parameter")
         if problems:
             raise ToolError("; ".join(problems))
         from .experiments import expression_controls, ldap_controls, operator_controls, sql_controls
