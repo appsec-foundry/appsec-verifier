@@ -1,0 +1,32 @@
+# Example identities whose sessions come from a login program (VER-040).
+# login.py, next to this file, logs in through a form with a CSRF token and
+# prints the session cookie; adapt it to your application. The program runs
+# without a shell from this directory, with your environment minus the model
+# providers' keys. Its own requests are outside the Verifier's scope and
+# limits; the run lists it before the confirmation. Set the accounts first,
+# without leaving them in the shell history:
+#
+#   read -rs VERIFIER_USER_A_PASS && export VERIFIER_USER_A_PASS
+#   export VERIFIER_USER_A_USER='user-a@example.test'   # your own test account
+#
+# and the same for user-b. Schema: schemas/identities.schema.yaml.
+
+identities:
+  - role: user-a
+    method: command
+    auth:
+      command: [python3, login.py, user-a]
+      headers: [Cookie]                      # the only header the program may set
+      target_origin: https://app.staging.example.com
+      check_url: https://app.staging.example.com/account
+
+  - role: user-b
+    method: command
+    auth:
+      command: [python3, login.py, user-b]
+      headers: [Cookie]
+      target_origin: https://app.staging.example.com
+      check_url: https://app.staging.example.com/account
+
+  - role: anonymous
+    method: none

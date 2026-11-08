@@ -3,6 +3,6 @@ include requirements.md
 recursive-include schemas *.yaml *.json
 recursive-include data *.yaml
 include docs/cli.md
-recursive-include examples *.yaml
+recursive-include examples *.yaml *.py
 global-exclude __pycache__/*
 global-exclude *.pyc

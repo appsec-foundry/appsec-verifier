@@ -37,15 +37,17 @@ Questions come only where there is no usable default. Enter accepts the default 
 | Question | Default | Same as |
 | --- | --- | --- |
 | Target URL | none; asked only without a scope file (below) | `--url` |
-| Identities file | asked only when `identities.yaml` is found next to the scope, the assessment, or in the working directory; `none` for no identities | `--identities` |
+| Identities file | asked only when `identities.yaml` is found next to the scope, the assessment, or in the working directory; `none` for no identities. A file that starts login programs needs its own `Run them? [y/N]` | `--identities` |
 | Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
 | Existing report in the output directory | `There is already a report in ./verification. Overwrite it? [y/N]`; a no stops the run before anything is contacted. Not asked with `--overwrite` or `--resume`, nor without a terminal, where the run stops as `verify` does | `--output`, `--overwrite`, `--resume` |
 
-Each answer goes through the same check as its option and is asked again when invalid: a URL without http or https, with a user name or password, or with an ambiguous path, or an identities file with unset variables (named, never their values). Options given on the command line are used as given and not asked, e.g. `appsec-verifier ./security-assessment.yaml --target http://localhost:3000` asks nothing but the confirmation. No question asks for a password, token, or other secret; credentials stay in environment variables.
+Each answer goes through the same check as its option and is asked again when invalid: a URL without http or https, with a user name or password, or with an ambiguous path, or an identities file that cannot be used. Options given on the command line are used as given and not asked, e.g. `appsec-verifier ./security-assessment.yaml --target http://localhost:3000` asks nothing but the confirmation. A credential variable the identities file names but the environment lacks is asked for without echo, e.g. `alice: VERIFIER_ALICE_PASS (password_env) is not set; enter its value (hidden):`; Enter alone leaves it unset. The value is kept only for this run, never written and never put into the environment.
 
 A `scope.yaml` next to the assessment, else in the working directory, is used without a question; the run prints its path. If it cannot be used, for instance because its window has closed, the run stops with exit 2 and says why. Correct the file, or move it away to enter a target URL instead.
 
 Without a scope file the run asks for the target URL, which has no default and is never taken from the assessment. The run then tests only that URL's scheme, host and port, read-only, as `verify --url` does without `--scope`, and writes no file.
+
+Without an identities file, when the selection holds access-control findings for which the scope declares `test_resources`, the run offers to take the session of each role those resources name from your browser: `Paste sessions for user-a, user-b? [y/N]`. Sign in to the application as that user (a private window or another browser profile for the second one), open the developer tools, and in the Network tab copy any request the application sends to the target with "Copy as cURL (bash)". Paste it at `Request copied as user-a (hidden; Enter alone skips this role):` and press Enter. The pasted text is not echoed and never run; the run keeps only its Cookie and Authorization headers and refuses a request to another site. When the copied request was a GET, the pre-flight check sends it once with the session to see that it is accepted. Pasted sessions are not renewed, so a session that expires during the run ends that role's tests. The equivalent invocation printed before the confirmation does not include them; for a repeatable run put them in an identities file with `method: session`.
 
 After the questions the run shows the `verify` settings and the equivalent non-interactive command line, e.g.
 
@@ -92,7 +94,7 @@ During the run, `verify` prints one entry per event on standard error, in the co
 | `--assessment PATH` | `security-assessment.yaml` to verify (the one the Analyzer produced). | VER-005 |
 | `--scope PATH` | Authorisation scope file (`schemas/scope.schema.yaml`): the target boundary, the declared proxy and auth hosts, the test window and the owner. Without it, `--url` alone sets the boundary. | VER-001 |
 | `--url URL` (alias `--target`) | Start/base URL to test. With `--scope` it must fall inside the scope; a mismatch is refused, and without `--url` the scope's `base_url` is used. Without `--scope` it is required and is the whole boundary: its scheme, host and port, read-only, with no window and no owner. | VER-001/004 |
-| `--identities PATH` | Test-identity config (`schemas/identities.schema.yaml`): bearer, basic, form, or OIDC login per role. Secret **values** come from env, never this file. | VER-016/028 |
+| `--identities PATH` | Test-identity config (`schemas/identities.schema.yaml`): per role a bearer token, basic, form, copied browser headers, an OIDC flow or a login program. Secret **values** come from env, or are asked hidden in an interactive run, never from this file. | VER-016/028/040 |
 | `--proxy URL` | *Not implemented yet; set `proxy.url` in the scope file.* Route target and auth traffic through this HTTP/HTTPS proxy, overriding the scope's `proxy.url`. Proxy credentials still come from the env vars the scope names. | VER-029 |
 
 ### Select what to verify (VER-026)
@@ -123,7 +125,7 @@ Every limit must be greater than 0; only `--rate` accepts 0. A negative or zero 
 
 Once the cost ceiling, the request cap, the call cap, the run time or the scope window is reached, the finding under test ends `inconclusive` and the remaining findings are not tested: they appear as `not-attempted` with the limit in `limits_hit`, no further model call is made, and the run exits with 3. After three failed model calls in a row, for example an exhausted quota or a rejected key, the run makes no further model call and the remaining findings end `inconclusive` with the reason.
 
-A failed request is not retried; only GET, HEAD and OPTIONS may be resent once after a 401 and session renewal. POST, PUT and PATCH are never automatically resent. When the request is answered 401 again with the new session, that identity is not logged in again until one of its requests is accepted. A login the target refuses is not tried again in the run. Each answer is read for at most 30 seconds and up to 10 MiB after decompression; a slower or larger answer ends that request with an error the agent sees.
+A session whose expiry is known (an OIDC `expires_in`, the `exp` of a JWT, or a login program's `expires_at`) is renewed a minute before it expires: with the refresh token where the flow issued one, otherwise by logging in again or running the login program again. A session from environment variables or a paste is not renewed and is no longer sent once it has expired. A failed request is not retried; only GET, HEAD and OPTIONS may be resent once after a 401 and session renewal. POST, PUT and PATCH are never automatically resent. When the request is answered 401 again with the new session, that identity is not logged in again until one of its requests is accepted. A login the target refuses is not tried again in the run. Each answer is read for at most 30 seconds and up to 10 MiB after decompression; a slower or larger answer ends that request with an error the agent sees.
 
 Ctrl-C stops the run: the finding under test ends `inconclusive`, the remaining ones are `not-attempted`, the report is written with the results so far and `meta.interrupted: true`, and the run exits with 130.
 
@@ -209,8 +211,8 @@ Each finding gets a random two-part marker; the payload must call `alert('<part1
 
 ### Interactive and non-interactive
 
-- Interactive (default, with a terminal): the run prints its settings and waits for one confirmation before the first request (VER-002). The guided run (above) asks for the settings first.
-- Non-interactive (`--non-interactive` / `--ci`, or no terminal): no prompts. Selection, profile and confirmation (`--yes`) come from the command line; a missing confirmation stops the run.
+- Interactive (default, with a terminal): the run prints its settings and waits for one confirmation before the first request (VER-002). A credential variable that is not set is asked for hidden before that, and sign-ins in your browser (`oidc-authorization-code`, `oidc-device-code`) happen after it, before the first finding. The run never asks again later. The guided run (above) asks for the settings first.
+- Non-interactive (`--non-interactive` / `--ci`, or no terminal): no prompts. Selection, profile and confirmation (`--yes`) come from the command line; a missing confirmation stops the run. Every credential variable must be set, and an identity that needs a person to sign in stops the run before anything is contacted; use a login program or client credentials there.
 
 ### Console output
 
@@ -249,11 +251,12 @@ Runs the checks `verify` runs before its first finding, and verifies nothing. Ea
 | Assessment | Checks the fields the Verifier reads against `schemas/assessment.schema.yaml` and that finding ids are unique. Shows project, date, and how many findings are dynamic, static-only, input-incomplete. Messages name the place and the rule; only a repeated id is quoted, escaped. | nothing |
 | Scope | Schema, window, URL inside the scope. | nothing |
 | Proxy | The proxy URL is http(s) without inline credentials, and `username_env`/`password_env` are both set. | nothing |
-| Identities | Schema, every `*_env` variable set, endpoints and `check_url` inside the scope. | nothing |
+| Identities | Schema, every `*_env` variable set (asked for hidden at a terminal, except with `--offline`), endpoints and `check_url` inside the scope, login programs found, and sign-ins that need a person only at a terminal. | nothing |
+| Programs | The login programs the identities start, as written. They run at the login check below, with your rights. | nothing |
 | Test plan | The test plan `verify` shows, for every finding and in safe mode: which findings a run tests, and which it cannot test because they need what the run lacks, grouped by that need with what to add. Warns when a finding cannot be tested, never fails. Only when the checks above passed. | nothing |
 | Model | The profile resolves (CLI present and logged in, or key set; model known and priced). For `codex` and `anthropic-api` one metadata request shows the key is accepted and the model offered; it generates nothing and proves no quota. | the provider (not with `--offline`) |
 | Target | One GET to the URL through the scope gate and the declared proxy. A redirect is not followed. Any HTTP answer counts as reachable; 5xx warns. A failure names its cause: name resolution, refused connection, timeout, TLS certificate or handshake, proxy refusal or proxy authentication (407), or an address the scope refuses. | the target |
-| per role | One login for `form` and OIDC identities, never retried. With `auth.check_url`, one GET there with the identity's credentials: 2xx accepted, 401/403 rejected, anything else unclear. `bearer` and `basic` without `check_url` are reported as not checked against the target. | target, login endpoints |
+| per role | One login for `form`, OIDC and `command` identities, never retried; for `oidc-authorization-code` and `oidc-device-code` you sign in now. With `auth.check_url`, one GET there with the identity's credentials: 2xx accepted, 401/403 rejected, anything else unclear. `bearer`, `basic` and `session` without `check_url` are reported as not checked against the target. Two roles whose tokens name the same account (the same `iss` and `sub`) fail, because an access-control proof needs two independent accounts; sessions that do not name their account, such as cookies, are not compared. | target, login endpoints, login programs |
 | Model test | Only with `--test-model` (`verify` always runs it, within its own limits): one fixed prompt without target data, findings or credentials. Passes when the host stays confined and replies with exactly the requested step. | the provider |
 
 The offline checks run first. If one fails, nothing is contacted. The target and login checks run only after one explicit confirmation (VER-002): at the prompt, or with `--yes`. `--non-interactive` without `--yes` contacts nothing and fails. A failed target check skips the logins. The test plan itself is printed after the checks, before the result.
@@ -344,32 +347,70 @@ Addresses are checked when the connection is made (VER-018). Each host name is r
 
 The `window` is checked before every request and every planning step. Once it has closed, the current finding ends `inconclusive` with `limits_hit: window`, no further request is sent, and the run exits with 3.
 
-### Identities file — `identities.yaml` (sessions, VER-016/028)
+### Identities file — `identities.yaml` (sessions, VER-016/028/040)
 
-Lists the test identities by role name and, per identity, the login `method` and the environment variables that hold its credentials. The file holds no secret values. Schema: `schemas/identities.schema.yaml`. Methods: `bearer` (static token), `basic`, `form`, `oidc-password`, `oidc-client-credentials`, and `none` (anonymous). `oidc-authorization-code` is in the schema but not implemented yet; the pre-flight check refuses it. Examples: `examples/juice-shop/` (form login) and `examples/sso-proxy/` (OIDC and proxy).
+Lists the test identities by role name and, per identity, the login `method` and where its credentials come from. The file holds no secret values: it names the environment variables that hold them. Use accounts made for the test, not your own company account, because the run acts with that account's rights. Schema: `schemas/identities.schema.yaml`. Examples: `examples/juice-shop/` (form login), `examples/sso-proxy/` (SSO sign-in in your browser, behind a proxy) and `examples/login-program/` (a login program).
+
+| Method | Session |
+| --- | --- |
+| `none` | no credentials, for anonymous requests |
+| `bearer` | the token in `token_env`, sent as `Authorization: Bearer` |
+| `basic` | `username_env` and `password_env` as HTTP Basic |
+| `session` | headers copied from a signed-in browser, each from its own variable, e.g. `headers_env: {Cookie: VERIFIER_A_COOKIE}`; also for API keys such as `X-Api-Key` |
+| `form` | a JSON login at `login_url` that returns a token |
+| `oidc-password` | the OIDC password grant; meant for test realms, many providers refuse it for accounts with MFA |
+| `oidc-client-credentials` | the client-credentials grant, for service identities |
+| `oidc-authorization-code` | you sign in in your own browser; needs a terminal and a browser on the same machine |
+| `oidc-device-code` | you sign in on any device with a code the Verifier shows; needs a terminal |
+| `command` | your login program prints the session |
 
 ```yaml
 identities:
-  - role: user-a                       # OIDC password grant against the SSO server
-    method: oidc-password
+  - role: user-a                       # sign-in in your browser, MFA included
+    method: oidc-authorization-code
     auth:
-      token_url: https://sso.example.com/realms/app/protocol/openid-connect/token
+      issuer: https://sso.example.com/realms/app
       client_id: verifier-cli
-      client_secret_env: VERIFIER_OIDC_CLIENT_SECRET
-      username_env: VERIFIER_USER_A_NAME
-      password_env: VERIFIER_USER_A_PASS
-  - role: service                      # pre-issued bearer token
-    method: bearer
-    auth: { token_env: VERIFIER_SVC_TOKEN }
+      scope: openid
+      check_url: https://app.example.com/api/me
+  - role: user-b                       # a session copied from the browser
+    method: session
+    auth:
+      headers_env: { Cookie: VERIFIER_USER_B_COOKIE }
+      check_url: https://app.example.com/api/me
+  - role: user-c                       # your own login program
+    method: command
+    auth:
+      command: [./login.py, user-c]
+      headers: [Cookie]
+  - role: service                      # client credentials
+    method: oidc-client-credentials
+    auth: { issuer: https://sso.example.com/realms/app, client_id: verifier-svc, client_secret_env: VERIFIER_SVC_SECRET }
   - role: anonymous
     method: none
 ```
 
-Each identity sends its credentials only to the endpoint it names, which must be the target or a scope `auth_hosts` entry (VER-028). The session it obtains is attached only to its own origin, `auth.target_origin`, by default the target base URL; a request as that role to any other origin is refused (VER-018). The HTTP client keeps no cookies, so a session never travels in a cookie the target set for another identity.
+For the OIDC methods `issuer` is enough: the Verifier reads `<issuer>/.well-known/openid-configuration` and takes the endpoints not given as `token_url`, `authorize_url` or `device_url`. Every endpoint must be the target or an `auth_hosts` entry of the scope, also one the discovery document names. Optional fields: `client_id` or `client_id_env`; `client_secret_env` for a confidential client, sent in the body (`client_auth: post`, the default) or as HTTP Basic (`client_auth: basic`); `scope`; `audience`, which Auth0 requires; `resource`, which Entra ID v1 requires; and `token: id` for an application that expects the ID token instead of the access token.
 
-Before the first request `verify` checks the file against the schema, checks that every `*_env` variable it names is set, and that login endpoints and `target_origin` lie inside the scope. A failure stops the run with exit 2 and names the variable, never its value. After the confirmation and before the first model call, every `form` and OIDC identity logs in once; a rejected login stops the run (VER-032). A `bearer` or `basic` identity is checked against the target only when it names `auth.check_url`, a URL on the origin its credentials are sent to, which the pre-flight check requests once.
+`oidc-authorization-code` needs a client at your identity provider that allows a loopback redirect and issues tokens the application's API accepts. The Verifier prints the authorize URL, opens it in your browser where there is a display, and waits up to 5 minutes for the redirect to `http://127.0.0.1:<port>/callback`. The listener there accepts only that path with the run's `state`, answers that one request and closes. The code is exchanged with PKCE (S256). If the provider needs the redirect registered with a fixed port, set `redirect_uri: http://127.0.0.1:8400/callback` (or `localhost`). The Verifier sends `prompt=login`, so the provider asks again for each role instead of signing the second role in as the first; `prompt: select_account` or `consent` change that. The Verifier never sees your password. This fits applications whose API accepts the provider's token. An application that keeps its own session cookie after the SSO sign-in needs `session` or a login program.
 
-Credential and token values are read from the environment at run time and used only to obtain a session. They are never written to logs, the report, evidence files or a model prompt; only the role name is passed on, and recorded requests are stripped of Authorization headers, cookies and token parameters (VER-016, VER-022). If the target echoes a credential, every value the run knows (each `*_env` value and each token obtained, also JSON-escaped and URL-encoded) is replaced by `[redacted]` in tool results, the report and the proof of concept. Values shorter than 4 characters are not replaced, and XSS screenshots are not redacted.
+`oidc-device-code` shows a URL and a code, e.g. `Sign in as user-a: open https://sso.example.com/device and enter the code WDJB-MJHT`, and polls the token endpoint at the interval the provider sets, for at most 15 minutes. It also works over SSH.
+
+Both sign-ins happen after the confirmation and before the first finding. A run without a terminal refuses such an identity before anything is contacted. Their sessions are renewed with the refresh token the provider issued; when that fails later in the run, the role is unavailable for the rest of it, because the run never asks again.
+
+A login program (`method: command`) is the way for everything else: a provider that needs a script, a classic login form with a CSRF token, or a CI run. `command` is the program and its arguments as a list; it is run without a shell from the directory of the identities file, so `./login.py` is found next to it. Any language works, e.g. `[/home/me/sso-venv/bin/python, login.py, user-a]`; use your own Python environment for what the program needs, not the Verifier's. The program prints the session on standard output, at most 64 KiB, either one line with a bearer token, or one JSON object:
+
+```json
+{"headers": {"Authorization": "Bearer eyJ…"}, "cookies": {"SESSION": "…"}, "expires_at": "2026-11-08T14:30:00Z"}
+```
+
+`cookies` are sent as one `Cookie` header, `expires_at` (ISO 8601 with a time zone) or `expires_in` (seconds) say when to run it again. Only the header names listed in `headers` are accepted (default `[Authorization]`), and a value with a line break or another control character is refused. `timeout` is 120 seconds by default, at most 900. In an interactive run the program shares your terminal, so it can ask for a one-time code itself; write such prompts to standard error. Otherwise its input is empty. Its standard error goes to the terminal as it is and is never recorded. It gets your environment without the model providers' credentials (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`). A program that exits with a status other than 0 is reported by that status only, and it is not run again in the run. Otherwise it runs again only to renew the session: shortly before its expiry and once after a 401. The program's own requests are outside the run's scope, limits, rate and safe mode: it runs with your rights, like a command you start yourself. The run lists each program in its settings before the confirmation, and in the guided run a found identities file that starts programs needs its own yes.
+
+Each identity sends its credentials only to the endpoint it names, which must be the target or a scope `auth_hosts` entry (VER-028). The session it obtains is attached only to its own origin, `auth.target_origin`, by default the target base URL; a request as that role to any other origin is refused, and its headers are removed when a redirect leads to another origin (VER-018). The HTTP client keeps no cookies, so a session never travels in a cookie the target set for another identity.
+
+Before the first request `verify` checks the file against the schema, that every variable it names is set, that login endpoints and `target_origin` lie inside the scope, and that login programs exist. In an interactive run a variable that is not set is asked for without echo and kept only for the run; without a terminal the run stops with exit 2 and names the variable, never its value. To keep a value out of your shell history, set it with `read -rs VERIFIER_ALICE_PASS && export VERIFIER_ALICE_PASS`. A secret manager can set the variables for the one command, e.g. `op run --env-file=verifier.env -- appsec-verifier verify …`, `doppler run -- appsec-verifier verify …` or `sops exec-env secrets.enc.yaml 'appsec-verifier verify …'`. After the confirmation and before the first model call, every identity that logs in does so once; a rejected login stops the run (VER-032). A `bearer`, `basic` or `session` identity is checked against the target only when it names `auth.check_url`, a URL on the origin its credentials are sent to, which the pre-flight check requests once. Two roles signed in as the same account also stop the run.
+
+Credential and token values are used only to obtain and send a session. They are never written to logs, the report, evidence files or a model prompt; only the role name is passed on, and recorded requests are stripped of Authorization headers, cookies and token parameters (VER-016, VER-022). If the target echoes a credential, every value the run knows (each variable's value, each value entered hidden or pasted, each token, refresh token and cookie value obtained, also JSON-escaped and URL-encoded) is replaced by `[redacted]` in tool results, the report and the proof of concept. Values shorter than 4 characters are not replaced, and XSS screenshots are not redacted.
 
 ### Limits — `data/limits.yaml`
 

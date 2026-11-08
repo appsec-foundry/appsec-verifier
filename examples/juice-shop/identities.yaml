@@ -1,12 +1,13 @@
 # Example test identities for verifying a local OWASP Juice Shop.
 # This file names ROLES and the environment variables that hold their
 # credentials — it contains no secret values (VER-016). Export the referenced
-# variables before the run, e.g.:
+# variables before the run; `read -rs` keeps a password out of the shell
+# history. In an interactive run a variable that is not set is asked hidden.
 #
 #   export VERIFIER_CUST_A_USER='customer-a@juice.test'
-#   export VERIFIER_CUST_A_PASS='...'      # your own throwaway test account
+#   read -rs VERIFIER_CUST_A_PASS && export VERIFIER_CUST_A_PASS   # your own throwaway test account
 #   export VERIFIER_CUST_B_USER='customer-b@juice.test'
-#   export VERIFIER_CUST_B_PASS='...'
+#   read -rs VERIFIER_CUST_B_PASS && export VERIFIER_CUST_B_PASS
 #
 # Credential values are used only to obtain a session and never appear in logs,
 # the report, evidence artefacts, or any model prompt — only the role label

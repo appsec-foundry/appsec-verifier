@@ -30,7 +30,7 @@ You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an assessme
    owner: {name: Your Name}   # who is responsible for the test
    ```
 
-3. Optional: add test accounts in `identities.yaml`. Access-control findings need two of them. The file names environment variables, never the passwords themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml).
+3. Optional: add test accounts in `identities.yaml`. Access-control findings need two of them. The file names environment variables, never the passwords themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml). With SSO, the accounts can sign in in your browser, or a login program of your own provides the session. Without a file, the guided run can take each account's session from a request you copy in the browser, when the scope declares test resources for the selected access-control findings.
 
 4. Start the guided run with the assessment:
 
@@ -171,11 +171,11 @@ python3 -m venv .venv
 ## Configuration
 
 - Scope file: [`schemas/scope.schema.yaml`](schemas/scope.schema.yaml)
-- Test accounts: [`schemas/identities.schema.yaml`](schemas/identities.schema.yaml), with `bearer`, `basic`, `form` or OIDC login
+- Test accounts: [`schemas/identities.schema.yaml`](schemas/identities.schema.yaml): a bearer token, basic, form login, headers copied from the browser, an OIDC flow (sign-in in your browser, device code, client credentials, password grant) or a login program; see [Identities file](docs/cli.md#identities-file--identitiesyaml-sessions-ver-016028040)
 - Default limits: [`data/limits.yaml`](data/limits.yaml)
 - Models and prices: [`data/model-catalog.yaml`](data/model-catalog.yaml) (OpenAI), [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml) (Anthropic API)
 
-Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form login) and [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, OIDC login).
+Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form login), [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, SSO sign-in in the browser) and [`examples/login-program/`](examples/login-program/) (a login program for a form with a CSRF token).
 
 ## Limitations
 
@@ -184,7 +184,8 @@ Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form log
 
 - The proof browser has only been tested against a local fake target, and the `codex-cli` and `copilot-cli` profiles only with simulated answers.
 - The path-traversal and SSRF checks decode percent-encoding, but no other encodings a target might accept.
-- Not implemented yet: the check that the target runs the assessed build (`expected_build`), the `--proxy` option (set `proxy.url` in the scope), and the `oidc-authorization-code` login.
+- Not implemented yet: the check that the target runs the assessed build (`expected_build`) and the `--proxy` option (set `proxy.url` in the scope).
+- A sign-in in the browser works for applications whose API accepts the identity provider's token. An application that keeps its own session cookie after the SSO sign-in needs a copied session or a login program; sessions copied from the browser are not renewed during the run.
 
 ## Non-goals
 
