@@ -1,23 +1,31 @@
-"""The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-016, VER-017).
+"""The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-016,
+VER-017, VER-039, VER-042).
 
 Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
-``start`` and ``done`` for a finding's bounds, ``·`` for an agent step, ``↻`` for a step the step
-contract refused and ``⚠`` for a limit that stopped the finding. A blank line sets each finding apart.
+``start`` and ``done`` for a finding's bounds, ``agent`` when an agent starts or finishes, ``·`` for an
+agent step, ``proof`` for the proof check, ``↻`` for a step the step contract refused and ``⚠`` for a
+limit that stopped the finding. A blank line sets each finding apart.
 The ``start`` entry gives the finding's title, then its severity, class and the requests the assessment
-names, then the agent that tests it: its model in AppSec Analyzer's short form (``Sonnet 4.5``) and
-runtime, its step budget, the identities it may act as and whether it may read source code. A finding
-an earlier run-wide limit stopped gets no agent row, since no agent starts for it. AppSec Analyzer names
-its agents' models in parentheses on a phase's start line; here a finding has one agent, so it gets a
-row of its own. A step entry gives the agent's note on what the step checks, then the request it tested with its
-query and body, the result and how long the model took to propose the step; the ``done`` entry gives the
-verdict, then the agent's rationale. When the run shows costs (API billing, or ``--show-costs`` as in
-AppSec Analyzer), each step gives its model cost, the ``done`` entry the finding's cost and the run's
-spend against its cost limit, and the status line the run's spend as it grows; on a terminal the amounts
-are highlighted. Under the ``done`` entry a line names each screenshot the finding produced, with its path in
-the output directory: ``proof`` when the Verifier checked the verdict's proof, otherwise ``img``. PROGRESS
-counts finished findings, ELAPSED is the run's time. LEFT extrapolates the time the finished findings took,
-never beyond the run's time limit; until the first finding has finished it shows that limit (``≤29m``).
+names. The ``agent`` entry after it says that the test agent started: its model in AppSec Analyzer's short
+form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act as and whether it may read
+source code. A finding an earlier run-wide limit stopped gets no agent entries, since no agent starts for
+it. A step entry gives the agent's note on what the step checks, then the request it tested with its
+query and body, the result and how long the model took to propose the step; a result that a proof needs
+(a script executed, the marker file read, a callback hit) is highlighted. A ``proof`` entry says when the
+proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
+entry says so, then a ``proof`` entry says whether the proof was checked (VER-009 to VER-013) or why
+there is none. The evidence reviewer of VER-042 gets ``agent`` entries for its start and end as well.
+The ``done`` entry gives the verdict, marked and highlighted, and for a confirmed finding the agent's
+rationale; once a finding's last variant is done, a ``rating`` entry follows when the rating after
+verification differs from the Analyzer's (VER-039). When the run shows costs (API billing, or
+``--show-costs`` as in AppSec Analyzer), each step gives its model cost, the ``done`` entry the finding's
+cost and the run's spend against its cost limit, and the status line the run's spend as it grows; on a
+terminal the amounts are highlighted. Under the ``done`` entry a line names each screenshot the finding
+produced, with its path in the output directory: ``proof`` when the Verifier checked the verdict's proof,
+otherwise ``img``. PROGRESS counts finished findings, ELAPSED is the run's time. LEFT extrapolates the
+time the finished findings took, never beyond the run's time limit; until the first finding has finished
+it shows that limit (``≤29m``).
 
 On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
 long row wraps under its column; a status line under the grid is redrawn every ``TICK_SECONDS`` with a
@@ -46,7 +54,13 @@ _ANSI = re.compile(r"\033\[[0-9;]*m")
 # Seen from the finding: green confirmed, red not reproduced or blocked (a likely false positive), yellow undecided.
 _VERDICT_ROLES = {"confirmed": "ok", "not-reproducible": "critical", "blocked-by-control": "critical",
                   "inconclusive": "warn", "not-attempted": "muted"}
-_EVENT_ROLES = {"start": "accent", "↻": "warn", "⚠": "warn"}
+_VERDICT_MARKS = {"confirmed": "✔", "not-reproducible": "✘", "blocked-by-control": "✘", "inconclusive": "?"}
+_EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
+# What a checked proof showed, by class (agent/proof.py).
+_PROVEN = {"xss": "script executed in the browser", "ssrf": "the target called the Verifier's listener",
+           "open-redirect": "redirect to the marker host", "path-traversal": "marker file read",
+           "access-control": "access differs between identities", "injection": "response follows fresh controls",
+           "session": "cookie attribute missing in repeated responses"}
 _SEVERITIES = ("critical", "high", "medium", "low")
 _NBSP = "\xa0"       # keeps the run's spend and the model time whole across a wrap, as in AppSec Analyzer
 # A redraw begins a synchronized update and hides the cursor, then shows it again; terminals without
@@ -149,21 +163,22 @@ def _action(tool: str, args: dict) -> str:
     return text + (f" as {_clip(args['role'], 40)}" if args.get("role") else "")
 
 
-def _outcome(result: dict) -> str:
+def _outcome(result: dict) -> list[tuple]:
+    """A tool result as segments; what a proof needs stands out."""
     if result.get("error"):
-        return f"error: {_clip(result['error'], 160)}"
+        return [(f"error: {_clip(result['error'], 160)}",)]
     parts = []
     if isinstance(result.get("status"), int):
         parts.append(str(result["status"]))
     if isinstance(result.get("length"), int):
         parts.append(f"{result['length']} B")
     if "executed" in result:
-        parts.append("script executed" if result["executed"] else "no script executed")
+        parts.append(("script executed", "ok", "bold") if result["executed"] else "no script executed")
     if result.get("marker_read"):
-        parts.append("marker file read")
+        parts.append(("marker file read", "ok", "bold"))
     if result.get("callback_hit"):
-        parts.append("callback hit")
-    return " · ".join(parts) or "done"
+        parts.append(("callback hit", "ok", "bold"))
+    return _line(*parts) or [("done",)]
 
 
 class _StatusGuard:
@@ -186,9 +201,9 @@ class _StatusGuard:
 class RunProgress:
     """The run's progress grid on ``stream`` (standard error by default).
 
-    The runner calls `begin`, then `finding` and `finished` per finding with a probe; the agent loop
-    calls `activity` before each model or tool call and `step` with each action-log record. `close`
-    stops the status line and must run however the run ends.
+    The runner calls `begin`, then `finding`, `agent_finished` and `finished` per finding with a probe;
+    the agent loop calls `activity` before each model or tool call and `step` with each action-log record.
+    `close` stops the status line and must run however the run ends.
     """
 
     TICK_SECONDS = 0.2
@@ -211,10 +226,10 @@ class RunProgress:
         self.live = live
         self._model = _clip(short_model(str(model)), 40) if model else "the model"
         self._redact = redact
-        # The agent row of each start entry: what tests the finding, with which budget and authority.
+        # The test agent's start entry: what tests the finding, with which budget and authority.
         who = " via ".join(part for part in (self._model if model else "", _clip(runtime or "", 40)) if part)
         names = _clip(self._text(", ".join(str(role) for role in roles)), 60)
-        self._agent = _line(f"agent {who}".strip(), f"≤{max_steps} steps" if max_steps else "",
+        self._agent = _line(who, f"≤{max_steps} steps" if max_steps else "",
                             f"identities {names}" if names else "no identities",
                             "source code" if source else "")
         self._remaining_time = remaining_time
@@ -230,6 +245,8 @@ class RunProgress:
         self._id = ""
         self._id_width = 0
         self._steps, self._noted = 0, False
+        self._explained = False         # a proof entry said why the finding has no proof
+        self._reviewing = False         # an evidence reviewer started and has not finished
         self._activity, self._activity_at = "", 0.0
         self._asked: tuple[int, float] | None = None     # (step, when the model call for it began)
         self._took: tuple[int, float] | None = None      # (step, how long the model took to propose it)
@@ -263,7 +280,7 @@ class RunProgress:
                 self._write("")         # sets the finding apart from the one before
             self.number += 1
             self._id = _clip(plan.id, 16)
-            self._steps, self._activity, self._noted = 0, "", False
+            self._steps, self._activity, self._noted, self._explained = 0, "", False, False
             self._asked = self._took = None
             self._finding_at = self._clock()
             self._spent_at = self._step_spent_at = self._spent() if self._spent is not None else 0.0
@@ -272,8 +289,9 @@ class RunProgress:
             requests = ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])   # what the assessment names
             self._record("start", [(title, "bold")],
                          _line((severity, severity if severity in _SEVERITIES else "muted"),
-                               _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)),
-                         *([self._agent] if agent else []))
+                               _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)))
+            if agent:
+                self._record("agent", _line(("▶ test agent started", "agent", "bold"), self._agent))
 
     def activity(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> None:
         """What runs now, for the status line and the heartbeat: a model call or a tool call."""
@@ -301,7 +319,14 @@ class RunProgress:
             took = f"model{_NBSP}{duration(self._took[1])}" if self._took and self._took[0] == number else ""
             cost = self._step_cost() if record.get("stopped") or record.get("refused") or action else ""
             self._noted = self._noted or bool(record.get("stopped") or record.get("refused"))
-            if record.get("stopped"):
+            if record.get("tool") == "proof_feedback":
+                # The proof check refused a claimed confirmation and the agent gets another try (agent/loop.py).
+                result = record.get("result") if isinstance(record.get("result"), dict) else {}
+                missing = result.get("missing") if isinstance(result.get("missing"), list) else []
+                reason = _clip(missing[0], 200) if missing else "the class's proof is missing"
+                self._record("proof", _line(head, [("✗ proof not accepted", "warn", "bold"), (f": {reason}", "warn")],
+                                            "back to the agent", (cost, "accent")), role="warn")
+            elif record.get("stopped"):
                 reason = f"stopped by limit: {_clip(record.get('reason', ''), 160)}"
                 self._record("⚠", _line(head, note, action, reason, (cost, "accent")))
             elif record.get("refused"):
@@ -318,7 +343,7 @@ class RunProgress:
                                                _clip(reason, 180) if reason else ""))
                     return
                 tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
-                tested = _line([tested, (f" → {_outcome(result)}",)], (took, "muted"), (cost, "accent"))
+                tested = _line([tested, (" → ",), *_outcome(result)], (took, "muted"), (cost, "accent"))
                 hang = len(head) + 3
                 if note:
                     self._record("·", _line(head, note), tested, hang=hang)
@@ -334,28 +359,63 @@ class RunProgress:
             text = _clip(self._text(detail), 300)
             self._activity = f"{self._id} · evidence {stage} · {label}" if stage in ("review", "revise") else ""
             self._activity_at = self._clock()
-            self._record(stage, _line(label, text, (self._step_cost(), "accent")))
+            cost = (self._step_cost(), "accent")
+            if stage == "review" and round_ == 0:       # the reviewer's first call: it starts
+                self._reviewing = True
+                self._record("agent", _line(("▶ evidence reviewer started", "agent", "bold"), text, cost))
+            elif stage == "quality" and self._reviewing:
+                self._reviewing = False
+                self._record("agent", _line(("■ evidence reviewer finished", "agent", "bold"), text, cost))
+            else:
+                self._record(stage, _line(label, text, cost))
             self._id = old_id
 
-    def finished(self, plan, result) -> None:
+    def agent_finished(self, plan, result) -> None:
+        """The test agent's end, then whether its verdict's proof was checked or why there is none (VER-013)."""
+        with self._lock:
+            self._activity = ""
+            steps = f"{self._steps} step" + ("s" if self._steps != 1 else "") if self._steps else ""
+            self._record("agent", _line(("■ test agent finished", "agent", "bold"), steps,
+                                        duration(self._clock() - self._finding_at)))
+            proof = result.proof if isinstance(result.proof, dict) else {}
+            if result.verdict == "confirmed" and proof.get("checked") is True:
+                cited = [n for n in proof.get("steps") or [] if isinstance(n, int)]
+                where = f"step{'s' if len(cited) > 1 else ''} {', '.join(map(str, cited))}" if cited else ""
+                shown = _PROVEN.get(plan.cls)
+                self._record("proof", _line([("✓ proof checked", "ok", "bold"),
+                                             *([(f": {shown}", "ok")] if shown else [])], where), role="ok")
+                return
+            missing = proof.get("missing") if proof.get("checked") is False else None
+            if isinstance(missing, list) and missing:
+                why = missing[0]                # what the proof check missed in a claimed confirmation
+            elif result.limits_hit:
+                why = f"stopped by the {result.limits_hit} limit"      # the ⚠ entry above has the detail
+            else:
+                why = result.rationale or "no verdict"
+            why = _clip(self._text(why), 200)
+            self._record("proof", [("✗ no proof", "warn", "bold"), (f": {why}", "warn")], role="warn")
+            self._explained = True
+
+    def finished(self, plan, result, rating: dict | None = None) -> None:
+        """The finding's verdict, marked and highlighted; with ``rating`` (VER-039) its change, if any."""
         verdict = printable(result.verdict)
         label = _VERDICT_LABEL.get(verdict, verdict)      # as the report and the results at the end name it
         role = _VERDICT_ROLES.get(verdict)
         label += f" ({_clip(result.confidence, 10)})" if result.confidence else ""
-        parts = [(label, *([role] if role else []))]
-        if verdict == "confirmed":      # a confirmed verdict reaches this line only with its proof checked (proof.py)
-            parts.append("proof checked")
-        if self._steps:
-            parts.append(f"{self._steps} step" + ("s" if self._steps != 1 else ""))
+        mark = _VERDICT_MARKS.get(verdict)
+        parts = [(f"{mark} {label}" if mark else label, *([role] if role else []), "bold")]
         with self._lock:
             parts.append(duration(self._clock() - self._finding_at))
             if self._spent is not None:
                 parts += [(f"${self._spent() - self._spent_at:.2f}", "accent"), [("run" + _NBSP,), *self._spend()]]
-            # Why, unless a refused step or a limit above already said so.
-            why = _clip(self._text(result.rationale), 160) if result.rationale and not self._noted else ""
+            # Why, unless a refused step, a limit or the proof entry above already said so.
+            why = (_clip(self._text(result.rationale), 160)
+                   if result.rationale and not self._noted and not self._explained else "")
             self.done += 1
             self._activity = ""
             self._record("done", _line(*parts), *([_line(why)] if why else []), role=role)
+            if rating and rating.get("changed"):
+                self._rating(rating)
             # A screenshot shows proof only where the Verifier checked the verdict's proof (proof.py).
             event = "proof" if isinstance(result.proof, dict) and result.proof.get("checked") is True else "img"
             for entry in result.evidence or []:
@@ -380,6 +440,14 @@ class RunProgress:
     def _text(self, value):
         """``value`` without the credential values the run knows (VER-016)."""
         return self._redact(value) if self._redact is not None else value
+
+    def _rating(self, rating: dict) -> None:
+        """``severity Medium → High · likelihood Low → High · confirmed with a checked proof`` (verify/rating.py)."""
+        before, after = rating.get("analyzer") or {}, rating.get("after_verification") or {}
+        changes = [f"{name} {_clip(before.get(name), 20)} → {_clip(after.get(name), 20)}"
+                   for name in ("severity", "likelihood") if before.get(name) != after.get(name)]
+        why = _clip(str(rating.get("reason", "")).partition(": ")[0], 120)
+        self._record("rating", _line(*[(change, "bold") for change in changes], (why, "muted")))
 
     def _ticker(self) -> None:
         while not self._stop.wait(self.TICK_SECONDS if self.live else 1.0):

@@ -355,6 +355,26 @@ def _rating_input(rows: list[dict], coverage: str | None) -> tuple[str | None, b
     return (rows[0]["verdict"] if len(rows) == 1 else "inconclusive"), False
 
 
+def _coverage(threat: dict, variants: list[dict]) -> str | None:
+    """``complete`` when each variant the threat names has a checked proof, else ``partial``; None for a threat
+    tested without variants."""
+    if not any(row["finding_ref"].get("variant") for row in variants):
+        return None
+    expected = {v["id"] for v in (threat.get("verification_context") or {}).get("variants", [])}
+    completed = {(row.get("proof") or {}).get("variant") for row in variants
+                 if (row.get("proof") or {}).get("checked") is True}
+    return "complete" if expected and expected <= completed else "partial"
+
+
+def rating_after_verification(threat: dict, rows: list[dict]) -> dict:
+    """The rating after verification (VER-039) of a threat from the results of its tested variants, as
+    `annotate_assessment` gives it; the console shows it as soon as the last variant is done."""
+    from .rating import rate
+
+    coverage = _coverage(threat, rows)
+    return rate(threat, *_rating_input(rows if coverage else rows[:1], coverage))
+
+
 def _pointers(rows: list[dict]) -> dict:
     """Paths of the proof of concept and screenshots, relative to the report (VER-027); never their content."""
     har = [row["poc"]["file"] for row in rows if (row.get("poc") or {}).get("file")]
@@ -406,12 +426,9 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
                              if k in (r.get("proof") or {})},
         }
         variants = [row for row in doc["results"] if row["finding_ref"].get("id") == t.get("id")]
-        rows, coverage = [r], None
-        if any(row["finding_ref"].get("variant") for row in variants):
-            expected = {v["id"] for v in (t.get("verification_context") or {}).get("variants", [])}
-            completed = {(row.get("proof") or {}).get("variant") for row in variants
-                         if (row.get("proof") or {}).get("checked") is True}
-            rows, coverage = variants, ("complete" if expected and expected <= completed else "partial")
+        coverage = _coverage(t, variants)
+        rows = variants if coverage else [r]
+        if coverage:
             t["dynamic_verification"].update({
                 "verdict": "confirmed" if any(row["verdict"] == "confirmed" for row in variants) else "inconclusive",
                 "coverage": coverage,

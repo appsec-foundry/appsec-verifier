@@ -69,6 +69,7 @@ class FindingPlan:
     selection_reason: str | None = None
     variant_id: str | None = None
     variant_digest: str | None = None
+    rating: dict = field(default_factory=dict)  # the Analyzer's rating and all variants, for VER-039 on the console
 
 
 def _first_location(threat: dict) -> str | None:
@@ -115,6 +116,8 @@ def classify(threat: dict, catalog: dict[str, dict], surface=None) -> FindingPla
         brief=finding_brief(threat),
         context=finding_context(threat),
         verification_context=threat.get("verification_context") or {},
+        rating={key: threat.get(key)
+                for key in ("likelihood", "impact", "effective_severity", "risk", "verification_context")},
     )
 
 

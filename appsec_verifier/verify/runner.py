@@ -1,8 +1,9 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
 VER-020). Pure, injectable logic: the probe registry, HTTP client, budget, and
 clock are all passed in, so the whole flow is tested offline. An optional
-`progress` (progress.RunProgress) shows each finding with a probe and its
-steps on the console. Returns the
+`progress` (progress.RunProgress) shows each finding with a probe, its
+steps, its proof and, once its last variant is done, a changed rating
+(VER-039) on the console. Returns the
 verification document as a dict shaped for schemas/verification.schema.yaml,
 its results redacted of every credential value the sessions know (VER-016).
 
@@ -238,6 +239,8 @@ def run_verification(
                 res = ProbeResult(
                     verdict="inconclusive", rationale="the run was interrupted while this finding was tested"
                 )
+            if shown and progress is not None and not interrupted:
+                progress.agent_finished(plan, res)
             if res.limits_hit in _RUN_LIMITS:
                 stopped = res.limits_hit
         results.append(_result_entry(i, plan, res))
@@ -258,7 +261,13 @@ def run_verification(
                 results[idx] = _result_entry(idx + 1, reviewed_plan, reviewed_result)
                 contexts.pop(evidence_id(reviewed_plan), None)
         if shown and progress is not None and not interrupted:
-            progress.finished(plan, res)
+            rating = None
+            if last_variant[plan.id] == i:      # the rating rests on all variants of the finding (VER-039)
+                from .report import rating_after_verification
+
+                rating = rating_after_verification(plan.rating, [r for r in results
+                                                                 if r["finding_ref"]["id"] == plan.id])
+            progress.finished(plan, res, rating=rating)
     if sessions is not None:
         results = sessions.redact(results)  # VER-016: model text never carries a credential into the report
 

@@ -302,7 +302,8 @@ def test_report_fences_untrusted_explanation_and_console_shows_rounds():
     finally:
         progress.close()
     text = stream.getvalue()
-    assert all(word in text for word in ("review", "revise", "quality", "T-1", "1/2", "no screenshot shown"))
+    assert all(word in text for word in ("evidence reviewer started", "revise", "evidence reviewer finished", "T-1",
+                                         "1/2", "no screenshot shown"))
     report = "\n".join(_poc_markdown({"evidence_review": res.evidence_review}))
     assert "````text" in report and "No screenshot was shown to a model." in report
     assert "Technical verdict unchanged" in report and "not additional proof" in report

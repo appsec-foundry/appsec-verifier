@@ -70,15 +70,22 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
                    "result": {"status": 200, "length": 512}})
     clock.now += 40
     progress.step({"step": 2, "verdict": "confirmed"})
-    progress.finished(_plan(), ProbeResult(verdict="confirmed", confidence="high", rationale="a read b"))
+    result = ProbeResult(verdict="confirmed", confidence="high", rationale="a read b",
+                         proof={"checked": True, "steps": [1, 2]})
+    progress.agent_finished(_plan(), result)
+    progress.finished(_plan(), result)
     progress.close()
-    header, start, step, done = _rows(out)[1:]
+    header, start, agent, step, finished, proof, done = _rows(out)[1:]
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
-    assert start.endswith("Basket of another user readable · high · access-control · agent Sonnet 5.5 · no identities")
+    assert start.endswith("Basket of another user readable · high · access-control")
+    assert agent.split()[3] == "agent" and agent.endswith("▶ test agent started · Sonnet 5.5 · no identities")
     assert step.endswith("step 1 · GET /rest/basket/2 as alice → 200 · 512 B")
+    assert finished.split()[3] == "agent" and finished.endswith("■ test agent finished · 2 steps · 1m00s")
+    assert proof.split()[3] == "proof"
+    assert proof.endswith("✓ proof checked: access differs between identities · steps 1, 2")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
-    assert done.endswith("confirmed (high) · proof checked · 2 steps · 1m00s · a read b")
+    assert done.endswith("✔ confirmed (high) · 1m00s · a read b")
     assert "\x1b" not in out.getvalue()
 
 
@@ -97,14 +104,17 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
     title, facts, agent = _rows(out)[-3:]
     assert SGR.sub("", title).endswith("  Basket of another user readable") and st(plan.title, "bold") in title
     assert SGR.sub("", facts).strip() == "high · access-control · GET /rest/basket/:id (login), PUT /a"
-    assert SGR.sub("", agent).strip() == "agent · no identities"
+    plain = SGR.sub("", agent)
+    assert plain.split()[3] == "agent" and plain.endswith("▶ test agent started · no identities")
+    assert st("▶ test agent started", "agent", "bold") in agent
     assert facts.startswith(" " * len(SGR.sub("", title).split("Basket")[0])) and st("high", "high") in facts
     assert st("1/1 T-1", "bold") in title and st("1/1 T-1", "accent", "bold") not in out.getvalue()
-    for verdict, label, role in (("confirmed", "confirmed", "ok"), ("not-reproducible", "not reproducible", "critical"),
-                                 ("blocked-by-control", "blocked by control", "critical"),
-                                 ("inconclusive", "inconclusive", "warn")):
+    for verdict, label, role in (("confirmed", "✔ confirmed", "ok"),
+                                 ("not-reproducible", "✘ not reproducible", "critical"),
+                                 ("blocked-by-control", "✘ blocked by control", "critical"),
+                                 ("inconclusive", "? inconclusive", "warn")):
         progress.finished(plan, ProbeResult(verdict=verdict))
-        assert st(label, role) in _rows(out)[-1], verdict
+        assert st(label, role, "bold") in _rows(out)[-1], verdict
 
 
 @pytest.mark.parametrize("model, short", [("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-opus-4-1-20250805", "Opus 4.1"),
@@ -121,8 +131,9 @@ def test_the_start_entry_names_the_agent_its_step_budget_and_what_it_may_use(mon
                            roles=["alice", "bob"], source=True, clock=clock, env={}, live=False)
     progress.begin([_plan(), _plan("T-2")])
     progress.finding(_plan())
-    assert SGR.sub("", _rows(out)[-1]).strip() == ("agent Sonnet 4.5 via Claude CLI · ≤12 steps · "
-                                                   "identities alice, bob · source code")
+    row = SGR.sub("", _rows(out)[-1])
+    assert row.split()[3] == "agent" and row.endswith("▶ test agent started · Sonnet 4.5 via Claude CLI · ≤12 steps · "
+                                                      "identities alice, bob · source code")
     progress.activity(1, 12)
     assert progress._activity == "step 1/12 · Sonnet 4.5 plans"         # what the status line shows
     progress.finding(_plan("T-2"), agent=False)     # stopped by an earlier run-wide limit: no agent starts
@@ -141,7 +152,9 @@ def test_a_finding_an_earlier_run_wide_limit_stopped_is_shown_without_an_agent()
     run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=[_plan("T-1"), _plan("T-2")],
                      limits=Limits(), identities=[], registry=ProbeRegistry({"access-control": Probe()}),
                      verifier_version="t", target_base=scope["base_url"], authorization={}, progress=recorder)
-    assert recorder.events == [("begin", ["T-1", "T-2"]), ("finding", "T-1"), ("finished", "T-1", "inconclusive"),
+    assert [event[:3] for event in recorder.events] == [
+                               ("begin", ["T-1", "T-2"]), ("finding", "T-1"), ("agent finished", "T-1", "inconclusive"),
+                               ("finished", "T-1", "inconclusive"),
                                ("finding", "T-2", "no agent"), ("finished", "T-2", "not-attempted")]
 
 
@@ -201,12 +214,16 @@ def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_don
     progress.step({"step": 1, "refused": "unknown action 'fetch_url'", "proposal": "{}"})
     progress.step({"step": 2, "tool": "http_request", "args": {"path": "/a"}, "stopped": "requests",
                    "reason": "request cap 1 exceeded"})
-    progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="stopped by limit: request cap"))
-    rows = _rows(out)[3:]
+    result = ProbeResult(verdict="inconclusive", rationale="stopped by limit: request cap", limits_hit="requests")
+    progress.agent_finished(_plan(), result)
+    progress.finished(_plan(), result)
+    rows = _rows(out)[4:]
     assert rows[0].split()[3] == "↻" and rows[0].endswith("step 1 · refused: unknown action 'fetch_url'")
     assert rows[1].split()[3] == "⚠"
     assert rows[1].endswith("step 2 · GET /a · stopped by limit: request cap 1 exceeded")
-    assert rows[2].endswith("inconclusive · 2 steps · 0s")
+    assert rows[2].endswith("■ test agent finished · 2 steps · 0s")
+    assert rows[3].split()[3] == "proof" and rows[3].endswith("✗ no proof: stopped by the requests limit")
+    assert rows[4].endswith("? inconclusive · 0s")
 
 
 def test_an_inconclusive_finding_says_why_when_nothing_above_did():
@@ -215,7 +232,132 @@ def test_an_inconclusive_finding_says_why_when_nothing_above_did():
     progress.begin([_plan()])
     progress.finding(_plan())
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="claude call failed: no answer"))
-    assert _rows(out)[-1].endswith("inconclusive · 0s · claude call failed: no answer")
+    assert _rows(out)[-1].endswith("? inconclusive · 0s · claude call failed: no answer")
+
+
+@pytest.mark.parametrize("result, why", [
+    # A claimed confirmation the proof check refused: what it missed, not the agent's claim.
+    (ProbeResult(verdict="inconclusive",
+                 rationale="indicative, not proven: no executed browser_check. Agent's claim: x",
+                 proof={"checked": False, "contract": 3, "missing": ["no executed browser_check"]}),
+     "no executed browser_check"),
+    (ProbeResult(verdict="not-reproducible", rationale="bob got 403 for every basket",
+                 proof={"checked": True, "steps": [2, 3]}), "bob got 403 for every basket"),
+    (ProbeResult(verdict="inconclusive", rationale="probe failed: KeyError"), "probe failed: KeyError"),
+    (ProbeResult(verdict="inconclusive"), "no verdict"),
+])
+def test_without_a_checked_proof_the_proof_entry_says_why_and_the_done_line_does_not_repeat_it(monkeypatch, result,
+                                                                                                why):
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    st = progress.st
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.agent_finished(_plan(), result)
+    proof = _rows(out)[-1]
+    assert SGR.sub("", proof).split()[3] == "proof" and SGR.sub("", proof).endswith(f"✗ no proof: {why}")
+    assert st("✗ no proof", "warn", "bold") in proof and st(f": {why}", "warn") in proof
+    assert st("proof  ", "warn") in proof                     # the event in the warning colour, not green
+    progress.finished(_plan(), result)
+    assert why not in _rows(out)[-1] and SGR.sub("", _rows(out)[-1]).endswith(" · 0s")
+
+
+@pytest.mark.parametrize("cls, shown", [("xss", "script executed in the browser"),
+                                        ("path-traversal", "marker file read"),
+                                        ("ssrf", "the target called the Verifier's listener")])
+def test_a_checked_proof_stands_out_with_what_it_showed(monkeypatch, cls, shown):
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    st = progress.st
+    plan = _plan(cls=cls)
+    progress.begin([plan])
+    progress.finding(plan)
+    result = ProbeResult(verdict="confirmed", confidence="high", rationale="why", proof={"checked": True, "steps": [4]})
+    progress.agent_finished(plan, result)
+    proof = _rows(out)[-1]
+    assert SGR.sub("", proof).endswith(f"✓ proof checked: {shown} · step 4")
+    assert st("✓ proof checked", "ok", "bold") in proof and st("proof  ", "ok") in proof
+    progress.finished(plan, result)
+    assert st("✔ confirmed (high)", "ok", "bold") in _rows(out)[-2] and _rows(out)[-1].strip() == "why"
+
+
+def test_a_proof_the_check_sent_back_to_the_agent_says_why(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
+    out, spent = Tty(), [0.10]
+    redact = lambda v: yaml.safe_load(yaml.safe_dump(v).replace("s3cret", "[redacted]"))  # noqa: E731
+    progress = RunProgress(out, clock=Clock(), env={}, live=False, redact=redact, spent=lambda: spent[0],
+                           cost_limit=10.0)
+    st = progress.st
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    spent[0] = 0.13
+    progress.step({"step": 3, "tool": "proof_feedback",
+                   "result": {"status": "insufficient", "remaining_steps": 4,
+                              "missing": [f"step 1 precedes the plan in step 2 and must be repeated s3cret{HOSTILE}"]}})
+    row = _rows(out)[-1]
+    assert SGR.sub("", row).split()[3] == "proof"
+    assert SGR.sub("", row).endswith("step 3 · ✗ proof not accepted: step 1 precedes the plan in step 2 and must be "
+                                     "repeated [redacted]]0;pwned[2J · back to the agent · $0.03")
+    assert st("✗ proof not accepted", "warn", "bold") in row and "s3cret" not in row
+    assert "\x1b" not in SGR.sub("", row) and "\x07" not in row
+
+
+def test_a_result_a_proof_needs_is_highlighted_in_its_step(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    st = progress.st
+    progress.begin([_plan(cls="xss")])
+    progress.finding(_plan(cls="xss"))
+    progress.step({"step": 1, "tool": "browser_check", "args": {"path": "/#/search?q=x"}, "result": {"executed": True}})
+    assert st("script executed", "ok", "bold") in _rows(out)[-1]
+    progress.step({"step": 2, "tool": "http_request", "args": {"path": "/f"},
+                   "result": {"status": 200, "marker_read": True, "callback_hit": True}})
+    assert st("marker file read", "ok", "bold") in _rows(out)[-1] and st("callback hit", "ok", "bold") in _rows(out)[-1]
+    progress.step({"step": 3, "tool": "browser_check", "args": {"path": "/#/search?q=y"},
+                   "result": {"executed": False}})
+    assert SGR.sub("", _rows(out)[-1]).endswith("→ no script executed")
+    assert st("no script executed", "ok", "bold") not in _rows(out)[-1]
+
+
+def test_the_evidence_reviewer_has_agent_entries_for_its_start_and_end():
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.evidence_review("T-1", "review", 0, "Checking evidence text, layout and 1 screenshot.")
+    progress.evidence_review("T-1", "revise", 1, "Original test agent: unclear quote")
+    progress.evidence_review("T-1", "review", 1, "Checking evidence text, layout and 1 screenshot.")
+    progress.evidence_review("T-1", "quality", 1, "clear: Evidence text and layout checks passed.")
+    progress.evidence_review("T-1", "quality", 0, "not-reviewed: Review not started: interrupted.")
+    rows = _rows(out)[-5:]
+    assert [row.split()[3] for row in rows] == ["agent", "revise", "review", "agent", "quality"]
+    assert rows[0].endswith("▶ evidence reviewer started · Checking evidence text, layout and 1 screenshot.")
+    assert rows[1].endswith("correction 1/2 · Original test agent: unclear quote")
+    assert rows[3].endswith("■ evidence reviewer finished · clear: Evidence text and layout checks passed.")
+    assert rows[4].endswith("correction 0/2 · not-reviewed: Review not started: interrupted.")
+
+
+def test_a_changed_rating_follows_the_verdict_and_an_unchanged_one_is_not_shown(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    st = progress.st
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    rating = {"analyzer": {"likelihood": "Low", "impact": "High", "severity": "Medium"},
+              "after_verification": {"likelihood": "High", "impact": "High", "severity": "High"}, "changed": True,
+              "reason": "confirmed with a checked proof: likelihood Low → High, severity Medium → High"}
+    progress.finished(_plan(), ProbeResult(verdict="confirmed"), rating=rating)
+    row = _rows(out)[-1]
+    assert SGR.sub("", row).split()[3] == "rating"
+    assert SGR.sub("", row).endswith("severity Medium → High · likelihood Low → High · confirmed with a checked proof")
+    assert st("severity Medium → High", "bold") in row
+    unchanged = {"analyzer": {}, "after_verification": {}, "changed": False, "reason": "no checked proof"}
+    progress.finished(_plan(), ProbeResult(verdict="inconclusive"), rating=unchanged)
+    assert SGR.sub("", _rows(out)[-1]).split()[3] == "done"
 
 
 @pytest.mark.parametrize("api_prices, spend", [(False, "run $1.62 of $10.00"),
@@ -302,7 +444,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(
     assert " 2/2 T-2  start " in rows[blank + 1]
     entry = [row[column:] for row in rows[done:blank]]
     assert all(row[:column].isspace() for row in rows[done + 1:blank]) and entry[-1] == "the rows flipped"
-    assert " ".join(entry[:-1]) == "confirmed (high) · proof checked · 1 step · 0s · $0.04 · run $0.04 of $10.00"
+    assert " ".join(entry[:-1]) == "✔ confirmed (high) · 0s · $0.04 · run $0.04 of $10.00"
     assert entry[-2].endswith("run $0.04 of $10.00")                        # the spend stays whole
 
 
@@ -315,8 +457,8 @@ def test_off_a_terminal_a_blank_line_sets_each_finding_apart():
     progress.finished(_plan(), ProbeResult(verdict="confirmed", rationale="why"))
     progress.finding(_plan("T-2"))
     rows = _rows(out)[2:]
-    assert [row.split()[3] if row else "" for row in rows] == ["start", "·", "done", "", "start"]
-    assert rows[1].endswith("step 1 · n · GET /a → 200") and rows[2].endswith(" · why")
+    assert [row.split()[3] if row else "" for row in rows] == ["start", "agent", "·", "done", "", "start", "agent"]
+    assert rows[2].endswith("step 1 · n · GET /a → 200") and rows[3].endswith(" · why")
 
 
 def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or_secret(monkeypatch):
@@ -327,11 +469,14 @@ def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or
                            redact=redact, clock=Clock(), env={"FORCE_COLOR": "1"}, live=False)
     progress.begin([_plan()])
     progress.finding(_plan(id=f"T-1{HOSTILE}", title=f"title {HOSTILE}"))
-    assert "agent m" in out.getvalue() and "identities alice [redacted]" in out.getvalue()
+    assert "test agent started · m" in SGR.sub("", out.getvalue()) and "identities alice [redacted]" in out.getvalue()
     progress.activity(1, 12, "http_request", {"path": f"/x?t=s3cret{HOSTILE}", "role": f"a{HOSTILE}"})
     progress.step({"step": 1, "tool": "http_request", "args": {"path": f"/x?t=s3cret{HOSTILE}"},
                    "result": {"error": f"refused s3cret {HOSTILE}"}})
-    progress.finished(_plan(), ProbeResult(verdict="inconclusive", confidence=HOSTILE, rationale=f"s3cret{HOSTILE}"))
+    result = ProbeResult(verdict="inconclusive", confidence=HOSTILE, rationale=f"s3cret{HOSTILE}")
+    progress.agent_finished(_plan(), result)
+    assert SGR.sub("", _rows(out)[-1]).endswith("✗ no proof: [redacted]]0;pwned[2J")
+    progress.finished(_plan(), result)
     text = out.getvalue()
     assert "s3cret" not in text and "[redacted]" in text
     assert "\x1b" not in SGR.sub("", text) and "\x07" not in text       # only the Verifier's own colour codes
@@ -383,7 +528,7 @@ def test_off_a_terminal_a_quiet_stretch_gets_a_heartbeat_line():
     progress.activity(2, 12)
     clock.now += 119
     progress.tick()
-    assert len(_rows(out)) == 3
+    assert len(_rows(out)) == 4
     clock.now += 1
     progress.tick()
     assert _rows(out)[-1].endswith("step 2/12 · m plans · 2m00s")
@@ -415,8 +560,11 @@ class Recorder:
     def step(self, record):
         self.events.append(("step", record.get("step"), record.get("tool") or record.get("verdict")))
 
-    def finished(self, plan, result):
-        self.events.append(("finished", plan.id, result.verdict))
+    def agent_finished(self, plan, result):
+        self.events.append(("agent finished", plan.id, result.verdict))
+
+    def finished(self, plan, result, rating=None):
+        self.events.append(("finished", plan.id, result.verdict, *([rating] if rating else [])))
 
 
 def test_the_runner_shows_only_findings_with_a_probe():
@@ -432,7 +580,38 @@ def test_the_runner_shows_only_findings_with_a_probe():
     run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=plans, limits=Limits(),
                      identities=[], registry=ProbeRegistry({"access-control": Probe()}), verifier_version="t",
                      target_base=scope["base_url"], authorization={}, progress=recorder)
-    assert recorder.events == [("begin", ["T-1"]), ("finding", "T-1"), ("finished", "T-1", "not-reproducible")]
+    assert recorder.events[:3] == [("begin", ["T-1"]), ("finding", "T-1"),
+                                   ("agent finished", "T-1", "not-reproducible")]
+    assert recorder.events[3][:3] == ("finished", "T-1", "not-reproducible") and len(recorder.events) == 4
+
+
+def test_the_runner_gives_the_rating_after_the_last_variant_of_a_finding_from_all_its_variants():
+    """One confirmed variant raises the rating (VER-039); it is shown once, after the finding's last variant."""
+    from dataclasses import replace
+
+    class Probe:
+        cls = "access-control"
+
+        def run(self, ctx):
+            if ctx.plan.variant_id == "v1":
+                return ProbeResult(verdict="confirmed", proof={"checked": True, "variant": "v1", "steps": [1, 2]})
+            return ProbeResult(verdict="inconclusive", rationale="no second identity")
+
+    rating = {"likelihood": "Low", "impact": "High", "effective_severity": "Medium", "risk": None,
+              "verification_context": {"variants": [{"id": "v1"}, {"id": "v2"}]}}
+    plan = replace(_plan("T-1"), rating=rating)
+    plans = [replace(plan, variant_id=v, variant_digest=v * 8) for v in ("v1", "v2")] + [_plan("T-2")]
+    recorder = Recorder()
+    scope = {"base_url": "https://app.example.com", "hosts": ["app.example.com"]}
+    run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=plans, limits=Limits(),
+                     identities=[], registry=ProbeRegistry({"access-control": Probe()}), verifier_version="t",
+                     target_base=scope["base_url"], authorization={}, progress=recorder)
+    finished = [event for event in recorder.events if event[0] == "finished"]
+    assert [len(event) for event in finished] == [3, 4, 4]          # no rating after the first variant
+    changed, unrated = finished[1][3], finished[2][3]
+    assert changed["changed"] and changed["after_verification"] == {"likelihood": "High", "impact": "High",
+                                                                    "severity": "High"}
+    assert not unrated["changed"]                                    # T-2 names no rating
 
 
 def test_the_agent_loop_announces_each_call_before_it_runs_and_reports_each_step():
@@ -514,11 +693,12 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
             "auth": "none", "api_billing": True}
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, usd=0.25)
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
-    assert any(row.endswith(" · agent m via Fake API · ≤12 steps · no identities") for row in rows)
+    assert any(row.endswith("▶ test agent started · m via Fake API · ≤12 steps · no identities") for row in rows)
+    assert any(row.endswith("✗ no proof: rejection alone is insufficient") for row in rows)
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
     done = next(row for row in rows if row.split()[3:4] == ["done"])
     assert done.split()[3:5] == ["done", "100%"] and "inconclusive" in done
-    assert " · $0.50 · run $0.50 of $10.00 · " in done                     # API billing: costs shown
+    assert done.endswith(" · $0.50 · run $0.50 of $10.00")                # API billing: costs shown
     # The verdict cites no step: the image of its requests follows, named img, not proof (VER-035).
     assert rows[-1].split()[3] == "img" and "screenshot" in rows[-1]
     assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
@@ -526,7 +706,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
 
 @pytest.mark.parametrize("profile, show, done, run", [
     ("claude", False, None, "2 requests\n"),
-    ("claude", True, " · $0.50 · run $0.50 of $10.00 at API prices · ", "2 requests · $0.50 of $10.00 at API prices"),
+    ("claude", True, " · $0.50 · run $0.50 of $10.00 at API prices", "2 requests · $0.50 of $10.00 at API prices"),
     ("codex-cli", False, None, "2 requests\n"),
     ("codex-cli", True, None, "2 requests · cost not reported (subscription)"),
 ])
@@ -537,7 +717,7 @@ def test_a_subscription_run_shows_costs_only_with_show_costs(tmp_path, monkeypat
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, *(["--show-costs"] if show else []),
                             usd=0.25 if profile == "claude" else 0.0)
     if done:
-        assert done in next(row for row in rows if row.split()[3:4] == ["done"])
+        assert next(row for row in rows if row.split()[3:4] == ["done"]).endswith(done)
     else:
         assert "$" not in "\n".join(rows)
     assert run in out
