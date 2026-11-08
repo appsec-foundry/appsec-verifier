@@ -347,7 +347,7 @@ def test_exchange_image_marks_the_marker_file(tmp_path):
                     [_get(None, "/download", file="../../srv/verifier-marker.txt"),
                      {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}], scope=scope)
     assert f"<mark>{content}</mark>" in shot["html"] and "<mark>verifier-marker.txt</mark>" in shot["html"]
-    assert "<mark>marker file read: yes</mark>" in shot["html"]
+    assert "<b>marker file read: yes</b>" in shot["html"]
 
 
 def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
@@ -359,11 +359,11 @@ def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
                      {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2]}}])
     page = shot["html"]
     assert "<mark>x%27+OR+1%3D1--</mark>" in page and "<mark>x%27+OR+1%3D2--</mark>" in page   # as httpx sends it
-    assert "<mark>1</mark>,2,3]}" in page and "<mark>]}</mark>" in page      # where the two answers part
-    assert page.count("<mark>") == 6 and "HTTP/<mark>" not in page             # once, not wherever "1" recurs
+    assert "<mark>1</mark></span>,2,3]}" in page and "<mark>]}</mark>" in page      # where the two answers part
+    assert page.count("<mark>") == 4 and "HTTP/<mark>" not in page             # once, not wherever "1" recurs
     assert page.count("<span class=tag>input ▸</span><mark>x%27+OR+1%3D") == 2       # each mark says what it is
     assert page.count("<span class=tag>answer differs ▸</span><mark>") == 2
-    assert "<mark>input, decoded: x&#x27; OR 1=1--</mark>" in page
+    assert "<b>input, decoded: x&#x27; OR 1=1--</b>" in page
     assert "answered in" not in page                                           # no time: not a timing proof
 
 
@@ -379,7 +379,7 @@ def test_exchange_image_marks_the_times_of_a_timing_proof(tmp_path):
     _, shot = _shot(tmp_path, "injection", transport,
                     [_get(None, "/search", q="x"), _get(None, "/search", q="x' AND SLEEP(2)--"),
                      {"verdict": {"verdict": "not-reproducible", "rationale": "r", "proof_steps": [1, 2]}}])
-    assert "<mark>answered in 40 ms</mark>" in shot["html"] and "<mark>answered in 2600 ms</mark>" in shot["html"]
+    assert "<b>answered in 40 ms</b>" in shot["html"] and "<b>answered in 2600 ms</b>" in shot["html"]
 
 
 def test_exchange_image_marks_the_callback_marker(tmp_path):
@@ -400,7 +400,7 @@ def test_exchange_image_marks_the_callback_marker(tmp_path):
         scope={**SCOPE, "callback": {"expect_rejected": True}},
     )
     assert "callback" in shot["html"] and "<mark>vrf" in shot["html"]
-    assert "<mark>callback listener received the marker: yes</mark>" in shot["html"]
+    assert "<b>callback listener received the marker: yes</b>" in shot["html"]
 
 
 def test_exchange_image_escapes_everything_the_target_sent(tmp_path):
@@ -449,10 +449,55 @@ def test_an_executed_xss_gets_the_exchange_image_beside_the_page_with_the_opened
     assert [e["kind"] for e in result.evidence].count("screenshot") == 2
     html = browser.exchanges[0]["html"]
     assert (
-        "<mark>opened in the browser: /#/search?q=&lt;iframe src=&quot;javascript:alert(&#x27;vrfaa11&#x27;+"
-        "&#x27;bb22&#x27;)&quot;&gt;</mark>"
+        "<b>opened in the browser: /#/search?q=&lt;iframe src=&quot;javascript:alert(&#x27;vrfaa11&#x27;+"
+        "&#x27;bb22&#x27;)&quot;&gt;</b>"
     ) in html
-    assert "<mark>marker executed in the browser: yes</mark>" in html
+    assert "<b>marker executed in the browser: yes</b>" in html
+
+
+def _session_image(cwe, history):
+    raw = {"method": "GET", "url": SCOPE["base_url"] + "/account", "body": None, "status": 200,
+           "headers": [("Accept", "*/*"), ("Authorization", f"Bearer {TA}")],
+           "response_headers": [("Content-Type", "text/html"), ("Set-Cookie", "sid=s3cr3tvalue; Path=/; Secure"),
+                                ("Set-Cookie", "lang=de; Path=/")],
+           "content": b"<h1>Account</h1>", "time": "2026-11-08T10:12:03.123456Z"}
+    e = poc.entry(raw, identity={"Authorization": f"Bearer {TA}"}, role="customer-a")
+    check = {"finding_id": "T-051", "id": "account", "path": "/account", "role": "customer-a", "cookie_name": "sid"}
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-051", cls="session", cwe=cwe), marker=("vrfaa", "bb"),
+                          scope={**SCOPE, "session_checks": [check]})
+    return poc.exchange_document(ctx, history, [(2, e), (3, e)], "confirmed", "evidence/T-051-poc.har")
+
+
+@pytest.mark.parametrize(
+    "cwe, seen, label",
+    [
+        ("CWE-1004", {"httponly": False}, "HttpOnly missing"),
+        ("CWE-614", {"secure": True}, "Secure set"),
+        ("CWE-1275", {"samesite": ""}, "SameSite missing"),
+        ("CWE-1275", {"samesite": "none"}, "SameSite=None"),
+    ],
+)
+def test_exchange_image_marks_the_set_cookie_line_of_the_observed_session_cookie(cwe, seen, label):
+    cookie = {"name": "sid", "secure": True, "httponly": False, "samesite": "lax", "active": True, **seen}
+    observed = {"tool": "http_request", "args": {"path": "/account", "role": "customer-a"},
+                "result": {"status": 200, "session_cookies": [cookie]}}
+    plan = {"tool": "plan_test", "args": {"kind": "session", "resource": "account"}, "result": {"accepted": True}}
+    page, marked = _session_image(cwe, [plan, observed, observed])
+    assert page.count(f"<span class=hit><span class=tag>{label} ▸</span><mark>Set-Cookie: sid=") == 2
+    assert marked == 2 and "<mark>Set-Cookie: lang=" not in page and "s3cr3tvalue" not in page
+    assert "[identity customer-a]" in page and "<mark>[identity customer-a]</mark>" not in page  # not decisive here
+    assert "First captured 2026-11-08T10:12:03Z." in page
+
+
+def test_exchange_image_marks_no_cookie_without_a_declared_session_plan():
+    page, marked = _session_image("CWE-1004", [{}, {}, {}])
+    assert marked == 0 and "<mark>" not in page and "Set-Cookie: sid=" in page
+
+
+def test_screenshots_show_times_to_the_second():
+    assert poc.shown_time("2026-11-08T13:24:45.623716Z") == "2026-11-08T13:24:45Z"
+    assert poc.shown_time("2026-11-08T13:24:45.5+01:00") == "2026-11-08T13:24:45+01:00"
+    assert poc.shown_time("2026-11-08T13:24:45Z") == "2026-11-08T13:24:45Z"
 
 
 # ── report and export ────────────────────────────────────────────────────────

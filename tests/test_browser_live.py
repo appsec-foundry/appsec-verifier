@@ -209,12 +209,12 @@ def test_screenshot_marks_the_payload_and_names_the_proof(browser):
 
 
 def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browser):
-    """VER-035: the payload runs in a frame under the page's own dialog; the screenshot shows the frame,
+    """VER-035: the payload runs under the page's own dialog; the screenshot shows the payload element,
     says what it hid, and the event record lists it."""
     import json
 
     b, _, tmp = browser
-    payload = f"<iframe src=\"javascript:alert({marker_expression(MARKER)})\"></iframe>"
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
     result = _check(b, "/dialog?q=" + quote(payload, safe=""))
     assert result["executed"] is True
     kinds = {e["kind"]: e for e in result["evidence"]}
@@ -266,7 +266,8 @@ def test_render_exchanges_draws_the_recorded_exchanges_without_contacting_the_ta
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-3", cls="injection"), marker=("vrfa", "b"), scope={})
     page, marked = poc.exchange_document(ctx, [{}, {}], shown, "confirmed", "evidence/T-3-poc.har")
     [shot] = b.render_exchanges(html=page, finding_id="T-3", marked=marked)
-    assert target.seen == [] and shot["marked"] == marked == 6 and shot["note"] == SCREENSHOT_NOTE
+    assert target.seen == [] and shot["marked"] == marked == 4 and shot["note"] == SCREENSHOT_NOTE
     path = tmp / shot["path"]
     assert path.name == "T-3-exchange-1.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert int.from_bytes(path.read_bytes()[20:24], "big") < 720       # as tall as the content, not the window
     assert stat.S_IMODE(path.stat().st_mode) == 0o600

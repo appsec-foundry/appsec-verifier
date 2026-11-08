@@ -131,12 +131,12 @@ def test_guarded_client_can_hand_redirects_back():
 # ── marker: only the evaluated join counts ────────────────────────────────────
 
 
-def test_marker_parts_are_random_and_only_their_join_is_in_the_page_hook():
+def test_marker_parts_are_random_and_the_page_hook_reports_dialogs_without_knowing_the_marker():
     a, b = new_marker()
     assert a.startswith("vrf") and (a, b) != new_marker()
-    script = _init_script((a, b))
-    assert f'"{a}{b}"' in script and marker_expression((a, b)) == f"'{a}'+'{b}'"
-    assert "text === marker" in script
+    script = _init_script()
+    assert a not in script and b not in script and marker_expression((a, b)) == f"'{a}'+'{b}'"
+    assert "__appsecVerifierReport(name, text)" in script
 
 
 def test_system_prompt_gives_the_marker_only_for_xss_and_open_redirect():

@@ -18,13 +18,12 @@ available, the browser does not start and XSS stays unproven.
 Only evaluation proves execution: the payload must call alert() with an
 expression that joins the two marker parts at runtime, and only a dialog whose
 message equals the joined marker counts. A page that merely echoes the payload
-text shows the expression, not its value. On execution a banner is drawn and a
-JSON event record is saved owner-only under evidence/, with a screenshot when
-screenshots are on for XSS (VER-035): a caption names finding, URL, identity
-and time, the elements that carry the payload are outlined and a tag with an
-arrow points at the first, the banner stands on the top page also when the
-payload ran in a frame, and what of the page covered the payload (a dialog, a
-backdrop) is hidden and named in the caption. Each request
+text shows the expression, not its value. On execution a JSON event record is
+saved owner-only under evidence/, with a screenshot when screenshots are on for
+XSS (VER-035): the elements that carry the payload are outlined, a caption
+names finding, URL, identity, time and what is marked, and what of the page
+covered the payload (a dialog, a backdrop) is hidden and named in the caption.
+The page is moved clear of the caption, so the caption hides none of it. Each request
 the guarded client answered is handed back for the proof of concept (VER-034),
 bodies only for documents, XHR and fetch.
 
@@ -61,7 +60,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from ..verify.poc import BODY_RESOURCE_TYPES, MAX_BROWSER_EXCHANGES, MAX_RAW_BYTES, TARGET_DATA_NOTE, capture
+from ..verify.poc import (
+    BODY_RESOURCE_TYPES,
+    MAX_BROWSER_EXCHANGES,
+    MAX_RAW_BYTES,
+    TARGET_DATA_NOTE,
+    capture,
+    shown_time,
+)
 from .http import ScopeViolation, same_origin
 
 _SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
@@ -236,38 +242,28 @@ def answer(method: str, url: str, headers: dict, body: bytes | None, *, http, id
                   capture(resp, method=method, url=url, headers=send, body=body))
 
 
-def _init_script(parts: tuple[str, str]) -> str:
+def _init_script() -> str:
+    """Reports every dialog of every frame; which one counts is decided outside the page."""
     return """(() => {
-  const marker = __MARKER__;
-  const banner = () => { try {
-    const d = document.createElement('div');
-    d.id = '__appsec_verifier_banner';
-    d.textContent = 'AppSec Verifier: XSS marker ' + marker + ' executed';
-    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b00020;'
-      + 'color:#fff;font:bold 16px sans-serif;padding:8px';
-    (document.body || document.documentElement).appendChild(d);
-  } catch (e) {} };
   for (const name of ['alert', 'confirm', 'prompt']) {
     Object.defineProperty(window, name, { configurable: false, writable: false, value: function (message) {
       const text = String(message);
       try { window.__appsecVerifierReport(name, text); } catch (e) {}
-      if (text === marker && window === window.top) banner();     // in a frame the screenshot draws it on top
       return name === 'confirm' ? false : null;
     } });
   }
-})();""".replace("__MARKER__", json.dumps(parts[0] + parts[1]))
+})();"""
 
 
 # Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
-# payload, also quoted in the caption), text that equals one of `values` (access control), and a caption.
-# `banner` is drawn on the top page when the payload ran in a frame. The page moves clear of the banner and
-# the caption, so neither hides a mark; whatever of the page still covers the first mark (a dialog, a
-# backdrop) is hidden and named in the caption, and a tag with an arrow and `label` points at that mark.
+# payload, also quoted in the caption), text that equals one of `values` (access control), and a caption
+# that says what is marked (`label`). The page moves clear of the caption, so it hides no mark; whatever of
+# the page still covers the first mark (a dialog, a backdrop) is hidden and named in the caption.
 # All text is set as text, never parsed as HTML. Returns the number of marks and what was hidden, as JSON.
-_MARK_SCRIPT = """({part, values, lines, none, color, banner, label}) => {
+_MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
   const marks = [];
   const root = document.body || document.documentElement;
-  const ours = (el) => el.id === '__appsec_verifier_banner' || el.hasAttribute('data-appsec-verifier');
+  const ours = (el) => el.hasAttribute('data-appsec-verifier');
   let carrier = null;
   const outline = (el) => {
     if (!el || el === root || marks.includes(el) || marks.length >= 20) return;
@@ -304,25 +300,16 @@ _MARK_SCRIPT = """({part, values, lines, none, color, banner, label}) => {
       }
     }
   }
-  if (banner && !document.getElementById('__appsec_verifier_banner')) {
-    const b = document.createElement('div');
-    b.id = '__appsec_verifier_banner';
-    b.textContent = banner;
-    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:' + color + ';'
-      + 'color:#fff;font:bold 16px sans-serif;padding:8px';
-    root.appendChild(b);
-  }
   const box = document.createElement('div');
   box.setAttribute('data-appsec-verifier', 'caption');
-  const extra = carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]);
+  const extra = (marks.length && label ? ['marked: ' + label] : [])
+    .concat(carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]));
   box.textContent = lines.concat(extra).join('\\n');
   box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;white-space:pre-wrap;'
     + 'word-break:break-all;background:rgba(17,17,17,.92);color:#fff;font:13px/1.4 monospace;'
     + 'padding:8px 10px;border-top:3px solid ' + color;
   root.appendChild(box);
-  const bar = document.getElementById('__appsec_verifier_banner');
   const fit = () => {
-    root.style.setProperty('margin-top', ((bar ? bar.getBoundingClientRect().height : 0) + 8) + 'px', 'important');
     root.style.setProperty('margin-bottom', (box.getBoundingClientRect().height + 8) + 'px', 'important');
     if (marks[0] && marks[0].scrollIntoView) marks[0].scrollIntoView({block: 'center'});
   };
@@ -351,20 +338,6 @@ _MARK_SCRIPT = """({part, values, lines, none, color, banner, label}) => {
   if (hidden.length) {
     box.textContent += '\\nhidden for the screenshot because it covered the mark: ' + hidden.join(', ');
     fit();
-  }
-  if (target && label) {
-    const r = target.getBoundingClientRect();
-    const tag = document.createElement('div');
-    tag.setAttribute('data-appsec-verifier', 'label');
-    tag.style.cssText = 'position:fixed;z-index:2147483647;background:' + color + ';color:#fff;'
-      + 'font:bold 14px sans-serif;padding:3px 8px;border-radius:3px;white-space:nowrap;pointer-events:none';
-    tag.textContent = '▼ ' + label;
-    root.appendChild(tag);
-    const h = tag.getBoundingClientRect().height;
-    const above = r.top - h - 8 > (bar ? bar.getBoundingClientRect().bottom : 0);
-    if (!above) tag.textContent = '▲ ' + label;
-    tag.style.left = Math.max(0, Math.min(r.left, innerWidth - tag.getBoundingClientRect().width)) + 'px';
-    tag.style.top = (above ? r.top - h - 8 : r.bottom + 8) + 'px';
   }
   return JSON.stringify({marks: marks.length, hidden});
 }"""
@@ -522,7 +495,7 @@ class ProofBrowser:
                     events.append((str(kind), str(message)[:300]))
 
             context.expose_binding("__appsecVerifierReport", on_marker)
-            context.add_init_script(_init_script(marker))
+            context.add_init_script(_init_script())
             page = context.new_page()
             page.on("dialog", lambda dialog: dialog.dismiss())
             status, error = None, None
@@ -558,15 +531,15 @@ class ProofBrowser:
 
     @staticmethod
     def _mark(page, lines: list[str], *, part: str = "", values=(), none: str | None = None,
-              banner: str | None = None, label: str | None = None) -> dict | None:
-        """Caption, highlights, banner and label drawn over the page before its screenshot, as
+              label: str | None = None) -> dict | None:
+        """Caption and highlights drawn over the page before its screenshot, as
         {"marks": n, "hidden": [what was hidden because it covered the first mark]}; None if the page refused
         them or did not answer in time. Unlike evaluate(), wait_for_function() has a timeout, so a page script
         that never returns cannot hold the check; the script's result is a JSON string, never falsy."""
         try:
             done = page.wait_for_function(f"(arg) => ({_MARK_SCRIPT})(arg)",
                                           arg={"part": part, "values": list(values), "lines": lines, "none": none,
-                                               "color": _HIGHLIGHT, "banner": banner, "label": label},
+                                               "color": _HIGHLIGHT, "label": label},
                                           timeout=EVIDENCE_TIMEOUT_MS)
             out = json.loads(done.json_value())
             return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5]}
@@ -595,9 +568,10 @@ class ProofBrowser:
         if "xss" in self.screenshots:
             marked = self._mark(
                 page, [f"AppSec Verifier · {finding_id} · XSS marker {joined} executed via {', '.join(via)}",
-                       f"{unquote(url)[:300]} as {role or 'anonymous'} → {status}", f"captured {captured}"],
+                       f"{unquote(url)[:300]} as {role or 'anonymous'} → {status}",
+                       f"captured {shown_time(captured)}"],
                 part=marker[0], none="(the element that carries the payload was not found in the page)",
-                banner=f"AppSec Verifier: XSS marker {joined} executed", label="payload that executed")
+                label="payload that executed")
             data["marked_elements"] = marked["marks"] if marked else None
             if marked and marked["hidden"]:
                 data["hidden_for_screenshot"] = marked["hidden"]
@@ -639,6 +613,8 @@ class ProofBrowser:
             except PlaywrightError:
                 return None, None
             marked = mark(page) if mark is not None else None
+            if full_page:              # as tall as the content: a short page leaves no empty window below it
+                page.set_viewport_size({"width": page.viewport_size["width"], "height": 1})
             self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             shot = self._dir / f"{self._stem(finding_id, kind)}.png"
             page.screenshot(path=str(shot), full_page=full_page)

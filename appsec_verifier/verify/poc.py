@@ -29,9 +29,11 @@ recorded response without a new request and marks the values the verdict
 names. Every finding with decisive steps also gets an image of those
 exchanges, request and response side by side, built here as escaped HTML with
 what the code can locate marked, each kind labelled by a red tag: the
-identity, the XSS or SSRF marker, the page a browser check opened, the
+identities an access-control proof compares, the XSS or SSRF marker, the
 redirect host and Location header, the marker file and its content, the input
-and answer that differ between injection requests, the time of each answer.
+and answer that differ between injection requests, the session cookie's
+Set-Cookie line. Facts about a step, such as the page a browser check opened
+or the time of each answer, stand above it, in bold where they decide.
 Response bodies and screenshots can show target data and are marked for
 review before sharing (VER-022).
 """
@@ -72,6 +74,11 @@ BODY_RESOURCE_TYPES = ("document", "xhr", "fetch")
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def shown_time(stamp: str) -> str:
+    """A recorded time as a screenshot shows it, to the second."""
+    return re.sub(r"\.\d+(?=Z$|[+-]\d\d:\d\d$)", "", str(stamp))
 
 
 def _items(headers) -> list[tuple[str, str]]:
@@ -375,7 +382,8 @@ def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
         caption = [f"AppSec Verifier · {ctx.plan.id} · access control · step {step['step']}",
                    f"{e['request']['method']} {e['request']['url'][:300]} as {e.get('_role') or 'anonymous'} "
                    f"→ {e['response']['status']}",
-                   f"captured {e['startedDateTime']} · rendered from the recorded response, no new request"]
+                   f"captured {shown_time(e['startedDateTime'])} · rendered from the recorded response, "
+                   "no new request"]
         try:
             out += browser.render(url=e["request"]["url"], status=e["response"]["status"],
                                   content_type=e["response"]["content"]["mimeType"], html=text,
@@ -415,7 +423,8 @@ def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
     """`text` as escaped HTML with what `needles` and `lines` name in <mark>, each a (label, what) pair: a
     string at each occurrence, a (region, context, token) from `_diff_token` once in the request line or the
     body, and in `lines` a prefix that marks each line starting with it. A red tag before the first mark of
-    each label says what is marked. Nothing of `text` is ever parsed as markup."""
+    each label says what is marked; tag and mark wrap to the next line together, not inside a word. Nothing of
+    `text` is ever parsed as markup."""
     spans = []
     blank = text.find("\n\n")
     body_start = blank + 2 if blank >= 0 else len(text)
@@ -452,7 +461,7 @@ def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
         new = [label for label in dict.fromkeys(labels) if label not in tagged]
         tagged.update(new)
         tag = f"<span class=tag>{html.escape(' · '.join(new))} ▸</span>" if new else ""
-        out += [html.escape(text[last:a]), tag, f"<mark>{html.escape(text[a:b])}</mark>"]
+        out += [html.escape(text[last:a]), f"<span class=hit>{tag}<mark>{html.escape(text[a:b])}</mark></span>"]
         last = b
     out.append(html.escape(text[last:]))
     return "".join(out), len(merged)
@@ -473,7 +482,7 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
     timing = cls == "injection" and max(times) - min(times) >= 2000        # a timing proof rests on the times
     if e.get("time"):
         facts.append((f"answered in {e['time']} ms", timing))
-    if e.get("_role"):
+    if cls == "access-control" and e.get("_role"):      # elsewhere the step heading names the identity
         req_marks.append(("identity", f"[identity {e['_role']}]"))
     if cls == "xss" and marker[0]:
         req_marks.append(("payload", marker[0]))
@@ -522,7 +531,34 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
                 res_lines.append(("status differs", "HTTP/1.1 "))
     elif cls == "access-control":
         res_marks += [("named in the verdict", value) for value in _values(highlight, _text(e))]
+    elif cls == "session":
+        res_lines += _session_cookie_line(ctx, history, res)
     return req_marks, res_marks, res_lines, facts
+
+
+_SESSION_ATTRIBUTES = {"CWE-614": "Secure", "CWE-1004": "HttpOnly", "CWE-1275": "SameSite"}
+
+
+def _session_cookie_line(ctx, history: list[dict], res: dict) -> list[tuple[str, str]]:
+    """The Set-Cookie line of the session cookie the plan observes, labelled with the attribute the finding
+    is about as the step saw it, e.g. "HttpOnly missing"; nothing without a declared session plan."""
+    from ..agent.experiments import latest_plan
+
+    _, plan = latest_plan(history)
+    resource = next((r for r in (getattr(ctx, "scope", None) or {}).get("session_checks", [])
+                     if r.get("finding_id") == ctx.plan.id and r.get("id") == plan.get("resource")), None)
+    attribute = _SESSION_ATTRIBUTES.get(getattr(ctx.plan, "cwe", None))
+    if not resource or not resource.get("cookie_name") or not attribute:
+        return []
+    name = resource["cookie_name"]
+    seen = next((c for c in res.get("session_cookies") or [] if c.get("name") == name), None)
+    if seen is None:
+        label = "session cookie"
+    elif attribute == "SameSite":
+        label = f"SameSite={seen['samesite'][:20].capitalize()}" if seen.get("samesite") else "SameSite missing"
+    else:
+        label = f"{attribute} {'set' if seen.get(attribute.lower()) else 'missing'}"
+    return [(label, f"set-cookie: {name}=")]
 
 
 _EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
@@ -532,7 +568,7 @@ h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:13px;border-bottom:1px
 .facts{padding:4px 10px;border-bottom:1px solid #ccc}.cols{display:flex}.cols>div{flex:1;min-width:0}
 .cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:12px;color:#555}
 pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;word-break:break-all}
-mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}
+mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}.hit{display:inline-block;max-width:100%}
 .tag{background:#b00020;color:#fff;font:bold 11px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}"""
 
 
@@ -546,14 +582,15 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     head = (f"<b>AppSec Verifier · {html.escape(str(ctx.plan.id))} · {html.escape(cls)} · "
             f"{html.escape(verdict)}</b>\nRecorded, redacted exchanges"
             f"{' from ' + html.escape(har_path) if har_path else ''}; no new request. "
-            f"First captured {html.escape(captured)}.\nMarked: what the verdict rests on, as the code locates it.")
+            f"First captured {html.escape(shown_time(captured))}.\n"
+            "Marked: what the verdict rests on, as the code locates it.")
     parts, total = [f"<header>{head}</header>"], 0
     for n, e in shown[:6]:
         req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, shown, highlight)
         req_html, a = _marked(_raw_request(e), req_marks)
         res_html, b = _marked(_raw_response(e, _focus(ctx, [o for _, o in shown], e), har_path), res_marks, res_lines)
-        fact_html = " · ".join(f"<mark>{html.escape(t)}</mark>" if decides else html.escape(t) for t, decides in facts)
-        total += a + b + sum(1 for _, decides in facts if decides)
+        fact_html = " · ".join(f"<b>{html.escape(t)}</b>" if decides else html.escape(t) for t, decides in facts)
+        total += a + b
         who = html.escape(e.get("_role") or "anonymous")
         parts.append(f"<section><h2>Step {n} · {html.escape(e['request']['method'])} as {who} → "
                      f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"
