@@ -1,6 +1,7 @@
 # Example authorisation scope for verifying a LOCAL OWASP Juice Shop.
 # Juice Shop is an intentionally vulnerable training app — run it on your own
-# machine (e.g. `docker run --rm -p 3000:3000 bkimminich/juice-shop`) and never
+# machine (e.g. `docker run --rm -p 3000:3000 bkimminich/juice-shop`, or with
+# `--network host` instead of `-p` when SSRF findings are to be confirmed) and never
 # expose this target or point this scope at anything you are not authorised to test.
 # Schema: schemas/scope.schema.yaml.
 
@@ -36,19 +37,25 @@ expected_build:
   commit: null                # commit the assessment was run against; not checked yet (VER-003)
   version: null
 
-allow_state_change: true      # disposable target: marked writes allowed, not cleaned up; reset it after a run (VER-014)
+allow_state_change: true      # writes still need --allow-intrusive; false would forbid them. Not cleaned up: reset the target after a run (VER-014, VER-030)
 
-# SSRF proof (VER-012). The listener binds to loopback only. A Juice Shop
+# SSRF proof (VER-012). For a target on localhost the Verifier starts its own
+# listener on a free loopback port, so no callback is needed here. A Juice Shop
 # container reaches the host's loopback only with `--network host` (Linux);
-# with `-p 3000:3000` its "localhost" is the container itself.
-callback:
-  base_url: http://localhost:4444   # how the target reaches the built-in listener
-  host: 127.0.0.1                    # local bind host for the Verifier's listener (loopback)
-  port: 4444                         # local bind port
+# with `-p 3000:3000` its "localhost" is the container itself. To fix the port,
+# declare the listener yourself; expect_rejected says that fetching it is a
+# boundary violation, without which a hit stays inconclusive:
+# callback:
+#   base_url: http://localhost:4444   # how the target reaches the built-in listener
+#   host: 127.0.0.1                    # local bind host for the Verifier's listener (loopback)
+#   port: 4444                         # local bind port
+#   expect_rejected: true
 
-# Path-traversal proof (VER-012). Place a file with a random token on the
-# target, e.g. `docker exec <container> sh -c 'echo <token> > /juice-shop/verifier-marker.txt'`,
-# then uncomment. The token is never shown to the model.
+# Path-traversal proof (VER-012). Put a file with a random token on the target,
+# then uncomment. The Juice Shop image has no shell, so copy the file in:
+#   openssl rand -hex 16 > verifier-marker.txt
+#   docker cp verifier-marker.txt <container>:/juice-shop/verifier-marker.txt
+# Copy it again after each restart. The token is never shown to the model.
 # marker_file:
 #   path: /juice-shop/verifier-marker.txt
 #   content: EDIT-random-token-16-to-128-chars

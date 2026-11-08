@@ -4,10 +4,21 @@
 # variables before the run; `read -rs` keeps a password out of the shell
 # history. In an interactive run a variable that is not set is asked hidden.
 #
-#   export VERIFIER_CUST_A_USER='customer-a@juice.test'
-#   read -rs VERIFIER_CUST_A_PASS && export VERIFIER_CUST_A_PASS   # your own throwaway test account
-#   export VERIFIER_CUST_B_USER='customer-b@juice.test'
+# Juice Shop creates its own customer accounts on every start, so they survive
+# a container reset, e.g. jim@juice-sh.op and bender@juice-sh.op; their
+# passwords are in Juice Shop's data/static/users.yml. Self-registered accounts
+# are gone after a restart.
+#
+#   export VERIFIER_CUST_A_USER='jim@juice-sh.op'
+#   read -rs VERIFIER_CUST_A_PASS && export VERIFIER_CUST_A_PASS
+#   export VERIFIER_CUST_B_USER='bender@juice-sh.op'
 #   read -rs VERIFIER_CUST_B_PASS && export VERIFIER_CUST_B_PASS
+#
+# The two roles must be different accounts: Juice Shop's token names no
+# subject, so the pre-flight check cannot tell that two roles share one.
+#
+# Without this file the same accounts work on the command line (VER-041):
+#   --account jim@juice-sh.op --account bender@juice-sh.op
 #
 # Credential values are used only to obtain a session and never appear in logs,
 # the report, evidence artefacts, or any model prompt — only the role label

@@ -20,7 +20,7 @@ You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an assessme
    pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
    ```
 
-2. Optional: write a scope file. Without one, the guided run asks for the target URL and tests only that URL's host and port, read-only. A scope file authorises more, such as several hosts, a proxy or write requests, and records the test period and who is responsible. The Verifier contacts nothing outside it. For a test instance on your own machine:
+2. Optional: write a scope file. Without one, the guided run asks for the target URL and tests only that URL's host and port. A scope file authorises more, such as several hosts or a proxy, and records the test period and who is responsible. The Verifier contacts nothing outside it. For a test instance on your own machine:
 
    ```yaml
    # scope.yaml
@@ -30,7 +30,7 @@ You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an assessme
    owner: {name: Your Name}   # who is responsible for the test
    ```
 
-3. Optional: add test accounts in `identities.yaml`. Access-control findings need two of them. The file names environment variables, never the passwords themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml). With SSO, the accounts can sign in in your browser, or a login program of your own provides the session. Without a file, the guided run can take each account's session from a request you copy in the browser, when the scope declares test resources for the selected access-control findings.
+3. Optional: add test accounts. Access-control findings need two of them. For a login that answers a JSON POST with a token, name them on the command line, e.g. `--account jim@juice-sh.op --account bender@juice-sh.op`: the Verifier asks for the passwords hidden and takes the login endpoint from the assessment; see [Test accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041). For anything else, use `identities.yaml`. The file names environment variables, never the passwords themselves; see [`examples/juice-shop/identities.yaml`](examples/juice-shop/identities.yaml). With SSO, the accounts can sign in in your browser, or a login program of your own provides the session. Without a file, the guided run can take each account's session from a request you copy in the browser, when the scope declares test resources for the selected access-control findings.
 
 4. Start the guided run with the assessment:
 
@@ -70,7 +70,7 @@ A finding counts as confirmed only with the proof in the right column.
 | Open redirect | CWE-601 | the target redirects to a marker host that does not exist; the redirect is not followed |
 | SSRF | CWE-918 | the target calls a listener the Verifier runs on your machine |
 
-XSS needs the proof browser (see [Install](#install)), path traversal a marker file named in the scope (`marker_file`), and SSRF a listener the target can reach (`callback`). Details: [`docs/cli.md`](docs/cli.md).
+XSS needs the proof browser (see [Install](#install)), path traversal a marker file named in the scope (`marker_file`), and SSRF a listener the target can reach. For a target on `localhost` the Verifier starts that listener itself; for any other target the scope names it (`callback`). Details: [`docs/cli.md`](docs/cli.md).
 
 Each finding ends with one of these verdicts:
 
@@ -90,9 +90,9 @@ The testable CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cw
 
 - Only the hosts, ports, paths and schemes in the scope file are contacted, and only within its time window. Private and loopback addresses must be listed in the scope (`networks`), unless the scope names the host as `localhost` or as an IP address. Cloud metadata addresses are never contacted.
 - The Verifier shows the plan and asks before the first request. In CI, `--yes` gives this confirmation.
-- By default it sends only GET, HEAD and OPTIONS requests, with one harmless payload per test. Writing requests (POST, PUT, PATCH), needed for stored XSS and some access-control cases, require `--allow-intrusive` and `allow_state_change: true` in the scope. Use them only against a test instance you can reset. DELETE is never sent.
+- By default it sends only GET, HEAD and OPTIONS requests, with one harmless payload per test. Writing requests (POST, PUT, PATCH), needed for stored XSS and some access-control cases, require `--allow-intrusive`. A scope file can forbid them with `allow_state_change: false`. Use them only against a test instance you can reset. DELETE is never sent.
 - Requests, request rate, model calls, model cost and run time are capped; the defaults are in [`data/limits.yaml`](data/limits.yaml). A limit that is reached stops the finding or the run it applies to. Ctrl-C stops the run and still writes the report with the results so far.
-- Passwords and tokens are read from environment variables. They are kept out of the model's input, the logs and the report; the model only sees role names.
+- Passwords and tokens are read from environment variables or entered hidden. They are kept out of the model's input, the logs and the report; the model only sees role names. An account given with `--admin-account` only sends GET, HEAD and OPTIONS.
 - The model proposes one step at a time, and the Verifier checks each step before it runs it. The model has no shell and no file access. With `--source` it can read the target's source code, but not `.env` files, keys or `.git/`.
 
 ## Model profiles
