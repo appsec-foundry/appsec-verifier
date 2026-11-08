@@ -19,6 +19,7 @@ from appsec_verifier.agent.prompts import _system
 from appsec_verifier.agent.proof import check_proof
 from appsec_verifier.agent.tools import AgentTools, ToolError
 from appsec_verifier.endpoints import Endpoint
+from appsec_verifier.verification_context import record_segment
 from appsec_verifier.verify.probes import ProbeResult
 from appsec_verifier.verify.report import to_markdown
 
@@ -249,6 +250,7 @@ def _controller(tmp_path, plan):
     ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False, env=ENV, idents=IDENTITIES)
     ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),
                                             Endpoint("GET", "/api/Feedbacks/:id", None)))
+    ctx.marker = MARKER
     c = Controller(ctx)
     c.plan = {"kind": "access-control", "path": "/api/Feedbacks/:id", **plan}
     return c
@@ -269,7 +271,51 @@ def test_only_the_owner_writes_under_an_own_resource_plan(tmp_path):
 def test_a_privileged_comparison_plan_allows_no_write(tmp_path):
     c = _controller(tmp_path, {"reference": "admin-1"})
     with pytest.raises(ToolError, match="accepted test plan"):
-        c.before("http_request", {"path": "/api/Feedbacks", "method": "POST", "role": "account-1", "json": {"x": 1}})
+        c.before("http_request", {"path": "/api/Feedbacks", "method": "POST", "role": "account-1", "json": {"x": M}})
+
+
+def test_a_write_carries_the_marker_and_names_no_existing_record(tmp_path):
+    """VER-014: what a write changes can be found by the finding's marker, and no write changes a record named by
+    its identifier in the path, since that record may belong to someone else."""
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False, env=ENV, idents=IDENTITIES)
+    ctx.plan = replace(ctx.plan, endpoints=tuple(Endpoint(m, p, None) for m, p in (
+        ("POST", "/api/Feedbacks"), ("PUT", "/api/Feedbacks/:id"), ("PATCH", "/api/Items/7"),
+        ("POST", "/rest/basket/:bid/checkout"), ("GET", "/api/Feedbacks/:id"))))
+    ctx.marker = MARKER
+    c = Controller(ctx)
+    with pytest.raises(ToolError, match=f"must carry {MARKER[0]}"):
+        c.before("http_request", {"path": "/api/Feedbacks", "method": "POST", "role": "account-1",
+                                  "json": {"comment": "hello"}})
+    for path, method in (("/api/Feedbacks/1", "PUT"), ("/api/Items/7", "PATCH"), ("/rest/basket/1/checkout", "POST"),
+                         (f"/api/Feedbacks/{M}", "PUT")):           # a placeholder names a record, whatever fills it
+        with pytest.raises(ToolError, match="must not name an existing record"):
+            c.before("http_request", {"path": path, "method": method, "role": "account-1", "json": {"comment": M}})
+    c.before("http_request", {"path": "/api/Feedbacks", "method": "POST", "role": "account-1", "json": {"comment": M}})
+    c.before("http_request", {"path": "/api/Feedbacks/1", "role": "account-1"})        # reads stay as they are
+    ctx.marker = ("", "")
+    with pytest.raises(ToolError, match="no marker"):
+        c.before("http_request", {"path": "/api/Feedbacks", "method": "POST", "role": "account-2",
+                                  "json": {"comment": M}})
+
+
+def test_an_operator_test_resource_is_written_as_declared(tmp_path):
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False, env=ENV, idents=IDENTITIES)
+    ctx.scope = {**ctx.scope, "test_resources": [{**RESOURCE, "finding_id": ctx.plan.id, "path": "/api/Feedbacks/2",
+                                                  "method": "PUT"}]}
+    Controller(ctx).before("http_request", {"path": "/api/Feedbacks/2", "method": "PUT", "role": "account-2",
+                                            "json": {"c": "declared"}})
+
+
+@pytest.mark.parametrize("template, path, expected", [
+    ("/api/Feedbacks", None, None),
+    ("/profile/image/url", "/profile/image/url", None),
+    ("/rest/basket/:id/coupon/:coupon", None, ":id"),
+    ("/api/Users/{uid}/role", "/api/Users/me/role", "me"),
+    ("/api/Items/<item>", "/api/Items/3f2504e0-4f89-11d3-9a0c-0305e82c3301", "3f2504e0-4f89-11d3-9a0c-0305e82c3301"),
+    ("/api/Items/7", "/api/Items/7", "7"),
+])
+def test_the_record_a_path_names(template, path, expected):
+    assert record_segment(template, path) == expected
 
 
 # ── whether the run tests the finding, and what the model is told ─────────────
@@ -295,7 +341,11 @@ def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
         plan = _plan("access-control", *endpoints)
         assert _blocker(plan, identities=two + admin, safe=False)[0] == "access"
         assert _blocker(plan, identities=two, safe=False, scope={"test_resources": [RESOURCE]}) is None
-    assert _blocker(_plan("access-control", put, get), identities=two, safe=False) is None
+    post = Endpoint("POST", "/api/Items", True)
+    assert _blocker(_plan("access-control", post, get), identities=two, safe=False) is None
+    # a write that names an existing record never creates one (VER-014); the comparison still can read
+    assert _blocker(_plan("access-control", put, get), identities=two, safe=False)[0] == "access"
+    assert _blocker(_plan("access-control", put, get), identities=two + admin, safe=False) is None
     assert _blocker(_plan("access-control", get), identities=two, safe=False)[0] == "access"  # nothing creates it
     assert _blocker(_plan("access-control", get), identities=two[:1] + admin, safe=False) is None
     assert _blocker(_plan("access-control"), identities=two + admin, safe=False) is None  # the route rule decides

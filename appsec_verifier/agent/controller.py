@@ -1,10 +1,11 @@
-"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-015, VER-036).
+"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036).
 
 ScopeGuard remains the connection authority. Assessment routes only narrow
 that scope; neither model plans nor target responses can add routes here.
 An accepted plan narrows requests to its route and method; under an
 own-resource access-control plan its owner may also write to the finding's
-routes, to create the resource it then reads back.
+routes, to create the resource it then reads back. Every write carries the
+finding's marker and names no existing record in its path (VER-014).
 """
 
 from __future__ import annotations
@@ -15,9 +16,9 @@ from urllib.parse import parse_qsl, urlsplit
 
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
-from ..verification_context import route_matches
+from ..verification_context import record_segment, route_matches
 from .experiments import token
-from .tools import ToolError
+from .tools import ToolError, _strings
 
 
 class Controller:
@@ -92,6 +93,10 @@ class Controller:
                     and self._matches(r["path"], route_path)]
         if not matching:
             raise ToolError("request has no matching route in this finding or its operator-declared resources")
+        if name == "http_request" and method not in SAFE_METHODS and not any(
+                r["finding_id"] == self.ctx.plan.id and r["path"] == path and r.get("method", "GET") == method
+                for r in self.ctx.scope.get("test_resources", [])):
+            self._write_allowed(path, args, matching)
         # Under an own-resource plan the owner, and only the owner, may also write to the finding's routes (VER-010).
         owner_write = (name == "http_request" and self.plan and self.plan.get("owner") and method not in SAFE_METHODS
                        and args.get("role") == self.plan["owner"])
@@ -137,6 +142,22 @@ class Controller:
             if query <= names["query"] and all(set(args.get(k) or {}) <= names[k] for k in ("json", "form")):
                 return
         raise ToolError("request inputs do not match the finding variant")
+
+    def _write_allowed(self, path, args, matching):
+        """VER-014: a write carries the finding's marker, so what it changes can be found and attributed, and
+        names no existing record by its identifier in the URL path, since that record may belong to someone
+        else. An operator-declared test resource is exempt. Identifiers in a body are not recognised."""
+        part = (getattr(self.ctx, "marker", None) or ("",))[0]
+        if not part:
+            raise ToolError("this finding has no marker, so it sends no write (VER-014)")
+        sent = [path, *(v for k in ("params", "json", "form") for v in _strings(args.get(k)))]
+        if not any(part in v for v in sent if isinstance(v, str)):
+            raise ToolError(f"a write must carry {part} in its path or a value, so the change can be found "
+                            "(VER-014)")
+        segment = next(filter(None, (record_segment(r["path"], path) for r in matching)), None)
+        if segment is not None:
+            raise ToolError(f"a write must not name an existing record in its path ({segment[:80]!r}): it may "
+                            "create, never change what may belong to someone else (VER-014)")
 
     def _key(self, name, args):
         args = dict(args)

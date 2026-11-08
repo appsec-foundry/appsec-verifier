@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from functools import lru_cache
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from jsonschema import Draft202012Validator
 
@@ -62,6 +62,10 @@ def finding_context(threat: dict) -> dict:
     return {key: bounded(threat[key]) for key in keys if threat.get(key) is not None}
 
 
+_PLACEHOLDER = re.compile(r":\w+|\{\w+\}|<\w+>")
+_RECORD_ID = re.compile(r"\d+|[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
+
+
 def route_matches(template: str, path: str) -> bool:
     """Match literal route segments and one-segment placeholders, never a model regex."""
     try:
@@ -72,8 +76,22 @@ def route_matches(template: str, path: str) -> bool:
         return False
     a, b = expected.path.split("/"), actual.path.split("/")
     return len(a) == len(b) and all(
-        x == y or (bool(y) and bool(re.fullmatch(r":\w+|\{\w+\}|<\w+>", x))) for x, y in zip(a, b, strict=True)
+        x == y or (bool(y) and bool(_PLACEHOLDER.fullmatch(x))) for x, y in zip(a, b, strict=True)
     )
+
+
+def record_segment(template: str, path: str | None = None) -> str | None:
+    """The segment of a request path that names an existing record (VER-014): one at a placeholder of its route
+    template, or one of digits or a UUID; None when it names none. Without `path`, the template's own."""
+    try:
+        expected = urlsplit(template).path.split("/")
+        actual = urlsplit(path).path.split("/") if path is not None else expected
+    except ValueError:
+        return template if path is None else path
+    for i, segment in enumerate(actual):
+        if (i < len(expected) and _PLACEHOLDER.fullmatch(expected[i])) or _RECORD_ID.fullmatch(unquote(segment)):
+            return segment
+    return None
 
 
 def missing_capabilities(variant: dict, *, safe: bool, browser: bool) -> list[str]:

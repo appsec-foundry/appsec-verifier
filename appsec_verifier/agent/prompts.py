@@ -178,10 +178,14 @@ def _system(ctx) -> str:
     if privileged:
         roles += (f". Privileged roles, read-only and the reference for privileged functions: "
                   f"{', '.join(privileged)}")
+    part = (getattr(ctx, "marker", None) or ("",))[0]
     mode = (
         "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing)"
         if ctx.safe
-        else "intrusive"
+        else "intrusive; every write (POST, PUT, PATCH) must carry " + (part or "the finding's marker")
+        + " in its path or a value, must not name an existing record by its identifier in the URL path, and "
+        "must not name another account's record in its body: create, never change what may belong to someone "
+        "else (VER-014)"
     )
     return (
         "You verify ONE static security finding against the running target, and only that finding. "
@@ -268,9 +272,10 @@ def _access_hint(ctx) -> str:
             "\nOwn-resource proof: call plan_test with kind access-control, owner set to one normal account and "
             "path the GET that reads the resource back (a placeholder such as :id may stand for its id). The "
             "accepted plan returns a marker. Then, as the owner and no one else, create something that belongs to "
-            "that account and holds the marker in a field the target returns, with one write to a route of this "
-            "finding. Read it back with the same GET and inputs as the owner, without a role, and as another normal "
-            "account; never send the marker in a read. Confirmed needs the owner to see the marker, the read "
+            "that account and holds the marker in a text field the target returns, with one write to a route of "
+            "this finding that names no record in its path, such as a POST to a collection. Read it back with the "
+            "same GET and inputs as the owner, without a role, and as another normal account; never send the "
+            "marker in a read. Confirmed needs the owner to see the marker, the read "
             "without a role not to see it, and the other account to see it. Cite the write and the reads. The "
             "record stays on the target."
         )

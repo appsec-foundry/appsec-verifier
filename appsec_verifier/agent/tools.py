@@ -8,8 +8,9 @@ VER-018). Nothing else.
 An identity's credentials go only to the origin it is bound to (its
 `target_origin`, by default the target base URL), never to another host in the
 scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
-POST, PUT and PATCH only in intrusive mode; DELETE and every other method are
-never sent (VER-014). A privileged account (--admin-account) only reads, in any
+POST, PUT and PATCH only in intrusive mode, with the finding's marker and
+without naming an existing record in the path (agent/controller.py); DELETE and
+every other method are never sent (VER-014). A privileged account (--admin-account) only reads, in any
 mode (VER-041). An access-control plan without an operator test resource is
 accepted only when the run allows its proof: a resource a normal account
 creates (two normal accounts, intrusive mode), for which plan_test returns the
