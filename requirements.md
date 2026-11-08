@@ -9,8 +9,8 @@ or blocked by a control that the static view could not see.
 
 It reads a finished `security-assessment.yaml`, verifies one finding at a time
 against a target the operator is authorised to test, and writes its own report.
-It never re-runs the static analysis, never re-scores a finding on its own, and
-never rates a finding it did not actively test.
+It never re-runs the static analysis, never changes the Analyzer's rating, and
+rates after verification only the findings it actively tested (VER-039).
 
 **Non-goals.** The Verifier is not a scanner and not a pentest agent. It does
 not crawl for new weaknesses, does not chain exploits for impact, and does not
@@ -305,14 +305,11 @@ optional hardening.
   tested, any deviation from the finding, and the authorisation under which the
   test ran.
 
-- **VER-027: Choose report or annotate.** The operator chooses, per run, between
-  the standalone report (default) and annotating the assessment with the
-  verification results. Annotating only adds each finding's dynamic-verification
-  status, verdict, and evidence pointer next to the existing finding; it never
-  changes, re-scores, or removes the static result, and it records that the file
-  was annotated and by which run. Both output modes work in interactive and in
-  non-interactive runs; annotating the source file in place requires an explicit
-  instruction, never a default.
+- **VER-027: Annotate a copy of the assessment.** On request, a run also writes a copy of the assessment annotated with the verification results; the standalone report (VER-020) is always written. Annotating only adds each tested finding's verdict, confidence, rating after verification (VER-039) and pointers to its proof of concept and screenshots next to the existing finding; it never changes or removes the static result, and it records that the file was annotated and by which run. The added fields follow a published schema, and the copy stays valid against the Analyzer's assessment schema. Annotating works in interactive and in non-interactive runs and never changes the source assessment.
+
+- **VER-038: Write the assessment report with the verification results.** On request, a run also saves a copy of the Analyzer's report in which each tested finding gets a verification section with its verdict, rationale, rating after verification (VER-039), proof of concept and screenshots. A summary of the verification precedes the findings, and the report's changelog gets an entry for the verification run. The original report stays unchanged. A finding the copy cannot place is listed at the end, never left out. The copy can show target data and is marked for review before sharing (VER-022).
+
+- **VER-039: Rate a finding after verification.** For each tested finding the Verifier states a rating after verification next to the Analyzer's rating, which stays visible, with the reason for any change. The rating follows fixed, documented rules applied in code, never the model's judgement, and changes only on a verdict whose proof check passed (VER-013). Impact is never changed. A changed rating is marked at its finding and listed in the summary.
 
 - **VER-037: Update an earlier report.** A run can continue the report of an earlier run against the same assessment and target. It keeps each checked verdict, tests the selected findings that have none, and tests again the findings the operator names, for example after a fix, replacing their earlier result. Each result states when it was tested. A report for another assessment or target is not continued.
 
