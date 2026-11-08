@@ -57,7 +57,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 | `progress.py` | `RunProgress`: the run's progress grid and live status line during `verify`, as in AppSec Analyzer |
 | `update.py`, `version_info.py` | `update`: pipx reinstall after a yes (VER-033); `--version` from the build stamp `build-info.json` (written by `setup.py`) or Git |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
-| `auth/sessions.py` | sessions per test identity; secrets come from env vars |
+| `auth/` | sessions per test identity (`sessions.py`); sign-ins in the operator's browser (`interactive.py`); the login program (`program.py`); pasted sessions and hidden input (`paste.py`) |
 | `agent/` | agent loop and narrow tool set; model profiles (`profiles.py`), the shared action schemas and prompts (`prompts.py`), the step contract (`steps.py`), `HostPlanner` (`hosts.py`) with one `host_*.py` per CLI/API |
 | `verify/` | runner (injectable, offline-testable), probes, proof of concept per finding (`poc.py`), report/export/annotate |
 | `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`, `model-catalog.yaml`, `anthropic-model-catalog.yaml`) |
@@ -83,13 +83,13 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 
 ## Safety invariants (do not weaken)
 
-These implement VER-001, -014 to -018, -025, -030. A change that loosens one needs an explicit decision from the maintainer, not a workaround.
+These implement VER-001, -014 to -018, -025, -030, -040. A change that loosens one needs an explicit decision from the maintainer, not a workaround.
 
-- Every request to the target goes through `GuardedHttpClient` and `ScopeGuard`. Do not add a code path that opens connections directly. The resolved address is checked when the connection is made (`AddressCheckingBackend` in `tools/httpx_transport.py`, rule in `ScopeGuard.address_allowed`); metadata and other link-local addresses are never contacted (VER-018).
+- Every request the Verifier sends goes through `GuardedHttpClient` and `ScopeGuard`. A login program the operator declares (VER-040) runs outside these controls; it is shown and confirmed before it starts, and the model cannot choose or change it. Do not add a code path that opens connections directly. The resolved address is checked when the connection is made (`AddressCheckingBackend` in `tools/httpx_transport.py`, rule in `ScopeGuard.address_allowed`); metadata and other link-local addresses are never contacted (VER-018).
 - Limits are enforced in code, outside the model. Reaching one stops the affected work.
 - The agent's tools are only those in `agent/tools.py`: guarded HTTP as a named identity, and read-only source access confined to the repository, without `.env` files, keys, credential stores or `.git/`. No shell, no raw network, no file writes.
 - Safe mode is the default: only GET, HEAD and OPTIONS. Write requests need `--allow-intrusive` and `allow_state_change: true` in the scope.
-- Secret values only come from environment variables. They never appear in logs, reports, prompts or files. The agent sees role names only.
+- Secret values come from environment variables or, in an interactive run, from hidden input; sessions are obtained at run time from a login or a login program. None of them is stored. They never appear in logs, reports, prompts or files. The agent sees role names only.
 - Credentials are dropped on cross-origin redirects.
 - Model hosts only plan. Agent CLIs run without tools, MCP servers, settings or session history, from an empty temp directory, with an allow-listed environment (no identity secrets, no other provider's keys). Every step goes through `steps.parse_step`; where a CLI reports tool use (`claude`, `codex-cli`), it is a breach that stops all later model calls. Keep the isolation flags at least as strict as AppSec Analyzer's adapters (see Relation to AppSec Analyzer).
 - The proof browser (`tools/browser.py`) never connects by itself: every page request goes through `answer()` and the `GuardedHttpClient`, is answered from a recorded response (`render`, `render_exchanges`, scripts off), or is aborted. Chrome runs in a network namespace without network access (`unshare --user --net`); without it the browser does not start.

@@ -236,30 +236,9 @@ optional hardening.
 
 - **VER-036: Stop unproductive verification.** Before each model call and tool action, the Verifier checks authorisation, remaining budgets and recorded progress outside the model. Tool actions must stay within the finding under test (VER-008). Repeated failed or redundant actions without new evidence stop after documented finite allowances; planned repetitions required for proof remain permitted. Running actions are bounded by the remaining execution time. A stopped finding retains its evidence and reports the reason without claiming a negative result (VER-024).
 
-- **VER-016: Handle test credentials as secrets.** Session credentials for the
-  test identities — bearer tokens, usernames and passwords, client secrets — come
-  from external configuration — environment variables or a restricted secret
-  store — supplied by the operator, never committed, never bundled, and never a
-  default or shared account. Credential and token **values** never appear in
-  logs, in the report, in evidence artefacts, or in any prompt sent to a model;
-  only a role label identifies an identity, and captured requests are redacted of
-  Authorization headers, cookies, and token parameters. Self-registration is used
-  only when the scope explicitly allows it and the target has open registration,
-  and any account it creates is marked and reported.
+- **VER-016: Handle test credentials as secrets.** Session credentials for the test identities (bearer tokens, usernames and passwords, client secrets, session cookies) come from environment variables supplied by the operator or, in an interactive run, from hidden input; sessions are also obtained at run time (VER-028, VER-040). None is stored, committed or bundled, and none is a default or shared account. Credential and token **values** never appear in logs, in the report, in evidence artefacts, or in any prompt sent to a model; only a role label identifies an identity, and captured requests are redacted of Authorization headers, cookies, and token parameters. Self-registration is used only when the scope explicitly allows it and the target has open registration, and any account it creates is marked and reported.
 
-- **VER-028: Authenticate through the operator's mechanism.** The Verifier
-  obtains sessions the way the target expects: a static bearer token, HTTP basic
-  or form login with a username and password, or an SSO/OIDC flow — resource-
-  owner password grant, client-credentials grant, or a browser-driven
-  authorization-code flow run in the proof browser. Each identity declares its
-  method and the exact authentication endpoint; the Verifier sends the identity's
-  credentials only to that bound endpoint, obtains a token or session, and
-  attaches it to requests to the target. It never sends a credential to an
-  endpoint the identity did not name, and never re-sends a token across a
-  redirect to a different origin (VER-018). A token is obtained once per identity
-  and reused, and re-obtained transparently when it expires or a request is
-  rejected as unauthenticated, so a long run stays within its bounds without
-  re-logging in for every finding.
+- **VER-028: Authenticate through the operator's mechanism.** The Verifier obtains sessions the way the target expects: a static bearer token, HTTP basic or form login with a username and password, an SSO/OIDC flow (client-credentials grant, resource-owner password grant, an authorization-code flow with PKCE in the operator's own browser, or a device-code flow), or a login program (VER-040). The Verifier never handles the password of an interactive SSO login. Each identity declares its method and its authentication endpoint, directly or through its issuer's discovery document, inside the scope (VER-029); the Verifier sends the identity's credentials only to that bound endpoint, obtains a token or session, and attaches it to requests to the target. It never sends a credential to an endpoint the identity did not name, and never re-sends a token across a redirect to a different origin (VER-018). A token is obtained once per identity and reused, renewed before it expires, with a refresh token where one was issued, and re-obtained when a request is rejected as unauthenticated, so a long run stays within its bounds without re-logging in for every finding. Flows that need a person run only in an interactive run and before the first finding; elsewhere such an identity blocks the run before anything is contacted. Later in the run the Verifier never asks, and an identity whose session cannot be renewed is unavailable for the rest of the run.
 
 - **VER-029: Reach the target through a declared proxy.** When the operator
   declares an HTTP/HTTPS proxy, the Verifier routes its target and authentication
@@ -269,6 +248,8 @@ optional hardening.
   destinations; they widen only where the Verifier may connect for transport and
   authentication, separately from the target's attack surface, and the scope
   still refuses every destination not listed (VER-001).
+
+- **VER-040: Obtain a session from the operator's login program.** An identity can name a program the operator provides, which the Verifier runs without a shell and without model credentials to obtain that identity's session and, optionally, its expiry. The program is shown before it first runs and confirmed with VER-002; one from an identities file the guided run found rather than was given needs its own explicit yes, and the model can neither choose nor change it. The Verifier attaches only the headers the identity allows, only to its origin (VER-018), handles every value as in VER-016, and runs the program again only to renew the session (VER-028). The program's own requests are outside the run's scope, limits and safe mode (VER-001, VER-015, VER-030); the documentation and the confirmation say so.
 
 - **VER-017: Give the agent the least authority it needs.** The verification
   agent is driven through narrow, purpose-built tools — a scoped HTTP client, a
@@ -357,9 +338,7 @@ optional hardening.
     used stops the run. Without one the run asks for the target URL, which has
     no default, and the URL alone is the scope. Neither comes from the
     assessment; the guided run writes no scope and never widens one.
-  - **Identities** (VER-016, VER-028): asked only when an identities file is
-    found. Missing credentials are pointed out, and so are access-control
-    findings that cannot be confirmed for lack of two identities (VER-010).
+  - **Identities** (VER-016, VER-028): asked when an identities file is found; missing credential values are asked for hidden. Without a file, when findings need two identities (VER-010), the run offers to take each identity's session from a request copied from the operator's browser. Access-control findings that cannot be confirmed for lack of two identities are pointed out.
   - **Model and budget** (VER-023, VER-015): the profile claude and the
     documented run limits, unless options change them; an unavailable profile
     stops the run before any question.
@@ -369,13 +348,7 @@ optional hardening.
     the output directory is replaced only after its own yes or `--overwrite`;
     a no stops the run before anything is contacted.
 
-  Answers are validated like the matching options and allow nothing an option
-  could not; settings already given as options are not asked again. The guided
-  run never asks for a secret value. Before anything is contacted it shows the
-  resolved settings with the equivalent non-interactive invocation, then asks
-  for the confirmation of VER-002; answering the setup questions is not that
-  confirmation. There Enter confirms.
-  Cancelling at any point contacts nothing.
+  Answers are validated like the matching options and allow nothing an option could not; settings already given as options are not asked again. The guided run asks for secret values only hidden and never stores them (VER-016). Before anything is contacted it shows the resolved settings with the equivalent non-interactive invocation, then asks for the confirmation of VER-002; answering the setup questions is not that confirmation. There Enter confirms. Cancelling at any point contacts nothing.
 
   An explicit flag turns the guided run off for CI, and it is also off when no
   terminal is attached, so an unattended run never waits for input. All
@@ -383,19 +356,7 @@ optional hardening.
   scope or URL, profile, or confirmation blocks the run and names what is
   missing.
 
-- **VER-032: Check inputs and access before the first finding.** Before a run
-  tests a finding, it checks the assessment's structure (VER-005), that the
-  target answers through the declared proxy (VER-003, VER-029), that every
-  identity obtains a session and, where it names a check URL, is accepted there
-  (VER-028), that the model profile is usable, for an API profile by one
-  metadata request, and that the model answers one fixed prompt without target
-  data, findings or credentials with a valid step, within the run's limits. A
-  failed check blocks the run and names its cause, never a secret or raw error
-  (VER-016); what a check cannot prove is said. Checks that contact the target
-  follow the confirmation of VER-002, and each login is tried once. A separate
-  command runs the same checks without verifying, offline if asked; there the
-  fixed prompt runs only on explicit request and with its own limit, and it shows
-  the test plan of VER-008 and warns when a finding cannot be tested.
+- **VER-032: Check inputs and access before the first finding.** Before a run tests a finding, it checks the assessment's structure (VER-005), that the target answers through the declared proxy (VER-003, VER-029), that every identity obtains a session and, where it names a check URL, is accepted there, and that no two identities whose tokens name their account are the same account (VER-010, VER-028), that the model profile is usable, for an API profile by one metadata request, and that the model answers one fixed prompt without target data, findings or credentials with a valid step, within the run's limits. A failed check blocks the run and names its cause, never a secret or raw error (VER-016); what a check cannot prove is said. Checks that contact the target follow the confirmation of VER-002, and each login is tried once. A separate command runs the same checks without verifying, offline if asked; there the fixed prompt runs only on explicit request and with its own limit, and it shows the test plan of VER-008 and warns when a finding cannot be tested.
 
 - **VER-033: Update its own installation on request.** A separate command
   reinstalls a pipx installation of the Verifier from the source it was
