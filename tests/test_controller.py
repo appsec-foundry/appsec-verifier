@@ -411,6 +411,19 @@ def test_rejected_plans_leave_the_allowance_to_the_corrected_plan(tmp_path):
     assert all("a revised plan must explain the new observation" in e for e in errors)
 
 
+@pytest.mark.parametrize("plan_path", ["/#/search", "/#/search?q=<test>", "/#/search?q=<test>&lang=en"])
+def test_xss_proof_takes_the_planned_route_with_or_without_a_query_template(tmp_path, plan_path):
+    """The controller and the proof check compare the planned route alike; a query is not part of it (VER-009)."""
+    plan = xss_plan(page_loads("assumed"))
+    plan["args"]["path"] = plan_path
+    script = Script([
+        plan,
+        {"tool": "browser_check", "args": {"path": "/#/search?q=<svg/onload=alert('m1'.concat('m2'))>"}},
+        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [2]}},
+    ])
+    assert AgentProbe("xss", lambda: script).run(xss_context(tmp_path)).verdict == "confirmed"
+
+
 def test_identical_rejected_plans_still_stop_after_three_failures(tmp_path):
     ctx = xss_context(tmp_path)
     logs = []

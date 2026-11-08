@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 
@@ -227,6 +228,43 @@ def test_repeated_no_effect_supports_only_the_tested_negative():
         h["_body"] = '{"result":"fixture-record"}'
     result = check(history, verdict="not-reproducible")
     assert result.verdict == "not-reproducible" and result.proof["scope"] == "cited requests only"
+
+
+def _unchanged_history(plan_path="/search?q=<test>"):
+    history = boolean_history()
+    history[0]["args"]["path"] = plan_path
+    for h in history[1:]:
+        h["_body"] = '{"result":"fixture-record"}'
+    return history
+
+
+def test_a_query_template_in_the_plan_path_still_matches_its_requests():
+    """The plan may show its input as `?q=<test>`; the requests go to the same route (VER-011)."""
+    assert check(_unchanged_history(), verdict="not-reproducible").verdict == "not-reproducible"
+
+
+def test_the_input_may_travel_in_the_path_query_as_the_controller_sends_it():
+    history = _unchanged_history("/search")
+    for h in history[1:]:
+        h["args"]["path"] = "/search?" + urlencode(h["args"].pop("params"))
+    assert check(history, verdict="not-reproducible").verdict == "not-reproducible"
+
+
+@pytest.mark.parametrize("change, reason", [
+    ("other-route", "planned target"),
+    ("other-query-input", "only the declared input may change"),
+    ("query-without-input", "declared control value"),
+])
+def test_route_and_query_of_experiment_requests_fail_closed(change, reason):
+    history = _unchanged_history()
+    if change == "other-route":
+        history[3]["args"]["path"] = "/other"
+    if change == "other-query-input":
+        history[3]["args"]["path"] = "/search?page=2"
+    if change == "query-without-input":
+        history[3]["args"]["path"] = "/search?" + urlencode(history[3]["args"].pop("params") | {"q": "unplanned"})
+    result = check(history, verdict="not-reproducible")
+    assert result.verdict == "inconclusive" and reason in result.rationale
 
 
 def test_error_does_not_count_as_target_control():

@@ -60,6 +60,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from ..planning import evidence_id
+from ..verification_context import planned_route
 from ..verify.probes import ProbeResult
 from .experiments import access_check, experiment_groups, injection_check, latest_plan, observation, token
 from .tools import _decoded
@@ -217,7 +218,7 @@ def _negative(ctx, history, result, cited):
     own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference"))
     if any(
         h.get("tool") != "http_request"
-        or (not own and h.get("args", {}).get("path") != plan.get("path"))
+        or (not own and not planned_route(plan.get("path") or "", h.get("args", {}).get("path") or ""))
         or type(h.get("result", {}).get("status")) is not int
         for h in selected
     ):
@@ -299,7 +300,7 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
         for n, h in enumerate(history, 1)
         if n > start
         and h.get("tool") == "browser_check"
-        and (not plan.get("path") or h.get("args", {}).get("path", "").split("?", 1)[0] == plan["path"])
+        and (not plan.get("path") or planned_route(plan["path"], h.get("args", {}).get("path") or ""))
         and isinstance(h.get("result"), dict)
         and h["result"].get("executed") is True
         and h["result"].get("context_verified") is True

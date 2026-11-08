@@ -80,6 +80,15 @@ def route_matches(template: str, path: str) -> bool:
     )
 
 
+def planned_route(template: str, path: str) -> bool:
+    """`path` requests the route a test plan names: its path and any `#` route match as in route_matches. A query
+    is not part of the route, so a plan may show one as a template (`/#/search?q=<test>`)."""
+    if not route_matches(template, path):
+        return False
+    expected, actual = urlsplit(template).fragment, urlsplit(path).fragment
+    return not expected or route_matches(expected, actual)
+
+
 def record_segments(template: str, path: str | None = None) -> list[str]:
     """The segments of a request path that name an existing record (VER-014): those at a placeholder of its route
     template, and those of digits or a UUID. Without `path`, the template's own. An unparseable path counts as

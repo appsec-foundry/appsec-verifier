@@ -22,7 +22,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
-from ..verification_context import record_segment, record_segments, route_matches
+from ..verification_context import planned_route, record_segment, record_segments
 from .experiments import normal_roles, token
 from .tools import ToolError, _strings
 
@@ -89,10 +89,7 @@ class Controller:
         def resolved(value):
             return value if urlsplit(value).scheme else self.ctx.target_base.rstrip("/") + "/" + value.lstrip("/")
 
-        if not route_matches(resolved(template), resolved(path)):
-            return False
-        expected, actual = urlsplit(template).fragment, urlsplit(path).fragment
-        return not expected or route_matches(expected, actual)
+        return planned_route(resolved(template), resolved(path))
 
     def _target(self, name, args):
         path = args.get("path", "/")

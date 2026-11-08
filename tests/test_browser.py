@@ -36,6 +36,7 @@ from appsec_verifier.tools.browser import (
     answer,
     marker_expression,
     new_marker,
+    xss_frame,
 )
 from appsec_verifier.verify.probes import ProbeContext
 from appsec_verifier.verify.report import build_annotations, to_markdown
@@ -507,3 +508,52 @@ def test_screenshot_crop_is_bounded_even_if_the_page_alters_the_result(clip, acc
 
     result = ProofBrowser(None, tmp_path)._mark(Page(), ['caption'])
     assert result['clip'] == (clip if accepted else None)
+
+
+@pytest.mark.parametrize('crop, accepted', [
+    ({'top': 418, 'height': 470}, True),
+    ({'top': 0, 'height': 900}, False),           # over the compact panel bound
+    ({'top': 600, 'height': 400}, False),         # below the viewport
+    ({'top': -1, 'height': 300}, False),
+    ({'top': 0, 'height': 300.5}, False),
+    ({'top': 0, 'height': 300, 'x': 0}, False),
+])
+def test_xss_crop_and_carrier_are_bounded_even_if_the_page_alters_the_result(crop, accepted, tmp_path):
+    import json
+
+    class Page:
+        def wait_for_function(self, *args, **kwargs):
+            return SimpleNamespace(json_value=lambda: json.dumps(
+                {'marks': 1, 'hidden': [], 'clip': None, 'crop': crop, 'carrier': '<img onerror=x>' * 100}))
+
+    result = ProofBrowser(None, tmp_path)._mark(Page(), None, part='m1')
+    assert result['crop'] == (crop if accepted else None)
+    assert len(result['carrier']) == 300
+
+
+def test_xss_frame_draws_the_recorded_dialog_and_escapes_every_text():
+    """VER-035: address bar, the dialog the payload opened, the page section and a caption below it. URL,
+    message and caption come from the target or the payload and stay text."""
+    payload = "<img src=x onerror=alert('m1'.concat('m2'))>"
+    page = xss_frame(url="https://shop.example.com/#/search?q=" + payload, image=b"\x89PNG-bytes",
+                     crop={'top': 418, 'height': 470}, dialog=("alert", "shop.example.com", "m1m2</div><b>"),
+                     lines=["AppSec Verifier · T-1 · XSS", "Outlined: payload element " + payload])
+    assert "<img src=x" not in page and "<b>" not in page
+    assert page.count("&lt;img src=x onerror=alert(&#x27;m1&#x27;.concat(&#x27;m2&#x27;))&gt;") == 2
+    assert "shop.example.com says" in page and "m1m2&lt;/div&gt;&lt;b&gt;" in page
+    assert "Drawn by AppSec Verifier from the recorded alert() call" in page and "Cancel" not in page
+    assert 'height:470px' in page and 'margin-top:-418px' in page and "data:image/png;base64," in page
+    assert "default-src 'none'; img-src data:" in page and "<script" not in page
+
+
+@pytest.mark.parametrize('kind, cancel, field', [("confirm", True, False), ("prompt", True, True)])
+def test_xss_frame_draws_the_kind_of_dialog_that_ran(kind, cancel, field):
+    page = xss_frame(url="https://shop.example.com/", image=b"x", crop=None, dialog=(kind, "shop.example.com", "m"),
+                     lines=["c"])
+    assert ("Cancel" in page) is cancel and ("class=field" in page) is field
+    assert f"recorded {kind}() call" in page and "height:900px" in page
+
+
+def test_xss_frame_without_a_dialog_draws_none():
+    page = xss_frame(url="https://shop.example.com/", image=b"x", crop=None, dialog=None, lines=["c"])
+    assert "class=dialog" not in page and "Drawn by" not in page

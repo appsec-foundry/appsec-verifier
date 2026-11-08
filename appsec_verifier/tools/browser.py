@@ -20,10 +20,12 @@ expression that joins the two marker parts at runtime, and only a dialog whose
 message equals the joined marker counts. A page that merely echoes the payload
 text shows the expression, not its value. On execution a JSON event record is
 saved owner-only under evidence/, with a screenshot when screenshots are on for
-XSS (VER-035): the elements that carry the payload are outlined, a caption
-names finding, URL, identity, time and what is marked, and what of the page
-covered the payload (a dialog, a backdrop) is hidden and named in the caption.
-The page is moved clear of the caption, so the caption hides none of it. Each request
+XSS (VER-035): the elements that carry the payload are outlined, and what of
+the page covered the payload (a dialog, a backdrop) or floats over it
+(notifications, confetti) is hidden. The image (xss_frame) shows an address bar
+with the URL, the dialog drawn from the recorded call, the page section around
+the outlined payload, and below it a caption that names finding, identity,
+time, the payload element and what was hidden. Each request
 the guarded client answered is handed back for the proof of concept (VER-034),
 bodies only for documents, XHR and fetch.
 
@@ -51,6 +53,7 @@ answer keeps its event record without a screenshot.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -63,6 +66,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -263,16 +267,18 @@ def _init_script() -> str:
 
 
 # Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
-# payload, also quoted in the caption), text that equals one of `values` (access control), and a caption
-# that says what is marked (`label`). `tag` is set in the flow right after the first mark, so it covers nothing
-# (the XSS call that ran); without a mark it goes to the caption. The page moves clear of the caption, so it
-# hides no mark; whatever of the page still covers the first mark (a dialog, a backdrop) is hidden and named in
-# the caption. All text is set as text, never parsed as HTML. Returns the number of marks and what was hidden,
-# as JSON.
-_MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
+# payload), text that equals one of `values` (access control), and a caption that says what is marked
+# (`label`). The page moves clear of the caption, so it hides no mark; whatever of the page still covers the
+# first mark (a dialog, a backdrop) is hidden and named in the caption. All text is set as text, never parsed as
+# HTML. Returns the number of marks and what was hidden, as JSON. Without `lines` (XSS, whose frame draws the
+# caption outside the page, see xss_frame) no caption is added; floating layers that do not hold the mark
+# (notifications, banners, confetti) are hidden too, a bar along the top edge (the application's header) stays,
+# and `crop` gives the viewport rows of the page section around the mark.
+_MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
   const marks = [];
   const root = document.body || document.documentElement;
   const ours = (el) => el.hasAttribute('data-appsec-verifier');
+  const PANEL = 640, MIN_PANEL = 280, MAX_PANEL = 760;
   let carrier = null;
   const outline = (el) => {
     if (!el || el === root || marks.includes(el) || marks.length >= 20) return;
@@ -316,29 +322,39 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
       }
     }
   }
-  if (tag && marks.length) {
-    const t = document.createElement('span');
-    t.setAttribute('data-appsec-verifier', 'tag');
-    t.textContent = tag;
-    t.style.cssText = 'display:inline-block;margin:0 0 0 10px;padding:2px 8px;border-radius:3px;background:'
-      + color + ';color:#fff;font:bold 13px/1.5 monospace;vertical-align:middle;white-space:nowrap';
-    marks[0].insertAdjacentElement('afterend', t);
+  const box = lines ? document.createElement('div') : null;
+  if (box) {
+    box.setAttribute('data-appsec-verifier', 'caption');
+    const extra = (marks.length && label ? ['marked: ' + label] : [])
+      .concat(carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]));
+    box.textContent = lines.concat(extra).join('\\n');
+    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;white-space:pre-wrap;'
+      + 'word-break:break-all;background:rgba(17,17,17,.92);color:#fff;font:13px/1.4 monospace;'
+      + 'padding:8px 10px;border-top:3px solid ' + color;
+    root.appendChild(box);
   }
-  const box = document.createElement('div');
-  box.setAttribute('data-appsec-verifier', 'caption');
-  const extra = (tag && !marks.length ? [tag] : []).concat(marks.length && label ? ['marked: ' + label] : [])
-    .concat(carrier ? ['payload element: ' + carrier.slice(0, 300)] : (marks.length || !none ? [] : [none]));
-  box.textContent = lines.concat(extra).join('\\n');
-  box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;white-space:pre-wrap;'
-    + 'word-break:break-all;background:rgba(17,17,17,.92);color:#fff;font:13px/1.4 monospace;'
-    + 'padding:8px 10px;border-top:3px solid ' + color;
-  root.appendChild(box);
+  // Without a caption, the page section around the mark: its largest ancestor that still fits a compact panel.
+  let section = marks[0] || null;
+  if (!box && section) {
+    for (let el = section.parentElement; el && el !== root && el !== document.documentElement;
+         el = el.parentElement) {
+      if (el.getBoundingClientRect().height > PANEL - 32) break;
+      section = el;
+    }
+  }
   const fit = () => {
-    root.style.setProperty('margin-bottom', (box.getBoundingClientRect().height + 8) + 'px', 'important');
-    if (marks[0] && marks[0].scrollIntoView) marks[0].scrollIntoView({block: 'center'});
+    if (box) root.style.setProperty('margin-bottom', (box.getBoundingClientRect().height + 8) + 'px', 'important');
+    const focus = box ? marks[0] : section;
+    if (focus && focus.scrollIntoView) focus.scrollIntoView({block: 'center'});
   };
   fit();
   const target = marks[0], hidden = [], gone = [];
+  const hide = (el) => {
+    gone.push(el);
+    el.style.setProperty('visibility', 'hidden', 'important');
+    hidden.push((el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
+      + Array.from(el.classList).slice(0, 2).map((c) => '.' + c).join('')).slice(0, 80));
+  };
   if (target && document.elementsFromPoint) {
     const r = target.getBoundingClientRect();
     for (const [fx, fy] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
@@ -352,19 +368,40 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
         let cover = el;     // the whole layer: its outermost element that does not hold the mark
         while (cover.parentElement && !cover.parentElement.contains(target)) cover = cover.parentElement;
         if (gone.includes(cover) || gone.length >= 5) continue;
-        gone.push(cover);
-        cover.style.setProperty('visibility', 'hidden', 'important');
-        hidden.push((cover.tagName.toLowerCase() + (cover.id ? '#' + cover.id : '')
-          + Array.from(cover.classList).slice(0, 2).map((c) => '.' + c).join('')).slice(0, 80));
+        hide(cover);
       }
     }
   }
-  if (hidden.length) {
+  if (!box) {
+    for (const el of root.querySelectorAll('*')) {
+      if (gone.length >= 10) break;
+      if (ours(el) || (target && el.contains(target)) || gone.some((g) => g.contains(el))) continue;
+      const style = getComputedStyle(el);
+      if (style.position !== 'fixed' || style.visibility === 'hidden' || style.display === 'none') continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height || (r.top <= 0 && r.height <= 120 && r.width >= innerWidth * 0.9)) continue;
+      hide(el);
+    }
+  }
+  if (hidden.length && box) {
     box.textContent += '\\nhidden for the screenshot because it covered the mark: ' + hidden.join(', ');
     fit();
   }
-  let clip = null;
-  if (target) {
+  let clip = null, crop = null;
+  if (!box) {
+    let top = 0, bottom = Math.min(innerHeight, PANEL);
+    if (section) {
+      const s = section.getBoundingClientRect(), m = target.getBoundingClientRect();
+      top = Math.max(0, Math.min(s.top, m.top) - 16);
+      bottom = Math.min(innerHeight, Math.max(s.bottom, m.bottom) + 16, top + MAX_PANEL);
+      if (bottom - top < MIN_PANEL) {
+        top = Math.max(0, Math.min(top - (MIN_PANEL - (bottom - top)) / 2, innerHeight - MIN_PANEL));
+        bottom = Math.min(innerHeight, top + MIN_PANEL);
+      }
+    }
+    crop = {top: Math.round(top), height: Math.round(bottom - top)};
+  }
+  if (target && box) {
     const r = target.getBoundingClientRect();
     const height = box.getBoundingClientRect().height;
     if (r.width > 0 && r.height > 0 && r.height < 300 && height < 300) {
@@ -378,8 +415,52 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
       }
     }
   }
-  return JSON.stringify({marks: marks.length, hidden, clip});
+  return JSON.stringify({marks: marks.length, hidden, clip, crop, carrier: carrier && carrier.slice(0, 300)});
 }"""
+
+
+_FRAME_CSS = (
+    "body{margin:0;width:1280px;background:#fff;color:#1f1f1f;font:14px/1.45 system-ui,sans-serif}"
+    ".bar{padding:8px 12px;background:#dee1e6}"
+    ".url{background:#fff;border-radius:16px;padding:5px 14px;font:13px/1.45 monospace;word-break:break-all}"
+    ".sheet{background:#dee1e6;padding:2px 0 14px}"
+    ".dialog{width:460px;margin:0 auto;background:#fff;border-radius:8px;padding:16px 22px 14px;"
+    "box-shadow:0 2px 8px rgba(0,0,0,.25)}"
+    ".from{font-weight:600;margin-bottom:8px}.msg{font:13px/1.45 monospace;word-break:break-all}"
+    ".field{border:1px solid #747775;border-radius:4px;height:22px;margin-top:8px}"
+    ".buttons{text-align:right;margin-top:14px}.btn{display:inline-block;margin-left:8px;padding:4px 18px;"
+    "border-radius:16px;background:#0b57d0;color:#fff}.btn.alt{background:#fff;color:#0b57d0;"
+    "border:1px solid #c4c7c5}.drawn{margin-top:8px;font-size:12px;color:#5f6368;text-align:center}"
+    ".page{overflow:hidden;border-top:1px solid #c4c7c5;border-bottom:1px solid #c4c7c5}.page img{display:block}"
+    ".caption{background:#111;color:#fff;font:13px/1.45 monospace;padding:8px 12px;white-space:pre-wrap;"
+    "word-break:break-all;border-top:3px solid " + _HIGHLIGHT + "}"
+)
+
+
+def xss_frame(*, url: str, image: bytes, crop: dict | None, dialog: tuple[str, str, str] | None,
+              lines: list[str]) -> str:
+    """The XSS evidence image as a page of its own (VER-035): an address bar with the URL the browser opened, the
+    dialog the payload opened, drawn from the recorded call (`dialog` = kind, origin, message), the page section
+    around the outlined payload from `image` (a 1280 by 900 viewport screenshot; `crop` gives its rows), and a
+    caption below the page, so nothing covers it. All text is escaped; the page loads nothing but its image."""
+    top, height = (crop["top"], crop["height"]) if crop else (0, 900)
+    parts = [f'<div class=bar><div class=url>{escape(unquote(url)[:2000])}</div></div>']
+    if dialog:
+        kind, origin, message = dialog
+        buttons = '<span class="btn alt">Cancel</span><span class=btn>OK</span>' if kind != "alert" \
+            else "<span class=btn>OK</span>"
+        parts.append(
+            f"<div class=sheet><div class=dialog><div class=from>{escape(origin)} says</div>"
+            f"<div class=msg>{escape(message)}</div>{'<div class=field></div>' if kind == 'prompt' else ''}"
+            f"<div class=buttons>{buttons}</div></div>"
+            f"<div class=drawn>Drawn by AppSec Verifier from the recorded {escape(kind)}() call</div></div>")
+    parts.append(f'<div class=page style="height:{int(height)}px"><img alt="" width=1280 height=900 '
+                 f'style="margin-top:-{int(top)}px" src="data:image/png;base64,{base64.b64encode(image).decode()}">'
+                 "</div>")
+    parts.append(f"<div class=caption>{escape(chr(10).join(lines))}</div>")
+    return ("<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content=\"default-src "
+            "'none'; img-src data:; style-src 'unsafe-inline'\">"
+            f"<style>{_FRAME_CSS}</style><body>{''.join(parts)}</body>")
 
 
 def _launch_chrome(headless: bool):
@@ -603,16 +684,17 @@ class ProofBrowser:
         return f"{re.sub(r'[^A-Za-z0-9_.-]', '_', finding_id)}-{kind}-{n}"
 
     @staticmethod
-    def _mark(page, lines: list[str], *, part: str = "", values=(), none: str | None = None,
-              label: str | None = None, tag: str | None = None) -> dict | None:
+    def _mark(page, lines: list[str] | None, *, part: str = "", values=(), none: str | None = None,
+              label: str | None = None) -> dict | None:
         """Caption and highlights drawn over the page before its screenshot, as
-        {"marks": n, "hidden": [what was hidden because it covered the first mark]}; None if the page refused
-        them or did not answer in time. Unlike evaluate(), wait_for_function() has a timeout, so a page script
-        that never returns cannot hold the check; the script's result is a JSON string, never falsy."""
+        {"marks": n, "hidden": [what was hidden for the screenshot], "clip", "crop", "carrier"}; None if the page
+        refused them or did not answer in time. Without `lines` no caption is drawn (see _MARK_SCRIPT). Unlike
+        evaluate(), wait_for_function() has a timeout, so a page script that never returns cannot hold the check;
+        the script's result is a JSON string, never falsy. The page may alter it, so every value is bounded."""
         try:
             done = page.wait_for_function(f"(arg) => ({_MARK_SCRIPT})(arg)",
                                           arg={"part": part, "values": list(values), "lines": lines, "none": none,
-                                               "color": _HIGHLIGHT, "label": label, "tag": tag},
+                                               "color": _HIGHLIGHT, "label": label},
                                           timeout=EVIDENCE_TIMEOUT_MS)
             out = json.loads(done.json_value())
             clip = out.get("clip")
@@ -620,8 +702,14 @@ class ProofBrowser:
                     and all(type(v) in (int, float) and 0 <= v <= 100000 for v in clip.values())
                     and 0 < clip["width"] <= 1280 and 0 < clip["height"] <= 720):
                 clip = None
+            crop = out.get("crop")
+            if not (isinstance(crop, dict) and set(crop) == {"top", "height"}
+                    and all(type(v) is int for v in crop.values())
+                    and 0 <= crop["top"] and 0 < crop["height"] <= 760 and crop["top"] + crop["height"] <= 900):
+                crop = None
+            carrier = out.get("carrier")
             return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5],
-                    "clip": clip}
+                    "clip": clip, "crop": crop, "carrier": carrier[:300] if isinstance(carrier, str) else None}
         except Exception:  # noqa: BLE001 - the screenshot is still taken, unmarked
             return None
 
@@ -645,22 +733,40 @@ class ProofBrowser:
                 "captured": captured, "execution_contexts": execution_contexts or [], "attempt": attempt}
         shot = None
         if "xss" in self.screenshots:
-            # What ran stands beside the element that carries the payload, so the caption does not repeat it.
-            marked = self._mark(
-                page, [f"AppSec Verifier · {finding_id} · XSS",
-                       f"{unquote(url)[:300]} as {role or 'anonymous'} → {status}",
-                       f"captured {shown_time(captured)}"],
-                part=marker[0], none="(the element that carries the payload was not found in the page)",
-                tag="executed: " + ", ".join(f"{kind}('{joined}')" for kind in via))
+            # The page gets only the outline; address bar, dialog and caption are drawn around it (xss_frame).
+            marked = self._mark(page, None, part=marker[0])
             data["marked_elements"] = marked["marks"] if marked else None
             if marked and marked["hidden"]:
                 data["hidden_for_screenshot"] = marked["hidden"]
-            shot = self._dir / f"{stem}.png"
             try:
-                # Keep the application recognisable; a tiny payload crop is not the primary evidence.
-                page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
+                image = page.screenshot(timeout=EVIDENCE_TIMEOUT_MS)
             except PlaywrightError:      # a page that does not answer: the event record still proves execution
-                shot = None
+                image = None
+            if image is not None:
+                origin = next((c["origin"] for c in execution_contexts or []
+                               if c.get("verified") and c.get("is_marker")), url)
+                lines = [f"AppSec Verifier · {finding_id} · XSS · as {role or 'anonymous'} · HTTP {status} · "
+                         f"captured {shown_time(captured)}"]
+                if via:
+                    lines.append("The dialog shows a random value the payload assembled at runtime; a page that "
+                                 "only echoed the payload would show the expression.")
+                lines.append(f"Outlined: payload element {marked['carrier']}" if marked and marked["carrier"]
+                             else "(the element that carries the payload was not found in the page)")
+                if marked and marked["hidden"]:
+                    lines.append("Hidden for the screenshot: " + ", ".join(marked["hidden"]))
+                frame = xss_frame(url=url, image=image, crop=marked["crop"] if marked else None,
+                                  dialog=(via[0], urlsplit(origin).netloc or origin, joined) if via else None,
+                                  lines=lines)
+                shot = self._dir / f"{stem}.png"
+                try:
+                    framed, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200,
+                                                     content_type="text/html; charset=utf-8", body=frame,
+                                                     finding_id=finding_id, kind="xss", full_page=True,
+                                                     width=1280, path=shot)
+                except PlaywrightError:
+                    framed = None
+                if framed is None:       # the outlined page alone still shows the exploit
+                    shot.write_bytes(image)
         record.write_text(json.dumps(data, indent=2), encoding="utf-8")
         entries = [self._entry(record, "browser-event")]
         if shot is not None:
@@ -670,9 +776,10 @@ class ProofBrowser:
         return entries
 
     def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, finding_id: str,
-                        kind: str, mark=None, full_page: bool = False):
+                        kind: str, mark=None, full_page: bool = False, width: int = 1200, path: Path | None = None):
         """Screenshot of a page answered from a record: the navigation gets `body`, every other request is
-        aborted and scripts are off, so nothing reaches the target. Returns (path, marks) or (None, None)."""
+        aborted and scripts are off, so nothing reaches the target. Saved at `path`, by default the next
+        `<finding>-<kind>-<n>.png`. Returns (path, marks) or (None, None)."""
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -687,7 +794,7 @@ class ProofBrowser:
                 route.abort("blockedbyclient")
 
         context = browser.new_context(service_workers="block", accept_downloads=False, java_script_enabled=False,
-                                      viewport={"width": 1200, "height": 720}, device_scale_factor=1)
+                                      viewport={"width": width, "height": 720}, device_scale_factor=1)
         try:
             context.route_web_socket(re.compile(".*"), _leave_unconnected)
             context.route("**/*", on_route)
@@ -700,7 +807,7 @@ class ProofBrowser:
             if full_page:              # as tall as the content: a short page leaves no empty window below it
                 page.set_viewport_size({"width": page.viewport_size["width"], "height": 1})
             self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            shot = self._dir / f"{self._stem(finding_id, kind)}.png"
+            shot = path or self._dir / f"{self._stem(finding_id, kind)}.png"
             page.screenshot(path=str(shot), full_page=full_page,
                             **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
             return shot, marked

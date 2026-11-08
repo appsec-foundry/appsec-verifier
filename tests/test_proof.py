@@ -144,6 +144,28 @@ def test_injection_without_a_clear_delay_is_downgraded(history):
     assert res.verdict == "inconclusive" and "declare a plan_test" in res.rationale
 
 
+# ── xss (VER-009) ─────────────────────────────────────────────────────────────
+
+def _xss_history(checked_path):
+    plan = {"tool": "plan_test", "args": {"kind": "execution", "hypothesis": "q reaches innerHTML",
+                                          "path": "/#/search?q=<test>"}, "result": {"accepted": True}}
+    check = {"tool": "browser_check", "args": {"path": checked_path},
+             "result": {"executed": True, "context_verified": True, "evidence": []}}
+    return [plan, check]
+
+
+@pytest.mark.parametrize("checked_path, verdict", [
+    ("/#/search?q=<svg/onload=alert('m1'.concat('m2'))>", "confirmed"),
+    ("/#/score-board?q=<svg/onload=alert('m1'.concat('m2'))>", "inconclusive"),  # another route of the app
+    ("/search?q=<svg/onload=alert('m1'.concat('m2'))>", "inconclusive"),         # not the planned # route
+])
+def test_xss_execution_counts_only_on_the_planned_route(checked_path, verdict):
+    res = _check("xss", _xss_history(checked_path), [2], marker=("m1", "m2"))
+    assert res.verdict == verdict
+    if verdict == "inconclusive":
+        assert "no browser_check saw the marker execute" in res.rationale
+
+
 # ── open redirect (VER-012) ───────────────────────────────────────────────────
 
 MARKER = ("vrf0a1b2c3d", "4e5f6a7b")

@@ -62,6 +62,13 @@ class Target:
             "/spin": f"<html><body><p>Results for {q}</p><script>while (true) {{}}</script></body></html>",
             "/dialog": f"<html><body><p>Results for {q}</p><div id=welcome style='position:fixed;inset:0;"
                        "z-index:10;background:#333;color:#fff'>Welcome!</div></body></html>",
+            "/busy": "<html><body style='margin:0'><header style='position:fixed;top:0;left:0;right:0;height:56px;"
+                     "background:#263238;color:#fff'>Shop</header><div style='height:900px'></div>"
+                     f"<main style='padding:80px 20px'><h1>Search</h1><p>Results for {q}</p></main>"
+                     "<div id=toast style='position:fixed;right:20px;bottom:20px;width:300px;height:60px;"
+                     "background:#4caf50'>You solved a challenge</div><canvas style='position:fixed;inset:0;"
+                     "width:100%;height:100%;pointer-events:none'></canvas><div style='height:900px'></div>"
+                     "</body></html>",
             "/webrtc": "<html><body><script>const port = new URLSearchParams(location.search).get('port');"
                        "const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:127.0.0.1:' + port}]});"
                        "pc.createDataChannel('x'); pc.createOffer().then(o => pc.setLocalDescription(o));"
@@ -214,7 +221,8 @@ def test_screenshot_marks_the_payload_and_names_the_proof(browser):
     event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
     assert event["marked_elements"] == 1
     width, height = struct.unpack(">II", (tmp / kinds["screenshot"]["path"]).read_bytes()[16:24])
-    assert (width, height) == (1280, 900)  # application context, not a payload strip
+    # Address bar, drawn dialog, the page section with application context and the caption, in a compact panel.
+    assert width == 1280 and 500 <= height <= 1200
     pages = [x for x in result["_exchanges"] if x["navigation"]]
     assert len(pages) == 1 and pages[0]["status"] == 200 and b"Results for" in pages[0]["content"]
 
@@ -231,6 +239,20 @@ def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browse
     kinds = {e["kind"]: e for e in result["evidence"]}
     event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
     assert event["marked_elements"] == 1 and event["hidden_for_screenshot"] == ["div#welcome"]
+
+
+def test_floating_layers_are_hidden_for_the_screenshot_while_the_header_stays(browser):
+    """VER-035: notifications and confetti that do not hold the payload leave the image; the app's header bar
+    stays as context, and the event record names what was hidden."""
+    import json
+
+    b, _, tmp = browser
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+    result = _check(b, "/busy?q=" + quote(payload, safe=""))
+    kinds = {e["kind"]: e for e in result["evidence"]}
+    event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
+    assert event["marked_elements"] == 1
+    assert event["hidden_for_screenshot"] == ["div#toast", "canvas"]
 
 
 def test_screenshots_can_be_turned_off_without_losing_the_proof(tmp_path):

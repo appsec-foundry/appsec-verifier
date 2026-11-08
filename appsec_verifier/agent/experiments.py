@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import secrets
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote
 
 from ..planning import STRATEGY_SCHEMA
-from ..verification_context import record_segments, route_matches
+from ..verification_context import planned_route, record_segments, route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
@@ -199,13 +199,17 @@ def experiment_groups(history, cited):
         args, result = h.get("args", {}), h.get("result", {})
         if h.get("tool") != "http_request" or not isinstance(result.get("status"), int):
             return plan, {}, "proof needs answered target requests"
-        if args.get("path") != plan["path"] or (args.get("method") or "GET").upper() != plan.get("method", "GET"):
+        if not planned_route(plan["path"], args.get("path") or "") or (
+            (args.get("method") or "GET").upper() != plan.get("method", "GET")
+        ):
             return plan, {}, "proof requests do not match the declared target"
-        values = dict(args.get(plan.get("input_location")) or {})
+        # A query in the path counts as params, as the controller sends it; the rest of the path stays fixed.
+        path, _, query = (args.get("path") or "").partition("?")
+        sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers")}
+        sent["params"].update(parse_qsl(query, keep_blank_values=True))
+        values = sent[plan.get("input_location", "params")]
         value = values.pop(plan.get("input_name"), None)
-        fixed = {k: args.get(k) or {} for k in ("params", "json", "form", "headers")}
-        fixed[plan.get("input_location", "params")] = values
-        signatures.add(token([args.get("role"), fixed]))
+        signatures.add(token([args.get("role"), path, sent]))
         bucket = next((k for k in groups if token(value) == token(plan[k])), None)
         if bucket is None:
             return plan, {}, "a cited request did not use a declared control value"
