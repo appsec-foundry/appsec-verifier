@@ -6,7 +6,8 @@ description: |
   Analyzer to read the dynamic-verification results back and show, next to each
   finding, whether it was confirmed against the running system (VER-021). The
   Analyzer does not read it yet. `verify --annotate` writes a different form: a
-  `dynamic_verification` block on each finding of the assessment (VER-027).
+  copy of the assessment with a `dynamic_verification` block on each finding
+  (VER-027, schemas/annotated-assessment.schema.yaml).
 
   It is ADDITIVE and keyed by finding identity: each annotation names the source
   finding by `finding_id` AND `match_key`, so the Analyzer binds it to exactly

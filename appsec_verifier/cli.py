@@ -719,10 +719,13 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     if args.annotate:
         import yaml
 
+        from .verify.annotated_report import write_annotated_report
+
         annotated = annotate_assessment(_load_yaml(assessment), doc, verification_report=str(paths["yaml"]))
-        dest = assessment if args.in_place else (out_dir / "security-assessment.annotated.yaml")
+        dest = out_dir / "security-assessment.annotated.yaml"
         write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
-        extra.append(("Annotated", f"{dest}" + (" (in place)" if args.in_place else "")))
+        extra.append(("Annotated", str(dest)))
+        extra.append(("Annotated report", write_annotated_report(assessment, annotated, doc, out_dir)))
 
     print("\n".join(_results(st, doc, plans, blocked, full=args.print_results)))
     print("\n".join(_verify_summary(st, doc, paths, extra)))
@@ -1622,10 +1625,10 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         help="replace a report already in the output directory (without this or --resume, such a report stops the run)",
     )
     out.add_argument(
-        "--annotate", action="store_true", help="also write a copy of the assessment with the verdict of each finding"
-    )
-    out.add_argument(
-        "--in-place", action="store_true", help="with --annotate: write the verdicts into the assessment file itself"
+        "--annotate",
+        action="store_true",
+        help="also write copies of the assessment and of the Analyzer's Markdown report next to it, with the "
+        "verdict, rating after verification and proof of each tested finding; the originals stay unchanged",
     )
     out.add_argument(
         "--screenshots",

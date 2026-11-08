@@ -334,7 +334,7 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
                   ("screenshots", "--screenshots"))
 _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "--overwrite"),
-          ("annotate", "--annotate"), ("in_place", "--in-place"), ("allow_intrusive", "--allow-intrusive"),
+          ("annotate", "--annotate"), ("allow_intrusive", "--allow-intrusive"),
           ("read_only", "--read-only"), ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
           ("show_costs", "--show-costs"), ("strict_severity", "--strict-severity"))
 

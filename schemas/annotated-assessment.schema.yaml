@@ -1,0 +1,106 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://appsec-verifier/schemas/annotated-assessment.schema.yaml
+title: Verification fields of an annotated assessment
+description: |
+  The fields `verify --annotate` adds to its copy of a `security-assessment.yaml`,
+  written as `security-assessment.annotated.yaml` next to the report (VER-027).
+  The copy is the Analyzer's document with two additions and nothing else
+  changed: a top-level `dynamic_verification` record of the run, and a
+  `dynamic_verification` block on each finding the run tested. Both are allowed
+  by AppSec Analyzer's assessment schema, which accepts additional fields at the
+  root and on threats, so the copy stays valid against it. The Analyzer's own
+  `threats[].verification` (its static verification findings) is left unchanged.
+
+  This schema covers only the added fields. A change to them raises
+  `schema_version`.
+
+type: object
+required: [dynamic_verification]
+additionalProperties: true
+properties:
+
+  dynamic_verification:
+    type: object
+    description: The run that annotated this copy.
+    required: [schema_version, generated, verifier_version, verification_report]
+    additionalProperties: false
+    properties:
+      schema_version: { const: 1 }
+      generated: { type: [string, "null"], description: ISO-8601 UTC time the verification report was generated. }
+      verifier_version: { type: [string, "null"] }
+      verification_report:
+        type: string
+        description: Path of the run's verification.yaml; proof-of-concept and screenshot paths are relative to its directory.
+
+  threats:
+    type: array
+    items:
+      type: object
+      additionalProperties: true
+      properties:
+        dynamic_verification: { $ref: "#/$defs/finding" }
+
+$defs:
+
+  level:
+    description: AppSec Analyzer's rating levels, as found in the assessment; null where it gives none.
+    type: [string, "null"]
+
+  rating_values:
+    type: object
+    required: [likelihood, impact, severity]
+    additionalProperties: false
+    properties:
+      likelihood: { $ref: "#/$defs/level" }
+      impact: { $ref: "#/$defs/level" }
+      severity:
+        $ref: "#/$defs/level"
+        description: The Analyzer's effective_severity, else its risk.
+
+  finding:
+    type: object
+    required: [verdict, verified_at, result_ref, tested_scope, rating, proof_of_concept, screenshots]
+    additionalProperties: false
+    properties:
+      verdict:
+        enum: [confirmed, not-reproducible, blocked-by-control, inconclusive, not-attempted]
+      confidence: { enum: [high, medium, low, null] }
+      verified_at: { type: [string, "null"] }
+      verifier_version: { type: [string, "null"] }
+      result_ref:
+        type: [string, "null"]
+        description: Result id in the run's verification.yaml (VF-…).
+      tested_scope:
+        type: object
+        description: What the checked proof covers; cited requests and one variant only (VER-013).
+        additionalProperties: true
+      coverage:
+        enum: [complete, partial]
+        description: Only for a finding with declared variants.
+      variants:
+        type: array
+        items:
+          type: object
+          required: [variant, verdict, result_ref]
+          additionalProperties: true
+      rating:
+        type: object
+        description: |
+          Rating after verification (VER-039), by the fixed rules in docs/cli.md.
+          `analyzer` repeats the Analyzer's rating, which stays unchanged in the
+          finding; `after_verification` is the Verifier's, with the reason.
+        required: [analyzer, after_verification, changed, reason]
+        additionalProperties: false
+        properties:
+          analyzer: { $ref: "#/$defs/rating_values" }
+          after_verification: { $ref: "#/$defs/rating_values" }
+          changed: { type: boolean }
+          reason: { type: string }
+      proof_of_concept:
+        type: array
+        description: HAR files of the proof of concept (VER-034), relative to the report; they can show target data.
+        items: { type: string }
+      screenshots:
+        type: array
+        description: Screenshots (VER-035), relative to the report; they can show target data.
+        items: { type: string }

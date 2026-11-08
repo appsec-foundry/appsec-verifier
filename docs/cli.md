@@ -61,7 +61,7 @@ and then asks the one confirmation of VER-002 as `[Y/n]`: Enter starts the run. 
 
 ## `verify` — verify findings against a running target
 
-`verify` takes the `security-assessment.yaml` of an AppSec Analyzer run, the scope and limits of the test, and the selection of findings, and writes its own report or annotates the assessment.
+`verify` takes the `security-assessment.yaml` of an AppSec Analyzer run, the scope and limits of the test, and the selection of findings, and writes its own report; with `--annotate` also annotated copies of the assessment and of the Analyzer's report.
 
 ```
 # verify every High+ XSS and access-control finding of an assessment,
@@ -77,7 +77,7 @@ appsec-verifier verify \
   --output ./verification
 ```
 
-Flow: check the assessment's structure, the scope and proxy settings, the identities file and the model profile (VER-005, VER-032) → resolve the selection and the scope and, interactively, **print both for one explicit confirmation** (VER-002, VER-026) → check that the target answers, that every identity logs in, and that the model answers one fixed prompt, the pre-flight checks of [`preflight`](#preflight--check-before-a-run-ver-032) (VER-003, VER-032; the build/version match of VER-003 is *not implemented yet*) → for each selected finding, run a bounded, scope-confined verification of exactly that finding (VER-008, VER-015, VER-017) → write the report or annotate the assessment, with evidence artefacts (VER-020, VER-027, VER-022). Each check prints one line under `Preflight`. A failed check stops the run before the first finding (exit 2). Its requests count against `--max-requests`; the model test counts as one model call against `--max-calls` and `--cost-limit`.
+Flow: check the assessment's structure, the scope and proxy settings, the identities file and the model profile (VER-005, VER-032) → resolve the selection and the scope and, interactively, **print both for one explicit confirmation** (VER-002, VER-026) → check that the target answers, that every identity logs in, and that the model answers one fixed prompt, the pre-flight checks of [`preflight`](#preflight--check-before-a-run-ver-032) (VER-003, VER-032; the build/version match of VER-003 is *not implemented yet*) → for each selected finding, run a bounded, scope-confined verification of exactly that finding (VER-008, VER-015, VER-017) → write the report with evidence artefacts and, with `--annotate`, the annotated copies (VER-020, VER-022, VER-027, VER-038). Each check prints one line under `Preflight`. A failed check stops the run before the first finding (exit 2). Its requests count against `--max-requests`; the model test counts as one model call against `--max-calls` and `--cost-limit`.
 
 Before the confirmation, `Test plan` lists the findings the run will test, each with its severity, class, the requests the assessment names for it (for example `GET /rest/basket/:id (login)`) and its title. The requests come from the finding's scenario and attack steps and from the assessment's `attack_surface`: an entry point that matches a named request, or whose handler is at the finding's location, gives the path template and, with `auth_required: true`, the `(login)` mark. `page /#/search` is a browser route. The agent gets these requests and the finding's scenario and attack steps; without `--source` it is not offered `read_source`.
 
@@ -149,8 +149,7 @@ Source files larger than 1 MiB are refused before decoding. Agent CLI stdout and
 | `--show-costs` | Show model costs on the console also with subscription billing; by default only with API billing (see the `Run` row above). Changes no limit and nothing in the report. | VER-015 |
 | `--resume` | Continue the report in `--output`: findings with confirmed, not-reproducible or blocked-by-control and a code-checked proof contract 3 keep it; older or unchecked results are tested again; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. Cannot be combined with `--overwrite`. | VER-027 |
 | `--overwrite` | Replace a report already in `--output` (`verification.md` or `verification.yaml`). Without it, and without `--resume`, such a report stops the run (exit 2) before anything is contacted. | VER-027 |
-| `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each tested finding in a `dynamic_verification` block, and at the top a `dynamic_verification` entry naming the run: when it was generated, the Verifier version and its `verification.yaml`. The Analyzer's own fields, `verification` included, stay unchanged. Never re-scores or removes a finding. | VER-027 |
-| `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |
+| `--annotate` | Also write two copies to `--output` and leave the originals unchanged: `security-assessment.annotated.yaml`, the assessment with a `dynamic_verification` block per finding, and `security-assessment.annotated.md`, the Analyzer's Markdown report with the results. See [Annotated copies](#annotated-copies-ver-027-ver-038-ver-039). | VER-027/038/039 |
 | `--non-interactive` / `--ci` | No prompts: selection, scope confirmation, and cost ceiling all come from the invocation. Recorded in the report. | VER-002/026 |
 | `--allow-intrusive` | Opt out of safe mode (below) for marked state-changing or more thorough probing. Recorded in the report. | VER-030 |
 | `--read-only` | Force read-only even if the scope permits state change; overrides `allow_state_change`. | VER-014 |
@@ -384,9 +383,30 @@ Written to `--output` (default `./verification`):
 - `verification.yaml` — the same results as data (`schemas/verification.schema.yaml`), each entry linked to its finding by id and `match_key` (VER-007, VER-020).
 - `agent-log.jsonl` — written when the target is contacted: one JSON object per agent step of every finding, with `time`, `finding`, `step` and either the tool call (`tool`, `args`, `result` with status, body length, error or the browser's blocked requests), a step that was refused (`refused`, `proposal`), a limit that stopped the finding (`stopped`, `reason`) or the `verdict` (VER-017). A finding whose probe failed gets `probe_failed` with the error type and `at` with the file and line in the Verifier, never the error message; the finding under test when the run was interrupted gets `interrupted`. It holds no response bodies or source text, credential values are redacted (VER-016), and only the owner can read it. `--resume` continues it; otherwise each run starts it fresh.
 - `evidence/` — owner-only: `<finding>-poc.har` for every tested finding (see proof of concept above), the proof records `<finding>-exchanges.json` and `<finding>-callback-hits.json` (see proof per class above), for an XSS marker that executed `<finding>-xss-<n>.json` with a screenshot `.png`, `<finding>-access-control-<n>.png` and `<finding>-exchange-<n>.png`. XSS screenshots are not redacted. Responses and screenshots are marked for review before sharing (VER-022).
-- `security-assessment.annotated.yaml` — only with `--annotate`; with `--in-place` the assessment itself is changed instead (VER-027).
+- `security-assessment.annotated.yaml` and `security-assessment.annotated.md`, with the figures of the Analyzer's report — only with `--annotate`, see below (VER-027, VER-038).
 
 The `export` command writes `analyzer-verification.json` for AppSec Analyzer (VER-021).
+
+### Annotated copies (VER-027, VER-038, VER-039)
+
+With `--annotate` the run writes two copies next to its report. The assessment and the Analyzer's report stay unchanged, also because AppSec Analyzer records a SHA-256 of each file it saved and refuses `export` and `review` of an assessment whose files changed.
+
+`security-assessment.annotated.yaml` is the assessment with a top-level `dynamic_verification` entry for the run (schema version, time, Verifier version, path of `verification.yaml`) and a `dynamic_verification` block on each finding of the report: verdict, confidence, time, result id, what the checked proof covers, the rating after verification, and the paths of the proof of concept (HAR) and of the screenshots, relative to the report. The block carries no requests, responses or images. Schema: `schemas/annotated-assessment.schema.yaml`. Nothing else in the document changes, so it stays valid against the Analyzer's schema, and the Analyzer's own `verification` field is kept.
+
+`security-assessment.annotated.md` is written when the Analyzer's Markdown report lies next to the assessment under the same name, `security-assessment.md` for `security-assessment.yaml`. It is a copy of that report with three additions. A `Dynamic verification` section before the Management Summary names the target, counts the verdicts and lists each tested finding with the Analyzer's severity and the severity after verification. The changelog table gets a row for the verification run at the top; a report without that table gets the entry in the new section instead. Each tested finding gets a `Dynamic verification` section at its end with the verdict, the rating after verification, the agent's rationale (quoted), the proof of concept and the screenshots. Findings that were not tested get no section.
+
+A finding whose anchor in the report is missing or appears more than once is listed at the end of the copy. Figures the report names by a plain file name are copied next to the copy. A report larger than 32 MiB is not copied, and the `Annotated report` line in `Done` says why when no copy is written. The copy contains recorded responses and screenshots: review it before sharing (VER-022).
+
+**Rating after verification (VER-039).** The Analyzer's rating stays as it is; both copies show a second one next to it. Severity is the Analyzer's `effective_severity`, else its `risk`. The rules, applied in code:
+
+| Verdict, with a checked proof | Likelihood | Severity |
+| --- | --- | --- |
+| confirmed, likelihood below High | becomes High | one level higher, at most Critical |
+| confirmed, likelihood High or Critical | unchanged | unchanged |
+| blocked by control | one level lower | one level lower, at least Informational |
+| any other verdict, or no checked proof | unchanged | unchanged |
+
+Impact never changes. Of a finding with declared variants, one confirmed variant counts, and a block counts only when every variant was blocked. A block covers only the tested requests: a filter that rejects the test payloads lowers the rating although another path may still work, which is why the Analyzer's rating stays next to it. A finding whose likelihood or severity is not one of the Analyzer's levels (Critical, High, Medium, Low, Informational) is not rated.
 
 `--strict-severity` disables additional selection below `--min-severity`. Otherwise at most eight findings are added within the other selection filters: explicit prerequisites and access or exposure findings on `/actuator`, `/management`, `/admin`, `/metrics` or `/debug` routes. Health, readiness and liveness routes do not qualify on their own. The additions are shown with their reason before confirmation. Missing operator resources still block their tests.
 

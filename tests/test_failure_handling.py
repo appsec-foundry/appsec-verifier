@@ -527,29 +527,56 @@ def test_a_refused_login_is_not_tried_again_in_the_run():
 
 # ── files are replaced atomically (VER-020, VER-027) ───────────────────────────
 
-def test_a_failed_in_place_write_leaves_the_assessment_whole(tmp_path, monkeypatch):
+def test_a_failed_write_of_the_annotated_copy_leaves_no_partial_file(tmp_path, monkeypatch):
     real_replace = os.replace
 
     def replace(src, dst):
-        if Path(dst).name == "a.yaml":
+        if Path(dst).name == "security-assessment.annotated.yaml":
             raise OSError(errno.ENOSPC, "No space left on device")
         return real_replace(src, dst)
 
     monkeypatch.setattr(report.os, "replace", replace)
     with pytest.raises(OSError):
-        _verify(tmp_path, monkeypatch, Checked, "--annotate", "--in-place")
+        _verify(tmp_path, monkeypatch, Checked, "--annotate")
     assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": THREATS}
-    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    out = tmp_path / "out"
+    assert not (out / "security-assessment.annotated.yaml").exists()
+    assert not [p for p in [*tmp_path.iterdir(), *out.iterdir()] if p.name.endswith(".tmp")]
 
 
-def test_annotating_in_place_keeps_the_analyzers_verification_block(tmp_path, monkeypatch):
+# ── annotating writes copies; the Analyzer's files stay as they are (VER-027, VER-038) ──
+
+def test_in_place_is_gone_and_stops_before_anything_is_contacted(tmp_path, monkeypatch):
+    target = Target(default=Resp())
+    with pytest.raises(SystemExit) as exit_:
+        _verify(tmp_path, monkeypatch, Checked, "--annotate", "--in-place", target=target)
+    assert exit_.value.code == 2 and target.calls == []
+    assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": THREATS}
+
+
+def test_annotate_writes_copies_and_leaves_the_analyzers_files_alone(tmp_path, monkeypatch):
     block = {"finding_ids": ["TCF-001"], "test_case_ids": ["TC-IDOR-01"]}   # AppSec Analyzer REQ-040
     threats = [dict(t, verification=block) for t in THREATS]
-    assert _verify(tmp_path, monkeypatch, Checked, "--annotate", "--in-place", threats=threats)[0] == cli.EXIT_OK
-    annotated = yaml.safe_load((tmp_path / "a.yaml").read_text())
+    report_md = "# Security Assessment Report\n\n## Findings Register\n\n<a id=\"t-1\"></a>\n#### T-1 · idor\n"
+    (tmp_path / "a.md").write_text(report_md)
+    assert _verify(tmp_path, monkeypatch, Checked, "--annotate", threats=threats)[0] == cli.EXIT_OK
+    assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": threats}
+    assert (tmp_path / "a.md").read_text() == report_md
+    out = tmp_path / "out"
+    annotated = yaml.safe_load((out / "security-assessment.annotated.yaml").read_text())
     assert [t["verification"] for t in annotated["threats"]] == [block] * len(THREATS)
     assert all(t["dynamic_verification"]["verdict"] == "not-attempted" for t in annotated["threats"])
-    assert annotated["dynamic_verification"]["verification_report"] == str(tmp_path / "out" / "verification.yaml")
+    assert annotated["dynamic_verification"]["verification_report"] == str(out / "verification.yaml")
+    copy = (out / "security-assessment.annotated.md").read_text()
+    assert copy.index("## Dynamic verification") < copy.index("## Findings Register")
+    assert "0 findings tested" in copy and "4 not tested" in copy
+
+
+def test_annotate_without_the_analyzers_report_says_so(tmp_path, monkeypatch, capsys):
+    assert _verify(tmp_path, monkeypatch, Checked, "--annotate")[0] == cli.EXIT_OK
+    assert (tmp_path / "out" / "security-assessment.annotated.yaml").is_file()
+    assert not (tmp_path / "out" / "security-assessment.annotated.md").exists()
+    assert "not written: no file a.md next to the assessment" in capsys.readouterr().out
 
 
 def test_a_replaced_file_keeps_its_permissions(tmp_path):

@@ -1,6 +1,8 @@
 """Serialize a verification run: the standalone report (verification.yaml +
 verification.md, VER-020), the AppSec Analyzer re-ingest export (VER-021), and
-an additive assessment annotation (VER-027).
+an additive annotation of a copy of the assessment (VER-027) with the rating
+after verification (VER-039, verify/rating.py). The Analyzer's Markdown report
+with the results is verify/annotated_report.py (VER-038).
 
 Each tested finding's section in verification.md ends with its proof of
 concept (VER-034): one line per step and the decisive steps as raw HTTP, in
@@ -233,12 +235,12 @@ def _fenced(text: str, info: str = "http") -> str:
     return f"{fence}{info}\n{text}\n{fence}"
 
 
-def _poc_markdown(r: dict) -> list[str]:
+def _poc_markdown(r: dict, level: int = 4) -> list[str]:
     """The proof of concept (VER-034): one line per step, then the steps the verdict rests on as raw HTTP."""
     poc = r.get("poc") or {}
     if not poc.get("steps"):
         return []
-    out = ["", "#### Proof of concept", ""]
+    out = ["", f"{'#' * level} Proof of concept", ""]
     if poc.get("file"):
         out += [f"All requests and responses: `{poc['file']}` (HAR, {TARGET_DATA_NOTE}).", ""]
     # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.
@@ -295,13 +297,41 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
     }
 
 
+ANNOTATION_SCHEMA_VERSION = 1
+
+
+def _rating_input(rows: list[dict], coverage: str | None) -> tuple[str | None, bool]:
+    """The verdict a threat's rating after verification rests on (VER-039), and whether its proof was checked.
+    Of several variants, one confirmed variant counts; a block counts only when every variant was blocked."""
+    def checked(row):
+        return (row.get("proof") or {}).get("checked") is True
+
+    if any(row["verdict"] == "confirmed" and checked(row) for row in rows):
+        return "confirmed", True
+    if coverage in (None, "complete") and rows and all(
+            row["verdict"] == "blocked-by-control" and checked(row) for row in rows):
+        return "blocked-by-control", True
+    return (rows[0]["verdict"] if len(rows) == 1 else "inconclusive"), False
+
+
+def _pointers(rows: list[dict]) -> dict:
+    """Paths of the proof of concept and screenshots, relative to the report (VER-027); never their content."""
+    har = [row["poc"]["file"] for row in rows if (row.get("poc") or {}).get("file")]
+    shots = [ev["path"] for row in rows for ev in row.get("evidence") or []
+             if ev.get("kind") == "screenshot" and ev.get("path")]
+    return {"proof_of_concept": list(dict.fromkeys(har)), "screenshots": list(dict.fromkeys(shots))}
+
+
 def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str) -> dict:
     """Return a copy of the assessment with an additive `dynamic_verification`
     block on each matched finding and a top-level `dynamic_verification` record
-    of the run that wrote them (VER-027). Never changes or removes a finding.
-    The key is the Verifier's own: AppSec Analyzer uses `threats[].verification`
-    for its static verification findings (REQ-040)."""
+    of the run that wrote them (VER-027): verdict, confidence, the rating after
+    verification (VER-039) and pointers to the proof of concept and screenshots.
+    Never changes or removes a finding. The key is the Verifier's own: AppSec
+    Analyzer uses `threats[].verification` for its static verification findings
+    (REQ-040). The fields are defined in schemas/annotated-assessment.schema.yaml."""
     from ..matchkey import match_key
+    from .rating import rate
 
     by_id = {r["finding_ref"]["id"]: r for r in doc["results"] if r["finding_ref"].get("id")}
     by_key = {}
@@ -313,6 +343,7 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
     import copy
     out = copy.deepcopy(assessment)
     out["dynamic_verification"] = {
+        "schema_version": ANNOTATION_SCHEMA_VERSION,
         "generated": doc["meta"].get("generated"),
         "verifier_version": doc["meta"].get("verifier_version"),
         "verification_report": verification_report,
@@ -334,15 +365,19 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
                              if k in (r.get("proof") or {})},
         }
         variants = [row for row in doc["results"] if row["finding_ref"].get("id") == t.get("id")]
+        rows, coverage = [r], None
         if any(row["finding_ref"].get("variant") for row in variants):
             expected = {v["id"] for v in (t.get("verification_context") or {}).get("variants", [])}
             completed = {(row.get("proof") or {}).get("variant") for row in variants
                          if (row.get("proof") or {}).get("checked") is True}
+            rows, coverage = variants, ("complete" if expected and expected <= completed else "partial")
             t["dynamic_verification"].update({
                 "verdict": "confirmed" if any(row["verdict"] == "confirmed" for row in variants) else "inconclusive",
-                "coverage": "complete" if expected and expected <= completed else "partial",
+                "coverage": coverage,
                 "variants": [{"variant": row["finding_ref"].get("variant"), "verdict": row["verdict"],
                               "result_ref": row["result_id"], "tested_scope": row.get("proof")}
                              for row in variants],
             })
+        t["dynamic_verification"]["rating"] = rate(t, *_rating_input(rows, coverage))
+        t["dynamic_verification"].update(_pointers(rows))
     return out

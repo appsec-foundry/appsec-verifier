@@ -77,6 +77,9 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 | `--profile` selection, cost limit and cost display in `cli.py` | `appsec_analyzer/cli.py` |
 | `term_style.py`, `progress.py` | `scripts/renderers/term_style.py`, `appsec_analyzer/assessment/console.py` |
 | `export`, `schemas/analyzer-annotations.schema.yaml` (VER-021) | no reader yet |
+| `verify/report.py` `annotate_assessment`, `schemas/annotated-assessment.schema.yaml` (VER-027) | `threats[]` and the root of `schemas/threat-model.output.schema.yaml` must keep accepting additional fields; `threats[].verification` is the Analyzer's |
+| `verify/annotated_report.py` (VER-038) | one `<a id="t-…"></a>` line per finding from `scripts/renderers/compose_threat_model.py`, the `## Changelog` table from `templates/fragments/changelog-table.md.j2` |
+| `verify/rating.py` (VER-039) | the levels of `threats[].likelihood`, `impact`, `risk` and `effective_severity` |
 
 ## Safety invariants (do not weaken)
 

@@ -139,7 +139,7 @@ The Verifier checks each proposed action against the finding and the remaining t
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `evidence/`: per tested finding `<finding>-poc.har` with every request the agent sent and the response to it, the proof records, and a screenshot: the page in which an XSS payload ran, an access-control HTML page, or else an image of the decisive requests and responses with what decides marked. `--screenshots` chooses the classes. Responses and screenshots can show data of the target; check them before you share them.
 
-At the end `verify` lists each finding with its result and the reason. `--print` adds the code-only findings, and `--resume` continues a report whose run did not finish: findings with a verdict keep it, the others are tested. A report already in `--output` is replaced only with `--overwrite`; otherwise the run stops before anything is contacted, and the guided run asks. `--annotate` writes `security-assessment.annotated.yaml`, a copy of the assessment with the verdict of each finding.
+At the end `verify` lists each finding with its result and the reason. `--print` adds the code-only findings, and `--resume` continues a report whose run did not finish: findings with a verdict keep it, the others are tested. A report already in `--output` is replaced only with `--overwrite`; otherwise the run stops before anything is contacted, and the guided run asks. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding; the originals stay unchanged.
 
 ## Install
 
