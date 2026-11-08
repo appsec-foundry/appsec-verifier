@@ -2,10 +2,11 @@ $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://appsec-verifier/schemas/analyzer-annotations.schema.yaml
 title: Dynamic-verification annotations for AppSec Analyzer
 description: |
-  Output written by `appsec-verifier export --format analyzer-annotations` (and
-  by `verify --annotate`) so AppSec Analyzer can read the dynamic-verification
-  results back and show, next to each finding, whether it was confirmed against
-  the running system (VER-021, VER-027).
+  Output written by `appsec-verifier export` (JSON or YAML), meant for AppSec
+  Analyzer to read the dynamic-verification results back and show, next to each
+  finding, whether it was confirmed against the running system (VER-021). The
+  Analyzer does not read it yet. `verify --annotate` writes a different form: a
+  `verification` block on each finding of the assessment (VER-027).
 
   It is ADDITIVE and keyed by finding identity: each annotation names the source
   finding by `finding_id` AND `match_key`, so the Analyzer binds it to exactly

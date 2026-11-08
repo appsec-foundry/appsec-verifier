@@ -1,5 +1,6 @@
 """`copilot-cli` profile: GitHub Copilot CLI with its login, run tool-less the
-way AppSec Analyzer runs it (VER-023).
+way AppSec Analyzer runs it (VER-023). The reference for flags, version and
+environment is the Analyzer's `appsec_analyzer/copilot_cli.py`.
 
 Preflight requires exactly the reviewed Copilot CLI version on Linux or macOS;
 it does not read credentials. Each step is one call from an empty directory with

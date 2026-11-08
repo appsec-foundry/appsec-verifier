@@ -312,10 +312,11 @@ optional hardening.
   non-interactive runs; annotating the source file in place requires an explicit
   instruction, never a default.
 
-- **VER-021: Offer a result the Analyzer can re-ingest.** The verdicts can also
-  be emitted in a form keyed by finding identifier and the cross-run key (VER-007)
-  that AppSec Analyzer can read back to annotate findings with their dynamic-
-  verification status. This export is explicit and additive; it never rewrites or
+- **VER-021: Offer a result for the Analyzer to re-ingest.** The verdicts can
+  also be emitted in a form keyed by finding identifier and the cross-run key
+  (VER-007), meant for AppSec Analyzer to read back and annotate findings with
+  their dynamic-verification status. Reading it is the Analyzer's part, which it
+  does not do yet. This export is explicit and additive; it never rewrites or
   re-scores the assessment itself.
 
 - **VER-022: Make evidence self-contained and safe to share.** Evidence

@@ -1,5 +1,6 @@
 """`codex-cli` profile: Codex CLI (`codex exec`) with its ChatGPT login, isolated
-the way AppSec Analyzer runs it (VER-023).
+the way AppSec Analyzer runs it (VER-023). The reference for flags, minimum
+version and environment is the Analyzer's `appsec_analyzer/codex_cli.py`.
 
 Preflight requires Codex CLI 0.163.0 or newer on Linux or macOS, the isolation
 options of `codex exec`, the feature switches it turns off, and a ChatGPT login.

@@ -35,7 +35,8 @@ examples are. Options count only as written: an abbreviation such as
 **Post-processing** (no model calls)
 
 - `export` — re-emit the verdicts of a finished `verification.yaml` in a form
-  AppSec Analyzer can read back; no re-verification (VER-021, VER-015).
+  meant for AppSec Analyzer, which does not read it yet; no re-verification
+  (VER-021, VER-015).
 
 **Maintain the installation**
 
@@ -598,9 +599,10 @@ appsec-verifier export --verification ./verification/verification.yaml \
 ```
 
 Converts a finished `verification.yaml` into a set of verdicts keyed by finding
-id and the cross-run `match_key` (VER-007), which AppSec Analyzer reads to mark
-findings with their verification status. It never changes or re-scores the
-assessment (VER-021), contacts nothing and makes no model calls. Default output:
+id and the cross-run `match_key` (VER-007), meant for AppSec Analyzer to mark
+findings with their verification status. The Analyzer does not read this file
+yet. It never changes or re-scores the assessment (VER-021), contacts nothing
+and makes no model calls. Default output:
 `analyzer-verification.json` in the working directory, JSON format. A file that
 cannot be read or does not match `schemas/verification.schema.yaml` stops it
 with exit 2.

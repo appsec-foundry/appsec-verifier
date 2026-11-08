@@ -169,6 +169,6 @@ Empfohlene Reihenfolge: Injection-Regression und Beweiskonzept, XSS-Zuordnung, V
 
 Möglicher Startauftrag:
 
-> Lies `docs/handoff-evidence-verification.md` und die geltenden AGENTS.md. Beginne mit Punkt 1: Reproduziere die Fehlklassifikation, ergänze einen Regressionstest und verbessere das Beweiskonzept so, dass normale parametrisierte Suchlogik nicht als Injection bestätigt wird. Behalte einen verwundbaren Vergleichsfall bei. Bearbeite zunächst nur diese Lücke und erläutere verbleibende Nachweisgrenzen.
+> Lies `docs/internal/analysis/evidence-verification-handoff-2026-11-08.md` und die geltenden AGENTS.md. Beginne mit Punkt 1: Reproduziere die Fehlklassifikation, ergänze einen Regressionstest und verbessere das Beweiskonzept so, dass normale parametrisierte Suchlogik nicht als Injection bestätigt wird. Behalte einen verwundbaren Vergleichsfall bei. Bearbeite zunächst nur diese Lücke und erläutere verbleibende Nachweisgrenzen.
 
 Vor der Arbeit den aktuellen Git-Stand prüfen. Die bisherigen Commits liegen auf `main`; die Übergabe ersetzt keine aktuelle Branch- oder Ausführungsentscheidung. Für neue Analyzer-Features gelten dessen Anforderungen an genehmigten Anforderungswortlaut und Branchwahl; Bugfixes innerhalb bestehender Zusagen separat einordnen. Keine weiteren Modellkosten, Zielsystemtests, Releases oder Pushes aus diesem Dokument ableiten. Scope, Identitäten, Budgets und bestehende Freigaben der Testwerkzeuge nicht lockern.

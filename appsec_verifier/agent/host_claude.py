@@ -1,5 +1,7 @@
 """`claude` profile: Claude CLI (`claude -p`) with its login or external
-credentials, as AppSec Analyzer uses it (VER-023, VER-028).
+credentials, as AppSec Analyzer uses it (VER-023, VER-028). The counterpart is
+the Analyzer's `scripts/runtime/analyst_host.py`; this profile is stricter
+(`--setting-sources ""`, `--permission-mode dontAsk`) and stays so.
 
 Each step is one `claude -p` call without built-in tools, MCP servers, settings,
 customizations, skills or session persistence, in an empty working directory.

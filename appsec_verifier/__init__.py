@@ -1,7 +1,6 @@
-"""AppSec Verifier — dynamic verification of static security-assessment findings.
-
-Design-stage package: `scope` and `plan` run offline today; `verify` and
-`export` are specified (see requirements.md, docs/cli.md) but not implemented.
+"""AppSec Verifier: tests the findings of an AppSec Analyzer security assessment
+against the running application and reports per finding whether the weakness
+reproduces (requirements.md, docs/cli.md).
 """
 
 from __future__ import annotations

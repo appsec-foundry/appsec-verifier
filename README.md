@@ -171,7 +171,7 @@ applies either way.
 | `verify` | Tests the selected findings against the target. |
 | `preflight` | Checks assessment, scope, target, logins and model, and shows which findings a run can test; tests no finding. `--offline` contacts nothing. |
 | `scope` | Validates a scope file and shows whether a URL is inside it. Offline. |
-| `export` | Converts a `verification.yaml` into a file AppSec Analyzer can read. |
+| `export` | Converts a `verification.yaml` into a file meant for AppSec Analyzer. The Analyzer does not read it yet. |
 | `update` | Updates a pipx installation after you confirm. |
 
 Select findings with `--category` (for example `xss`, `idor`, `sqli`),

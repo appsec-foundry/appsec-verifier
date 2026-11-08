@@ -1450,8 +1450,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ex = sub.add_parser(
         "export", help="re-emit a verification.yaml for AppSec Analyzer",
-        description=_wrap("Converts the verdicts of a finished run into the file AppSec Analyzer reads. "
-                          "Contacts nothing."),
+        description=_wrap("Converts the verdicts of a finished run into a file meant for AppSec Analyzer, "
+                          "which does not read it yet. Contacts nothing."),
         epilog="Example:\n  appsec-verifier export --verification verification/verification.yaml")
     ex.add_argument("--verification", metavar="FILE", required=True, help="verification.yaml of a finished run")
     ex.add_argument("--output", metavar="FILE", help="file to write (default: analyzer-verification.json)")

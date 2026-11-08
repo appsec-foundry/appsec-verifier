@@ -3,8 +3,11 @@ its changelog delta: ``<normalized-file>|<cwe-family>`` (VER-007).
 
 The file path — the one signal derived from source, not model phrasing — anchors
 identity; a narrow CWE "family" absorbs the few CWE swaps the Analyzer observed
-for the same finding. This mirrors build_threat_model_yaml._match_key so the
-Verifier's key equals the Analyzer's for the same finding.
+for the same finding. This mirrors `_match_key` and `_CWE_FAMILIES` in the
+Analyzer's `scripts/model/build_threat_model_yaml.py` (`MATCH_KEY_VERSION` 2),
+the reference, so the Verifier's key equals the Analyzer's for the same finding.
+One deliberate difference: a finding without an evidence file gets no key here
+(input-incomplete, VER-006) instead of the Analyzer's fallback fingerprint.
 """
 
 from __future__ import annotations
