@@ -2,7 +2,7 @@
 
 AppSec Verifier is a Python CLI that tests the findings of an AppSec Analyzer `security-assessment.yaml` against a running application and reports per finding whether the weakness reproduces. It is an active security test tool, so its safety controls are part of the product, not optional hardening.
 
-User-facing overview: `README.md`. Command reference: `docs/cli.md`. Requirements (VER-001 … VER-035): `requirements.md`. Internal analyses and handoffs: `docs/internal/analysis/<topic>-<YYYY-MM-DD>.md` (not packaged).
+User-facing overview: `README.md`. Command reference: `docs/cli.md`. Requirements and their VER-IDs: `requirements.md`. Internal analyses and handoffs: `docs/internal/analysis/<topic>-<YYYY-MM-DD>.md` (not packaged).
 
 ## Setup and checks
 

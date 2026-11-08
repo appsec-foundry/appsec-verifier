@@ -2,7 +2,7 @@
 
 `appsec-verifier` takes a finished `security-assessment.yaml`, an authorisation scope file and a running target. It tests the selected findings one at a time against the application and writes a verification report. It never re-runs or re-scores the static assessment. For installation and a quick start, see the [README](../README.md).
 
-The requirement IDs (VER-001 to VER-035, [`requirements.md`](../requirements.md)) are cited per command and option.
+The requirement IDs (VER-…) from [`requirements.md`](../requirements.md) are cited per command and option.
 
 ## Commands
 
@@ -147,7 +147,7 @@ Source files larger than 1 MiB are refused before decoding. Agent CLI stdout and
 | `--report` | Write a standalone report, leave the assessment untouched. **Default.** | VER-020 |
 | `--print` | List every finding in the results at the end, code-only ones included, with the whole reason. | VER-013 |
 | `--show-costs` | Show model costs on the console also with subscription billing; by default only with API billing (see the `Run` row above). Changes no limit and nothing in the report. | VER-015 |
-| `--resume` | Continue the report in `--output`: findings with confirmed, not-reproducible or blocked-by-control and a code-checked proof contract 2 keep it; older or unchecked results are tested again; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. Cannot be combined with `--overwrite`. | VER-027 |
+| `--resume` | Continue the report in `--output`: findings with confirmed, not-reproducible or blocked-by-control and a code-checked proof contract 3 keep it; older or unchecked results are tested again; the other selected findings (inconclusive, not attempted, or not in the report) are tested and their results replace the earlier ones. The action log is continued. When every selected finding has a verdict, nothing is contacted (exit 0). Without a report in `--output` the run starts as usual. A report that cannot be read, does not match `schemas/verification.schema.yaml`, or was written for another assessment (by SHA-256) or target blocks the run (exit 2) before anything is contacted. Cannot be combined with `--overwrite`. | VER-027 |
 | `--overwrite` | Replace a report already in `--output` (`verification.md` or `verification.yaml`). Without it, and without `--resume`, such a report stops the run (exit 2) before anything is contacted. | VER-027 |
 | `--annotate` | Also write `security-assessment.annotated.yaml` to `--output`: a copy of the assessment with the verification status of each tested finding in a `dynamic_verification` block, and at the top a `dynamic_verification` entry naming the run: when it was generated, the Verifier version and its `verification.yaml`. The Analyzer's own fields, `verification` included, stay unchanged. Never re-scores or removes a finding. | VER-027 |
 | `--in-place` | With `--annotate`, modify the referenced `security-assessment.yaml` itself. Explicit, never a default. The file is replaced in one step, so a write that fails leaves it unchanged. | VER-027 |

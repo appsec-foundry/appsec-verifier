@@ -192,7 +192,7 @@ The Verifier is not a scanner and not a pentest agent. It does not search for ne
 
 ## Development
 
-Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements VER-001 to VER-035: [`requirements.md`](requirements.md).
+Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements and their VER-IDs: [`requirements.md`](requirements.md).
 
 With `--min-severity`, the selection also includes up to eight additional findings: declared prerequisites and access or exposure findings on concrete management routes. The test plan names each addition and its reason before confirmation. `--strict-severity` keeps the severity floor exact; `--severity`, `--only`, category and CWE filters remain explicit boundaries. Health responses alone do not trigger this additional selection.
 
