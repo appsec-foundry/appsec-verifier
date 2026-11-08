@@ -1355,7 +1355,8 @@ _NEEDS = {
     "access": ("access request", "a test_resources entry in a scope file",
                ["without a test_resources entry the proof reads the resource with a GET request the finding names, "
                 "and an account creates its own resource with a write request the finding names that has no "
-                "record identifier in its path, since a write never changes an existing record; declare a test "
+                "record identifier in its path, since a write never changes an existing record; a write proof "
+                "also needs the finding's write that changes a record by its identifier; declare a test "
                 "resource in a scope file (--scope) whose request returns a harmless value only the allowed roles "
                 "may see:",
                 "test_resources: [{id: NAME, finding_id: ID, path: /route, method: GET, allowed_roles: [ROLE], "
@@ -1416,21 +1417,25 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
             set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles for r in resources
         ):
             return "resource", "a declared test resource names roles unavailable in this run"
-        # Without one, both proofs read with a GET request of the finding, and the account creates its resource
-        # with a write request of the finding that names no existing record (agent/tools.py, VER-014); routes as
-        # agent/controller.py builds them.
+        # Without one, the comparison reads with a GET request of the finding; an account creates its resource
+        # with a write request of the finding that names no existing record (VER-014) and reads it back with a GET
+        # of the finding, or, for a write proof, with a GET on the path of the finding's write that changes a
+        # record (VER-010; agent/tools.py, routes as agent/controller.py builds them).
         variants = getattr(plan, "verification_context", {}).get("variants", [])
         named = [(v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants] or [
             *((e.method, e.path) for e in plan.endpoints),
             *((r.get("method", "GET"), r["path"]) for key in ("injection_inputs", "session_checks")
               for r in scope.get(key, []) if r["finding_id"] == plan.id)]
-        if named and "resource" not in methods:
-            if not any(m in ("GET", "PAGE", "ALL") for m, _ in named):
-                return "access", "every request the assessment names writes or deletes; the proof reads with GET"
-            if methods == ["owner"] and not any(m in ("POST", "PUT", "PATCH", "ALL") and record_segment(p) is None
-                                                for m, p in named):
-                return "access", ("no write request that creates a record, one without an identifier in its "
-                                  "path, and no --admin-account")
+        writes = [p for m, p in named if m in ("POST", "PUT", "PATCH", "ALL")]
+        reads = any(m in ("GET", "PAGE", "ALL") for m, _ in named)
+        creates = any(record_segment(p) is None for p in writes)
+        changes = any(record_segment(p) is not None for p in writes)
+        if named and "resource" not in methods and not (
+                ("reference" in methods and reads) or ("owner" in methods and creates and (reads or changes))):
+            if "owner" in methods and not creates:
+                return "access", "no write request that creates a record, one without an identifier in its path"
+            return "access", "no GET request to read with" + (
+                ", and no write request that changes the record" if "owner" in methods else "")
     if plan.cls == "xss" and browser is None:
         return "browser", "no proof browser; XSS counts only when the payload executes"
     if plan.cls == "path-traversal" and not (scope.get("marker_file") or {}).get("path"):

@@ -135,7 +135,12 @@ def _checked(result, history, cited, ctx=None):
     )
     events = {k: v for k, v in (result.proof or {}).items() if k in ("executed", "callback_hit")}
     scope = "cited requests only"
-    if plan.get("owner"):
+    if plan.get("change"):
+        scope = (f"cited requests only, on a resource {plan['owner']} created and another account wrote to; the "
+                 "record with the markers stays on the target")
+        events["marker"] = "".join(getattr(ctx, "marker", None) or ())
+        events["second_marker"] = plan.get("second_marker")
+    elif plan.get("owner"):
         scope = (f"cited requests only, on a resource {plan['owner']} created; the record with the marker stays "
                  "on the target")
         events["marker"] = "".join(getattr(ctx, "marker", None) or ())

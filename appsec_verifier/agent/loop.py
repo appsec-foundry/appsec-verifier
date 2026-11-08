@@ -98,6 +98,7 @@ class AgentProbe:
         history: list[dict] = []
         sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
+        ctx.created, ctx.owned = set(), set()
         last_rejected = None
         last_cited = None
         repairs = 0

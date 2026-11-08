@@ -54,6 +54,8 @@ class ProbeContext:
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
     progress: object | None = None     # RunProgress that shows each step on the console, or None
     responses: dict = field(default_factory=dict)  # bounded redacted responses, private to this finding
+    created: set = field(default_factory=set)  # identifiers the owner's creating answers returned (VER-010)
+    owned: set = field(default_factory=set)    # of those, the ones the owner's read showed with its marker
     prior_results: list[dict] = field(default_factory=list)
 
 

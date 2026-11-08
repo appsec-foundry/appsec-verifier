@@ -80,18 +80,22 @@ def route_matches(template: str, path: str) -> bool:
     )
 
 
-def record_segment(template: str, path: str | None = None) -> str | None:
-    """The segment of a request path that names an existing record (VER-014): one at a placeholder of its route
-    template, or one of digits or a UUID; None when it names none. Without `path`, the template's own."""
+def record_segments(template: str, path: str | None = None) -> list[str]:
+    """The segments of a request path that name an existing record (VER-014): those at a placeholder of its route
+    template, and those of digits or a UUID. Without `path`, the template's own. An unparseable path counts as
+    naming one."""
     try:
         expected = urlsplit(template).path.split("/")
         actual = urlsplit(path).path.split("/") if path is not None else expected
     except ValueError:
-        return template if path is None else path
-    for i, segment in enumerate(actual):
-        if (i < len(expected) and _PLACEHOLDER.fullmatch(expected[i])) or _RECORD_ID.fullmatch(unquote(segment)):
-            return segment
-    return None
+        return [template if path is None else path]
+    return [segment for i, segment in enumerate(actual)
+            if (i < len(expected) and _PLACEHOLDER.fullmatch(expected[i])) or _RECORD_ID.fullmatch(unquote(segment))]
+
+
+def record_segment(template: str, path: str | None = None) -> str | None:
+    """The first segment of a request path that names an existing record, or None (record_segments)."""
+    return next(iter(record_segments(template, path)), None)
 
 
 def missing_capabilities(variant: dict, *, safe: bool, browser: bool) -> list[str]:

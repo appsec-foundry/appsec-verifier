@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ from test_experiments import STRATEGY
 from appsec_verifier.agent.controller import Controller
 from appsec_verifier.agent.prompts import _system
 from appsec_verifier.agent.proof import check_proof
-from appsec_verifier.agent.tools import AgentTools, ToolError
+from appsec_verifier.agent.tools import AgentTools, ToolError, _created_ids
 from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.verification_context import record_segment
 from appsec_verifier.verify.probes import ProbeResult
@@ -49,11 +50,12 @@ def _req(role, body="", status=200, method="GET", path="/api/Feedbacks/7", json=
                           "digest": sha}}
 
 
-def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639"):
+def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639", owned=()):
     history = copy.deepcopy(history)
     responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe), scope=scope or {},
-                          identities=ROLES, marker=MARKER, responses=responses, sessions=None, evidence_dir=None)
+                          identities=ROLES, marker=MARKER, responses=responses, sessions=None, evidence_dir=None,
+                          owned=set(owned))
     if cited is None:
         cited = [n for n, h in enumerate(history, 1) if h["tool"] == "http_request"]
     return check_proof(ctx, history, ProbeResult(verdict=verdict, confidence="high", rationale="claim"), cited)
@@ -167,6 +169,209 @@ def test_privileged_negative_verdicts():
     assert result.verdict == "inconclusive" and "received the privileged answer" in result.rationale
     result = _check(privileged(normal='{"other":1}'), "not-reproducible")
     assert result.verdict == "inconclusive" and "does not show that the function is protected" in result.rationale
+
+
+# ── a write on the owner's resource (VER-010) ─────────────────────────────────
+
+SECOND = MARKER[0] + "c0ffee00"
+CHANGE = {"method": "PUT", "path": "/api/Feedbacks/:id"}
+
+
+def changed(after=f'{{"comment":"{SECOND}"}}', change_status=200, change_path="/api/Feedbacks/7"):
+    return [_plan_step(owner="account-1", change=CHANGE, second_marker=SECOND),
+            _req("account-1", '{"data":{"id":7}}', 201, "POST", "/api/Feedbacks", json={"comment": M}),
+            _req("account-1", f'{{"comment":"{M}"}}'),
+            _req("account-2", '{"status":"ok"}', change_status, "PUT", change_path, json={"comment": SECOND}),
+            _req("account-1", after)]
+
+
+def test_another_account_changing_the_owners_record_confirms_at_medium():
+    result = _check(changed(), owned={"7"})
+    assert result.verdict == "confirmed" and result.confidence == "medium"
+    assert result.proof["marker"] == M and result.proof["second_marker"] == SECOND
+    assert "another account wrote to" in result.proof["scope"]
+
+
+@pytest.mark.parametrize("history, created, reason", [
+    (changed(after=f'{{"comment":"{M}"}}'), {"7"}, "does not show the second marker"),
+    (changed(change_path="/api/Feedbacks/8"), {"7"}, "must name the record the owner's write created"),
+    (changed(), set(), "must name the record the owner's write created"),
+    (_change(changed(), 3, role="account-1"), {"7"}, "the owner sent the second marker itself"),
+    (_change(changed(), 3, role=None), {"7"}, "neither the owner's creation nor the other account's change"),
+    (_change(changed(), 3, role="admin-1"), {"7"}, "neither the owner's creation nor the other account's change"),
+    (_change(changed(), 3, identity="account-1"), {"7"}, "the owner's own session"),
+    (changed()[:2] + changed()[3:], {"7"}, "does not show the marker before the change"),
+    (changed()[:4], {"7"}, "cite the owner's read after the change"),
+    (_change(changed(), 4, params={"q": SECOND}), {"7"}, "the owner sent the second marker itself"),
+    (_change(changed(), 1, role="account-2"), {"7"}, "an identity other than the owner sent the marker"),
+])
+def test_a_write_proof_without_the_full_sequence_stays_inconclusive(history, created, reason):
+    result = _check(history, owned=created)
+    assert result.verdict == "inconclusive" and reason in result.rationale
+
+
+def test_write_proof_negative_verdicts():
+    refused = changed(after=f'{{"comment":"{M}"}}', change_status=403)
+    assert _check(refused, "blocked-by-control", owned={"7"}).verdict == "blocked-by-control"
+    result = _check(changed(change_status=403), "blocked-by-control", owned={"7"})
+    assert result.verdict == "inconclusive" and "the change went through" in result.rationale
+    result = _check(changed(after=f'{{"comment":"{M}"}}'), "not-reproducible", owned={"7"})
+    assert result.verdict == "inconclusive" and "only a 403 or 404" in result.rationale
+
+
+def _change_controller(tmp_path, plan=None, owned=(), created=None):
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False, env=ENV, idents=IDENTITIES)
+    ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),
+                                            Endpoint("PUT", "/api/Feedbacks/:id", None)))
+    ctx.marker, ctx.owned = MARKER, set(owned)
+    ctx.created = set(owned) if created is None else set(created)
+    c = Controller(ctx)
+    c.plan = plan
+    return c
+
+
+def test_a_change_plan_reads_the_changed_path_although_the_finding_names_no_get(tmp_path):
+    args = _plan_args(owner="account-1", change=CHANGE)
+    args["path"] = "/api/Feedbacks/:id"
+    _change_controller(tmp_path).before("plan_test", args)
+    with pytest.raises(ToolError, match="no matching route"):
+        _change_controller(tmp_path).before("plan_test", {k: v for k, v in args.items() if k != "change"})
+    with pytest.raises(ToolError, match="change must be a write request this finding names"):
+        _change_controller(tmp_path).before("plan_test", {**args, "change": {"method": "PATCH",
+                                                                             "path": "/api/Feedbacks/:id"}})
+
+
+def test_only_another_normal_account_changes_and_only_the_record_the_owner_created(tmp_path):
+    plan = {"kind": "access-control", "path": "/api/Feedbacks/:id", "owner": "account-1", "change": CHANGE,
+            "second_marker": SECOND}
+    c = _change_controller(tmp_path, plan, owned={"7"})
+    c.before("http_request", {"path": "/api/Feedbacks/7", "method": "PUT", "role": "account-2",
+                              "json": {"comment": SECOND}})
+    for role, path in (("account-2", "/api/Feedbacks/8"), ("account-1", "/api/Feedbacks/7"),
+                       (None, "/api/Feedbacks/7"), ("admin-1", "/api/Feedbacks/7")):
+        with pytest.raises(ToolError, match="must not name an existing record|accepted test plan"):
+            c.before("http_request", {"path": path, "method": "PUT", "role": role, "json": {"comment": SECOND}})
+    with pytest.raises(ToolError, match="must carry"):
+        c.before("http_request", {"path": "/api/Feedbacks/7", "method": "PUT", "role": "account-2",
+                                  "json": {"comment": "x"}})
+    for role in ("account-1", None, "account-2"):
+        c.before("http_request", {"path": "/api/Feedbacks/7", "role": role})          # the derived read
+    with pytest.raises(ToolError, match="may read only the record the owner created"):
+        c.before("http_request", {"path": "/api/Feedbacks/8", "role": "account-2"})
+    plain = _change_controller(tmp_path, {**{k: v for k, v in plan.items() if k != "change"}}, owned={"7"})
+    with pytest.raises(ToolError, match="no matching route"):
+        plain.before("http_request", {"path": "/api/Feedbacks/7", "role": "account-1"})  # no change, no GET
+    # The creating answer named 7, but the owner's read has not shown the marker there yet: read, never change.
+    unread = _change_controller(tmp_path, plan, owned=(), created={"7"})
+    unread.before("http_request", {"path": "/api/Feedbacks/7", "role": "account-1"})
+    with pytest.raises(ToolError, match="must not name an existing record"):
+        unread.before("http_request", {"path": "/api/Feedbacks/7", "method": "PUT", "role": "account-2",
+                                       "json": {"comment": SECOND}})
+
+
+def test_a_change_plan_gets_a_second_marker_of_the_verifier(tmp_path):
+    result = _tools(tmp_path).plan_test(**_plan_args(owner="account-2", change=CHANGE))
+    assert result["marker"] == M and result["second_marker"].startswith(MARKER[0])
+    assert result["second_marker"] != M and result["experiment"]["second_marker"] == result["second_marker"]
+    with pytest.raises(ToolError, match="invalid experiment declaration"):
+        _tools(tmp_path).plan_test(**_plan_args(reference="admin-1", change=CHANGE))      # change only with owner
+    with pytest.raises(ToolError, match="changes a record by its identifier"):
+        _tools(tmp_path).plan_test(**_plan_args(owner="account-2", change={"method": "POST", "path": "/api/Feedbacks"}))
+    with pytest.raises(ToolError, match="invalid experiment declaration"):
+        _tools(tmp_path).plan_test(**_plan_args(owner="account-2", second_marker="mine"))  # never the model's
+
+
+def test_a_change_may_name_what_the_owner_created_and_then_read_with_its_marker(tmp_path):
+    reads = {"7": f'{{"comment":"{M}"}}', "8": '{"comment":"someone else"}'}
+
+    def transport(m, u, h, **k):
+        if m == "POST":
+            return Resp(201, '{"status":"success","data":{"id":7,"UserId":2,"owner":{"id":1}},"flag":true}')
+        return Resp(200, reads.get(u.rsplit("/", 1)[1], "{}"))
+
+    tools = _tools(tmp_path, transport=transport)
+    args = _plan_args(owner="account-1", change=CHANGE)
+    tools.plan_test(**{**args, "path": "/api/Feedbacks/:id"})
+    tools.http_request(role="account-2", method="POST", path="/api/Feedbacks", json={"comment": M})
+    assert tools.ctx.created == set()                                  # only the owner's write creates
+    tools.http_request(role="account-1", method="POST", path="/api/Feedbacks", json={"comment": M})
+    assert tools.ctx.created == {"7"} and tools.ctx.owned == set()     # not its owner's id 1, not yet read
+    tools.http_request(role="account-2", path="/api/Feedbacks/7")
+    assert tools.ctx.owned == set()                                    # only the owner's read confirms
+    tools.http_request(role="account-1", path="/api/Feedbacks/8")
+    assert tools.ctx.owned == set()                                    # never created
+    tools.http_request(role="account-1", path="/api/Feedbacks/7")
+    assert tools.ctx.owned == {"7"}
+
+
+def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record(tmp_path):
+    """The owner creates, another account changes the record by the identifier the creation returned, and the
+    owner's next read shows the second marker; the change of any other record never reaches the target."""
+    from urllib.parse import urlsplit
+
+    from appsec_verifier.agent import AgentProbe
+
+    store, writes = {"1": "someone else's"}, []
+
+    def transport(m, u, h, **k):
+        path = urlsplit(u).path
+        if m == "POST" and path == "/api/Feedbacks":
+            store["7"] = k["json"]["comment"]
+            writes.append((m, path))
+            return Resp(201, '{"status":"success","data":{"id":7}}')
+        if m == "PUT":
+            writes.append((m, path))
+            store[path.rsplit("/", 1)[1]] = k["json"]["comment"]
+            return Resp(200, '{"status":"success"}')
+        if "token-" not in str(h):
+            return Resp(401, '{"error":"login"}')
+        return Resp(200, json.dumps({"comment": store.get(path.rsplit("/", 1)[1], "")}))
+
+    class Planner:
+        def __init__(self):
+            self.second = None
+
+        def next_step(self, ctx, history):
+            n = len(history)
+            if n == 1:
+                self.second = history[0]["result"]["second_marker"]
+            steps = [
+                {"tool": "plan_test", "args": {**_plan_args(owner="account-1", change=CHANGE),
+                                               "path": "/api/Feedbacks/:id"}},
+                {"tool": "http_request", "args": {"role": "account-1", "method": "POST", "path": "/api/Feedbacks",
+                                                  "json": {"comment": M}}},
+                {"tool": "http_request", "args": {"role": "account-1", "path": "/api/Feedbacks/7"}},
+                {"tool": "http_request", "args": {"role": "account-2", "method": "PUT", "path": "/api/Feedbacks/1",
+                                                  "json": {"comment": self.second}}},
+                {"tool": "http_request", "args": {"role": "account-2", "method": "PUT", "path": "/api/Feedbacks/7",
+                                                  "json": {"comment": self.second}}},
+                {"tool": "http_request", "args": {"role": "account-1", "path": "/api/Feedbacks/7"}},
+                {"verdict": {"verdict": "confirmed", "rationale": "changed", "proof_steps": [2, 3, 5, 6]}},
+            ]
+            return steps[n]
+
+    ctx = _ctx(tmp_path, transport, safe=False, read_only=False, env=ENV, idents=IDENTITIES)
+    ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),
+                                            Endpoint("PUT", "/api/Feedbacks/:id", None)))
+    ctx.marker = MARKER
+    result = AgentProbe("access-control", Planner).run(ctx)
+    assert result.verdict == "confirmed" and result.confidence == "medium", result.rationale
+    assert writes == [("POST", "/api/Feedbacks"), ("PUT", "/api/Feedbacks/7")]   # /api/Feedbacks/1 was refused
+    assert store["1"] == "someone else's" and store["7"].startswith(MARKER[0]) and store["7"] != M
+
+
+@pytest.mark.parametrize("body, location, expected", [
+    ('{"id": 7, "UserId": 2}', None, {"7"}),
+    ('{"data": {"id": "x9"}}', "/api/Feedbacks/12", {"x9", "12"}),
+    ('{"id": 7, "owner": {"id": 1}, "items": [{"id": 2}]}', None, {"7"}),   # a nested record is not the created one
+    ('{"data": {"user": {"id": 1}}}', None, set()),
+    ('{"id": true}', None, set()),
+    ('{"id": "a/b"}', None, set()),
+    ("not json", "https://shop.example.com/api/Items/3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+     {"3f2504e0-4f89-11d3-9a0c-0305e82c3301"}),
+])
+def test_the_identifiers_a_creating_answer_returns(body, location, expected):
+    assert _created_ids(body, location) == expected
 
 
 # ── what plan_test accepts ────────────────────────────────────────────────────
@@ -347,6 +552,9 @@ def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
     assert _blocker(_plan("access-control", put, get), identities=two, safe=False)[0] == "access"
     assert _blocker(_plan("access-control", put, get), identities=two + admin, safe=False) is None
     assert _blocker(_plan("access-control", get), identities=two, safe=False)[0] == "access"  # nothing creates it
+    # a write proof creates, changes by identifier and reads the changed path (VER-010)
+    assert _blocker(_plan("access-control", post, put), identities=two, safe=False) is None
+    assert _blocker(_plan("access-control", post), identities=two, safe=False)[1].startswith("no GET request")
     assert _blocker(_plan("access-control", get), identities=two[:1] + admin, safe=False) is None
     assert _blocker(_plan("access-control"), identities=two + admin, safe=False) is None  # the route rule decides
 

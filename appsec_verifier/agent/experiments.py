@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import secrets
+from urllib.parse import unquote
 
 from ..planning import STRATEGY_SCHEMA
-from ..verification_context import route_matches
+from ..verification_context import record_segments, route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
@@ -27,6 +28,14 @@ PLAN_SCHEMA = {
         "pointer": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^/"},
         "resource": {"type": "string", "maxLength": 80},
         "owner": {"type": "string", "minLength": 1, "maxLength": 80},
+        # The finding's request that changes a record, for a write proof on the owner's resource (VER-010).
+        "change": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["method", "path"],
+            "properties": {"method": {"enum": ["POST", "PUT", "PATCH"]},
+                           "path": {"type": "string", "minLength": 1, "maxLength": 2000}},
+        },
         "reference": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
         "expression_template": {"type": "string", "minLength": 5, "maxLength": 3000},
@@ -48,6 +57,7 @@ PLAN_SCHEMA = {
             "if": {"properties": {"kind": {"const": "access-control"}}},
             "then": {"oneOf": [{"required": ["resource"]}, {"required": ["owner"]}, {"required": ["reference"]}]},
         },
+        {"if": {"required": ["change"]}, "then": {"required": ["owner"]}},
     ],
 }
 
@@ -405,6 +415,78 @@ def owned_check(ctx, history, cited, *, negative=False, blocked=False):
     return "the resource lacks a valid contrast between its owner and an independent other normal account"
 
 
+def changed_check(ctx, history, cited, *, negative=False, blocked=False):
+    """A write on a resource the owner created (VER-010, VER-014): the owner writes the marker and reads it back,
+    another normal account writes the second marker to that record by the identifier its creation returned and
+    the owner's read confirmed (ctx.owned), and the owner's next read decides: the second marker confirms, the
+    first alone after a 403 or 404 gives blocked-by-control."""
+    start, plan = latest_plan(history)
+    owner, change = plan["owner"], plan["change"]
+    first, second = "".join(getattr(ctx, "marker", None) or ()), plan.get("second_marker") or ""
+    if not first or not second:
+        return "this run has no markers for the finding"
+    for h in history:
+        args = h.get("args") or {}
+        if h.get("tool") != "http_request" or type(h.get("result", {}).get("status")) is not int:
+            continue
+        if first in _sent(args) and (args.get("role") or None) != owner:
+            return "an identity other than the owner sent the marker"
+        if second in _sent(args) and (args.get("role") or None) == owner:
+            return "the owner sent the second marker itself"
+    writes, reads, error = _access_steps(ctx, history, cited, plan, start)
+    if error:
+        return error
+    responses, created = getattr(ctx, "responses", {}), getattr(ctx, "owned", None) or set()
+    creates = [n for n, role, res in writes
+               if role == owner and 200 <= res["status"] < 300 and first in _sent(history[n - 1]["args"])]
+    if not creates:
+        return "cite the owner's answered write that carries the marker"
+    owner_ids = {responses.get(n, {}).get("identity") for n in creates}
+    normal, changes = normal_roles(getattr(ctx, "identities", None)), []
+    for n, role, res in writes:
+        args = history[n - 1]["args"]
+        if n in creates:
+            continue
+        if not (role in normal and role != owner and second in _sent(args)
+                and (args.get("method") or "GET").upper() == change["method"]
+                and route_matches(change["path"], args.get("path", ""))):
+            return "a cited write is neither the owner's creation nor the other account's change"
+        segments = record_segments(change["path"], args.get("path", ""))
+        if not segments or any(unquote(s) not in created for s in segments):
+            return "the change must name the record the owner's write created"
+        if responses.get(n, {}).get("identity") in owner_ids:
+            return "the change came from the owner's own session"
+        changes.append((n, res))
+    if not changes:
+        return "cite the other account's write of the second marker to the created record"
+    step, answer = min(changes, key=lambda c: c[0])
+    if any(n > step for n in creates):
+        return "the owner's write must come before the change"
+    if any(first in _sent(history[n - 1]["args"]) or second in _sent(history[n - 1]["args"]) for n, *_ in reads):
+        return "a read that sends a marker itself does not count"
+    owner_reads = sorted((n, response, res) for n, role, response, res in reads if role == owner)
+    if not any(min(creates) < n < step and first in response.get("body", "") and 200 <= res["status"] < 300
+               for n, response, res in owner_reads):
+        return "the owner's read does not show the marker before the change"
+    after = [(response, res) for n, response, res in owner_reads if n > step]
+    if not after:
+        return "cite the owner's read after the change"
+    response, res = after[0]                                    # the owner's next read decides
+    ok = 200 <= res["status"] < 300
+    shows_second, shows_first = ok and second in response.get("body", ""), ok and first in response.get("body", "")
+    if not shows_second and not response.get("complete"):
+        return "the owner's read after the change is incomplete, so the second marker's absence is not established"
+    if not negative:
+        return None if shows_second else "the owner's next read after the change does not show the second marker"
+    if shows_second:
+        return "the owner's read shows the second marker, so the change went through"
+    if not blocked:
+        return "a change without effect shows no protection; only a 403 or 404 gives blocked-by-control"
+    if answer["status"] in (403, 404) and shows_first:
+        return None
+    return "the change was not refused with 403 or 404, or the owner's read no longer shows the marker"
+
+
 def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
     """A privileged function (VER-010, VER-041): the privileged account gets 2xx, a request without a role 401 or
     403, and a normal account the identical answer (confirmed) or 403/404 (blocked-by-control). Identical means the
@@ -444,7 +526,7 @@ def access_check(ctx, history, cited, *, negative=False, blocked=False):
     if plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")):
         if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
             return "the operator-declared test resource takes precedence"
-        check = owned_check if plan.get("owner") else privileged_check
+        check = changed_check if plan.get("change") else owned_check if plan.get("owner") else privileged_check
         return check(ctx, history, cited, negative=negative, blocked=blocked)
     matched, resource, error = access_observations(ctx, history, cited)
     if error:

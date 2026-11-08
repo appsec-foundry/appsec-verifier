@@ -242,6 +242,7 @@ properties:
           additionalProperties: true
           properties:
             marker:         { type: [string, "null"] }
+            second_marker:  { type: [string, "null"], description: "The marker another account wrote to the owner's resource (VER-010)." }
             checked:        { type: boolean }
             contract:       { type: integer, minimum: 1 }
             steps:

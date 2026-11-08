@@ -5,19 +5,25 @@ that scope; neither model plans nor target responses can add routes here.
 An accepted plan narrows requests to its route and method; under an
 own-resource access-control plan its owner may also write to the finding's
 routes, to create the resource it then reads back. Every write carries the
-finding's marker and names no existing record in its path (VER-014).
+finding's marker and names no existing record in its path (VER-014). The one
+exception is a write proof (VER-010): under a plan with a change, another
+normal account may send that change to the record the owner's write created
+and its read showed with the marker (ctx.owned), and a GET on the change's path
+may read what the creating answer returned (ctx.created) when the finding names
+no read. Both come from the target's answers (agent/tools.py), never from the
+model.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
-from ..verification_context import record_segment, route_matches
-from .experiments import token
+from ..verification_context import record_segment, record_segments, route_matches
+from .experiments import normal_roles, token
 from .tools import ToolError, _strings
 
 
@@ -52,18 +58,29 @@ class Controller:
         self.check()
         return result
 
-    def _routes(self):
+    def _routes(self, change=None):
+        """The finding's routes; with `change`, a write of the finding that changes a record (VER-010), also a GET
+        on its path, marked derived: it may read only what the owner created, to observe the change."""
         p = self.ctx.plan
         variants = p.verification_context.get("variants", [])
         if p.variant_id:
             variants = [v for v in variants if v["id"] == p.variant_id]
         if variants or p.variant_id:
-            return [v["request"] for v in variants]
-        routes = [{"method": e.method, "path": e.path} for e in p.endpoints]
-        for key in ("test_resources", "injection_inputs", "session_checks"):
-            routes.extend({"method": r.get("method", "GET"), "path": r["path"]}
-                          for r in self.ctx.scope.get(key, []) if r["finding_id"] == p.id)
-        return routes + self.source_routes
+            routes = [v["request"] for v in variants]
+        else:
+            routes = [{"method": e.method, "path": e.path} for e in p.endpoints]
+            for key in ("test_resources", "injection_inputs", "session_checks"):
+                routes.extend({"method": r.get("method", "GET"), "path": r["path"]}
+                              for r in self.ctx.scope.get(key, []) if r["finding_id"] == p.id)
+            routes += self.source_routes
+        if change and self._names_change(routes, change):
+            routes = [*routes, {"method": "GET", "path": change["path"], "derived": True}]
+        return routes
+
+    def _names_change(self, routes, change) -> bool:
+        return isinstance(change, dict) and any(
+            r["method"] in (change.get("method"), "ALL") and self._matches(r["path"], change.get("path", ""))
+            for r in routes)
 
     def _matches(self, template, path):
         def resolved(value):
@@ -88,19 +105,29 @@ class Controller:
         if not same_origin(url, self.ctx.target_base):
             raise ToolError("the finding's requests must use its target origin")
         route_path = path
-        matching = [r for r in self._routes() if (r["method"] in (method, "ALL")
+        change = args.get("change") if name == "plan_test" else (self.plan or {}).get("change")
+        if name == "plan_test" and change and not self._names_change(self._routes(), change):
+            raise ToolError("change must be a write request this finding names")
+        matching = [r for r in self._routes(change) if (r["method"] in (method, "ALL")
                     or r["method"] == "PAGE" and method == "GET")
                     and self._matches(r["path"], route_path)]
         if not matching:
             raise ToolError("request has no matching route in this finding or its operator-declared resources")
+        if name != "plan_test" and all(r.get("derived") for r in matching) and not self._created(change, path):
+            raise ToolError("a GET the finding does not name may read only the record the owner created (VER-010)")
+        # Under a change plan another normal account writes the second marker to what the owner created (VER-010).
+        plan = self.plan or {}
+        change_write = bool(name == "http_request" and change and method == change["method"]
+                            and args.get("role") in normal_roles(self.ctx.identities)
+                            and args.get("role") != plan.get("owner") and self._matches(change["path"], route_path))
         if name == "http_request" and method not in SAFE_METHODS and not any(
                 r["finding_id"] == self.ctx.plan.id and r["path"] == path and r.get("method", "GET") == method
                 for r in self.ctx.scope.get("test_resources", [])):
-            self._write_allowed(path, args, matching)
+            self._write_allowed(path, args, matching, created=change_write and self._created(change, path, "owned"))
         # Under an own-resource plan the owner, and only the owner, may also write to the finding's routes (VER-010).
         owner_write = (name == "http_request" and self.plan and self.plan.get("owner") and method not in SAFE_METHODS
                        and args.get("role") == self.plan["owner"])
-        if name != "plan_test" and self.plan and not owner_write and (
+        if name != "plan_test" and self.plan and not owner_write and not change_write and (
             not self._matches(self.plan["path"], route_path) or method != self.plan.get("method", "GET")
         ):
             raise ToolError("request does not match the accepted test plan")
@@ -143,10 +170,19 @@ class Controller:
                 return
         raise ToolError("request inputs do not match the finding variant")
 
-    def _write_allowed(self, path, args, matching):
+    def _created(self, change, path, which="created") -> bool:
+        """Whether every record `path` names is one the owner's write created in this finding (VER-010):
+        `created`, returned by its creating answer, or `owned`, which the owner's read then showed with its
+        marker."""
+        segments = record_segments(change["path"], path) if isinstance(change, dict) else []
+        ids = getattr(self.ctx, which, None) or set()
+        return bool(segments) and all(unquote(s) in ids for s in segments)
+
+    def _write_allowed(self, path, args, matching, *, created=False):
         """VER-014: a write carries the finding's marker, so what it changes can be found and attributed, and
         names no existing record by its identifier in the URL path, since that record may belong to someone
-        else. An operator-declared test resource is exempt. Identifiers in a body are not recognised."""
+        else. An operator-declared test resource is exempt, and `created`: the change of a record the owner's
+        write created in this finding (VER-010). Identifiers in a body are not recognised."""
         part = (getattr(self.ctx, "marker", None) or ("",))[0]
         if not part:
             raise ToolError("this finding has no marker, so it sends no write (VER-014)")
@@ -155,9 +191,10 @@ class Controller:
             raise ToolError(f"a write must carry {part} in its path or a value, so the change can be found "
                             "(VER-014)")
         segment = next(filter(None, (record_segment(r["path"], path) for r in matching)), None)
-        if segment is not None:
+        if segment is not None and not created:
             raise ToolError(f"a write must not name an existing record in its path ({segment[:80]!r}): it may "
-                            "create, never change what may belong to someone else (VER-014)")
+                            "create, never change what may belong to someone else; only a change plan's other "
+                            "account may change the record its owner created (VER-010, VER-014)")
 
     def _key(self, name, args):
         args = dict(args)

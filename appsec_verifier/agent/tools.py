@@ -52,7 +52,7 @@ from jsonschema import Draft202012Validator
 
 from ..auth.sessions import AuthError
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
-from ..verification_context import missing_capabilities, route_matches
+from ..verification_context import missing_capabilities, record_segments, route_matches
 from ..verify import poc
 from .experiments import PLAN_SCHEMA, access_methods, normal_roles, pointer_value, privileged_roles, token
 from .source_reader import SourceAccessError
@@ -126,6 +126,34 @@ def _hide(value, secret: str | None):
     if isinstance(value, list | tuple):
         return [_hide(v, secret) for v in value]
     return value
+
+
+_WRAPPERS = ("data", "result", "item", "record", "resource", "object")
+
+
+def _created_ids(body: str, location) -> set[str]:
+    """The identifiers a creating answer returns (VER-010): the id field of the answer or of its data wrapper, and
+    the last path segment of a Location header. An id of a nested record, such as its owner, is not the created
+    record's."""
+    found: set[str] = set()
+    try:
+        answer = jsonlib.loads(body)
+    except (ValueError, RecursionError):
+        answer = None
+    if isinstance(answer, dict):
+        for record in (answer, *(answer.get(k) for k in _WRAPPERS)):
+            for key, v in (record.items() if isinstance(record, dict) else ()):
+                if (isinstance(key, str) and key.lower() == "id" and isinstance(v, int | str)
+                        and not isinstance(v, bool) and 0 < len(str(v)) <= 128 and "/" not in str(v)):
+                    found.add(str(v))
+    if location:
+        try:
+            segment = unquote(urlsplit(str(location)).path.rstrip("/").rsplit("/", 1)[-1])
+        except ValueError:
+            segment = ""
+        if 0 < len(segment) <= 128:
+            found.add(segment)
+    return found
 
 
 class AgentTools:
@@ -269,6 +297,15 @@ class AgentTools:
                 if plan["owner"] not in normal_roles(self.ctx.identities):
                     raise ToolError("the owner must be a normal account; a privileged account only reads (VER-041)")
                 marker = "".join(self.ctx.marker)
+                if plan.get("change"):
+                    if not record_segments(plan["change"]["path"]):
+                        raise ToolError("change is the finding's write that changes a record by its identifier in "
+                                        "the path, such as PUT /items/:id")
+                    # The Verifier's, like the first; its marker part keeps the change attributable (VER-014).
+                    second = marker
+                    while second == marker:
+                        second = self.ctx.marker[0] + secrets.token_hex(4)
+                    plan = {**plan, "second_marker": second}
             else:
                 if "reference" not in methods:
                     raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
@@ -297,6 +334,7 @@ class AgentTools:
             "kind": plan["kind"],
             "experiment": plan,
             **({"marker": marker} if marker else {}),
+            **({"second_marker": plan["second_marker"]} if plan.get("second_marker") else {}),
             **({"note": f"prerequisite {', '.join(assumed)} counts as assumed: observed needs http_request steps "
                         "of this finding with a recorded response"} if assumed else {}),
             "next": "collect observations; run_experiment repeats read-only injection controls within the budget",
@@ -653,6 +691,19 @@ class AgentTools:
             out["location"] = _hide(location, self._marker_content)[:_LOCATION_CAP]
         if self.ctx.plan.cls == "session":
             out["session_cookies"] = session_cookies
+        plan = getattr(self, "_experiment", None) or {}
+        if plan.get("change") and role == plan.get("owner") and isinstance(status, int) and 200 <= status < 300:
+            # A change may name only a record the owner's write created (its answer's id) and the owner's read
+            # then showed with the marker, so it is that record (VER-010, agent/controller.py).
+            for name in ("created", "owned"):
+                if getattr(self.ctx, name, None) is None:
+                    setattr(self.ctx, name, set())
+            if m in ("POST", "PUT", "PATCH"):
+                self.ctx.created.update(_created_ids(text, location))
+            elif m == "GET" and all(self.ctx.marker) and "".join(self.ctx.marker) in text:
+                segments = [unquote(s) for s in record_segments(plan["path"], path)]
+                if segments and all(s in self.ctx.created for s in segments):
+                    self.ctx.owned.update(segments)
         elapsed = _elapsed_ms(resp)
         if elapsed is not None:
             out["elapsed_ms"] = elapsed  # transport time, without the rate limit's wait (VER-011)
