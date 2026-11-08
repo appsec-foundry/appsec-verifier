@@ -182,7 +182,7 @@ def test_without_a_scope_file_the_typed_url_is_the_scope_and_nothing_is_written(
     (env.run / "scope.yaml").unlink()
     rc, args, prompts, out = env.go("http://localhost:3000")
     assert rc == 0 and prompts == ["Target URL you are authorised to test: "]
-    assert "tests only the host and port of the URL you enter, read-only" in out
+    assert "tests only the host and port of the URL you enter (VER-001)" in out
     assert (args.scope, args.target) == (None, "http://localhost:3000")
     assert not (env.run / "scope.yaml").exists() and not (env.cwd / "scope.yaml").exists()
     _, invocation, default_yes = env.calls[0]
@@ -266,6 +266,18 @@ def test_missing_credentials_are_named_and_asked_again(env):
     assert prompts[0].startswith(f"Identities file (test roles; missing credentials are asked for hidden), "
                                  f"or 'none' [{env.run / 'identities.yaml'}]")
     assert env.hidden.prompts == ["alice: ALICE_TOKEN (token_env) is not set; enter its value (hidden): "]
+
+
+def test_accounts_on_the_command_line_skip_the_identities_question_and_appear_in_the_invocation(env):
+    (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))       # found, but not asked for
+    rc, args, prompts, _ = env.go(extra=["--account", "jim@juice-sh.op=JP", "--account", "bender@juice-sh.op",
+                                         "--admin-account", "admin@juice-sh.op", "--login-url",
+                                         "http://localhost:3000/rest/user/login"])
+    assert rc == 0 and prompts == [] and args.identities is None and env.kws[0]["pasted"] is None
+    parts = shlex.split(env.calls[0][1])
+    assert parts[parts.index("--account") + 1] == "jim@juice-sh.op=JP"
+    assert parts.count("--account") == 2 and "--admin-account" in parts
+    assert parts[parts.index("--login-url") + 1] == "http://localhost:3000/rest/user/login"
 
 
 def test_identities_are_used_and_values_never_shown(env):
@@ -462,7 +474,7 @@ def test_the_invocation_runs_the_same_settings(env, with_scope):
 def test_unreadable_or_unverifiable_assessments_block(env, capsys):
     env.assessment.write_text(": not yaml : [")
     assert env.go()[0] == cli.EXIT_BLOCKED
-    assert "cannot read it: ParserError" in capsys.readouterr().err
+    assert "cannot read it as YAML: ParserError" in capsys.readouterr().err
     env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[3]]}))
     rc, _, prompts, _ = env.go()
     assert rc == cli.EXIT_BLOCKED and prompts == []

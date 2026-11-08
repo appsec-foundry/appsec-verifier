@@ -17,6 +17,7 @@ import math
 
 from jsonschema import Draft202012Validator
 
+from ..auth.accounts import FIELDS_ACTION
 from ..verification_context import bounded
 from .prompts import _seed, _system, _tool_defs
 
@@ -46,7 +47,7 @@ def system_prompt(ctx) -> str:
     """Without a source checkout read_source is not offered: a call would only return an error."""
     source = getattr(ctx, "source", None) is not None
     actions = [{k: t[k] for k in ("name", "description", "input_schema")} for t in _tool_defs()
-               if source or t["name"] != "read_source"]
+               if (source or t["name"] != "read_source") and t["name"] != FIELDS_ACTION]
     return (
         _system(ctx)
         + ("" if source else "\nThere is no source checkout in this run; work from the finding's description.")

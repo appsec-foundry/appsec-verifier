@@ -22,6 +22,7 @@ import time
 from collections import ChainMap
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .limits import Limits, RunBudget
 from .loader import AssessmentError, plans_from, read_assessment, select
@@ -132,7 +133,9 @@ def _load_assessment(path: Path) -> tuple[dict | None, list, list[str]]:
     except AssessmentError as exc:
         return None, [], exc.errors
     except (OSError, yaml.YAMLError) as exc:
-        return None, [], [f"cannot read it: {type(exc).__name__}"]
+        if path.suffix.lower() in (".md", ".markdown"):
+            return None, [], ["this is a Markdown report; give the security-assessment.yaml next to it"]
+        return None, [], [f"cannot read it as YAML: {type(exc).__name__}"]
     except ValueError as exc:                       # not a mapping at the top level
         return None, [], [str(exc)]
     return doc, plans_from(doc), []
@@ -233,8 +236,8 @@ def _read_scope(path: Path) -> tuple[dict | None, list[str]]:
 
 def url_scope(url: str | None) -> tuple[dict | None, list[str]]:
     """Without a scope file, the scope of the target URL alone (VER-001): its scheme, host and port, the
-    whole host, read-only. It lasts for this run, so it has no window and no owner. The URL comes from the
-    operator, never from the assessment (VER-004)."""
+    whole host; writes only with --allow-intrusive (VER-030). It lasts for this run, so it has no window and
+    no owner. The URL comes from the operator, never from the assessment (VER-004)."""
     from urllib.parse import urlsplit
 
     if not url:
@@ -250,7 +253,7 @@ def url_scope(url: str | None) -> tuple[dict | None, list[str]]:
         return None, ["enter an absolute http or https URL with a host, e.g. https://app.test.example.com"]
     if parts.username is not None or parts.password is not None:
         return None, ["leave credentials out of the URL; test identities take theirs from environment variables"]
-    scope = {"schema_version": 1, "base_url": url, "schemes": [scheme], "allow_state_change": False}
+    scope = {"schema_version": 1, "base_url": url, "schemes": [scheme]}
     decision = ScopeGuard(scope).authorize(url, "target")
     return (scope, []) if decision.allowed else (None, [printable(decision.reason)])
 
@@ -265,7 +268,7 @@ def cmd_scope(args: argparse.Namespace) -> int:
     window = scope.get("window", {})
     guard = ScopeGuard(scope)
     win = guard.within_window()
-    state_change = bool(scope.get("allow_state_change"))
+    forbidden = scope.get("allow_state_change") is False
     rows = [
         ("Base URL", str(scope.get("base_url"))),
         ("Hosts", ", ".join(scope.get("hosts", []) or [scope.get("base_url", "")])),
@@ -276,7 +279,7 @@ def cmd_scope(args: argparse.Namespace) -> int:
         ("Window", f"{window.get('from')} → {window.get('until')} ({'open now' if win.allowed else 'not open now'})",
          "ok" if win.allowed else "critical"),
         ("Owner", str((scope.get("owner") or {}).get("name"))),
-        ("State change", "allowed" if state_change else "read-only", "warn" if state_change else "ok"),
+        ("State change", "forbidden" if forbidden else "with --allow-intrusive", "ok" if forbidden else "warn"),
         ("Auth hosts", ", ".join(scope.get("auth_hosts", []) or ["—"])),
         ("Proxy", (scope.get("proxy") or {}).get("url") or "—"),
     ]
@@ -377,6 +380,119 @@ def _check_identities(path: str | None, guard: ScopeGuard, env, *, interactive: 
             elif not decision.allowed:
                 errors.append(f"{role}: check_url is outside the scope: {decision.reason}")
     return identities, errors
+
+
+def _prepare_accounts(args, doc: dict, scope: dict, guard: ScopeGuard, target: str, secrets: dict, env,
+                      interactive: bool, *, passwords: bool = True
+                      ) -> tuple[list[dict], dict | None, ScopeGuard, list[str]]:
+    """VER-041: the identities for --account and --admin-account, the login endpoint they sign in at, the
+    guard (widened by a --login-url host when there is no scope file), and errors. User names go to `secrets`;
+    a password not in its variable is asked hidden in an interactive run. Without `passwords` (an offline
+    check) passwords are not needed yet. Contacts nothing."""
+    from .auth.accounts import PRIVILEGED_ROLE, AccountError, account_identities, resolve_login_url
+
+    normal, privileged =getattr(args, "account", None) or [], getattr(args, "admin_account", None) or []
+    if not normal and not privileged:
+        return [], None, guard, (["--login-url needs --account or --admin-account"]
+                                 if getattr(args, "login_url", None) else [])
+    if getattr(args, "identities", None):
+        return [], None, guard, ["use either --identities or --account/--admin-account, not both"]
+    try:
+        login_url, source = resolve_login_url(args.login_url, doc, target)
+        identities, users, pending = account_identities(normal, privileged, login_url)
+    except AccountError as exc:
+        return [], None, guard, [str(exc)]
+    if len(set(users.values())) < len(users):
+        return [], None, guard, ["the same user name is given twice; an access-control proof needs independent "
+                                 "accounts (VER-010)"]
+    decision = guard.authorize(login_url, "auth")
+    if not decision.allowed:
+        if args.scope:
+            return [], None, guard, [f"the login endpoint is outside the scope: {decision.reason}; "
+                                     "add its host to auth_hosts in the scope file"]
+        parts = urlsplit(login_url)      # without a scope file, --login-url names a login host for this run
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        scope.setdefault("auth_hosts", []).append(f"{parts.hostname}:{port}")
+        if parts.scheme not in scope.setdefault("schemes", []):
+            scope["schemes"].append(parts.scheme)
+        guard = ScopeGuard(scope)
+    secrets.update(users)
+    errors = []
+    for role, user, variable, named in pending:
+        if env.get(variable) or not passwords:
+            continue
+        if interactive:
+            value = _ask_secret(f"Password for {role} ({printable(user)}), hidden: ")
+            if value:
+                secrets[variable] = value
+                continue
+        errors.append(f"{role}: environment variable {named} is not set" if named else
+                      f"{role}: no password; enter it in a terminal or name its variable with --account USER=VARIABLE")
+    if errors:
+        return [], None, guard, errors
+    # Offline the passwords are not needed yet: the check sees a stand-in, never used to sign in.
+    later = {} if passwords else {v: "asked when the run starts" for _, _, v, _ in pending if not env.get(v)}
+    _, errors = _check_identities(None, guard, ChainMap(later, env), doc={"identities": identities})
+    for ident in identities:          # after the schema check, which knows no such field
+        ident["privileged"] = ident["role"].startswith(f"{PRIVILEGED_ROLE}-")
+    return identities, {"url": login_url, "source": source}, guard, errors
+
+
+def _accounts_note(identities: list[dict], login: dict | None) -> str | None:
+    """The accounts and their login endpoint, for the settings shown before the confirmation (VER-002, VER-041)."""
+    if not login:
+        return None
+    roles = ", ".join(i["role"] + (" (privileged, read-only)" if i.get("privileged") else "") for i in identities)
+    return f"{roles} · sign in at POST {login['url']} ({login['source']}); the model chooses the field names"
+
+
+def _sign_in_accounts(sessions, identities: list[dict], login: dict, host, budget, doc: dict,
+                      source_dir) -> list[Check]:
+    """VER-041: one model call for the login field names, then each account signs in with at most two
+    attempts; a pair that worked is used for the others. A failed login shows in the identity checks."""
+    from .auth.accounts import AccountError, choose_fields, handler_of
+    from .auth.sessions import AuthError
+    from .preflight import _REQUEST_ERRORS
+
+    path = urlsplit(login["url"]).path
+    handler = handler_of(doc, path) if login["source"] != "--login-url" else None
+    excerpt = None
+    if handler and source_dir:
+        from .agent.source_reader import SourceAccessError, SourceReader
+
+        try:
+            excerpt = SourceReader(source_dir).read_window(handler[0], handler[1], context=15)["text"]
+        except SourceAccessError:
+            excerpt = None
+    try:
+        pairs = choose_fields(host, budget, endpoint=f"POST {path}",
+                              handler=f"{handler[0]}:{handler[1]}" if handler else None, excerpt=excerpt)
+    except AccountError as exc:
+        return [Check("Login fields", "fail", str(exc))]
+    working, refused = None, []
+    for ident in identities:
+        try:
+            working = sessions.sign_in_with_fields(ident["role"], [working] if working else pairs)
+        except (AuthError, *_REQUEST_ERRORS):
+            refused.append(ident["role"])       # the identity check names the cause; not tried again
+    shown = ", ".join(f"{u}/{p}" for u, p in pairs)
+    if not refused:
+        return [Check("Login fields", "ok", f"{shown} proposed by the model; {working[0]}/{working[1]} worked")]
+    return [Check("Login fields", "fail", f"{shown} proposed by the model; no token for {', '.join(refused)}. "
+                                          "A login that does not answer a JSON POST with a token needs --identities")]
+
+
+def _identities_fix(errors: list[str]) -> str:
+    """What to do about the identities errors shown, by their cause."""
+    fixes = []
+    if any("is not set" in e for e in errors):
+        fixes.append("export the variables named above")
+    if any("refused for authentication" in e or "outside the scope" in e for e in errors):
+        fixes.append("name the login host as the target names it (e.g. localhost, not 127.0.0.1), or list it "
+                     "in auth_hosts of a scope file")
+    if not fixes:
+        fixes.append("correct the identities file")
+    return "; ".join(fixes) + ", or start without --identities"
 
 
 def _ask_secret(prompt: str) -> str:
@@ -565,21 +681,33 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     from .planning import evidence_id, expand_variants
 
     sel = expand_variants(sel)
+    auto_callback = _auto_callback(scope, target, sel)
+    if auto_callback:
+        guard = ScopeGuard(scope)   # so the listener is never a target
     safe = not args.allow_intrusive
-    read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
+    read_only = safe or args.read_only
+    if not read_only and scope.get("allow_state_change") is False:   # an explicit no in the scope file wins
+        return _blocked(
+            "The scope file forbids write requests (allow_state_change: false)",
+            fix="start without --allow-intrusive, add --read-only, or remove allow_state_change: false",
+        )
 
     interactive = not args.non_interactive and _stdin_is_terminal()
     secrets = dict(secrets or {})
     env = ChainMap(secrets, os.environ)
-    identities, id_errors = _check_identities(
-        None if pasted else args.identities, guard, env, interactive=interactive, secrets=secrets,
-        ask_secret=_ask_secret if interactive else None, doc={"identities": pasted} if pasted else None)
+    account_ids, login, guard, account_errors = _prepare_accounts(args, doc, scope, guard, target, secrets, env,
+                                                                  interactive)
+    if account_errors:
+        return _blocked("The accounts cannot be used", account_errors,
+                        "see --account, --admin-account and --login-url in `appsec-verifier verify --help`")
+    if login:
+        identities, id_errors = account_ids, []
+    else:
+        identities, id_errors = _check_identities(
+            None if pasted else args.identities, guard, env, interactive=interactive, secrets=secrets,
+            ask_secret=_ask_secret if interactive else None, doc={"identities": pasted} if pasted else None)
     if id_errors:
-        return _blocked(
-            "The identities cannot be used",
-            id_errors,
-            "export the variables named above, or start without --identities",
-        )
+        return _blocked("The identities cannot be used", id_errors, _identities_fix(id_errors))
     budget = RunBudget(limits)
     try:
         planner_factory, agent_info = _build_planner_factory(args)
@@ -600,7 +728,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     source = SourceReader(args.source) if args.source else None
     registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
     browser, browser_note, browser_missing = _proof_browser(args, http, sel)
-    listener, listener_note = _callback_listener(scope, sel)
+    listener, listener_note = _callback_listener(scope, sel, auto=auto_callback)
     probed = [p for p in sel if p.status == "dynamic" and registry.get(p.cls)]
     blocked = (
         {}
@@ -623,6 +751,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     )
     notes = (
         ("Report", report_note),
+        ("Accounts", _accounts_note(identities, login)),
         ("Identities", _identities_note(identities, sel)),
         ("Login programs", _login_programs(identities)),
         ("Browser", browser_note),
@@ -698,6 +827,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             print(render(list(items), st), flush=True)
 
         add(check_target(http, target, proxy=proxy_for(scope, target)))
+        if not failed(checks) and login:
+            add(*_sign_in_accounts(sessions, identities, login, planner_factory.host, budget, doc, args.source))
         if not failed(checks):
             add(
                 *(
@@ -855,7 +986,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         add(Check("Scope", "fail", f"{target} is out of scope: {decision.reason}"))
         guard = None
     elif not args.scope:
-        add(Check("Scope", "ok", f"no scope file: only {target}'s host and port, read-only"))
+        add(Check("Scope", "ok", f"no scope file: only {target}'s host and port"))
     else:
         window = scope.get("window") or {}
         add(Check("Scope", "ok", f"{target} in scope · window until {window.get('until')} · "
@@ -867,7 +998,19 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     interactive = not args.non_interactive and _stdin_is_terminal()
     secrets: dict = {}
     env = ChainMap(secrets, os.environ)
-    if not args.identities:
+    login = None
+    if failed(checks) and (args.account or args.admin_account or args.identities):
+        # no password is asked for a run that cannot start anyway
+        add(Check("Identities", "info", "not checked: an earlier check failed"))
+    elif args.account or args.admin_account or args.login_url:
+        if guard is None or doc is None:
+            add(Check("Accounts", "info", "not checked without a usable scope and assessment"))
+        else:
+            identities, login, guard, errors = _prepare_accounts(args, doc, scope, guard, target, secrets, env,
+                                                                 interactive, passwords=not args.offline)
+            add(Check("Accounts", "fail", "; ".join(errors)) if errors else
+                Check("Accounts", "ok", _accounts_note(identities, login)))
+    elif not args.identities:
         add(Check("Identities", "info", "none given; only anonymous requests are possible"))
     elif guard is None:
         add(Check("Identities", "info", "not checked without a usable scope"))
@@ -910,7 +1053,9 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
         via = proxy_for(scope, target)
         print(f"\nThe next checks contact {target}{f' via proxy {via}' if via else ''}: one GET, one login "
-              "per identity with a login or token endpoint, one GET per check_url.", file=out)
+              "per identity with a login or token endpoint, one GET per check_url"
+              + (f"; first one call to {host.model} for the login field names, at most two logins per account"
+                 if login else "") + ".", file=out)
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
         if not conf.confirmed:
             add(Check("Target", "fail", f"not contacted: {conf.reason}; confirm with --yes, or use --offline"))
@@ -919,6 +1064,8 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             add(check_target(http, target, proxy=via))
             if not failed(checks):
                 sessions = _sessions(identities, http, env, args, interactive)
+                if login:
+                    add(*_sign_in_accounts(sessions, identities, login, host, RunBudget(Limits.load()), doc, None))
                 add(*check_identities(sessions, identities, http, target, scope=scope))
                 if not failed(checks) and (same := check_accounts(sessions)):
                     add(*same)
@@ -947,6 +1094,7 @@ def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | 
             ProofBrowser.check_available()
         except BrowserUnavailable as exc:
             browser_missing = str(exc)
+    _auto_callback(scope, target, probed)
     listener, _ = _callback_listener(scope, probed)  # validated only; it binds on start()
     from .planning import evidence_id
 
@@ -1094,7 +1242,37 @@ def _proof_browser(args, http, sel):
                      + f", started on first use · screenshots: {listed}"), None
 
 
-def _callback_listener(scope, sel):
+def _auto_callback(scope: dict, target: str, sel) -> bool:
+    """For a target on a loopback address whose scope declares no callback, a listener on a free loopback
+    port when an SSRF finding is selected (VER-012). It is added to `scope`, so the guard refuses it as a
+    target. A hit there confirms the finding: the application fetched an internal address, so the
+    declaration expect_rejected is implied. Returns whether it was added."""
+    import socket
+    from urllib.parse import urlsplit
+
+    from .scope.guard import is_loopback
+
+    if scope.get("callback") or not any(p.status == "dynamic" and p.cls == "ssrf" for p in sel):
+        return False
+    try:
+        host = urlsplit(target).hostname
+    except ValueError:
+        return False
+    if not is_loopback(host):
+        return False
+    bind = "::1" if ":" in str(host) else "127.0.0.1"
+    try:
+        with socket.socket(socket.AF_INET6 if bind == "::1" else socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind((bind, 0))
+            port = probe.getsockname()[1]
+    except OSError:
+        return False
+    shown = f"[{bind}]" if bind == "::1" else bind
+    scope["callback"] = {"host": bind, "port": port, "base_url": f"http://{shown}:{port}", "expect_rejected": True}
+    return True
+
+
+def _callback_listener(scope, sel, *, auto: bool = False):
     """The SSRF callback listener when an SSRF finding is selected (VER-012), not yet started, else None;
     with a line for the run settings. Without it SSRF findings stay unconfirmed."""
     if not any(p.status == "dynamic" and p.cls == "ssrf" for p in sel):
@@ -1105,7 +1283,11 @@ def _callback_listener(scope, sel):
         listener = CallbackListener(scope.get("callback"))
     except CallbackUnavailable as exc:
         return None, f"unavailable ({exc}); SSRF findings cannot be confirmed"
-    return listener, f"will listen on {listener.host}:{listener.port}, reached as {listener.base_url}"
+    note = f"will listen on {listener.host}:{listener.port}, reached as {listener.base_url}"
+    if auto:
+        note += (" (automatic for a local target; the target must reach this machine's loopback, e.g. run "
+                 "directly or with docker --network host, not docker -p)")
+    return listener, note
 
 
 def _marker_note(scope, sel):
@@ -1147,7 +1329,7 @@ _NEEDS = {
     "callback": ("callback", ["add to a scope file (--scope):",
                               'callback: {host: 127.0.0.1, port: 8099, base_url: "http://127.0.0.1:8099"}',
                               "(docs/cli.md, Scope file)"]),
-    "intrusive": ("intrusive mode", ["run with --allow-intrusive; the scope file needs allow_state_change: true"]),
+    "intrusive": ("intrusive mode", ["run with --allow-intrusive"]),
 }
 
 
@@ -1282,7 +1464,7 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
         ("Assessment", str(assessment)),
         ("Target", f"{target} ({'will contact' if contact else 'not contacted yet'})"),
         ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"
-         if "owner" in scope else f"no scope file: only {target}'s host and port, read-only"),
+         if "owner" in scope else f"no scope file: only {target}'s host and port"),
         ("Selection", " · ".join([_count(len(sel), "finding") + (f", severity {floor} and above" if floor else ""),
                                   f"{dyn} testable against the running app",
                                   *([f"{len(sel) - dyn} code-only"] if len(sel) > dyn else [])])),
@@ -1524,6 +1706,7 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--url", "--target", dest="target", metavar="URL",
                     help="URL to check (default: base_url of the scope); must lie inside the scope")
     pf.add_argument("--identities", metavar="FILE", help="test accounts by role; each login is tried once")
+    _add_account_options(pf)
     pf.add_argument("--profile", choices=_PROFILE_CHOICES, metavar="PROFILE", help=f"model profile: {_PROFILE_HELP}")
     pf.add_argument("--model", help="model of the profile (default: the profile's model)")
     pf.add_argument("--offline", action="store_true",
@@ -1577,6 +1760,23 @@ def build_guided_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _add_account_options(group) -> None:
+    """--account, --admin-account and --login-url (VER-041)."""
+    group.add_argument(
+        "--account", action="append", metavar="USER[=VAR]",
+        help="a test account by user name, instead of --identities; its password comes from the environment "
+             "variable VAR or is asked hidden. Repeat for a second account",
+    )
+    group.add_argument(
+        "--admin-account", action="append", metavar="USER[=VAR]",
+        help="a privileged test account; it sends only GET, HEAD and OPTIONS, also with --allow-intrusive",
+    )
+    group.add_argument(
+        "--login-url", metavar="URL",
+        help="where --account signs in (default: the login entry point the assessment names for the target)",
+    )
+
+
 def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     """The options of `verify`, shared with the guided run. The guided run takes
     the assessment as its argument and asks for the scope when it is missing."""
@@ -1600,13 +1800,14 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         dest="target",
         metavar="URL",
         help="URL to start from (default: base_url of the scope); must lie inside the scope. "
-        "Without --scope, only this URL's host and port are contacted, read-only",
+        "Without --scope, only this URL's host and port are contacted",
     )
     src.add_argument(
         "--identities", metavar="FILE",
         help="test accounts by role; credentials come from environment variables, sign-in in your browser or a "
              "login program",
     )
+    _add_account_options(src)
     src.add_argument("--source", metavar="DIR", help="checkout of the application's source code, read by the agent")
 
     sel = vf.add_argument_group(
@@ -1655,13 +1856,13 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     mode.add_argument(
         "--allow-intrusive",
         action="store_true",
-        help="also send marked write requests (POST, PUT, PATCH); needs allow_state_change: true "
-        "in the scope. Default: GET, HEAD and OPTIONS only",
+        help="also send marked write requests (POST, PUT, PATCH), unless the scope file says "
+        "allow_state_change: false. Default: GET, HEAD and OPTIONS only",
     )
     mode.add_argument(
         "--read-only",
         action="store_true",
-        help="no write requests, even with --allow-intrusive and a scope that allows them",
+        help="no write requests, even with --allow-intrusive",
     )
     mode.add_argument(
         "--non-interactive",

@@ -170,3 +170,78 @@ def test_listener_is_prepared_only_for_ssrf_findings():
     listener, note = _callback_listener({"callback": {"host": "0.0.0.0", "port": 1, "base_url": "https://x"}},
                                         [_plan("ssrf")])
     assert listener is None and "SSRF findings cannot be confirmed" in note
+
+
+# ── automatic listener for a local target (VER-012) ───────────────────────────
+
+def test_a_local_target_without_a_callback_gets_one_on_a_free_loopback_port():
+    from appsec_verifier.cli import _auto_callback
+
+    for target, bind, shown in (("http://localhost:3000", "127.0.0.1", "127.0.0.1"),
+                                ("http://127.0.0.1:3000/app", "127.0.0.1", "127.0.0.1"),
+                                ("http://[::1]:3000", "::1", "[::1]")):
+        scope = {"base_url": target}
+        assert _auto_callback(scope, target, [_plan("ssrf")]) is True
+        cb = scope["callback"]
+        assert cb["host"] == bind and cb["expect_rejected"] is True
+        assert cb["base_url"] == f"http://{shown}:{cb['port']}" and 0 < cb["port"] < 65536
+        assert CallbackListener(cb).base_url == cb["base_url"]
+        wide = dict(scope, hosts=["localhost", "127.0.0.1", "::1"], ports=[3000, cb["port"]], schemes=["http"])
+        assert not ScopeGuard(wide).authorize(cb["base_url"] + "/vrf", "target").allowed    # never a target
+
+
+@pytest.mark.parametrize("target, cls, scope", [
+    ("https://app.example.com", "ssrf", {}),                                  # not loopback
+    ("http://10.0.0.5:3000", "ssrf", {}),
+    ("http://localhost:3000", "xss", {}),                                     # no SSRF finding selected
+    ("http://localhost:3000", "ssrf", {"callback": SCOPE["callback"]}),       # the scope declares one
+])
+def test_no_automatic_callback_otherwise(target, cls, scope):
+    from appsec_verifier.cli import _auto_callback
+
+    before = dict(scope)
+    assert _auto_callback(scope, target, [_plan(cls)]) is False and scope == before
+
+
+def test_verify_confirms_ssrf_through_the_automatic_listener_without_a_scope_file(tmp_path, monkeypatch, capsys):
+    """--url on localhost, no callback declared: the run listens on a free loopback port, says so, and a hit
+    confirms the finding because the target fetched an internal address."""
+    from urllib.parse import urlsplit
+
+    import yaml
+
+    from appsec_verifier import cli
+    from appsec_verifier.tools import httpx_transport
+
+    (tmp_path / "assessment.yaml").write_text(yaml.safe_dump({"threats": [
+        {"id": "T-9", "cwe": "CWE-918", "severity": "high", "title": "ssrf", "scenario": "GET /fetch",
+         "evidence": {"file": "routes/fetch.ts", "line": 1}}]}))
+
+    class Planner:
+        def next_step(self, ctx, history):
+            if not history:
+                return {"tool": "http_request",
+                        "args": {"path": "/fetch", "params": {"url": ctx.listener.url_for("".join(ctx.marker))}}}
+            return {"verdict": {"verdict": "confirmed", "rationale": "the listener was called"}}
+
+    class Resp:
+        status_code, text, headers = 200, "fetched", {}
+
+    def vulnerable_target(method, url, headers, params=None, **kwargs):
+        if params is None:
+            return Resp()
+        u = urlsplit(params["url"])
+        conn = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+        conn.request("GET", u.path)
+        conn.getresponse().read()
+        conn.close()
+        return Resp()
+
+    info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none"}
+    monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, info))
+    monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: vulnerable_target)
+    rc = cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--url", "http://localhost:3000",
+                   "--output", str(tmp_path / "out"), "--yes", "--rate", "0"])
+    result = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())["results"][0]
+    assert rc == 0 and result["verdict"] == "confirmed", result["rationale"]
+    assert "automatic for a local target" in capsys.readouterr().out

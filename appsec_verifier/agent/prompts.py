@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 
+from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
 from ..verification_context import missing_capabilities
 from .experiments import PLAN_SCHEMA
 from .proof import redirect_host
@@ -123,6 +124,12 @@ def _tool_defs() -> list[dict]:
             },
         },
         {
+            "name": FIELDS_ACTION,
+            "description": "Only when asked before the run: the JSON field names of a login endpoint for the "
+            "user name and the password (VER-041). Never part of a finding.",
+            "input_schema": FIELDS_SCHEMA,
+        },
+        {
             "name": "submit_verdict",
             "description": "Submit the final verdict for this finding and end the probe. List in proof_steps "
             "the numbers of the steps the verdict rests on, for every verdict; the report shows "
@@ -161,6 +168,10 @@ def _tool_defs() -> list[dict]:
 
 def _system(ctx) -> str:
     roles = ", ".join(i.get("role") for i in (ctx.identities or []) if i.get("role")) or "none configured"
+    privileged = [i["role"] for i in (ctx.identities or []) if i.get("role") and i.get("privileged")]
+    if privileged:
+        roles += (f". Privileged roles, read-only and the reference for privileged functions: "
+                  f"{', '.join(privileged)}")
     mode = (
         "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing)"
         if ctx.safe

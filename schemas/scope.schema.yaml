@@ -12,8 +12,8 @@ description: |
   the scope on anything the target or a model says during a run (VER-004).
 
   SAFETY: a missing, schema-invalid, or expired scope blocks the run (exit 2),
-  it does not weaken to a default (VER-025). State-changing probes are allowed
-  only when `allow_state_change` is true (VER-014).
+  it does not weaken to a default (VER-025). State-changing probes need
+  `--allow-intrusive`; `allow_state_change: false` forbids them (VER-014, VER-030).
 
 type: object
 required: [schema_version, base_url, owner, window]
@@ -124,12 +124,12 @@ properties:
   allow_state_change:
     type: boolean
     description: |
-      Whether state-changing (write) probes are permitted (VER-014). When false,
-      the Verifier is read-only and stored-write findings are reported as
-      not-attempted with that reason. `--read-only` can force this off per run
-      but never on. Even when true, deletes, bulk/destructive operations, DoS,
-      and detection evasion are never performed.
-    default: false
+      Whether state-changing (write) probes may be sent (VER-014, VER-030). Write
+      probes need `--allow-intrusive`; false forbids them, and a run with
+      `--allow-intrusive` then stops before anything is contacted. Absent or
+      true leaves the choice to `--allow-intrusive`. `--read-only` can force
+      writes off per run. Deletes, bulk/destructive operations, DoS, and
+      detection evasion are never performed.
 
   callback:
     type: object

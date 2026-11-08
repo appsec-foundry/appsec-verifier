@@ -9,7 +9,8 @@ An identity's credentials go only to the origin it is bound to (its
 `target_origin`, by default the target base URL), never to another host in the
 scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode; DELETE and every other method are
-never sent (VER-014). A failing identity or transport ends the call as a tool
+never sent (VER-014). A privileged account (--admin-account) only reads, in any
+mode (VER-041). A failing identity or transport ends the call as a tool
 error for the agent, never as an exception past the loop. A response body is
 redacted of every credential value before it is cut to the excerpt (VER-016).
 The agent's path is appended to the target base URL as written, without
@@ -418,7 +419,7 @@ class AgentTools:
                 marker=self.ctx.marker,
                 finding_id=self.ctx.plan.id,
                 wait_ms=wait_ms,
-                safe=self.ctx.safe or self.ctx.read_only,
+                safe=self.ctx.safe or self.ctx.read_only or bool(role and self._privileged(role)),
                 role=role,
             )
         except BrowserError as exc:
@@ -440,6 +441,10 @@ class AgentTools:
         if scheme in ("http", "https"):
             return path
         return self.ctx.target_base.rstrip("/") + "/" + path.lstrip("/")
+
+    def _privileged(self, role: str) -> bool:
+        """Whether `role` is a privileged account, which only reads (VER-041)."""
+        return any(i.get("role") == role and i.get("privileged") for i in (self.ctx.identities or []))
 
     def _bound_origin(self, role: str) -> str:
         """The origin `role`'s credentials may be sent to (VER-018, VER-028)."""
@@ -503,6 +508,8 @@ class AgentTools:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
         if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only):
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive")
+        if m not in SAFE_METHODS and role and self._privileged(role):
+            raise ToolError(f"{role} is a privileged account and only reads (VER-041); write as a normal account")
         if self.ctx.http is None or not self.ctx.target_base:
             raise ToolError("no HTTP transport is wired for this run")
         if json is not None and form is not None:

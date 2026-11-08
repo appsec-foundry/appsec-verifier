@@ -15,10 +15,11 @@ VER-002, where Enter proceeds.
 
 A scope file given or found next to the assessment or in the working directory
 is used as it is. Without one the run takes the target URL the operator types,
-and the scope is that URL's host and port, read-only, for this run only
-(VER-001, VER-004).
+and the scope is that URL's host and port, for this run only (VER-001,
+VER-004).
 
-Identities (VER-016, VER-028, VER-031, VER-040): a credential variable the
+Identities (VER-016, VER-028, VER-031, VER-040, VER-041): with --account or
+--admin-account no identities file is asked for. Otherwise a credential variable the
 identities file names but the environment lacks is asked for hidden. A file the
 run found, rather than one given with --identities, that starts login programs
 needs its own explicit yes, because a file next to a foreign assessment could
@@ -293,7 +294,7 @@ def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
             return None
         return scope, ScopeGuard(scope)
     d.out("No scope.yaml next to the assessment or in the working directory: the run tests only the host "
-          "and port of the URL you enter, read-only (VER-001).")
+          "and port of the URL you enter (VER-001).")
     while True:
         url = d.question("Target URL you are authorised to test")
         scope, errors = cli.url_scope(url)
@@ -315,6 +316,8 @@ def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Pat
     def check(path):
         return cli._check_identities(path, guard, env, interactive=True, secrets=secrets, ask_secret=d.secret)
 
+    if getattr(args, "account", None) or getattr(args, "admin_account", None):
+        return secrets, None             # accounts on the command line; verify asks their passwords (VER-041)
     if args.identities:
         identities, errors = check(args.identities)
         if errors:
@@ -422,7 +425,7 @@ def _ask_output(d: Dialog, args) -> bool:
 # ── equivalent invocation ────────────────────────────────────────────────────
 
 _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--identities"),
-                  ("source", "--source"), ("output", "--output"),
+                  ("login_url", "--login-url"), ("source", "--source"), ("output", "--output"),
                   ("category", "--category"), ("cls", "--class"), ("severity", "--severity"),
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
                   *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
@@ -440,6 +443,9 @@ def equivalent_invocation(args) -> str:
     for attr, flag in _VALUE_OPTIONS:
         value = getattr(args, attr, None)
         if value is not None:
+            parts += [flag, str(value)]
+    for attr, flag in (("account", "--account"), ("admin_account", "--admin-account")):
+        for value in getattr(args, attr, None) or []:
             parts += [flag, str(value)]
     parts += [flag for attr, flag in _FLAGS if getattr(args, attr, False)]
     parts += ["--non-interactive", "--yes"]

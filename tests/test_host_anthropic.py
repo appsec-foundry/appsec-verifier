@@ -94,6 +94,7 @@ def test_tool_defs_expose_only_the_confined_tools():
         "read_response",
         "plan_test",
         "run_experiment",
+        "login_fields",          # asked once before the run (VER-041), never offered during a finding
     }
     verdict = next(t for t in _tool_defs() if t["name"] == "submit_verdict")
     assert "confirmed" in verdict["input_schema"]["properties"]["verdict"]["enum"]

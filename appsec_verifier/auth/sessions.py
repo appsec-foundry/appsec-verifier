@@ -201,6 +201,32 @@ class SessionManager:
         self._keep(role, session)
         return dict(session.headers)
 
+    def sign_in_with_fields(self, role: str, candidates: list[tuple[str, str]]) -> tuple[str, str]:
+        """VER-041: log the `form` identity `role` in with the first (username_field, password_field) pair whose
+        login returns a token, at most two attempts. The pair that worked is kept on the identity for renewals.
+        When none does, the role is refused for the rest of the run, like any rejected login (VER-028)."""
+        ident = self._by_role.get(role)
+        if ident is None or ident.get("method") != "form":
+            raise AuthError(f"unknown form identity {role!r}")
+        if role in self._refused:
+            raise AuthError(f"{self._refused[role]}; not tried again in this run")
+        auth, tried = ident.setdefault("auth", {}), []
+        for username_field, password_field in candidates[:2]:
+            attempt = dict(auth, username_field=username_field, password_field=password_field)
+            tried.append(f"{username_field}/{password_field}")
+            try:
+                session = self._form_login(attempt)
+            except AuthError:
+                continue
+            except Exception as exc:      # not a refused login: stop, and never fall back to default fields
+                self._refused[role] = f"form login failed ({type(exc).__name__})"
+                raise
+            auth.update(username_field=username_field, password_field=password_field)
+            self._keep(role, session)
+            return username_field, password_field
+        self._refused[role] = f"form login returned no token with the fields {', '.join(tried)}"
+        raise AuthError(self._refused[role])
+
     def end_interactive(self) -> None:
         """No more logins that need a person: the run is about to test findings (VER-028)."""
         self._ui = None

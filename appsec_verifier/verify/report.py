@@ -177,7 +177,7 @@ def to_markdown(doc: dict) -> str:
         f"- **Assessment:** {meta.get('source_assessment')}",
         f"- **Target:** {tgt.get('base_url')} ({tgt.get('environment')}) · build {tgt.get('build_match')}",
         f"- **Scope owner:** {meta.get('scope', {}).get('owner')}" if meta.get("scope", {}).get("file")
-        else "- **Scope:** no scope file; only the target's host and port, read-only",
+        else "- **Scope:** no scope file; only the target's host and port",
         f"- **Authorisation:** confirmed={meta.get('authorization', {}).get('confirmed')} "
         f"({meta.get('authorization', {}).get('mode')})",
         f"- **Mode:** {meta.get('safety', {}).get('mode')} · "
