@@ -49,6 +49,7 @@ import os
 import re
 import tempfile
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, unquote_plus, urlencode, urlsplit, urlunsplit
@@ -378,7 +379,7 @@ def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
         if not step["decisive"] or e is None or "html" not in e["response"]["content"]["mimeType"].lower():
             continue
         text = _text(e)
-        if not text:
+        if not text or not 200 <= e["response"]["status"] < 300:
             continue
         values = _values(highlight, text)
         caption = [f"AppSec Verifier · {ctx.plan.id} · access control · step {step['step']}",
@@ -532,6 +533,9 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
             if e["response"]["status"] != o["response"]["status"]:
                 res_lines.append(("status differs", "HTTP/1.1 "))
     elif cls == "access-control":
+        own_marker = "".join(marker)
+        if own_marker and own_marker in _text(e):
+            res_marks.append(("test marker", own_marker))
         res_marks += [("named in the verdict", value) for value in _values(highlight, _text(e))]
     elif cls == "session":
         res_lines += _session_cookie_line(ctx, history, res)
@@ -563,19 +567,122 @@ def _session_cookie_line(ctx, history: list[dict], res: dict) -> list[tuple[str,
     return [(label, f"set-cookie: {name}=")]
 
 
-_EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+class _VisibleText(HTMLParser):
+    """Extract a bounded text excerpt; never execute recorded markup."""
+
+    def __init__(self):
+        super().__init__()
+        self.hidden = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.hidden += 1
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self.hidden = max(0, self.hidden - 1)
+
+    def handle_data(self, data):
+        if not self.hidden and data.strip():
+            self.parts.append(data.strip())
+
+
+def _image_excerpt(text: str, needles=(), *, limit=700) -> str:
+    """An explicitly shortened window around the first located evidence value."""
+    values = [v[2] if isinstance(v, tuple) else v for _, v in needles]
+    focus = next((text.index(v) for v in values if v and v in text), 0)
+    start = max(0, focus - 100) if len(text) > limit else 0
+    excerpt = text[start:start + limit]
+    lines = excerpt.splitlines()
+    if len(lines) > 12:
+        # Keep the located evidence within the visible lines, including late JSON fields.
+        index = excerpt[:max(0, focus - start)].count("\n")
+        offset = max(0, index - 3)
+        lines = lines[offset:offset + 12]
+        excerpt = ("[…]\n" if offset else "") + "\n".join(lines) + "\n[…]"
+    return ("[…]" if start else "") + excerpt + (
+        "\n[…] excerpt; full record in HAR" if start + limit < len(text) else "")
+
+
+def _image_request(e, marks):
+    req = e["request"]
+    lines = [f"{req['method']} {_target(req['url'])} HTTP/1.1"]
+    lines += [f"{h['name']}: {h['value']}" for h in req["headers"]
+              if h["name"].lower() in ("authorization", "content-type")]
+    body = (req.get("postData") or {}).get("text") or ""
+    return _image_excerpt("\n".join(lines), marks, limit=450) + "\n\n" + _image_excerpt(body, marks, limit=350)
+
+
+def _json_fields(value, marks):
+    """Bounded scalar projection with explicit paths, prioritising marked data and ownership fields."""
+    fields = []
+    needles = [v for _, v in marks if isinstance(v, str)]
+
+    def visit(item, path="", depth=0):
+        if len(fields) >= 128 or depth > 8:
+            return
+        if isinstance(item, dict):
+            for key, child in list(item.items())[:32]:
+                escaped = str(key).replace("~", "~0").replace("/", "~1")
+                visit(child, path + "/" + escaped, depth + 1)
+        elif isinstance(item, list):
+            for index, child in enumerate(item[:8]):
+                visit(child, path + "/" + str(index), depth + 1)
+        else:
+            rendered = json.dumps(item, ensure_ascii=False)
+            priority = (0 if any(v in rendered for v in needles) else
+                        1 if path.rsplit("/", 1)[-1].lower() in ("id", "userid", "ownerid", "role") else 2)
+            fields.append((priority, path or "/", rendered))
+
+    visit(value)
+    chosen = sorted(fields, key=lambda row: row[0])[:7]
+    return "Selected JSON fields (other content in HAR):\n" + "\n".join(
+        f"{path}: {_image_excerpt(value, marks, limit=180)}" for _, path, value in chosen)
+
+
+def _image_response(ctx, e, marks, marked_lines):
+    res = e["response"]
+    lines = [f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()]
+    keep = {"location", "www-authenticate", "set-cookie"}
+    lines += [f"{h['name']}: {h['value']}" for h in res["headers"]
+              if h["name"].lower() in keep or any(h["name"].lower() + ":" == prefix.lower()
+                                                for _, prefix in marked_lines)]
+    text = _text(e)
+    mime = res["content"].get("mimeType", "").lower()
+    if "html" in mime:
+        if getattr(ctx.plan, "cls", None) == "xss":
+            text = "Application HTML omitted here. The browser execution observation above decides the XSS test."
+        else:
+            parser = _VisibleText()
+            parser.feed(text[:MAX_BODY_CHARS])
+            text = "Visible text excerpt: " + " ".join(parser.parts)
+    else:
+        try:
+            if getattr(ctx.plan, "cls", None) == "access-control":
+                text = _json_fields(json.loads(text), marks)
+            elif getattr(ctx.plan, "cls", None) != "injection":
+                text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+        except (ValueError, RecursionError):
+            pass
+    if res["content"].get("_omitted"):
+        text = "[Body omitted from the record]"
+    return _image_excerpt("\n".join(lines), limit=450) + "\n\n" + _image_excerpt(text, marks)
+
+
+_EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 ui-monospace,Menlo,Consolas,monospace}
 header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #b00020;white-space:pre-wrap}
-header b{font-size:15px}section{margin:14px;border:1px solid #ccc}
-h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:13px;border-bottom:1px solid #ccc}
+header b{font-size:20px}section{margin:14px;border:1px solid #ccc}
+h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:16px;border-bottom:1px solid #ccc}
 .facts{padding:4px 10px;border-bottom:1px solid #ccc}.cols{display:flex}.cols>div{flex:1;min-width:0}
-.cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:12px;color:#555}
-pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;word-break:break-all}
+.cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:15px;color:#555}
+pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
 mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}.hit{display:inline-block;max-width:100%}
-.tag{background:#b00020;color:#fff;font:bold 11px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}"""
+.tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}"""
 
 
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                      highlight=None, *, cited: bool = True) -> tuple[str, int]:
+                      highlight=None, *, cited: bool = True, comparison=None) -> tuple[str, int]:
     """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): request and
     response side by side per step, what the verdict rests on marked. Without `cited` they are the answered
     requests after the last test plan of a verdict that cites no step, and the header says so. Returns the page
@@ -589,11 +696,21 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
             + ("Marked: what the verdict rests on, as the code locates it." if cited else
                "The verdict cites no step: the answered requests after the last test plan. Marked: what the code "
                "locates in them; it proves nothing."))
+    interpretation = {
+        "confirmed": "The proof checker accepted the cited evidence.",
+        "inconclusive": "Not established: the observations do not complete the required proof.",
+        "blocked-by-control": "The tested operation was refused with matched control evidence.",
+        "not-reproducible": "Not reproduced in the cited attempts; this does not prove absence.",
+    }.get(verdict, "No completed proof.")
+    overview = " | ".join(f"step {n}: {e.get('_role') or 'anonymous'} → {e['response']['status']}"
+                          for n, e in (comparison or shown)[:12])
+    head += "\n" + html.escape(interpretation) + "\nComparison: " + html.escape(overview)
+    head += "\nSelected excerpts; routine headers and unrelated body content omitted. Full record in HAR."
     parts, total = [f"<header>{head}</header>"], 0
     for n, e in shown[:6]:
-        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, shown, highlight)
-        req_html, a = _marked(_raw_request(e), req_marks)
-        res_html, b = _marked(_raw_response(e, _focus(ctx, [o for _, o in shown], e), har_path), res_marks, res_lines)
+        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, comparison or shown, highlight)
+        req_html, a = _marked(_image_request(e, req_marks), req_marks)
+        res_html, b = _marked(_image_response(ctx, e, res_marks, res_lines), res_marks, res_lines)
         fact_html = " · ".join(f"<b>{html.escape(t)}</b>" if decides else html.escape(t) for t, decides in facts)
         total += a + b
         who = html.escape(e.get("_role") or "anonymous")
@@ -622,11 +739,19 @@ def _tried(history: list[dict], steps: list[dict]) -> list[tuple[int, dict]]:
 
 def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
                          highlight, *, cited: bool = True) -> list[dict]:
-    page, marked = exchange_document(ctx, history, shown, verdict, har_path, highlight, cited=cited)
-    try:
-        return ctx.browser.render_exchanges(html=page, finding_id=evidence_id(ctx.plan), marked=marked)
-    except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
-        return []
+    shots = []
+    # Two exchanges per panel preserve the comparison without a long full-page image.
+    for start in range(0, min(len(shown), 6), 2):
+        page, marked = exchange_document(ctx, history, shown[start:start + 2], verdict, har_path,
+                                         highlight, cited=cited, comparison=shown)
+        visible = _VisibleText()
+        visible.feed(page)
+        ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
+        try:
+            shots += ctx.browser.render_exchanges(html=page, finding_id=evidence_id(ctx.plan), marked=marked)
+        except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
+            break
+    return shots
 
 
 def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):

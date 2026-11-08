@@ -93,6 +93,8 @@ class AgentProbe:
 
     def run(self, ctx: ProbeContext) -> ProbeResult:
         planner = self._planner_factory()
+        ctx.evidence_test_planner = planner
+        ctx.evidence_reviewer_factory = self._planner_factory
         tools = AgentTools(ctx)
         controller = Controller(ctx)
         history: list[dict] = []

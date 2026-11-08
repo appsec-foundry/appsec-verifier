@@ -106,10 +106,12 @@ class CodexCliHost:
             "-",
         ]
 
-    def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-codex-") as cwd:
             schema_path, instructions_path = Path(cwd) / "schema.json", Path(cwd) / "instructions.txt"
-            for path, text in ((schema_path, json.dumps(STEP_SCHEMA)), (instructions_path, system)):
+            files = ((schema_path, json.dumps(schema if schema is not None else STEP_SCHEMA)),
+                     (instructions_path, system))
+            for path, text in files:
                 path.write_text(text, encoding="utf-8")
                 path.chmod(0o600)
             result = call_process(self, self.command(schema_path, instructions_path),

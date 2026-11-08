@@ -197,7 +197,8 @@ properties:
               type: string
               enum:
                 - dynamic            # verifiable against a running system
-                - static-only        # out of scope for dynamic verification
+                - static-only        # legacy reports
+                - unsupported        # no supported proof method
                 - input-incomplete   # assessment lacked evidence file/line/route
             reason: { type: [string, "null"] }
 
@@ -352,9 +353,114 @@ properties:
                   response:   { type: string }
                   elapsed_ms: { type: [integer, "null"], description: How long the answer took. }
 
+        evidence_review:
+          anyOf:
+            - type: "null"
+            - $ref: "#/$defs/evidence_review"
+
         timing:
           type: object
           additionalProperties: true
           properties:
             started:  { type: [string, "null"] }
             finished: { type: [string, "null"] }
+
+$defs:
+  evidence_review:
+    type: object
+    additionalProperties: false
+    required:
+    - status
+    - rounds
+    - reviews
+    - visual_review
+    - reason
+    - issues
+    - presentations
+    - variants
+    properties:
+      status:
+        enum:
+        - clear
+        - needs-attention
+        - stopped
+        - not-reviewed
+      rounds:
+        type: integer
+        minimum: 0
+        maximum: 2
+      reviews:
+        type: integer
+        minimum: 0
+        maximum: 3
+      visual_review:
+        const: not-performed
+      reason:
+        type: string
+      issues:
+        type: array
+        items:
+          type: object
+          properties:
+            variant:
+              type: string
+              maxLength: 200
+            code:
+              type: string
+              enum:
+              - context
+              - comparison
+              - excerpt
+              - readability
+              - missing-evidence
+            detail: &id001
+              type: string
+              minLength: 1
+              maxLength: 600
+          required:
+          - variant
+          - code
+          - detail
+          additionalProperties: false
+      variants:
+        type: array
+        items:
+          type: string
+      presentations:
+        type: array
+        maxItems: 2
+        items:
+          type: object
+          additionalProperties: false
+          required:
+          - variant
+          - explanation
+          - quotes
+          properties:
+            variant:
+              type: string
+            explanation: *id001
+            quotes:
+              type: array
+              minItems: 1
+              maxItems: 3
+              items:
+                type: object
+                properties:
+                  step:
+                    type: integer
+                    minimum: 1
+                  part:
+                    type: string
+                    enum:
+                    - request
+                    - response
+                  text:
+                    type: string
+                    minLength: 1
+                    maxLength: 240
+                required:
+                - step
+                - part
+                - text
+                additionalProperties: false

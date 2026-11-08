@@ -76,7 +76,9 @@ def test_verify_writes_the_log_with_the_refused_request(tmp_path, monkeypatch):
     cli.main(["verify", "--assessment", str(tmp_path / "assessment.yaml"), "--scope", str(tmp_path / "scope.yaml"),
               "--output", str(tmp_path / "out"), "--yes", "--test-all"])
     path = tmp_path / "out" / "agent-log.jsonl"
-    first, last = _lines(path)
+    first, last, review = _lines(path)
+    assert review["finding"] == "T-1" and review["evidence_review"] == "quality"
+    assert review["detail"].startswith("not-reviewed:")
     assert first["finding"] == "T-1" and first["tool"] == "http_request"
     assert first["args"] == {"path": "/rest/%2e%2e/admin"} and "out of scope" in first["result"]["error"]
     assert last["verdict"] == "inconclusive" and last["step"] == 2

@@ -428,8 +428,9 @@ def test_a_finding_a_limit_stopped_gets_the_image_of_its_requests(tmp_path):
     browser = RenderBrowser()
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(500, "{}"), cls="injection", browser=browser)
     result, _ = _run(ctx, [_get(None, "/search", q=str(n)) for n in range(5)])   # three server errors stop it
-    assert result.limits_hit == "stagnation" and len(browser.exchanges) == 1
-    assert "cites no step" in browser.exchanges[0]["html"]
+    assert result.limits_hit == "stagnation" and len(browser.exchanges) == 2
+    assert all("cites no step" in panel["html"] for panel in browser.exchanges)
+    assert sum(panel["html"].count("<section>") for panel in browser.exchanges) == 3
 
 
 def test_the_uncited_image_shows_only_answered_requests_after_the_last_plan():
@@ -637,3 +638,23 @@ def test_interrupted_har_write_does_not_replace_previous_evidence(tmp_path, monk
         poc._write_har(ctx, [])
     assert path.read_text() == "previous complete record"
     assert list(ctx.evidence_dir.iterdir()) == [path]
+
+
+def test_compact_images_keep_late_markers_and_escape_untrusted_text():
+    marker = 'verifier-late-marker'
+    text = 'x' * 5000 + marker + '<script>alert(1)</script>'
+    excerpt = poc._image_excerpt(text, [('marker', marker)])
+    assert marker in excerpt and len(excerpt) < 800 and '[…]' in excerpt
+    rendered, count = poc._marked(excerpt, [('marker', marker)])
+    assert count == 1 and '<script>' not in rendered and '&lt;script&gt;' in rendered
+
+
+def test_compact_error_response_omits_css_and_preserves_original_record():
+    e = poc.entry(_raw(status=401, response_headers=[('Content-Type', 'text/html')],
+                       content=b'<style>body{height:99999px}</style><h1>Unauthorized</h1><script>evil()</script>'))
+    before = copy.deepcopy(e)
+    ctx = SimpleNamespace(plan=SimpleNamespace(cls='access-control'))
+    text = poc._image_response(ctx, e, [], [])
+    assert '401' in text and 'Unauthorized' in text
+    assert 'height:99999px' not in text and 'evil()' not in text
+    assert e == before

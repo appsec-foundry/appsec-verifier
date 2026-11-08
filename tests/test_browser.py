@@ -489,3 +489,21 @@ def test_the_install_command_fits_the_installation(tmp_path):
         f"{python} -m pip install --require-hashes -r {checkout / 'requirements.lock'}")
     (prefix / "pipx_metadata.json").write_text("{}")
     assert _playwright_install_command(str(prefix), checkout).startswith("pipx inject appsec-verifier playwright==")
+
+
+@pytest.mark.parametrize('clip, accepted', [
+    ({'x': 0, 'y': 20, 'width': 1200, 'height': 180}, True),
+    ({'x': 0, 'y': 0, 'width': 999999999, 'height': 180}, False),
+    ({'x': 0, 'y': -1, 'width': 1200, 'height': 180}, False),
+    ({'x': 0, 'y': 0, 'width': 1200, 'height': float('inf')}, False),
+    ({'x': 0, 'y': 0, 'width': '1200', 'height': 180}, False),
+])
+def test_screenshot_crop_is_bounded_even_if_the_page_alters_the_result(clip, accepted, tmp_path):
+    import json
+
+    class Page:
+        def wait_for_function(self, *args, **kwargs):
+            return SimpleNamespace(json_value=lambda: json.dumps({'marks': 1, 'hidden': [], 'clip': clip}))
+
+    result = ProofBrowser(None, tmp_path)._mark(Page(), ['caption'])
+    assert result['clip'] == (clip if accepted else None)

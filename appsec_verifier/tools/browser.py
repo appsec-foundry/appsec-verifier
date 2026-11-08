@@ -350,7 +350,22 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label, tag}) => {
     box.textContent += '\\nhidden for the screenshot because it covered the mark: ' + hidden.join(', ');
     fit();
   }
-  return JSON.stringify({marks: marks.length, hidden});
+  let clip = null;
+  if (target) {
+    const r = target.getBoundingClientRect();
+    const height = box.getBoundingClientRect().height;
+    if (r.width > 0 && r.height > 0 && r.height < 300 && height < 300) {
+      const top = Math.max(0, r.top - 32);
+      const captionTop = Math.min(innerHeight - height, r.bottom + 24);
+      if (captionTop >= r.bottom) {
+        box.style.setProperty('bottom', 'auto');
+        box.style.setProperty('top', captionTop + 'px');
+        clip = {x: 0, y: top + scrollY, width: innerWidth,
+                height: Math.min(innerHeight - top, captionTop + height - top)};
+      }
+    }
+  }
+  return JSON.stringify({marks: marks.length, hidden, clip});
 }"""
 
 
@@ -553,7 +568,13 @@ class ProofBrowser:
                                                "color": _HIGHLIGHT, "label": label, "tag": tag},
                                           timeout=EVIDENCE_TIMEOUT_MS)
             out = json.loads(done.json_value())
-            return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5]}
+            clip = out.get("clip")
+            if not (isinstance(clip, dict) and set(clip) == {"x", "y", "width", "height"}
+                    and all(type(v) in (int, float) and 0 <= v <= 100000 for v in clip.values())
+                    and 0 < clip["width"] <= 1280 and 0 < clip["height"] <= 720):
+                clip = None
+            return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5],
+                    "clip": clip}
         except Exception:  # noqa: BLE001 - the screenshot is still taken, unmarked
             return None
 
@@ -589,7 +610,8 @@ class ProofBrowser:
                 data["hidden_for_screenshot"] = marked["hidden"]
             shot = self._dir / f"{stem}.png"
             try:
-                page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
+                page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS,
+                                **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
             except PlaywrightError:      # a page that does not answer: the event record still proves execution
                 shot = None
         record.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -615,7 +637,8 @@ class ProofBrowser:
             else:
                 route.abort("blockedbyclient")
 
-        context = browser.new_context(service_workers="block", accept_downloads=False, java_script_enabled=False)
+        context = browser.new_context(service_workers="block", accept_downloads=False, java_script_enabled=False,
+                                      viewport={"width": 1200, "height": 720}, device_scale_factor=1)
         try:
             context.route_web_socket(re.compile(".*"), _leave_unconnected)
             context.route("**/*", on_route)
@@ -629,7 +652,8 @@ class ProofBrowser:
                 page.set_viewport_size({"width": page.viewport_size["width"], "height": 1})
             self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             shot = self._dir / f"{self._stem(finding_id, kind)}.png"
-            page.screenshot(path=str(shot), full_page=full_page)
+            page.screenshot(path=str(shot), full_page=full_page,
+                            **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
             return shot, marked
         finally:
             _quietly(context.close)

@@ -12,6 +12,7 @@ import os
 import signal
 import socket
 import stat
+import struct
 import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, urlparse
@@ -212,6 +213,8 @@ def test_screenshot_marks_the_payload_and_names_the_proof(browser):
     kinds = {e["kind"]: e for e in result["evidence"]}
     event = json.loads((tmp / kinds["browser-event"]["path"]).read_text())
     assert event["marked_elements"] == 1
+    width, height = struct.unpack(">II", (tmp / kinds["screenshot"]["path"]).read_bytes()[16:24])
+    assert width <= 1280 and 0 < height < 720  # payload and caption, not a full viewport
     pages = [x for x in result["_exchanges"] if x["navigation"]]
     assert len(pages) == 1 and pages[0]["status"] == 200 and b"Results for" in pages[0]["content"]
 
@@ -279,3 +282,18 @@ def test_render_exchanges_draws_the_recorded_exchanges_without_contacting_the_ta
     assert path.name == "T-3-exchange-1.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert int.from_bytes(path.read_bytes()[20:24], "big") < 720       # as tall as the content, not the window
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_evidence_revision_panel_is_compact_and_sends_no_requests(browser):
+    from appsec_verifier.verify.evidence_review import presentation_document
+
+    b, target, tmp = browser
+    revision = {"explanation": "The second account received the same test marker as the owner. "
+                "The original proof remains in the HAR. <img src=/must-not-load>",
+                "quotes": [{"step": 2, "part": "response", "text": 'HTTP/1.1 200 OK\n{"marker":"vrf-demo"}'},
+                           {"step": 3, "part": "response", "text": 'HTTP/1.1 200 OK\n{"marker":"vrf-demo"}'}]}
+    page = presentation_document("T-2", "confirmed", revision)
+    [shot] = b.render_exchanges(html=page, finding_id="T-2-review", marked=0)
+    assert target.seen == []
+    width, height = struct.unpack(">II", (tmp / shot["path"]).read_bytes()[16:24])
+    assert width <= 1280 and 0 < height <= 1200

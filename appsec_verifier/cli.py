@@ -756,6 +756,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         ("Identities", None if login else _identities_note(identities, sel)),  # Accounts names the roles
         ("Login programs", _login_programs(identities)),
         ("Browser", browser_note),
+        ("Evidence", "text review per finding; at most 2 corrections / 5 extra model calls within run limits; "
+                     "no image-pixel review"),
         ("Callback", listener_note),
         ("Marker file", _marker_note(scope, sel)),
     )
@@ -1134,8 +1136,10 @@ def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | 
 
 
 def _assessment_check(doc: dict, plans) -> Check:
-    counts = {s: sum(p.status == s for p in plans) for s in ("dynamic", "static-only", "input-incomplete")}
-    text = (f"{len(plans)} findings: {counts['dynamic']} dynamic, {counts['static-only']} static-only, "
+    counts = {s: sum(p.status == s for p in plans) for s in
+              ("dynamic", "static-only", "unsupported", "input-incomplete")}
+    text = (f"{len(plans)} findings: {counts['dynamic']} dynamic, {counts['unsupported']} unsupported, "
+            f"{counts['static-only']} legacy static-only, "
             f"{counts['input-incomplete']} input-incomplete")
     summary = _assessment_summary(doc)
     text = f"{summary} · {text}" if summary else text
@@ -1346,7 +1350,7 @@ _NEEDS = {
                   "injection_inputs: [{finding_id: ID, path: /route, input_location: params, input_name: NAME, "
                   "semantics: literal}]",
                   "(docs/cli.md, Scope file)"]),
-    "repeat": ("repeatable request", "a GET request with the same input as a query parameter, in injection_inputs",
+    "repeat": ("unsupported write-injection proof", "this proof method cannot repeat write requests",
                ["the injection proof sends every control twice and never repeats a write, and every request these "
                 "findings name writes; if a GET request of the application carries the same input as a query "
                 "parameter, declare that one in a scope file (--scope):",
@@ -1362,7 +1366,7 @@ _NEEDS = {
                 "test_resources: [{id: NAME, finding_id: ID, path: /route, method: GET, allowed_roles: [ROLE], "
                 "denied_roles: [ROLE], pointer: /field, value: VALUE}]",
                 "(docs/cli.md, Scope file)"]),
-    "route": ("route", "--source, or a scope entry for the finding that names its request",
+    "route": ("request information", "--source, or a scope entry for the finding that names its request",
               ["the assessment names no request for the finding: pass the application's source with --source when "
                "the file of the finding declares its route, or name the request in a scope entry for the finding "
                "(injection_inputs, test_resources)"]),
@@ -1426,6 +1430,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
             *((e.method, e.path) for e in plan.endpoints),
             *((r.get("method", "GET"), r["path"]) for key in ("injection_inputs", "session_checks")
               for r in scope.get(key, []) if r["finding_id"] == plan.id)]
+        named += [(e.method, e.path) for e in getattr(plan, "preparation", ())]
         writes = [p for m, p in named if m in ("POST", "PUT", "PATCH", "ALL")]
         reads = any(m in ("GET", "PAGE", "ALL") for m, _ in named)
         creates = any(record_segment(p) is None for p in writes)
@@ -1505,6 +1510,8 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
             f"  {printable(p.id):<{width}}  {st(f'{printable(p.severity).lower():<8}', 'muted')}  "
             f"{printable(p.cls or ''):<14}  {what}"
         )
+        for request in getattr(p, "preparation", ()):
+            lines.append(f"    Preparation: {printable(str(request))} · owner creates a marked test resource")
         if p.selection_reason:
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
@@ -1557,8 +1564,8 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
         ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"
          if "owner" in scope else f"no scope file: only {target}'s host and port"),
         ("Selection", " · ".join([_count(len(sel), "finding") + (f", severity {floor} and above" if floor else ""),
-                                  f"{dyn} testable against the running app",
-                                  *([f"{len(sel) - dyn} code-only"] if len(sel) > dyn else [])])),
+                                  f"{dyn} candidates for runtime testing",
+                                  *([f"{len(sel) - dyn} unsupported or incomplete"] if len(sel) > dyn else [])])),
         # The profile's own check is not repeated: the pre-flight model test shows whether the model answers.
         ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth")) if v)),
         ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} requests · ≤ "
@@ -1624,7 +1631,8 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
             lines += [" " * indent + st(piece, "muted") for piece in pieces]
     hidden = len(doc["results"]) - len(rows)
     if hidden:
-        lines.append(st(f"  {_count(hidden, 'code-only finding')} not listed (--print lists them)", "muted"))
+        lines.append(st(f"  {_count(hidden, 'unsupported or incomplete finding')} not listed (--print lists them)",
+                        "muted"))
     return lines
 
 
@@ -1656,7 +1664,8 @@ def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list
     code_only = sum(1 for r in doc["results"] if (r.get("eligibility") or {}).get("status") != "dynamic")
     verdicts = ((s["confirmed"], "confirmed", "ok"), (s["not_reproducible"], "not reproducible", "critical"),
                 (s["blocked"], "blocked by control", "critical"), (s["inconclusive"], "inconclusive", "warn"),
-                (s["not_attempted"] - code_only, "not tested", "muted"), (code_only, "code-only", "muted"))
+                (s["not_attempted"] - code_only, "not tested", "muted"),
+                (code_only, "unsupported or incomplete", "muted"))
     evidence = Path(paths["evidence"])
     rows = [
         ("Report", f"{paths['md']} (Markdown)", "bold"),

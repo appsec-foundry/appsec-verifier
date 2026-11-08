@@ -190,14 +190,14 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
 
 def overview(assessment: Path, plans) -> str:
     dyn = [p for p in plans if p.status == "dynamic"]
-    static = sum(1 for p in plans if p.status == "static-only")
+    static = sum(1 for p in plans if p.status in ("static-only", "unsupported"))
     incomplete = sum(1 for p in plans if p.status == "input-incomplete")
     by_class = Counter(p.cls for p in dyn)
     by_sev = Counter(clean(p.severity).lower() or "unknown" for p in dyn)
     order = [*SEVERITY_FLOORS, *sorted(set(by_sev) - set(SEVERITY_FLOORS))]
     st = Style.for_stream(sys.stdout)
-    counts = [f"{len(plans)} total", f"{len(dyn)} testable against the running app",
-              *([f"{static} code-only"] if static else []),
+    counts = [f"{len(plans)} total", f"{len(dyn)} candidates for runtime testing",
+              *([f"{static} unsupported"] if static else []),
               *([f"{incomplete} without a code location"] if incomplete else [])]
     return "\n".join([*cli._title(st, "assessment"), *cli._facts(st, [
         ("Assessment", str(assessment)),

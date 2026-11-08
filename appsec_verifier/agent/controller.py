@@ -73,6 +73,9 @@ class Controller:
                 routes.extend({"method": r.get("method", "GET"), "path": r["path"]}
                               for r in self.ctx.scope.get(key, []) if r["finding_id"] == p.id)
             routes += self.source_routes
+        if (self.plan or {}).get("kind") == "access-control" and self.plan.get("owner"):
+            routes += [{"method": e.method, "path": e.path, "preparation": True}
+                       for e in getattr(p, "preparation", ())]
         if change and self._names_change(routes, change):
             routes = [*routes, {"method": "GET", "path": change["path"], "derived": True}]
         return routes
@@ -111,6 +114,9 @@ class Controller:
         matching = [r for r in self._routes(change) if (r["method"] in (method, "ALL")
                     or r["method"] == "PAGE" and method == "GET")
                     and self._matches(r["path"], route_path)]
+        if matching and all(r.get("preparation") for r in matching):
+            if name != "http_request" or args.get("role") != (self.plan or {}).get("owner"):
+                raise ToolError("preparation is only for the accepted test resource owner")
         if not matching:
             raise ToolError("request has no matching route in this finding or its operator-declared resources")
         if name != "plan_test" and all(r.get("derived") for r in matching) and not self._created(change, path):

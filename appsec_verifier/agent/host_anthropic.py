@@ -107,12 +107,13 @@ class AnthropicHost:
         prices = long if long is not None and prompt > long["threshold_tokens"] else self.prices
         return sum(tokens[field] * prices[price] for field, price in _PRICED_USAGE) / 1_000_000
 
-    def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
         try:
             resp = self._client.with_options(timeout=timeout, max_retries=0).messages.create(
                 model=self.model, max_tokens=MAX_TOKENS, system=system,
                 messages=[{"role": "user", "content": prompt}],
-                output_config={"format": {"type": "json_schema", "schema": STEP_SCHEMA}},
+                output_config={"format": {"type": "json_schema", "schema":
+                                          schema if schema is not None else STEP_SCHEMA}},
             )
         except Exception as exc:  # noqa: BLE001 - any SDK failure ends this finding with a fixed reason code
             return HostReply(error=_reason(exc))

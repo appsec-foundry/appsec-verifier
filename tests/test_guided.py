@@ -88,7 +88,7 @@ def env(tmp_path, monkeypatch):
 def test_with_a_scope_file_nothing_is_asked_and_the_defaults_apply(env):
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
-    assert "4 total · 3 testable against the running app · 1 code-only\n" in out
+    assert "4 total · 3 candidates for runtime testing · 1 unsupported\n" in out
     assert "critical 1 · high 1 · medium 1" in out
     assert "→ 2 findings to verify, severity high and above (--min-severity to change)" in out
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
@@ -546,6 +546,6 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
         rc, _, _, _ = env.go(extra=["--category", "access-control", "--test-all"])
     out = capsys.readouterr()
     assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False, "default_yes": True}]
-    assert "Selection  : 1 finding, severity high and above · 1 testable against the running app\n" in out.out
+    assert "Selection  : 1 finding, severity high and above · 1 candidates for runtime testing\n" in out.out
     assert "The same run without questions" in out.out and "Not authorised to proceed" in out.err
     assert not (env.cwd / "verification").exists()

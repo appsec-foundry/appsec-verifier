@@ -74,7 +74,7 @@ class ClaudeHost:
             raise HostUnavailable(f"could not query Claude CLI: {type(exc).__name__}") from exc
         return cls(binary, version, model=model, auth=auth, environ=environ, run=run, api_billing=api_billing)
 
-    def command(self, system: str, max_usd: float | None) -> list[str]:
+    def command(self, system: str, max_usd: float | None, *, schema=None) -> list[str]:
         return [
             self.binary, "-p",
             "--model", self.model,
@@ -88,14 +88,14 @@ class ClaudeHost:
             "--permission-mode", "dontAsk",
             "--permission-prompts", "none",     # anything that would prompt is denied
             "--output-format", "stream-json", "--verbose",
-            "--json-schema", json.dumps(STEP_SCHEMA),
+            "--json-schema", json.dumps(schema if schema is not None else STEP_SCHEMA),
             "--system-prompt", system,
             *(["--max-budget-usd", f"{max_usd:.2f}"] if max_usd is not None else []),
         ]
 
-    def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-claude-") as cwd:
-            result = call_process(self, self.command(system, budget.remaining_cost()),
+            result = call_process(self, self.command(system, budget.remaining_cost(), schema=schema),
                                   input=prompt, cwd=cwd, timeout=timeout)
         if isinstance(result, HostReply):
             return result

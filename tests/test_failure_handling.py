@@ -142,7 +142,8 @@ def test_an_interrupted_run_writes_what_it_found_and_exits_130(tmp_path, monkeyp
                                                       "not-attempted"]
     assert "interrupted" in doc["results"][2]["rationale"] and "interrupted" in doc["results"][3]["rationale"]
     log = [json.loads(line) for line in (tmp_path / "out" / "agent-log.jsonl").read_text().splitlines()]
-    assert {"finding": "T-3", "interrupted": True}.items() <= log[-1].items()
+    assert {"finding": "T-3", "interrupted": True}.items() <= log[-2].items()
+    assert log[-1]["evidence_review"] == "quality" and "interrupted" in log[-1]["detail"]
 
 
 def test_ctrl_c_outside_a_run_ends_with_130_without_a_traceback(monkeypatch, capsys):
@@ -383,7 +384,8 @@ def test_a_failed_probe_logs_type_and_place_but_not_its_message():
     log = []
     doc, _ = _run(ProbeRegistry({"access-control": Broken()}), plans=_plans(1), log=log.append)
     assert doc["results"][0]["rationale"] == "probe failed: ValueError"
-    (record,) = log
+    record, review = log
+    assert review["evidence_review"] == "quality" and review["detail"].startswith("not-reviewed:")
     assert record["probe_failed"] == "ValueError" and record["at"].startswith("verify/runner.py:")
     assert SECRET not in json.dumps(log)
 

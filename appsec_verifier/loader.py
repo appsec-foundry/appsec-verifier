@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 from jsonschema.validators import validator_for
 
-from .endpoints import Endpoint, finding_brief, finding_endpoints
+from .endpoints import Endpoint, finding_brief, finding_endpoints, preparation_endpoints
 from .matchkey import match_key
 from .verification_context import context_errors, finding_context
 from .version_info import resource_root
@@ -57,11 +57,12 @@ class FindingPlan:
     title: str
     match_key: str | None
     instance: str | None            # "file:line" when the finding has a location
-    status: str                     # dynamic | static-only | input-incomplete
+    status: str                     # dynamic | unsupported | static-only (legacy reports) | input-incomplete
     cls: str | None                 # weakness class when dynamic
     reason: str
     technique: str | None = None    # finer category (e.g. idor, sqli) when dynamic
     endpoints: tuple[Endpoint, ...] = ()    # requests the finding names (endpoints.py)
+    preparation: tuple[Endpoint, ...] = ()  # evidenced creation requests, owner-only under an accepted plan
     brief: str = ""                 # its scenario and attack steps, for the agent
     context: dict = field(default_factory=dict)
     verification_context: dict = field(default_factory=dict)
@@ -92,11 +93,12 @@ def classify(threat: dict, catalog: dict[str, dict], surface=None) -> FindingPla
     loc = _first_location(threat)
     entry = catalog.get(cwe)
     if entry is None:
-        status, cls, reason = "static-only", None, f"{cwe or 'no CWE'} not dynamically verifiable"
+        status, cls, reason = "unsupported", None, f"no supported proof method for {cwe or 'missing CWE'}"
     elif mk is None or loc is None:
         status, cls, reason = "input-incomplete", entry["class"], "no evidence file/line in the finding"
     else:
         status, cls, reason = "dynamic", entry["class"], f"proof: {entry.get('proof_method')}"
+    endpoints = finding_endpoints(threat, surface)
     return FindingPlan(
         id=str(threat.get("id") or ""),
         cwe=cwe,
@@ -108,7 +110,8 @@ def classify(threat: dict, catalog: dict[str, dict], surface=None) -> FindingPla
         cls=cls,
         reason=reason,
         technique=(entry.get("technique") if entry else None),
-        endpoints=finding_endpoints(threat, surface),
+        endpoints=endpoints,
+        preparation=preparation_endpoints(threat, surface, endpoints),
         brief=finding_brief(threat),
         context=finding_context(threat),
         verification_context=threat.get("verification_context") or {},

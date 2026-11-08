@@ -5,7 +5,7 @@ description: |
   Not the AppSec Analyzer output schema: only the fields the Verifier reads,
   with the types it needs (VER-005, VER-032). Other fields pass unchecked. A
   finding without a CWE or an evidence location is valid here; it is reported
-  as static-only or input-incomplete.
+  as unsupported or input-incomplete.
 
 type: object
 required: [threats]

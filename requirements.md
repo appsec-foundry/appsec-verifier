@@ -73,8 +73,9 @@ optional hardening.
   active verification only when its weakness can be probed against a running
   system and its CWE is on a supported positive list. Static-only findings — a
   weak PRNG choice, a hard-coded secret literal, an insecure practice with no
-  runtime effect — are reported as *out of scope for dynamic verification* with a
-  short reason, not marked unconfirmed. Version 1 supports:
+  runtime effect — are outside dynamic verification. A missing CWE catalog entry
+  is reported as unsupported, not as proof that a finding is static-only.
+  Unsupported findings have a short reason and are not marked unconfirmed. Version 1 supports:
   - **Cross-site scripting** (CWE-79): reflected, stored, and DOM-based.
   - **Broken access control / IDOR** (CWE-639, CWE-862, CWE-863): missing object-
     and function-level authorisation.
@@ -114,6 +115,8 @@ optional hardening.
   asks; the plan names what is missing, the report the reason. Optional versioned
   analysis context preserves source-cited input processing, controls, hypotheses
   and unknowns per variant. Missing capabilities never count as a negative test.
+
+  Before testing, the operator can distinguish missing information and preparation from unsupported proof methods. For access-control tests, the Verifier considers evidenced requests for creating and reading its own test resources and shows the preparation before execution. Unsupported weaknesses are not automatically classified as static-only; ambiguous resource relationships remain unresolved, and scope, write permission and proof requirements still apply (VER-001, VER-010, VER-030).
 
 - **VER-009: Require real execution as proof of XSS.** An XSS finding counts as
   confirmed only when a unique, harmless marker payload actually executes in a
@@ -181,6 +184,8 @@ optional hardening.
   executed payload is hidden and named. Marks leave the recorded
   exchange unchanged. A screenshot illustrates the proof; no verdict depends
   on it.
+
+- **VER-042: Review evidence clarity.** After each tested finding, a separate evidence reviewer checks whether the evidence presentation is understandable and returns concrete issues to the original test agent for at most two correction rounds shared by all variants of that finding. Technical verdict and presentation quality stay separate. Corrections use recorded evidence and never send new target requests. Repeated issues without improvement and the existing cost and time limits stop the loop. The console and report show progress, completion and unresolved issues. The first stage reviews redacted evidence text and deterministic presentation checks; it explicitly states that no model inspected image pixels.
 
 ## Stay safe and in scope
 

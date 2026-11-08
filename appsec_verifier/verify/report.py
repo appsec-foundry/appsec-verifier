@@ -236,12 +236,32 @@ def _fenced(text: str, info: str = "http") -> str:
     return f"{fence}{info}\n{text}\n{fence}"
 
 
+def _review_markdown(r: dict, level: int) -> list[str]:
+    review = r.get("evidence_review")
+    if not review:
+        return []
+    out = ["", f"{'#' * level} Evidence presentation review", "",
+           "Technical verdict unchanged. Image pixels were not inspected by a model.", "",
+           _fenced(f"Status: {review['status']} · corrections: {review['rounds']}/2 · "
+                   f"reviews: {review['reviews']}\n{review['reason']}", "text")]
+    if review["issues"]:
+        out += ["", "Unresolved presentation issues:", "",
+                _fenced("\n".join(f"{i['variant']}: {i['detail']}" for i in review["issues"]), "text")]
+    for presentation in review["presentations"]:
+        out += ["", "Original test agent explanation (not additional proof):", "",
+                _fenced(f"{presentation['variant']}: {presentation['explanation']}", "text")]
+        for quote in presentation["quotes"]:
+            out += ["", f"Recorded excerpt, step {quote['step']}, {quote['part']}:", "", _fenced(quote["text"])]
+    return out
+
+
 def _poc_markdown(r: dict, level: int = 4) -> list[str]:
     """The proof of concept (VER-034): one line per step, then the steps the verdict rests on as raw HTTP."""
     poc = r.get("poc") or {}
+    out = _review_markdown(r, level)
     if not poc.get("steps"):
-        return []
-    out = ["", f"{'#' * level} Proof of concept", ""]
+        return out
+    out += ["", f"{'#' * level} Proof of concept", ""]
     if poc.get("file"):
         out += [f"All requests and responses: `{poc['file']}` (HAR, {TARGET_DATA_NOTE}).", ""]
     # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.

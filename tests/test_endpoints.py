@@ -209,9 +209,10 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     assert out.index("Test plan     1 of 3 findings will be tested") < out.index("Preflight")   # before contact
     assert "  T-1  critical  injection       GET /rest/products/search · sqli in search" in out
     assert "Not testable  2 findings need what this run does not have (--test-all tries anyway)" in out
-    assert "  test identity        1  T-3\n" in out and "→ test accounts: --account, or --identities FILE" in out
+    assert "test identity" in out and "→ test accounts: --account, or --identities FILE" in " ".join(out.split())
     # T-2's contract declares a JSON field of the login POST: no read request carries it, so no mode helps.
-    assert "  repeatable request   1  T-2\n" in out and "→ a GET request with the same input as a query" in out
+    assert "unsupported write-injection proof" in out
+    assert "→ this proof method cannot repeat write requests" in " ".join(out.split())
     # verify gives a few words per need; preflight shows how to provide it
     assert "how to provide each, with lines to copy: appsec-verifier preflight" in out
     assert "create an identities file" not in out and "the injection proof sends every control twice" not in out
@@ -219,8 +220,8 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     listed = out[out.index("\nResults\n"):]
     assert "T-1  critical  injection       not attempted (low)" in listed
     assert "no answered target request" in listed
-    assert "  · T-2  high      injection       needs repeatable request  sqli in login\n" in listed
-    assert "  · T-3  high      access-control  needs test identity       idor\n" in listed
+    assert "· T-2 high injection needs unsupported write-injection proof sqli in login" in " ".join(listed.split())
+    assert "· T-3 high access-control needs test identity idor" in " ".join(listed.split())
     assert "Verdicts   : 3 not tested\n" in out
     assert results["T-1"][0] == "not-attempted"
     assert results["T-2"] == ("not-attempted", "not tested: the proof repeats each control, and every request the "

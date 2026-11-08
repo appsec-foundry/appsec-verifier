@@ -87,7 +87,7 @@ class OpenAIHost:
         if status != 200:
             raise HostUnavailable(f"model {self.model}: {_status_reason(status)} (HTTP {status})")
 
-    def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
         body = {
             "model": self.model,
             "instructions": system,
@@ -96,7 +96,7 @@ class OpenAIHost:
             "max_output_tokens": MAX_OUTPUT_TOKENS,
             "reasoning": {"effort": REASONING_EFFORT},
             "text": {"format": {"type": "json_schema", "name": "verification_step", "strict": True,
-                                "schema": STEP_SCHEMA}},
+                                "schema": schema if schema is not None else STEP_SCHEMA}},
         }
         try:
             status, data = self._post(ENDPOINT, {"Authorization": f"Bearer {self._key}"}, body, timeout)

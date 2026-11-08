@@ -65,7 +65,7 @@ def test_without_a_terminal_the_output_is_plain_with_analyzer_style_facts(assess
     out = _overview(assessment)
     assert "\x1b" not in out and "\x07" not in out
     assert out.startswith("▶ AppSec Verifier · assessment · ")
-    assert "  Findings    : 2 total · 2 testable against the running app\n" in out
+    assert "  Findings    : 2 total · 2 candidates for runtime testing\n" in out
 
 
 def test_force_color_colours_the_overview_but_strips_escapes_from_the_assessment(assessment, monkeypatch):

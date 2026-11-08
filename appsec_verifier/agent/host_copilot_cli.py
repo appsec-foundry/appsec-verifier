@@ -77,9 +77,10 @@ class CopilotCliHost:
             "-C", str(cwd),
         ]
 
-    def call(self, system: str, prompt: str, timeout: float, budget) -> HostReply:
+    def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None) -> HostReply:
         instructions = (system + "\nReturn exactly one JSON value matching this JSON Schema. "
-                        "Do not use Markdown fences or add prose.\n" + json.dumps(STEP_SCHEMA))
+                        "Do not use Markdown fences or add prose.\n"
+                        + json.dumps(schema if schema is not None else STEP_SCHEMA))
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-copilot-") as cwd:
             result = call_process(self, self.command(Path(cwd)), input=instructions + "\n\n" + prompt,
                                   cwd=cwd, timeout=timeout)

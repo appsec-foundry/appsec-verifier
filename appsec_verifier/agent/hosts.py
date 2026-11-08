@@ -137,6 +137,10 @@ def _stop_group(proc) -> None:
     proc.wait(timeout=5)
 
 
+class HostCallError(Exception):
+    """A bounded host call failed; its fixed reason is safe to report."""
+
+
 class HostPlanner:
     """Planner protocol over a host. Holds no conversation state: every call is
     rebuilt from the finding and the loop's history."""
@@ -145,18 +149,36 @@ class HostPlanner:
         self._host = host
 
     def next_step(self, ctx, history: list[dict]) -> dict:
+        try:
+            return parse_step(self._request(ctx, system_prompt(ctx), prompt(ctx, history)))
+        except HostCallError as exc:
+            return inconclusive(str(exc))
+
+    def structured(self, ctx, system: str, payload: str, schema: dict):
+        """A tool-less review/revision call; its caller validates the separate schema (VER-042)."""
+        ctx.guard.check_window()
+        return self._request(ctx, system, payload, schema=schema)
+
+    def _request(self, ctx, system: str, payload: str, *, schema=None):
         host = self._host
         if host.broken:
-            return inconclusive(f"{host.label} stopped for this run: {host.broken}")
+            raise HostCallError(f"{host.label} stopped for this run: {host.broken}")
         ctx.budget.note_cost(0.0)   # no new call once the cost ceiling is already exceeded
+        if ctx.budget.remaining_cost() == 0:
+            raise LimitExceeded("cost", "cost ceiling reached")
         ctx.budget.note_call()
         timeout = CALL_TIMEOUT_S
         remaining = ctx.budget.remaining_time()
         if remaining is not None:
             timeout = min(timeout, remaining)
+        if schema is not None:
+            window = ctx.guard.remaining_time()
+            if window is not None:
+                timeout = min(timeout, window)
         try:
             with execution_deadline(timeout, kind="model-timeout"):
-                reply = host.call(system_prompt(ctx), prompt(ctx, history), timeout, ctx.budget)
+                reply = host.call(system, payload, timeout, ctx.budget,
+                                  **({"schema": schema} if schema is not None else {}))
         except LimitExceeded as exc:
             if exc.kind != "model-timeout":
                 raise
@@ -167,15 +189,15 @@ class HostPlanner:
         if reply.usd is not None:
             ctx.budget.note_cost(reply.usd)
         if reply.breach:
-            return inconclusive(f"{host.label} confinement check failed: {reply.breach}")
+            raise HostCallError(f"{host.label} confinement check failed: {reply.breach}")
         if reply.error:
             # Kept on the host, not the planner: a planner lives for one finding, the host for the run.
             host.failed_calls = getattr(host, "failed_calls", 0) + 1
             if host.failed_calls >= MAX_FAILED_CALLS:
                 host.broken = f"{host.failed_calls} calls in a row failed, the last with {reply.error}"
-            return inconclusive(f"{host.label} call failed: {reply.error}")
+            raise HostCallError(f"{host.label} call failed: {reply.error}")
         host.failed_calls = 0
-        return parse_step(reply.step)
+        return reply.step
 
 
 def call_process(host, argv: list[str], *, input: str, cwd, timeout: float):

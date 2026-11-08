@@ -116,6 +116,39 @@ def finding_endpoints(threat: dict, surface) -> tuple[Endpoint, ...]:
     return tuple(found[:MAX_ENDPOINTS])
 
 
+def preparation_endpoints(threat: dict, surface, endpoints) -> tuple[Endpoint, ...]:
+    """A source-located POST to the exact collection of a finding's record route.
+
+    No URL guessing or cross-finding reuse. Structured variants keep their explicit
+    request boundary; ambiguous collections need an operator resource instead.
+    These are preparation candidates, never permission to send a request.
+    """
+    if threat.get("cwe") not in ("CWE-639", "CWE-862", "CWE-863") or threat.get("verification_context"):
+        return ()
+    files = {loc.rsplit(":", 1)[0] for loc in _locations(threat)}
+    entries = _entries(surface)
+    # A route registration can live separately from its handler. Only an exact
+    # matching record request links that registration file to this finding.
+    files.update(e.handler.rsplit(":", 1)[0] for e in entries if e.handler and any(
+        e.method == endpoint.method and e.template == endpoint.path for endpoint in endpoints))
+    collections = set()
+    for endpoint in endpoints:
+        path, _, record = endpoint.path.rpartition("/")
+        if endpoint.method not in ("GET", "PUT", "PATCH") or not re.fullmatch(r":\w+|\{\w+\}|<\w+>", record):
+            continue
+        if re.fullmatch(r"/(?:[A-Za-z_][A-Za-z0-9_-]*/)*[A-Za-z_][A-Za-z0-9_-]*", path):
+            collections.add(path)
+    if len(collections) != 1:
+        return ()
+    entries = [e for e in entries if e.method == "POST" and e.template in collections
+               and e.handler and e.handler.rsplit(":", 1)[0] in files]
+    if len(entries) != 1:
+        return ()
+    e = entries[0]
+    candidate = Endpoint("POST", e.template, e.login)
+    return () if candidate in endpoints else (candidate,)
+
+
 def login_endpoint(surface) -> str | None:
     """The path of the login the attack surface lists (a POST whose path names login), for the
     operator's identities file; None when it lists none."""

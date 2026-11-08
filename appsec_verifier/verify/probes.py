@@ -30,6 +30,7 @@ class ProbeResult:
     limits_hit: str | None = None
     poc: dict | None = None            # proof of concept recorded by the code (VER-034, verify/poc.py)
     planning: list[dict] = field(default_factory=list)
+    evidence_review: dict | None = None  # presentation quality, never a technical verdict (VER-042)
 
 
 @dataclass
@@ -57,6 +58,9 @@ class ProbeContext:
     created: set = field(default_factory=set)  # identifiers the owner's creating answers returned (VER-010)
     owned: set = field(default_factory=set)    # of those, the ones the owner's read showed with its marker
     prior_results: list[dict] = field(default_factory=list)
+    evidence_test_planner: object | None = None
+    evidence_reviewer_factory: object | None = None
+    evidence_panels: list[dict] = field(default_factory=list)
 
 
 @runtime_checkable

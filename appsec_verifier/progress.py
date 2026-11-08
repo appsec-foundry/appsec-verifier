@@ -246,7 +246,7 @@ class RunProgress:
         self._id_width = len(f"{total}/{total} ") + max(len(_clip(plan.id, 16)) for plan in plans)
         sys.stdout.flush()      # the run settings above, when both streams go to one log
         self._write("")
-        self._write(self.st(f"{'TIME':<8}  {'FINDING':<{self._id_width}}  {'EVENT':<5}  {'PROGRESS':>8}  "
+        self._write(self.st(f"{'TIME':<8}  {'FINDING':<{self._id_width}}  {'EVENT':<7}  {'PROGRESS':>8}  "
                             f"{'ELAPSED':>7}  {'LEFT':>6}  DETAIL", "muted", "bold"))
         self._thread = threading.Thread(target=self._ticker, name="appsec-verifier-progress", daemon=True)
         if self.live:
@@ -324,6 +324,18 @@ class RunProgress:
                     self._record("·", _line(head, note), tested, hang=hang)
                 else:
                     self._record("·", _line(head, tested), hang=hang)
+
+    def evidence_review(self, finding: str, stage: str, round_: int, detail: str) -> None:
+        """Presentation work has its own rows; it never counts as a target test step (VER-042)."""
+        with self._lock:
+            old_id = self._id
+            self._id = _clip(self._text(finding), 16)
+            label = "initial" if stage == "review" and round_ == 0 else f"correction {round_}/2"
+            text = _clip(self._text(detail), 300)
+            self._activity = f"{self._id} · evidence {stage} · {label}" if stage in ("review", "revise") else ""
+            self._activity_at = self._clock()
+            self._record(stage, _line(label, text, (self._step_cost(), "accent")))
+            self._id = old_id
 
     def finished(self, plan, result) -> None:
         verdict = printable(result.verdict)
@@ -433,7 +445,7 @@ class RunProgress:
         bar = f"{self._bar()}  " if live else ""
         head = (f"{st(stamp, 'muted')}  "
                 + st(f"{finding:<{self._id_width}}", *(("bold",) if event in ("start", "done") else ()))
-                + f"  {st(f'{event:<5}', 'accent' if live else role or _EVENT_ROLES.get(event, 'muted'))}  "
+                + f"  {st(f'{event:<7}', 'accent' if live else role or _EVENT_ROLES.get(event, 'muted'))}  "
                 + st(f"{share:>8}  {elapsed:>7}  {left:>6}", "muted") + f"  {bar}")
         indent = len(_ANSI.sub("", head))
         if event in ("↻", "⚠"):        # needs attention: all but the highlighted amounts in the warning colour

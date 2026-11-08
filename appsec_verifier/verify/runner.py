@@ -80,6 +80,7 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
         "evidence": res.evidence,
         "poc": res.poc,
         "planning": res.planning,
+        "evidence_review": res.evidence_review,
         "selection_reason": plan.selection_reason,
         "target_location": res.target_location
         or ({"source_file": plan.instance.rsplit(":", 1)[0], "source_line": None} if plan.instance else None),
@@ -151,9 +152,11 @@ def run_verification(
 
     guard = ScopeGuard(scope)
 
+    contexts = {}
+
     def ctx_factory(plan: FindingPlan) -> ProbeContext:
         related = set(plan.context.get("dependencies", []))
-        return ProbeContext(
+        ctx = ProbeContext(
             plan=plan,
             scope=scope,
             guard=guard,
@@ -184,12 +187,17 @@ def run_verification(
             ][-12:],
         )
 
+        contexts[evidence_id(plan)] = ctx
+        return ctx
+
     probed = [
         p.status == "dynamic" and registry.get(p.cls) is not None and evidence_id(p) not in skipped for p in plans
     ]
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
     results = []
+    groups = {}
+    last_variant = {p.id: i for i, p in enumerate(plans, start=1)}
     stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
@@ -205,7 +213,6 @@ def run_verification(
             )
             if progress is not None:
                 progress.finding(plan, agent=False)  # no agent starts for it
-                progress.finished(plan, res)
         else:
             if shown and progress is not None:
                 progress.finding(plan)
@@ -218,12 +225,27 @@ def run_verification(
                 res = ProbeResult(
                     verdict="inconclusive", rationale="the run was interrupted while this finding was tested"
                 )
-            else:
-                if shown and progress is not None:
-                    progress.finished(plan, res)
             if res.limits_hit in _RUN_LIMITS:
                 stopped = res.limits_hit
         results.append(_result_entry(i, plan, res))
+        ctx = contexts.get(evidence_id(plan))
+        if ctx is not None and res.verdict != "not-attempted":
+            groups.setdefault(plan.id, []).append((i - 1, plan, ctx, res))
+        if last_variant[plan.id] == i and plan.id in groups:
+            from .evidence_review import review_finding
+
+            group = groups.pop(plan.id)
+            review_stop = review_finding([(c, r) for _, _, c, r in group],
+                                         stop="interrupted" if interrupted else stopped)
+            if review_stop == "interrupted":
+                interrupted = True
+            elif review_stop in _RUN_LIMITS:
+                stopped = review_stop
+            for idx, reviewed_plan, _, reviewed_result in group:
+                results[idx] = _result_entry(idx + 1, reviewed_plan, reviewed_result)
+                contexts.pop(evidence_id(reviewed_plan), None)
+        if shown and progress is not None and not interrupted:
+            progress.finished(plan, res)
     if sessions is not None:
         results = sessions.redact(results)  # VER-016: model text never carries a credential into the report
 
