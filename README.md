@@ -126,7 +126,7 @@ Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severi
 
 ## Output
 
-Before it contacts the target, `verify` shows a test plan: the findings it will test with the requests the assessment names, and the findings it cannot test in this run, grouped by what they need (a test identity, the proof browser, a marker file, a callback, an injection contract, a route, or `--allow-intrusive`) and how to provide it. Those are not tested unless you add `--test-all`.
+Before it contacts the target, `verify` shows a test plan: the findings it will test with the requests the assessment names, and the findings it cannot test in this run, grouped by what they need (a test identity, the proof browser, a marker file, a callback, an injection contract, a route, or `--allow-intrusive`) with what to provide; `preflight` shows how, with the lines to copy. Those are not tested unless you add `--test-all`.
 
 While `verify` runs, it prints its progress on standard error, each finding set apart by a blank line: its title and the agent that tests it, with model, step budget and identities, one entry per request or source read of the agent with what it checks, the request it tested and the result, and one with the verdict and its reason: green confirmed, red not reproduced, yellow inconclusive. Each entry shows the finding, the share of findings done, the run time and the time left. When costs are shown, each step gives its cost and the verdict the run's spend. In a terminal the tested request and the amounts are highlighted, and a status line underneath shows the run's spend so far, the running step and how long it has been running. [`docs/cli.md`](docs/cli.md#verify--verify-findings-against-a-running-target) describes the columns.
 
@@ -197,7 +197,7 @@ Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements and 
 
 With `--min-severity`, the selection also includes up to eight additional findings: declared prerequisites and access or exposure findings on concrete management routes. The test plan names each addition and its reason before confirmation. `--strict-severity` keeps the severity floor exact; `--severity`, `--only`, category and CWE filters remain explicit boundaries. Health responses alone do not trigger this additional selection.
 
-The agent records a test plan with the relevant data flow, prerequisites, choice of test, alternative explanation, expected observation and stop condition. The console and report show this plan and justified revisions. Related architecture, walkthroughs and earlier prerequisite results are available as context. A verified finding does not establish a complete attack chain.
+The agent records a test plan with the relevant data flow, prerequisites, choice of test, alternative explanation, expected observation and stop condition. The report shows this plan and justified revisions; the console shows one line for each. Related architecture, walkthroughs and earlier prerequisite results are available as context. A verified finding does not establish a complete attack chain.
 
 SQL confirmation uses fresh complementary predicate controls. Command, template and XPath injection can be checked with harmless arithmetic evaluation and fresh expected results. Ordinary search differences, reflected inputs and timing alone remain inconclusive. NoSQL JSON-operator and LDAP filter-predicate checks use fresh controls against the declared literal-input contract. Scope and all run limits apply to each request, including requests collected by `run_experiment`.
 

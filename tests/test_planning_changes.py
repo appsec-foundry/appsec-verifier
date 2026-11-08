@@ -327,8 +327,19 @@ def test_session_screenshot_selection_and_console_plan(tmp_path):
             "result": {"accepted": True},
         }
     )
+    progress.step(
+        {
+            "step": 2,
+            "tool": "plan_test",
+            "args": {"path": "/session", "strategy": STRATEGY | {"revision_reason": "cookie set on login only"}},
+            "result": {"accepted": True},
+        }
+    )
     progress.close()
-    assert "counter_hypothesis" in stream.getvalue() and "/session" in stream.getvalue()
+    out = stream.getvalue()
+    # one row per accepted plan; the report keeps the whole plan
+    assert "test plan · /session\n" in out and "plan revised · /session · cookie set on login only\n" in out
+    assert not any(key in out for key in ("data_flow", "counter_hypothesis", "expected:", "stop:", "prerequisite"))
 
 
 def test_expression_proof_needs_an_operator_input_contract(tmp_path):

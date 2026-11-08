@@ -753,7 +753,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     notes = (
         ("Report", report_note),
         ("Accounts", _accounts_note(identities, login)),
-        ("Identities", _identities_note(identities, sel)),
+        ("Identities", None if login else _identities_note(identities, sel)),  # Accounts names the roles
         ("Login programs", _login_programs(identities)),
         ("Browser", browser_note),
         ("Callback", listener_note),
@@ -781,7 +781,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             )
         )
     )
-    print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing))))
+    print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing), full=False)))
     if probed and not contact:
         return _blocked(
             "Nothing to test in this run; no report was written",
@@ -1313,41 +1313,49 @@ def _identities_note(identities, sel):
     return ", ".join(str(i["role"]) for i in identities)
 
 
-# What a finding this run cannot test needs: its name in the test plan, and how the operator provides it.
-# The browser's and the identity's lines are replaced by ones that fit this run (_run_hints).
+# What a finding this run cannot test needs: its name in the test plan, what to provide in a few words (`verify`),
+# and how to provide it (`preflight`). The browser's and the identity's how-tos are replaced by ones that fit this
+# run (_run_hints); the browser's also replaces its few words, since it names the actual cause.
 _NEEDS = {
-    "resource": ("test resource", ["add an operator-owned test_resources entry to the scope file, with the "
-                                     "finding ID, allowed and denied roles, and a harmless response marker",
-                                     "for IDOR and missing authorisation also: two accounts (--account) with "
-                                     "--allow-intrusive, or an --admin-account for a privileged function"]),
-    "capability": ("test capability", ["the reported variant needs a tool this run does not provide; "
-                                        "keep it unresolved or test that variant separately"]),
-    "identity": ("test identity", ["create an identities file with two test accounts and pass it with "
-                                   "--identities FILE (docs/cli.md, Identities file)"]),
-    "browser": ("proof browser", ["install Playwright and Google Chrome"]),
-    "marker": ("marker file", ["place a file holding a random token (16 to 128 of A-Z a-z 0-9 _ -) on the "
-                               "target and add to a scope file (--scope):",
-                               "marker_file: {path: /path/on/the/target/marker.txt, content: TOKEN}",
-                               "(docs/cli.md, Scope file)"]),
-    "callback": ("callback", ["add to a scope file (--scope):",
-                              'callback: {host: 127.0.0.1, port: 8099, base_url: "http://127.0.0.1:8099"}',
-                              "(docs/cli.md, Scope file)"]),
-    "intrusive": ("intrusive mode", ["run with --allow-intrusive"]),
-    "contract": ("injection contract", ["add to a scope file (--scope) the input the application must treat as "
-                                        "literal data; the proof repeats read requests, so a query parameter or a "
-                                        "JSON field, not a path parameter or a write:",
-                                        "injection_inputs: [{finding_id: ID, path: /route, input_location: params, "
-                                        "input_name: NAME, semantics: literal}]",
-                                        "(docs/cli.md, Scope file)"]),
-    "repeat": ("repeatable request", ["the injection proof sends every control twice and never repeats a write, "
-                                      "and every request these findings name writes; if a GET request of the "
-                                      "application carries the same input as a query parameter, declare that "
-                                      "one in a scope file (--scope):",
-                                      "injection_inputs: [{finding_id: ID, path: /route, input_location: params, "
-                                      "input_name: NAME, semantics: literal}]"]),
-    "route": ("route", ["the assessment names no request for the finding: pass the application's source with "
-                        "--source when the file of the finding declares its route, or name the request in a scope "
-                        "entry for the finding (injection_inputs, test_resources)"]),
+    "resource": ("test resource",
+                 "a test_resources entry in a scope file, two --account with --allow-intrusive, or an --admin-account",
+                 ["add an operator-owned test_resources entry to the scope file, with the finding ID, allowed and "
+                  "denied roles, and a harmless response marker",
+                  "for IDOR and missing authorisation also: two accounts (--account) with --allow-intrusive, or an "
+                  "--admin-account for a privileged function"]),
+    "capability": ("test capability", "the reported variant needs a tool this run does not provide",
+                   ["the reported variant needs a tool this run does not provide; keep it unresolved or test that "
+                    "variant separately"]),
+    "identity": ("test identity", "test accounts: --account, or --identities FILE",
+                 ["create an identities file with two test accounts and pass it with --identities FILE "
+                  "(docs/cli.md, Identities file)"]),
+    "browser": ("proof browser", "install Playwright and Google Chrome", ["install Playwright and Google Chrome"]),
+    "marker": ("marker file", "a marker_file in a scope file",
+               ["place a file holding a random token (16 to 128 of A-Z a-z 0-9 _ -) on the target and add to a "
+                "scope file (--scope):",
+                "marker_file: {path: /path/on/the/target/marker.txt, content: TOKEN}",
+                "(docs/cli.md, Scope file)"]),
+    "callback": ("callback", "a callback in a scope file",
+                 ["add to a scope file (--scope):",
+                  'callback: {host: 127.0.0.1, port: 8099, base_url: "http://127.0.0.1:8099"}',
+                  "(docs/cli.md, Scope file)"]),
+    "intrusive": ("intrusive mode", "run with --allow-intrusive", ["run with --allow-intrusive"]),
+    "contract": ("injection contract", "an injection_inputs entry in a scope file: a query parameter or JSON field",
+                 ["add to a scope file (--scope) the input the application must treat as literal data; the proof "
+                  "repeats read requests, so a query parameter or a JSON field, not a path parameter or a write:",
+                  "injection_inputs: [{finding_id: ID, path: /route, input_location: params, input_name: NAME, "
+                  "semantics: literal}]",
+                  "(docs/cli.md, Scope file)"]),
+    "repeat": ("repeatable request", "a GET request with the same input as a query parameter, in injection_inputs",
+               ["the injection proof sends every control twice and never repeats a write, and every request these "
+                "findings name writes; if a GET request of the application carries the same input as a query "
+                "parameter, declare that one in a scope file (--scope):",
+                "injection_inputs: [{finding_id: ID, path: /route, input_location: params, input_name: NAME, "
+                "semantics: literal}]"]),
+    "route": ("route", "--source, or a scope entry for the finding that names its request",
+              ["the assessment names no request for the finding: pass the application's source with --source when "
+               "the file of the finding declares its route, or name the request in a scope entry for the finding "
+               "(injection_inputs, test_resources)"]),
 }
 
 
@@ -1441,10 +1449,12 @@ def _wrap_whole(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False)
 
 
-def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None) -> list[str]:
+def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,
+                full: bool = True) -> list[str]:
     """The test plan before the confirmation: each finding the run tests with the requests the
     assessment names, then those it cannot test, grouped by what they need and how to provide it.
-    `hints` replaces a need's how-to with what is actually missing (the browser's cause)."""
+    `hints` replaces a need's how-to with what is actually missing (the browser's cause). Without
+    `full` (in `verify`) each need gets a few words and a pointer to `preflight`, which shows the how-tos."""
     if not plans:
         return []
     from .planning import evidence_id
@@ -1482,8 +1492,11 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     indent = 2 + label_width + 2 + 2 + 2
     room = max(columns() - 1 - indent, 30)
     for key, ids in sorted(groups.items(), key=lambda group: -len(group[1])):
-        label, how = _NEEDS[key]
-        how = [printable(text) for text in (hints or {}).get(key) or how]
+        label, brief, how = _NEEDS[key]
+        how = (hints or {}).get(key) or how
+        if not full:
+            how = how[:1] if key == "browser" else [brief]
+        how = [printable(text) for text in how]
         wrapped = _wrap_whole(", ".join(ids), room) or [""]
         lines.append(f"  {st(f'{label:<{label_width}}', 'warn')}  {len(ids):>2}  {wrapped[0]}")
         lines += [" " * indent + piece for piece in wrapped[1:]]
@@ -1493,6 +1506,9 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
                 " " * indent + st(("→ " if n == 0 and i == 0 else "  ") + piece, "muted")
                 for i, piece in enumerate(pieces)
             ]
+    if not full:
+        lines.append("  " + st("how to provide each, with lines to copy: appsec-verifier preflight, or docs/cli.md "
+                               "(Scope file)", "muted"))
     return lines
 
 

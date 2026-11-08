@@ -209,9 +209,12 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     assert out.index("Test plan     1 of 3 findings will be tested") < out.index("Preflight")   # before contact
     assert "  T-1  critical  injection       GET /rest/products/search · sqli in search" in out
     assert "Not testable  2 findings need what this run does not have (--test-all tries anyway)" in out
-    assert "  test identity        1  T-3\n" in out and "→ create an identities file with two test accounts" in out
+    assert "  test identity        1  T-3\n" in out and "→ test accounts: --account, or --identities FILE" in out
     # T-2's contract declares a JSON field of the login POST: no read request carries it, so no mode helps.
-    assert "  repeatable request   1  T-2\n" in out and "→ the injection proof sends every control twice" in out
+    assert "  repeatable request   1  T-2\n" in out and "→ a GET request with the same input as a query" in out
+    # verify gives a few words per need; preflight shows how to provide it
+    assert "how to provide each, with lines to copy: appsec-verifier preflight" in out
+    assert "create an identities file" not in out and "the injection proof sends every control twice" not in out
     assert "Identities  :" not in out            # what is missing is said once, in the test plan
     listed = out[out.index("\nResults\n"):]
     assert "T-1  critical  injection       not attempted (low)" in listed
@@ -250,6 +253,10 @@ def test_the_test_plan_gives_lines_to_copy_and_the_browser_s_actual_cause(monkey
     text = "\n".join(lines)
     assert '  callback: {host: 127.0.0.1, port: 8099, base_url: "http://127.0.0.1:8099"}\n' in text
     assert "→ Playwright is not installed; run `x`" in text and "install Playwright and Google Chrome" not in text
+    brief = "\n".join(cli._test_cases(cli.Style(False), plans, blocked, {"browser": ["Playwright is not installed"]},
+                                      full=False))
+    assert "→ a callback in a scope file\n" in brief and "callback: {host" not in brief
+    assert "→ Playwright is not installed\n" in brief and "appsec-verifier preflight" in brief
 
 
 def test_the_identity_hint_names_the_login_the_assessment_lists_and_an_example():

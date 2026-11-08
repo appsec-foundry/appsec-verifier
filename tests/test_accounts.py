@@ -257,7 +257,7 @@ THREAT = {"id": "T-1", "cwe": "CWE-89", "severity": "high", "title": "sqli", "sc
           "evidence": {"file": "routes/search.ts", "line": 1}}
 
 
-def _verify(tmp_path, monkeypatch, target, host, *extra, env=None, surface=SURFACE):
+def _verify(tmp_path, monkeypatch, target, host, *extra, env=None, surface=SURFACE, threats=(THREAT,)):
     seen = {}
 
     class Planner:
@@ -272,7 +272,7 @@ def _verify(tmp_path, monkeypatch, target, host, *extra, env=None, surface=SURFA
     monkeypatch.setattr(cli, "_stdin_is_terminal", lambda: False)
     for name, value in (env or {}).items():
         monkeypatch.setenv(name, value)
-    (tmp_path / "a.yaml").write_text(yaml.safe_dump({"threats": [THREAT], **surface}))
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump({"threats": list(threats), **surface}))
     rc = cli.main(["verify", "--assessment", str(tmp_path / "a.yaml"), "--url", URL, "--yes", "--test-all",
                    "--output", str(tmp_path / "out"), *extra])
     return rc, seen
@@ -298,6 +298,17 @@ def test_verify_signs_accounts_in_at_the_assessments_login_and_shows_it_before_t
         assert value not in prompt and value not in out
     report = (tmp_path / "out" / "verification.md").read_text() + (tmp_path / "out" / "agent-log.jsonl").read_text()
     assert "ncc-1701" not in report and "jim@juice-sh.op" not in report
+
+
+def test_with_accounts_the_settings_name_the_roles_once(tmp_path, monkeypatch, capsys):
+    idor = {"id": "T-2", "cwe": "CWE-639", "severity": "high", "title": "idor", "scenario": "GET /rest/basket/1",
+            "evidence": {"file": "routes/basket.ts", "line": 1}}
+    target, host = JuiceShop({"jim@juice-sh.op": "ncc-1701", "bender@juice-sh.op": "liquor"}), FakeHost()
+    rc, _ = _verify(tmp_path, monkeypatch, target, host, "--account", "jim@juice-sh.op=JP", "--account",
+                    "bender@juice-sh.op=BP", env={"JP": "ncc-1701", "BP": "liquor"}, threats=(THREAT, idor))
+    out = capsys.readouterr().out
+    assert rc == cli.EXIT_OK, out
+    assert "  Accounts   : account-1, account-2 · sign in at POST" in out and "Identities :" not in out
 
 
 def test_a_failed_account_login_stops_the_run_and_points_to_identities(tmp_path, monkeypatch, capsys):

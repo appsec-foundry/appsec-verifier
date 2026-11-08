@@ -311,14 +311,11 @@ class RunProgress:
                 # there is one.
                 result = record.get("result") if isinstance(record.get("result"), dict) else {}
                 if record["tool"] == "plan_test" and result.get("accepted"):
-                    strategy = args.get("strategy", {})
-                    self._record("plan", _line("plan revised" if strategy.get("revision_reason") else "test plan",
-                                               _clip(args.get("path", ""))),
-                                 *[_line(f"{key}: {_clip(strategy[key], 180)}") for key in
-                                   ("data_flow", "choice", "counter_hypothesis", "expected", "stop", "revision_reason")
-                                   if key in strategy],
-                                 *[_line(f"prerequisite ({p['status']}): {_clip(p['condition'], 180)}")
-                                   for p in strategy.get("prerequisites", [])])
+                    # One row: the request and, for a revision, its reason. The report keeps the whole plan
+                    # (Test planning, verify/report.py).
+                    reason = args.get("strategy", {}).get("revision_reason")
+                    self._record("plan", _line("plan revised" if reason else "test plan", _clip(args.get("path", "")),
+                                               _clip(reason, 180) if reason else ""))
                     return
                 tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
                 tested = _line([tested, (f" → {_outcome(result)}",)], (took, "muted"), (cost, "accent"))
