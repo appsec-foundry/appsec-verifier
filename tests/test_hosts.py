@@ -553,7 +553,8 @@ def test_loop_runs_host_steps_through_the_scope_guard():
 
     budget = RunBudget(Limits())
     plan = FindingPlan(id="T-1", cwe="CWE-639", severity="High", title="idor", match_key="r.ts|CWE-639",
-                       instance="r.ts:1", status="dynamic", cls="access-control", reason="p")
+                       instance="r.ts:1", status="dynamic", cls="access-control", reason="p",
+                       endpoints=(Endpoint("GET", "/rest/basket/:id", None),))
     ctx = ProbeContext(plan=plan, scope=scope, guard=ScopeGuard(scope), budget=budget,
                        http=GuardedHttpClient(ScopeGuard(scope), budget, transport), identities=[],
                        callback={}, target_base=scope["base_url"])

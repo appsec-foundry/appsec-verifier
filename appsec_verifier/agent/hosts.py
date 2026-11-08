@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import os
 import re
+import selectors
 import signal
 import subprocess
+import time
 from dataclasses import dataclass
 
+from ..limits import LimitExceeded, execution_deadline
 from .steps import inconclusive, parse_step, prompt, system_prompt
 
 CALL_TIMEOUT_S = 300.0
@@ -77,12 +80,50 @@ def run_process(argv: list[str], *, input: str, cwd, env: dict, timeout: float) 
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True)
     try:
-        out, err = proc.communicate(input.encode("utf-8"), timeout=timeout)
+        out, err = _communicate_bounded(proc, input.encode("utf-8"), timeout)
     finally:
         _stop_group(proc)
-    if len(out) + len(err) > MAX_OUTPUT_BYTES:
-        raise subprocess.SubprocessError("host output exceeds its size limit")
     return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+
+def _communicate_bounded(proc, data: bytes, timeout: float):
+    """Drain both pipes while feeding stdin; enforce the cap before accumulating output."""
+    until = time.monotonic() + timeout
+    buffers = {proc.stdout: bytearray(), proc.stderr: bytearray()}
+    size, offset = 0, 0
+    with selectors.DefaultSelector() as selector:
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_WRITE if stream is proc.stdin else selectors.EVENT_READ)
+        try:
+            while selector.get_map():
+                left = until - time.monotonic()
+                if left <= 0:
+                    raise subprocess.TimeoutExpired(proc.args, timeout)
+                for key, _ in selector.select(left):
+                    stream = key.fileobj
+                    if stream is proc.stdin:
+                        try:
+                            offset += os.write(stream.fileno(), data[offset:offset + 4096])
+                        except BrokenPipeError:
+                            offset = len(data)
+                        if offset >= len(data):
+                            selector.unregister(stream)
+                            stream.close()
+                    else:
+                        chunk = os.read(stream.fileno(), min(65536, MAX_OUTPUT_BYTES - size + 1))
+                        if not chunk:
+                            selector.unregister(stream)
+                            continue
+                        size += len(chunk)
+                        if size > MAX_OUTPUT_BYTES:
+                            raise subprocess.SubprocessError("host output exceeds its size limit")
+                        buffers[stream].extend(chunk)
+            proc.wait(timeout=max(0.001, until - time.monotonic()))
+        finally:
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                stream.close()
+    return bytes(buffers[proc.stdout]), bytes(buffers[proc.stderr])
 
 
 def _stop_group(proc) -> None:
@@ -113,7 +154,14 @@ class HostPlanner:
         remaining = ctx.budget.remaining_time()
         if remaining is not None:
             timeout = min(timeout, remaining)
-        reply = host.call(system_prompt(ctx), prompt(ctx, history), timeout, ctx.budget)
+        try:
+            with execution_deadline(timeout, kind="model-timeout"):
+                reply = host.call(system_prompt(ctx), prompt(ctx, history), timeout, ctx.budget)
+        except LimitExceeded as exc:
+            if exc.kind != "model-timeout":
+                raise
+            ctx.budget.check_time()
+            reply = HostReply(error="timeout")
         if reply.breach:
             host.broken = reply.breach
         if reply.usd is not None:

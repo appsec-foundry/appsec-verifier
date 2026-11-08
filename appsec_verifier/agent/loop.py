@@ -1,4 +1,4 @@
-"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019).
+"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019, VER-036).
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
@@ -27,6 +27,7 @@ from typing import Protocol
 from ..limits import LimitExceeded
 from ..verify import poc
 from ..verify.probes import ProbeContext, ProbeResult
+from .controller import Controller
 from .proof import check_proof
 from .steps import check_action
 from .tools import AgentTools, ToolError
@@ -92,6 +93,7 @@ class AgentProbe:
     def run(self, ctx: ProbeContext) -> ProbeResult:
         planner = self._planner_factory()
         tools = AgentTools(ctx)
+        controller = Controller(ctx)
         history: list[dict] = []
         sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
@@ -109,12 +111,20 @@ class AgentProbe:
 
         for decision in range(1, self._max_steps + 1):
             step = len(history) + 1
+            ctx.controller_state = {
+                "remaining_decisions": self._max_steps - decision + 1,
+                "remaining_request_actions": self._max_steps - sum(
+                    h.get("tool") in ("http_request", "browser_check") for h in history
+                ),
+                "remaining_run_requests": ctx.budget.limits.max_requests - ctx.budget.requests,
+            }
             try:
                 ctx.budget.check_time()
                 ctx.guard.check_window()  # no model call once the authorisation window has closed
                 if ctx.progress is not None:
-                    ctx.progress.activity(step, self._max_steps)
-                proposal = planner.next_step(ctx, history)
+                    ctx.progress.activity(decision, self._max_steps)
+                controller.before_model()
+                proposal = controller.run(lambda: planner.next_step(ctx, history))
             except LimitExceeded as exc:
                 return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
             action = check_action(proposal)  # VER-019: no unchecked arguments
@@ -148,9 +158,12 @@ class AgentProbe:
             name, args = action["tool"], action["args"]
             if name == "run_experiment":
                 try:
-                    requests = tools.experiment_requests(**args)
+                    requests = controller.run(lambda args=args: tools.experiment_requests(**args))
+                except LimitExceeded as exc:
+                    return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
                 except ToolError as exc:
                     result = {"error": str(exc)}
+                    controller.observe(name, args, result)
                     history.append({"tool": name, "args": args, "result": result})
                     _log(ctx, step, tool=name, args=args, result=result)
                     continue
@@ -161,13 +174,15 @@ class AgentProbe:
                         ctx.guard.check_window()
                         if sum(h.get("tool") in ("http_request", "browser_check") for h in history) >= self._max_steps:
                             raise LimitExceeded("attempts", "per-finding request attempt limit reached")
-                        result = tools.http_request(**request)
+                        controller.before("http_request", request)
+                        result = controller.run(lambda request=request: tools.http_request(**request))
                     except ToolError as exc:
                         result = {"error": str(exc)}
                     except LimitExceeded as exc:
                         keep(step, "http_request")
                         return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
                     keep(step, "http_request")
+                    controller.observe("http_request", request, result)
                     if ctx.sessions is not None:
                         result = ctx.sessions.redact(result)
                     history.append({"tool": "http_request", "args": request, "result": result})
@@ -183,18 +198,20 @@ class AgentProbe:
                 continue
             call = {"tool": name, "args": args, **({"note": action["note"]} if action.get("note") else {})}
             if ctx.progress is not None:
-                ctx.progress.activity(step, self._max_steps, name, args)
+                ctx.progress.activity(decision, self._max_steps, name, args)
             try:
                 if name in ("http_request", "browser_check") and sum(
                         h.get("tool") in ("http_request", "browser_check") for h in history) >= self._max_steps:
                     raise LimitExceeded("attempts", "per-finding request attempt limit reached")
-                result = tools.call(name, args)
+                controller.before(name, args)
+                result = controller.run(lambda name=name, args=args: tools.call(name, args))
             except ToolError as exc:
                 result = {"error": str(exc)}
             except LimitExceeded as exc:
                 keep(step, name)
                 return poc.attach(ctx, history, sent, _stopped(ctx, step, exc, **call), None)
             keep(step, name)
+            controller.observe(name, args, result)
             if ctx.sessions is not None:
                 result = ctx.sessions.redact(result)  # VER-016: no credential value reaches the planner
             _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})

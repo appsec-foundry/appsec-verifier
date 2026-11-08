@@ -45,7 +45,7 @@ def test_strip_cross_origin_auth():
 
 def test_out_of_scope_request_refused():
     calls = []
-    c = client(lambda m, u, h: calls.append(u) or Resp())
+    c = client(lambda m, u, h, **kw: calls.append(u) or Resp())
     with pytest.raises(ScopeViolation):
         c.request("GET", "https://evil.example/x")
     assert calls == []  # nothing was sent
@@ -54,7 +54,7 @@ def test_out_of_scope_request_refused():
 def test_in_scope_request_sent_and_counted():
     seen = []
     budget = RunBudget(Limits())
-    c = GuardedHttpClient(ScopeGuard(SCOPE), budget, lambda m, u, h: seen.append((m, u)) or Resp())
+    c = GuardedHttpClient(ScopeGuard(SCOPE), budget, lambda m, u, h, **kw: seen.append((m, u)) or Resp())
     c.request("GET", "https://app.example.com/api/x", {"Authorization": "Bearer t"})
     assert seen == [("GET", "https://app.example.com/api/x")]
     assert budget.requests == 1
@@ -65,7 +65,7 @@ def test_redirect_to_foreign_origin_drops_auth_then_is_refused():
     # dropped AND the new destination must fail the scope check.
     sent = []
 
-    def transport(method, url, headers):
+    def transport(method, url, headers, **kw):
         sent.append((url, dict(headers)))
         if url == "https://app.example.com/login":
             return Resp(302, {"Location": "https://evil.example/steal"})
@@ -80,7 +80,7 @@ def test_redirect_to_foreign_origin_drops_auth_then_is_refused():
 
 def test_budget_exhaustion_stops_client():
     c = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits(max_requests=1)),
-                          lambda m, u, h: Resp())
+                          lambda m, u, h, **kw: Resp())
     c.request("GET", "https://app.example.com/a")
     with pytest.raises(LimitExceeded):
         c.request("GET", "https://app.example.com/b")
@@ -91,7 +91,7 @@ def test_budget_exhaustion_stops_client():
 def test_unusable_redirect_target_is_refused_not_raised(location):
     sent = []
 
-    def transport(method, url, headers):
+    def transport(method, url, headers, **kw):
         sent.append(url)
         return Resp(302, {"Location": location}) if url.endswith("/go") else Resp(200)
 

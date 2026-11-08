@@ -92,7 +92,7 @@ def test_max_attempts_bounds_the_agent_steps_per_finding(tmp_path, monkeypatch):
     class Planner:      # never submits; read_source without --source is a tool error, nothing is contacted
         def next_step(self, ctx, history):
             asked.append(1)
-            return {"tool": "read_source", "args": {"path": "routes/basket.ts"}}
+            return {"tool": "read_source", "args": {"path": f"routes/basket-{len(asked)}.ts"}}
 
     def no_network(method, url, headers, **k):    # only the pre-flight GET of the target is answered (VER-032)
         if (method, url) == ("GET", "https://app.example.com"):

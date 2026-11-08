@@ -17,6 +17,7 @@ import pytest
 from appsec_verifier.agent import AgentProbe, AgentTools, ToolError
 from appsec_verifier.agent.prompts import _system
 from appsec_verifier.cli import _proof_browser, screenshot_option
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
@@ -179,7 +180,9 @@ class FakeBrowser:
 
 def _ctx(cls="xss", browser=None, sessions=None, safe=True):
     plan = FindingPlan(id="T-9", cwe="CWE-79", severity="High", title="xss", match_key="s.ts|CWE-79",
-                       instance="s.ts:1", status="dynamic", cls=cls, reason="r")
+                       instance="s.ts:1", status="dynamic", cls=cls, reason="r",
+                       endpoints=(Endpoint("GET", "/s", None), Endpoint("GET", "/notify", None),
+                                  Endpoint("POST", "/msg", None)))
     return ProbeContext(plan=plan, scope=SCOPE, guard=ScopeGuard(SCOPE), budget=RunBudget(Limits()), http=None,
                         identities=[], callback={}, safe=safe, read_only=safe, sessions=sessions,
                         target_base=BASE, browser=browser, marker=("vrfaa", "bb"))

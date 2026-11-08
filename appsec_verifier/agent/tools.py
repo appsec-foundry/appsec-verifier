@@ -37,7 +37,7 @@ import hashlib
 import json as jsonlib
 import re
 from pathlib import PurePosixPath
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -509,6 +509,11 @@ class AgentTools:
             raise ToolError("choose one body format: json or form")
         if form is not None and m in SAFE_METHODS:
             raise ToolError("form bodies require POST, PUT or PATCH")
+        self._url(path)  # reject malformed URLs as tool errors before parsing their query
+        query = parse_qsl(urlsplit(path).query, keep_blank_values=True)
+        self._check_steering(dict(query), None)
+        # Check every duplicate too; converting to a dict alone could hide a forbidden value.
+        self._check_steering(None, [v for _, v in query])
         self._check_steering(params, json)
         self._check_steering(None, form)
         attempt_marker = None
@@ -516,7 +521,7 @@ class AgentTools:
             from ..tools.browser import new_marker
 
             marker = "".join(self.ctx.marker)
-            values = [*_strings(params), *_strings(json), *_strings(form)]
+            values = [*_strings(params), *_strings(json), *_strings(form), *(v for _, v in query)]
             if marker and any(marker in v for v in values):
                 attempt_marker = "".join(new_marker())
 
@@ -530,6 +535,7 @@ class AgentTools:
                     return value
 
                 params, json, form = (replace_marker(v) for v in (params, json, form))
+                path = urlsplit(path)._replace(query=urlencode([(k, replace_marker(v)) for k, v in query])).geturl()
         url = self._url(path)
         headers = {}
         if role:
@@ -552,7 +558,8 @@ class AgentTools:
             # VER-028: re-obtain the session once when the target rejects it as unauthenticated (401), unless a
             # new session already met a 401 (sessions.renew). A 403 is an authorisation answer, often the very
             # result under test; a new login cannot change it.
-            if sessions is not None and getattr(resp, "status_code", None) == 401 and sessions.renew(role):
+            if m in SAFE_METHODS and sessions is not None and getattr(resp, "status_code", None) == 401 \
+                    and sessions.renew(role):
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json, form)
                 session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []

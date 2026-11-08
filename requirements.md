@@ -234,6 +234,8 @@ optional hardening.
   run would exceed the cost ceiling, it stops; in interactive mode it may ask to
   raise the ceiling, in non-interactive mode it stops with a distinct exit.
 
+- **VER-036: Stop unproductive verification.** Before each model call and tool action, the Verifier checks authorisation, remaining budgets and recorded progress outside the model. Tool actions must stay within the finding under test (VER-008). Repeated failed or redundant actions without new evidence stop after documented finite allowances; planned repetitions required for proof remain permitted. Running actions are bounded by the remaining execution time. A stopped finding retains its evidence and reports the reason without claiming a negative result (VER-024).
+
 - **VER-016: Handle test credentials as secrets.** Session credentials for the
   test identities — bearer tokens, usernames and passwords, client secrets — come
   from external configuration — environment variables or a restricted secret

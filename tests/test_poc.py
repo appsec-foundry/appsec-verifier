@@ -17,6 +17,7 @@ from test_experiments import STRATEGY
 
 from appsec_verifier.agent import AgentProbe, AgentTools
 from appsec_verifier.auth import SessionManager
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
@@ -55,7 +56,10 @@ def _ctx(tmp_path, transport, cls="access-control", browser=None, scope=None):
     sessions = SessionManager(idents, http, env={"TA": TA, "TB": TB})
     plan = FindingPlan(id="T-001", cwe="CWE-639", severity="High", title="Missing ownership check",
                        match_key="routes/basket.ts|CWE-639", instance="routes/basket.ts:1",
-                       status="dynamic", cls=cls, reason="p")
+                       status="dynamic", cls=cls, reason="p",
+                       endpoints=tuple(Endpoint("GET", path, None) for path in
+                                       ("/rest/basket/:id", "/download", "/go", "/search",
+                                        "/fetch", "/s", "/#/search")))
     return ProbeContext(plan=plan, scope=scope, guard=ScopeGuard(scope), budget=RunBudget(Limits()), http=http,
                         identities=idents, callback={}, safe=True, read_only=True, sessions=sessions,
                         target_base=scope["base_url"], evidence_dir=tmp_path / "evidence", browser=browser,
@@ -502,3 +506,65 @@ def test_a_report_with_a_proof_of_concept_is_schema_valid(tmp_path):
     schema = yaml.safe_load((Path(__file__).resolve().parent.parent / "schemas" /
                              "verification.schema.yaml").read_text())
     assert not sorted(e.message for e in validator_for(schema)(schema).iter_errors(doc))
+
+
+def test_final_screenshot_deadline_keeps_verdict_and_har(tmp_path, monkeypatch):
+    import time
+
+    ctx = _ctx(tmp_path, lambda *a, **kw: Resp(302, "", {"location": "https://vrfaa11bb22.invalid/"}),
+               cls="open-redirect", browser=RenderBrowser())
+    ctx.budget = RunBudget(Limits(max_duration_s=1))
+    completed = []
+
+    def stuck(*args):
+        time.sleep(3)
+        completed.append(True)
+        return []
+
+    monkeypatch.setattr(poc, "_exchange_screenshot", stuck)
+    result, _ = _run(ctx, [_get(None, "/go"),
+                          {"verdict": {"verdict": "confirmed", "rationale": "redirected", "proof_steps": [1]}}])
+    assert result.verdict == "confirmed" and result.limits_hit == "time"
+    assert not completed and result.poc and result.poc["steps"]
+    assert any(e["kind"] == "har" for e in result.evidence)
+    assert any("screenshots may be missing" in note for note in result.observations)
+    _, har = _har(tmp_path)
+    assert len(har["log"]["entries"]) == 1
+
+
+def test_expired_run_only_saves_existing_exchanges(tmp_path):
+    ctx = _ctx(tmp_path, lambda *a, **kw: Resp(), browser=RenderBrowser())
+    ticks = [0.0]
+    ctx.budget = RunBudget(Limits(max_duration_s=1), clock=lambda: ticks[0])
+
+    class Planner:
+        def next_step(self, context, history):
+            if not history:
+                return _get("customer-a")
+            ticks[0] = 2.0
+            return {"verdict": {"verdict": "inconclusive", "rationale": "finished"}}
+
+    result = AgentProbe("access-control", Planner).run(ctx)
+    assert result.limits_hit == "time" and result.verdict == "inconclusive"
+    assert result.poc and len(result.poc["steps"]) == 1
+    assert not ctx.browser.calls and not ctx.browser.exchanges
+    _, har = _har(tmp_path)
+    assert len(har["log"]["entries"]) == 1
+
+
+def test_interrupted_har_write_does_not_replace_previous_evidence(tmp_path, monkeypatch):
+    from appsec_verifier.limits import LimitExceeded
+
+    ctx = _ctx(tmp_path, lambda *a, **kw: Resp())
+    ctx.evidence_dir.mkdir()
+    path = ctx.evidence_dir / "T-001-poc.har"
+    path.write_text("previous complete record")
+
+    def interrupted(*args):
+        raise LimitExceeded("time", "interrupted")
+
+    monkeypatch.setattr(poc.os, "replace", interrupted)
+    with pytest.raises(LimitExceeded):
+        poc._write_har(ctx, [])
+    assert path.read_text() == "previous complete record"
+    assert list(ctx.evidence_dir.iterdir()) == [path]

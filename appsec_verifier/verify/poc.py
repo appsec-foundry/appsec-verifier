@@ -43,6 +43,7 @@ import html
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -339,12 +340,18 @@ def _write_har(ctx, steps: list[dict]) -> list[dict]:
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = directory / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', evidence_id(ctx.plan))}-poc.har"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(har, indent=1, default=str))
-    path.chmod(0o600)                 # also when an earlier run left the file with wider rights
+    data = json.dumps(har, indent=1, default=str).encode("utf-8")
+    digest = hashlib.sha256(data).hexdigest()
+    fd, temporary = tempfile.mkstemp(prefix=".har-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     return [{"kind": "har", "path": f"evidence/{path.name}", "redacted": True,
-             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "note": TARGET_DATA_NOTE}]
+             "sha256": digest, "note": TARGET_DATA_NOTE}]
 
 
 def _values(highlight, text: str) -> list[str]:
@@ -568,6 +575,42 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
 
 
 def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
+    """Bound final rendering; retain recorded exchanges after a stop (VER-036).
+
+    Saving existing evidence has a separate five-second shutdown allowance.
+    It never starts a browser, model call or target request.
+    """
+    from ..limits import LimitExceeded, execution_deadline
+
+    remaining = ctx.budget.remaining_time()
+    window = ctx.guard.remaining_time()
+    kind = "window" if window is not None and window <= remaining else "time"
+    seconds = min(remaining, window) if window is not None else remaining
+    try:
+        with execution_deadline(seconds, kind=kind):
+            return _attach(ctx, history, steps, result, cited, highlight)
+    except LimitExceeded as exc:
+        result.limits_hit = result.limits_hit or exc.kind
+        result.observations.append("Evidence rendering stopped at the execution deadline; screenshots may be missing.")
+        if steps and not result.poc:
+            try:
+                with execution_deadline(5):
+                    for step in steps:
+                        step.setdefault("decisive", False)
+                    har = _write_har(ctx, steps)
+                    result.evidence = [*(result.evidence or []), *har]
+                    result.poc = {
+                        "file": har[0]["path"] if har else None,
+                        "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]}
+                                  for s in steps],
+                        "shown": [],
+                    }
+            except LimitExceeded:
+                result.observations.append("Saving recorded exchanges exceeded the five-second shutdown allowance.")
+        return result
+
+
+def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
     result.planning = [{"step": n, "path": h["args"].get("path"),
                         "hypothesis": h["args"].get("hypothesis"), "strategy": h["args"].get("strategy")}
                        for n, h in enumerate(history, 1) if h.get("tool") == "plan_test"
@@ -581,6 +624,7 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
     for step in steps:
         step["decisive"] = step["step"] in decisive
     har = _write_har(ctx, steps)
+    result.evidence = [*(result.evidence or []), *har]
     har_path = har[0]["path"] if har else None
     shown_entries = [(s["step"], _shown_entry(s)) for s in steps if s["decisive"]]
     shown_entries = [(n, e) for n, e in shown_entries if e is not None]
@@ -599,5 +643,5 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
             shots = _page_screenshots(ctx, steps, highlight)
         if shown_entries:                        # the exchanges, also beside a page that shows the proof
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight)
-    result.evidence = [*(result.evidence or []), *har, *shots]
+    result.evidence = [*(result.evidence or []), *shots]
     return result

@@ -137,6 +137,11 @@ class ScopeGuard:
         self.proxy = self.scope.get("proxy") or {}
         self.networks = [n for n in map(parse_network, self.scope.get("networks") or []) if n is not None]
 
+    def remaining_time(self) -> float | None:
+        """Seconds until authorisation expires, for in-flight deadlines (VER-036)."""
+        until = _parse_iso((self.scope.get("window") or {}).get("until"))
+        return max(0.0, (until - self._clock()).total_seconds()) if until else None
+
     def within_window(self, now: datetime | None = None) -> Decision:
         now = now or self._clock()
         w = self.scope.get("window") or {}

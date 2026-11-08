@@ -15,7 +15,10 @@ every further model call of the run as if the ceiling were reached.
 from __future__ import annotations
 
 import math
+import signal
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import yaml
@@ -27,6 +30,51 @@ class LimitExceeded(Exception):
     def __init__(self, kind: str, detail: str):
         super().__init__(detail)
         self.kind = kind  # "requests" | "cost" | "time" | "attempts" | "calls" | "window"
+
+
+class _DeadlineExpired(BaseException):
+    """Not swallowed by SDK/tool handlers for ordinary exceptions (VER-036)."""
+
+    def __init__(self, kind):
+        self.kind = kind
+
+
+@contextmanager
+def execution_deadline(seconds: float, *, kind: str = "time"):
+    """Interrupt synchronous work, including blocked I/O; restore enclosing timers.
+
+    The CLI runs on the main thread. Refuse execution where a real interrupt is
+    unavailable instead of leaving a worker running after a thread timeout.
+    """
+    if seconds <= 0:
+        raise LimitExceeded(kind, "execution deadline reached")
+    if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+        raise LimitExceeded(kind, "execution deadlines require a POSIX main thread")
+    started = time.monotonic()
+    previous = signal.getsignal(signal.SIGALRM)
+    old_delay, old_interval = signal.getitimer(signal.ITIMER_REAL)
+    outer_first = old_delay > 0 and old_delay <= seconds
+    fired = False
+
+    def expired(signum, frame):
+        nonlocal fired
+        fired = True
+        if outer_first and callable(previous):
+            previous(signum, frame)
+        raise _DeadlineExpired(kind)
+
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, min(seconds, old_delay) if old_delay > 0 else seconds)
+    try:
+        try:
+            yield
+        except _DeadlineExpired as exc:
+            raise LimitExceeded(exc.kind, "execution deadline reached") from None
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+        if old_delay > 0 and not (fired and outer_first):
+            signal.setitimer(signal.ITIMER_REAL, max(0.000001, old_delay - (time.monotonic() - started)), old_interval)
 
 
 @dataclass
@@ -83,7 +131,8 @@ class RunBudget:
             return
         now = self._clock()
         if self._next_request_at is not None and now < self._next_request_at:
-            self._sleep(self._next_request_at - now)
+            self._sleep(min(self._next_request_at - now, self.remaining_time()))
+            self.check_time()
             now = self._next_request_at
         self._next_request_at = now + 1.0 / self.limits.rate_rps
 
@@ -115,7 +164,7 @@ class RunBudget:
             raise LimitExceeded("cost", f"cost ceiling ${self.limits.cost_limit_usd:.2f} exceeded")
 
     def check_time(self) -> None:
-        if self.limits.max_duration_s and (self._clock() - self.start) > self.limits.max_duration_s:
+        if self.limits.max_duration_s and (self._clock() - self.start) >= self.limits.max_duration_s:
             raise LimitExceeded("time", f"run time budget {self.limits.max_duration_s}s exceeded")
 
     def remaining_time(self) -> float | None:

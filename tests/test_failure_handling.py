@@ -31,6 +31,7 @@ from appsec_verifier.agent.hosts import MAX_FAILED_CALLS, HostPlanner, HostReply
 from appsec_verifier.agent.registry import agent_registry
 from appsec_verifier.agent.source_reader import SourceReader
 from appsec_verifier.auth import SessionManager
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
@@ -82,7 +83,9 @@ class Target:
 
 def _plans(n=5):
     return [FindingPlan(id=f"F{i}", cwe="CWE-639", severity="high", title="t", match_key="k", instance="a.ts:1",
-                        status="dynamic", cls="access-control", reason="") for i in range(n)]
+                        status="dynamic", cls="access-control", reason="",
+                        endpoints=(Endpoint("GET", "/rest/basket/:id", None), Endpoint("GET", "/a", None)))
+            for i in range(n)]
 
 
 def _run(registry, *, plans=None, limits=None, target=None, identities=(), sessions=None, log=None):
@@ -403,7 +406,7 @@ def test_after_the_request_cap_no_finding_asks_the_model_again():
     target = Target(default=Resp())
     doc, budget = _run(agent_registry(lambda: HostPlanner(host)), limits=Limits(max_requests=2, rate_rps=0),
                        target=target)
-    assert len(target.calls) == 2 and budget.requests == 2 and host.calls == 3
+    assert len(target.calls) == 2 and budget.requests == 2 and host.calls == 2
     assert [(r["verdict"], r["limits_hit"]) for r in doc["results"]] == [("inconclusive", "requests")] + [
         ("not-attempted", "requests")] * 4
     assert "limit was reached by an earlier finding" in doc["results"][1]["rationale"]

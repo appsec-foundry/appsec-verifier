@@ -12,6 +12,7 @@ from test_experiments import STRATEGY
 
 from appsec_verifier.agent import AgentProbe, SourceReader
 from appsec_verifier.auth import SessionManager
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
@@ -51,7 +52,8 @@ def _ctx(tmp_path, transport):
     sessions = SessionManager(idents, http, env={"TA": "AAA", "TB": "BBB"})
     plan = FindingPlan(id="T-001", cwe="CWE-639", severity="High", title="Missing ownership check",
                        match_key="routes/basket.ts|CWE-639", instance="routes/basket.ts:1",
-                       status="dynamic", cls="access-control", reason="p")
+                       status="dynamic", cls="access-control", reason="p",
+                       endpoints=(Endpoint("GET", "/rest/basket/:id", None),))
     return ProbeContext(plan=plan, scope=SCOPE, guard=ScopeGuard(SCOPE), budget=RunBudget(Limits()),
                         http=http, identities=idents, callback={}, safe=True, read_only=True,
                         sessions=sessions, source=SourceReader(tmp_path), target_base=SCOPE["base_url"])
@@ -144,7 +146,7 @@ def test_planner_never_submits_is_inconclusive_not_refuted():
         ctx = _ctx(Path(d), lambda m, u, h, **k: Resp())
         res = AgentProbe("access-control", LoopPlanner, max_steps=3).run(ctx)
     assert res.verdict == "inconclusive"
-    assert res.limits_hit == "attempts"
+    assert res.limits_hit == "stagnation"
 
 
 @pytest.mark.parametrize(
@@ -191,6 +193,7 @@ def test_planner_and_report_never_see_a_credential_value(tmp_path):
                                 "observations": ["Bearer AAA-SECRET-TOKEN"]}}
 
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(200, f'{{"auth":"{h.get("Authorization")}"}}'))
+    ctx.plan.endpoints = (Endpoint("GET", "/whoami", None), Endpoint("GET", "/AAA-not-a-secret", None))
     ctx.sessions._env = {"TA": "AAA-SECRET-TOKEN", "TB": "BBB-SECRET-TOKEN"}
     doc = run_verification(
         assessment_path=P("a.yaml"), scope=SCOPE, scope_path=P("s.yaml"), plans=[ctx.plan], limits=Limits(),
@@ -231,7 +234,9 @@ def test_a_stopping_limit_is_logged(tmp_path):
     records = []
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp())
     ctx.log = records.append
-    ctx.budget = RunBudget(Limits(max_duration_s=1), clock=iter([0, 5]).__next__)
+    from itertools import chain, repeat
+
+    ctx.budget = RunBudget(Limits(max_duration_s=1), clock=chain([0], repeat(5)).__next__)
     res = AgentProbe("access-control", lambda: ScriptedPlanner([]), max_steps=3).run(ctx)
     assert res.limits_hit == "time"
     assert records == [{"finding": "T-001", "step": 1, "stopped": "time", "reason": "run time budget 1s exceeded"}]

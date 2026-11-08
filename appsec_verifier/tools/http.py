@@ -17,6 +17,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+from ..limits import execution_deadline
+
 _SENSITIVE = ("authorization", "cookie", "proxy-authorization")
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 ALLOWED_METHODS = SAFE_METHODS + ("POST", "PUT", "PATCH")
@@ -80,11 +82,25 @@ class GuardedHttpClient:
             decision = self._guard.authorize(url, purpose)
             if not decision.allowed:
                 raise ScopeViolation(decision.reason)
-            self._budget.pace()                   # VER-015: --rate, before the checks it may outlast
-            self._guard.check_window()            # VER-001: the window may close mid-run
+            self._guard.check_window()
             self._budget.check_time()
-            self._budget.note_request()
-            resp = self._transport(method, url, headers, **req_kwargs)
+            remaining = self._budget.remaining_time()
+            window = self._guard.remaining_time()
+            kind = "window" if window is not None and window <= remaining else "time"
+            seconds = min(remaining, window) if window is not None else remaining
+            options = dict(req_kwargs)
+            with execution_deadline(seconds, kind=kind):
+                self._budget.pace()
+                self._guard.check_window()        # the wait may have exhausted either boundary
+                self._budget.check_time()
+                remaining = self._budget.remaining_time()
+                window = self._guard.remaining_time()
+                seconds = min(remaining, window) if window is not None else remaining
+                options["timeout"] = min(options.get("timeout", seconds), seconds)
+                self._budget.note_request()
+                resp = self._transport(method, url, headers, **options)
+            self._budget.check_time()
+            self._guard.check_window()
 
             status = getattr(resp, "status_code", None)
             resp_headers = getattr(resp, "headers", {}) or {}

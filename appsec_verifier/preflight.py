@@ -263,13 +263,17 @@ def generation_test(host, budget, *, timeout: float = GENERATION_TIMEOUT_S, show
     limit). It passes only when the host stays confined and the reply is exactly
     the requested step. The call's cost is named only with `show_costs`."""
     from .agent.steps import parse_step  # the agent package is loaded only when a model is used
+    from .limits import execution_deadline
 
     label = "Model test"
     usd = None
     try:
         budget.note_cost(0.0)
         budget.note_call()
-        reply = host.call(_TEST_SYSTEM, _TEST_PROMPT, timeout, budget)
+        timeout = min(timeout, budget.remaining_time())
+        with execution_deadline(timeout):
+            reply = host.call(_TEST_SYSTEM, _TEST_PROMPT, timeout, budget)
+        budget.check_time()
         usd = reply.usd
         if usd is not None:
             budget.note_cost(usd)

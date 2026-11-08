@@ -63,7 +63,9 @@ def system_prompt(ctx) -> str:
 def prompt(ctx, history: list[dict]) -> str:
     steps = [{"step": n, "action": h.get("tool"), "args": h.get("args"),
               "result": bounded(h.get("result"))} for n, h in enumerate(history, 1)]
-    return _seed(ctx) + "\n\nSteps so far (JSON):\n" + json.dumps(steps) + "\n\nReply with the next step."
+    return (_seed(ctx) + "\nController budget (including this decision): "
+            + json.dumps(getattr(ctx, "controller_state", {}))
+            + "\n\nSteps so far (JSON):\n" + json.dumps(steps) + "\n\nReply with the next step.")
 
 
 def inconclusive(reason: str) -> dict:

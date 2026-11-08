@@ -130,6 +130,8 @@ Before it contacts the target, `verify` shows a test plan: the findings it will 
 
 While `verify` runs, it prints its progress on standard error, each finding set apart by a blank line: its title, one entry per request or source read of the agent with what it checks, the request it tested and the result, and one with the verdict and its reason: green confirmed, red not reproduced, yellow inconclusive. Each entry shows the finding, the share of findings done, the run time and the time left. When costs are shown, each step gives its cost and the verdict the run's spend. In a terminal the tested request and the amounts are highlighted, and a status line underneath shows the run's spend so far, the running step and how long it has been running. [`docs/cli.md`](docs/cli.md#verify--verify-findings-against-a-running-target) describes the columns.
 
+The Verifier checks each proposed action against the finding and the remaining time. It stops unproductive repetitions with `inconclusive` and keeps the evidence collected so far. Required repeated proof controls remain allowed. Final screenshots share the execution deadline; saving recorded exchanges has a separate five-second shutdown allowance. Active verification requires POSIX deadline support; details and repetition allowances are in [continuous control](docs/cli.md#continuous-control-ver-036).
+
 `verify` writes to `--output` (default `./verification`):
 
 - `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on, as raw HTTP with the decisive part of the response.

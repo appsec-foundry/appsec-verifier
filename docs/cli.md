@@ -123,9 +123,21 @@ Every limit must be greater than 0; only `--rate` accepts 0. A negative or zero 
 
 Once the cost ceiling, the request cap, the call cap, the run time or the scope window is reached, the finding under test ends `inconclusive` and the remaining findings are not tested: they appear as `not-attempted` with the limit in `limits_hit`, no further model call is made, and the run exits with 3. After three failed model calls in a row, for example an exhausted quota or a rejected key, the run makes no further model call and the remaining findings end `inconclusive` with the reason.
 
-A failed request is not retried; the only resend is one new login after the target answers 401. When the request is answered 401 again with the new session, that identity is not logged in again until one of its requests is accepted. A login the target refuses is not tried again in the run. Each answer is read for at most 30 seconds and up to 10 MiB after decompression; a slower or larger answer ends that request with an error the agent sees.
+A failed request is not retried; only GET, HEAD and OPTIONS may be resent once after a 401 and session renewal. POST, PUT and PATCH are never automatically resent. When the request is answered 401 again with the new session, that identity is not logged in again until one of its requests is accepted. A login the target refuses is not tried again in the run. Each answer is read for at most 30 seconds and up to 10 MiB after decompression; a slower or larger answer ends that request with an error the agent sees.
 
 Ctrl-C stops the run: the finding under test ends `inconclusive`, the remaining ones are `not-attempted`, the report is written with the results so far and `meta.interrupted: true`, and the run exits with 130.
+
+### Continuous control (VER-036)
+
+Before each model call and tool action, the Verifier checks the remaining time and authorisation window. It checks every request in a batch separately. Active work, including final proof rendering and screenshots, is interrupted when either deadline expires. Recorded exchanges are saved without browser or network activity, with a separate five-second shutdown allowance. A screenshot timeout preserves the established verdict and recorded evidence, notes the missing rendering and stops further findings. This requires a POSIX main thread; active verification stops where that deadline mechanism is unavailable. Offline commands remain available.
+
+A request must match a route in the selected finding variant, the finding's declared endpoints or its operator-declared test resources. With source access, the nearest preceding literal `get('/route', ...)`, `app.get` or `router.get` declaration within 40 lines of the finding's evidenced location can also supply a route, including corresponding HTTP methods. Missing routes stop requests rather than allowing guesses. An accepted test plan narrows subsequent requests to its route and method; experiment requests must use its declared input and control values. Access-control requests retain the declared resource inputs and roles. Variant input declarations also restrict parameter names. Diagnostic requests may precede a plan within those same boundaries.
+
+The same read action or request may execute twice per finding, allowing repeated proof controls. The same write request may execute only once. A third repetition stops before execution. Three consecutive tool errors or HTTP server errors stop before the next model call. Rewording a plan does not reset these allowances. The finding ends `inconclusive` with `limits_hit: stagnation`, its reason and collected evidence; other findings may continue. This is not a negative verdict about the target.
+
+Model decisions, request actions and actual HTTP requests are counted separately. `--max-attempts` limits both decisions and HTTP/browser actions per finding. A batch uses one decision but multiple request actions; browser resources and logins count against `--max-requests`. The model receives the remaining decision and request allowances with each step.
+
+Source files larger than 1 MiB are refused before decoding. Agent CLI stdout and stderr together are limited to 1 MiB while they are read; exceeding that limit terminates the process group. Marker restrictions also apply to query parameters embedded in request URLs.
 
 ### Output mode and run mode
 

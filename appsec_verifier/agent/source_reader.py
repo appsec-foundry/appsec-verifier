@@ -19,6 +19,7 @@ _SECRET_DIRS = frozenset({".git", ".hg", ".svn", ".ssh", ".aws", ".gnupg", ".doc
 _SECRET_NAMES = frozenset({".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd", ".git-credentials",
                            "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"})
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
+MAX_SOURCE_BYTES = 1_048_576  # total read cap, before decoding or splitting (VER-036)
 _ENV_TEMPLATES = (".example", ".sample", ".template", ".dist")
 
 
@@ -62,7 +63,11 @@ class SourceReader:
     def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
         p = self._resolve(relpath)
         try:
-            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            with p.open("rb") as stream:
+                data = stream.read(MAX_SOURCE_BYTES + 1)
+            if len(data) > MAX_SOURCE_BYTES:
+                raise SourceAccessError("source exceeds the 1 MiB read limit")
+            lines = data.decode("utf-8", errors="replace").splitlines()
         except OSError as exc:
             raise SourceAccessError(f"cannot read {relpath!r}: {type(exc).__name__}") from exc
         ctx = self.context_lines if context is None else context

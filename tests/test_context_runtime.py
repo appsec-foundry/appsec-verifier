@@ -172,6 +172,7 @@ def test_forms_obey_guard_mode_and_marker_steering(tmp_path):
     with pytest.raises(ToolError, match="out of scope"):
         tools.http_request(method="POST", path="https://outside.invalid/submit", form={"q": "value"})
     tools.http_request(method="POST", path="/submit", form={"q": "value"})
+    assert 0 < sent[0][2].pop("timeout") <= ctx.http._budget.limits.max_duration_s
     assert sent == [("POST", "https://app.example.com/submit", {"data": {"q": "value"}})]
     ctx.plan = replace(ctx.plan, cls="path-traversal")
     with pytest.raises(ToolError, match="marker file"):

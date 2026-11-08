@@ -428,7 +428,7 @@ def _verify_run(tmp_path, monkeypatch, capsys, info, *extra, usd=0.0):
              "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
     (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))
     (tmp_path / "assessment.yaml").write_text(yaml.safe_dump({"threats": [
-        {"id": "T-1", "cwe": "CWE-639", "severity": "high", "title": "idor",
+        {"id": "T-1", "cwe": "CWE-639", "severity": "high", "title": "idor", "scenario": "GET /rest/basket/2",
          "evidence": {"file": "routes/basket.ts", "line": 1}}]}))
 
     class Planner:

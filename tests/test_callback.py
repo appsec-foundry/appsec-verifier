@@ -120,7 +120,7 @@ def test_verify_confirms_ssrf_when_the_target_calls_the_listener(tmp_path, monke
              "callback": {"expect_rejected": True, "host": "127.0.0.1", "port": port, "base_url": f"http://127.0.0.1:{port}"}}
     (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))
     (tmp_path / "assessment.yaml").write_text(yaml.safe_dump({"threats": [
-        {"id": "T-9", "cwe": "CWE-918", "severity": "high", "title": "ssrf",
+        {"id": "T-9", "cwe": "CWE-918", "severity": "high", "title": "ssrf", "scenario": "GET /fetch",
          "evidence": {"file": "routes/fetch.ts", "line": 1}}]}))
     seen = {}
 
