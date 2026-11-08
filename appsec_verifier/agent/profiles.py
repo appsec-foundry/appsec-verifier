@@ -29,7 +29,9 @@ def resolve(profile: str, *, model: str | None = None, environ=None, check_acces
     `check_access` asks an API host for the model's metadata once (VER-032); an
     agent CLI has only its local login checked. `info["check"]` says which.
     `info["api_billing"]` says whether the run is billed by the API, so the
-    console shows its costs without --show-costs, as in AppSec Analyzer."""
+    console shows its costs without --show-costs, as in AppSec Analyzer.
+    `info["runtime_name"]` is the runtime without its version, for the agent row
+    of each finding on the console."""
     environ = os.environ if environ is None else environ
     if profile == "anthropic-api":
         from .host_anthropic import AnthropicHost as host_cls
@@ -49,7 +51,7 @@ def resolve(profile: str, *, model: str | None = None, environ=None, check_acces
         host.check_access(ACCESS_TIMEOUT_S)
         check = "model metadata accessible"
     info = {"profile": profile, "model": host.model, "runtime": f"{host.label} {host.version}".strip(),
-            "auth": host.auth, "check": check, "api_billing": host.api_billing}
+            "runtime_name": host.label, "auth": host.auth, "check": check, "api_billing": host.api_billing}
     return PlannerFactory(host), info
 
 

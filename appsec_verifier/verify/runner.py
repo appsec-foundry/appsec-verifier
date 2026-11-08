@@ -204,7 +204,7 @@ def run_verification(
                 rationale=f"not tested: the run's {stopped} limit was reached by an earlier finding",
             )
             if progress is not None:
-                progress.finding(plan)
+                progress.finding(plan, agent=False)  # no agent starts for it
                 progress.finished(plan, res)
         else:
             if shown and progress is not None:

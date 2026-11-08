@@ -5,7 +5,11 @@ FINDING is the finding under test with its position among the findings that get 
 ``start`` and ``done`` for a finding's bounds, ``·`` for an agent step, ``↻`` for a step the step
 contract refused and ``⚠`` for a limit that stopped the finding. A blank line sets each finding apart.
 The ``start`` entry gives the finding's title, then its severity, class and the requests the assessment
-names. A step entry gives the agent's note on what the step checks, then the request it tested with its
+names, then the agent that tests it: its model in AppSec Analyzer's short form (``Sonnet 4.5``) and
+runtime, its step budget, the identities it may act as and whether it may read source code. A finding
+an earlier run-wide limit stopped gets no agent row, since no agent starts for it. AppSec Analyzer names
+its agents' models in parentheses on a phase's start line; here a finding has one agent, so it gets a
+row of its own. A step entry gives the agent's note on what the step checks, then the request it tested with its
 query and body, the result and how long the model took to propose the step; the ``done`` entry gives the
 verdict, then the agent's rationale. When the run shows costs (API billing, or ``--show-costs`` as in
 AppSec Analyzer), each step gives its model cost, the ``done`` entry the finding's cost and the run's
@@ -17,7 +21,8 @@ finding has finished it shows that limit (``≤29m``).
 
 On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
 long row wraps under its column; a status line under the grid is redrawn every ``TICK_SECONDS`` with a
-spinner, a progress bar, the run's spend, the running step and its age. Off a terminal (CI, logs) each
+spinner, a progress bar, the run's spend, the running step (``Sonnet 4.5 plans`` while the model call
+runs, otherwise the request) and its age. Off a terminal (CI, logs) each
 entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
 assessment, the model or the target passes the run's redaction and `printable` before it is shown, so no
 credential value, line break or escape sequence from it reaches the console.
@@ -50,6 +55,17 @@ _FRAME_OPEN = "\033[?2026h\033[?25l\r"
 _FRAME_CLOSE = "\r\033[?25h\033[?2026l"
 _CLEAR = "\r\033[K"
 _CLIP = 80
+_MODEL_ID = re.compile(r"(?:claude-)?(haiku|sonnet|opus|fable)(?:-(\d+)(?:-(\d{1,2}))?)?(?:-\d{8})?")
+
+
+def short_model(model: str) -> str:
+    """A model as the grid names it, as AppSec Analyzer's ``short_model`` does: ``Sonnet 5.5`` for
+    ``claude-sonnet-5-5``, ``Haiku`` for ``haiku``; an ID of another form without its vendor prefix."""
+    match = _MODEL_ID.fullmatch(model)
+    if not match:
+        return model.removeprefix("claude-")
+    family, major, minor = match.groups()
+    return " ".join(part for part in (family.capitalize(), f"{major}.{minor}" if minor else major) if part)
 
 
 def duration(seconds: float) -> str:
@@ -179,7 +195,8 @@ class RunProgress:
     HEARTBEAT_SECONDS = 120
     BAR_WIDTH = 12
 
-    def __init__(self, stream=None, *, model: str | None = None, redact=None, remaining_time=None,
+    def __init__(self, stream=None, *, model: str | None = None, runtime: str | None = None,
+                 max_steps: int | None = None, roles=(), source: bool = False, redact=None, remaining_time=None,
                  spent=None, cost_limit: float = 0.0, api_prices: bool = False,
                  live: bool | None = None, clock=time.time, env=None, out_dir=None):
         self._stream = sys.stderr if stream is None else stream
@@ -192,8 +209,14 @@ class RunProgress:
             except (AttributeError, ValueError):
                 live = False
         self.live = live
-        self._model = _clip(model, 40) if model else "the model"
+        self._model = _clip(short_model(str(model)), 40) if model else "the model"
         self._redact = redact
+        # The agent row of each start entry: what tests the finding, with which budget and authority.
+        who = " via ".join(part for part in (self._model if model else "", _clip(runtime or "", 40)) if part)
+        names = _clip(self._text(", ".join(str(role) for role in roles)), 60)
+        self._agent = _line(f"agent {who}".strip(), f"≤{max_steps} steps" if max_steps else "",
+                            f"identities {names}" if names else "no identities",
+                            "source code" if source else "")
         self._remaining_time = remaining_time
         self._spent, self._cost_limit, self._api_prices = spent, cost_limit, api_prices   # spent: None hides costs
         self._spent_at = self._step_spent_at = 0.0     # the spend when the finding began and after its last step
@@ -233,7 +256,8 @@ class RunProgress:
                 sys.stdout = _StatusGuard(sys.stdout, self)
         self._thread.start()
 
-    def finding(self, plan) -> None:
+    def finding(self, plan, *, agent: bool = True) -> None:
+        """The finding's ``start`` entry; ``agent`` off when no agent starts for it."""
         with self._lock:
             if self.number:
                 self._write("")         # sets the finding apart from the one before
@@ -248,11 +272,12 @@ class RunProgress:
             requests = ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])   # what the assessment names
             self._record("start", [(title, "bold")],
                          _line((severity, severity if severity in _SEVERITIES else "muted"),
-                               _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)))
+                               _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)),
+                         *([self._agent] if agent else []))
 
     def activity(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> None:
         """What runs now, for the status line and the heartbeat: a model call or a tool call."""
-        what = f"asking {self._model}" if tool is None else _action(tool, self._text(args or {}))
+        what = f"{self._model} plans" if tool is None else _action(tool, self._text(args or {}))
         with self._lock:
             now = self._clock()
             if tool is None:

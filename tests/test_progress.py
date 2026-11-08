@@ -17,7 +17,7 @@ from appsec_verifier import cli
 from appsec_verifier.agent import AgentProbe
 from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
-from appsec_verifier.progress import RunProgress, _StatusGuard, duration
+from appsec_verifier.progress import RunProgress, _StatusGuard, duration, short_model
 from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.verify.probes import ProbeContext, ProbeRegistry, ProbeResult
 from appsec_verifier.verify.runner import run_verification
@@ -75,7 +75,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     header, start, step, done = _rows(out)[1:]
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
-    assert start.endswith("Basket of another user readable · high · access-control")
+    assert start.endswith("Basket of another user readable · high · access-control · agent Sonnet 5.5 · no identities")
     assert step.endswith("step 1 · GET /rest/basket/2 as alice → 200 · 512 B")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
     assert done.endswith("confirmed (high) · proof checked · 2 steps · 1m00s · a read b")
@@ -94,9 +94,10 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
                       Endpoint("GET", "/b", None))
     progress.begin([plan])
     progress.finding(plan)
-    title, facts = _rows(out)[-2:]
+    title, facts, agent = _rows(out)[-3:]
     assert SGR.sub("", title).endswith("  Basket of another user readable") and st(plan.title, "bold") in title
     assert SGR.sub("", facts).strip() == "high · access-control · GET /rest/basket/:id (login), PUT /a"
+    assert SGR.sub("", agent).strip() == "agent · no identities"
     assert facts.startswith(" " * len(SGR.sub("", title).split("Basket")[0])) and st("high", "high") in facts
     assert st("1/1 T-1", "bold") in title and st("1/1 T-1", "accent", "bold") not in out.getvalue()
     for verdict, label, role in (("confirmed", "confirmed", "ok"), ("not-reproducible", "not reproducible", "critical"),
@@ -104,6 +105,44 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
                                  ("inconclusive", "inconclusive", "warn")):
         progress.finished(plan, ProbeResult(verdict=verdict))
         assert st(label, role) in _rows(out)[-1], verdict
+
+
+@pytest.mark.parametrize("model, short", [("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-opus-4-1-20250805", "Opus 4.1"),
+                                          ("haiku", "Haiku"), ("claude-fable-5-1", "Fable 5.1"),
+                                          ("gpt-5.1-codex", "gpt-5.1-codex")])
+def test_models_are_named_in_the_short_form_of_the_analyzer(model, short):
+    assert short_model(model) == short
+
+
+def test_the_start_entry_names_the_agent_its_step_budget_and_what_it_may_use(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
+    out, clock = Tty(), Clock()
+    progress = RunProgress(out, model="claude-sonnet-4-5-20250929", runtime="Claude CLI", max_steps=12,
+                           roles=["alice", "bob"], source=True, clock=clock, env={}, live=False)
+    progress.begin([_plan(), _plan("T-2")])
+    progress.finding(_plan())
+    assert SGR.sub("", _rows(out)[-1]).strip() == ("agent Sonnet 4.5 via Claude CLI · ≤12 steps · "
+                                                   "identities alice, bob · source code")
+    progress.activity(1, 12)
+    assert progress._activity == "step 1/12 · Sonnet 4.5 plans"         # what the status line shows
+    progress.finding(_plan("T-2"), agent=False)     # stopped by an earlier run-wide limit: no agent starts
+    assert SGR.sub("", _rows(out)[-1]).strip() == "high · access-control"
+
+
+def test_a_finding_an_earlier_run_wide_limit_stopped_is_shown_without_an_agent():
+    class Probe:
+        cls = "access-control"
+
+        def run(self, ctx):
+            return ProbeResult(verdict="inconclusive", limits_hit="requests")
+
+    recorder = Recorder()
+    scope = {"base_url": "https://app.example.com", "hosts": ["app.example.com"]}
+    run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=[_plan("T-1"), _plan("T-2")],
+                     limits=Limits(), identities=[], registry=ProbeRegistry({"access-control": Probe()}),
+                     verifier_version="t", target_base=scope["base_url"], authorization={}, progress=recorder)
+    assert recorder.events == [("begin", ["T-1", "T-2"]), ("finding", "T-1"), ("finished", "T-1", "inconclusive"),
+                               ("finding", "T-2", "no agent"), ("finished", "T-2", "not-attempted")]
 
 
 def test_a_step_line_shows_the_agent_note_the_payload_and_the_model_time(monkeypatch):
@@ -198,7 +237,7 @@ def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_s
     progress.activity(4, 12)
     clock.now += 120
     progress.tick()
-    assert _rows(out)[-1].endswith("$1.27 of $10.00 · step 4/12 · asking m · 2m00s")
+    assert _rows(out)[-1].endswith("$1.27 of $10.00 · step 4/12 · m plans · 2m00s")
 
     live = Tty()
     progress = RunProgress(live, model="m", clock=clock, env={}, spent=lambda: spent[0], cost_limit=10.0,
@@ -208,7 +247,7 @@ def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_s
     progress.activity(1, 12)
     progress.tick()
     frame = live.getvalue().rsplit("\n", 1)[1]
-    assert progress.st("$1.27", "accent") + " of $10.00 · step 1/12 · asking m" in frame
+    assert progress.st("$1.27", "accent") + " of $10.00 · step 1/12 · m plans" in frame
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive"))
     done = _rows(live)[-1]
@@ -266,12 +305,15 @@ def test_off_a_terminal_a_blank_line_sets_each_finding_apart():
     assert rows[1].endswith("step 1 · n · GET /a → 200") and rows[2].endswith(" · why")
 
 
-def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or_secret():
+def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or_secret(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")
     out = Tty()
     redact = lambda v: yaml.safe_load(yaml.safe_dump(v).replace("s3cret", "[redacted]"))  # noqa: E731
-    progress = RunProgress(out, redact=redact, clock=Clock(), env={"FORCE_COLOR": "1"}, live=False)
+    progress = RunProgress(out, model=f"m{HOSTILE}", runtime=f"Claude CLI {HOSTILE}", roles=[f"alice s3cret{HOSTILE}"],
+                           redact=redact, clock=Clock(), env={"FORCE_COLOR": "1"}, live=False)
     progress.begin([_plan()])
     progress.finding(_plan(id=f"T-1{HOSTILE}", title=f"title {HOSTILE}"))
+    assert "agent m" in out.getvalue() and "identities alice [redacted]" in out.getvalue()
     progress.activity(1, 12, "http_request", {"path": f"/x?t=s3cret{HOSTILE}", "role": f"a{HOSTILE}"})
     progress.step({"step": 1, "tool": "http_request", "args": {"path": f"/x?t=s3cret{HOSTILE}"},
                    "result": {"error": f"refused s3cret {HOSTILE}"}})
@@ -294,7 +336,7 @@ def test_on_a_terminal_the_status_line_shows_the_running_step_and_is_cleared_bef
     progress.tick()
     frame = out.getvalue().rsplit("\n", 1)[1]
     assert frame.startswith("\x1b[?2026h\x1b[?25l\r") and frame.endswith("\r\x1b[?25h\x1b[?2026l")
-    assert "step 3/12 · asking m · 7s" in frame and "─" * RunProgress.BAR_WIDTH in frame
+    assert "step 3/12 · m plans · 7s" in frame and "─" * RunProgress.BAR_WIDTH in frame
     before = out.getvalue()
     progress.step({"step": 3, "tool": "read_source", "args": {"path": "a.ts", "around_line": 4}, "result": {}})
     added = out.getvalue()[len(before):]
@@ -330,7 +372,7 @@ def test_off_a_terminal_a_quiet_stretch_gets_a_heartbeat_line():
     assert len(_rows(out)) == 3
     clock.now += 1
     progress.tick()
-    assert _rows(out)[-1].endswith("step 2/12 · asking m · 2m00s")
+    assert _rows(out)[-1].endswith("step 2/12 · m plans · 2m00s")
     assert "\x1b" not in out.getvalue()
     progress.close()
 
@@ -350,8 +392,8 @@ class Recorder:
     def begin(self, plans):
         self.events.append(("begin", [plan.id for plan in plans]))
 
-    def finding(self, plan):
-        self.events.append(("finding", plan.id))
+    def finding(self, plan, agent=True):
+        self.events.append(("finding", plan.id) if agent else ("finding", plan.id, "no agent"))
 
     def activity(self, step, of, tool=None, args=None):
         self.events.append(("activity", step, of, tool))
@@ -454,9 +496,11 @@ def _verify_run(tmp_path, monkeypatch, capsys, info, *extra, usd=0.0):
 
 
 def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_path, monkeypatch, capsys):
-    info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none", "api_billing": True}
+    info = {"profile": "anthropic-api", "model": "m", "runtime": "Fake API 1.0", "runtime_name": "Fake API",
+            "auth": "none", "api_billing": True}
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, usd=0.25)
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
+    assert any(row.endswith(" · agent m via Fake API · ≤12 steps · no identities") for row in rows)
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
     assert rows[-1].split()[3:5] == ["done", "100%"] and "inconclusive" in rows[-1]
     assert " · $0.50 · run $0.50 of $10.00 · " in rows[-1]                 # API billing: costs shown
