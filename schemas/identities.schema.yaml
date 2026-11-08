@@ -6,15 +6,18 @@ description: |
   `appsec-verifier verify`. Each identity is a role label plus the mechanism
   that obtains its session (VER-028). This file holds NO secret values: every
   credential, token, and client secret is named by the environment variable that
-  carries it (`*_env`), read at run time (VER-016). The role label is all that
-  appears in the report; captured requests are redacted of Authorization
+  carries it (`*_env`, `headers_env`), read at run time; in an interactive run a
+  variable that is not set is asked for hidden (VER-016). A `command` identity
+  names the operator's login program instead (VER-040). The role label is all
+  that appears in the report; captured requests are redacted of Authorization
   headers, cookies, and token parameters.
 
   Access-control / IDOR proofs contrast two independent identities (VER-010), so
   such a run needs at least two with sessions plus, often, an `anonymous` one.
 
-  Each identity sends its credentials ONLY to the endpoint it names, which must
-  be the target or a host listed in the scope's `auth_hosts` (VER-028, VER-001).
+  Each identity sends its credentials ONLY to the endpoint it names, or that its
+  issuer's discovery document names, which must be the target or a host listed
+  in the scope's `auth_hosts` (VER-028, VER-001).
 
 type: object
 required: [identities]
@@ -41,35 +44,77 @@ properties:
             - none                       # unauthenticated (e.g. anonymous probes)
             - bearer                     # static bearer token supplied via env
             - basic                      # HTTP Basic with username + password
-            - form                       # HTML form login (username + password)
-            - oidc-password              # OIDC resource-owner password grant
+            - session                    # headers copied from a signed-in browser, via env (headers_env)
+            - form                       # JSON login form (username + password) that returns a token
+            - oidc-password              # OIDC resource-owner password grant (test realms)
             - oidc-client-credentials    # OIDC client-credentials grant
-            - oidc-authorization-code    # browser-driven OIDC authorization code
+            - oidc-authorization-code    # authorization code with PKCE in the operator's own browser
+            - oidc-device-code           # device-code flow: sign in on any device with a code
+            - command                    # the operator's login program prints the session (VER-040)
 
         auth:
           type: object
           description: |
-            Method-specific parameters. Secret values are never here — only env
+            Method-specific parameters. Secret values are never here, only env
             references. `target_origin` is where the obtained token/session is
             attached; it defaults to the target base URL. The endpoint fields
-            (`login_url`, `token_url`, `authorize_url`) must resolve to the target
-            or a scope `auth_hosts` entry.
+            (`login_url`, `token_url`, `authorize_url`, `device_url`, `issuer`)
+            must resolve to the target or a scope `auth_hosts` entry.
           additionalProperties: false
           properties:
             target_origin:    { type: [string, "null"] }
             token_env:        { type: [string, "null"], description: "method=bearer: env var holding the token." }
             username_env:     { type: [string, "null"] }
             password_env:     { type: [string, "null"] }
+            headers_env:
+              type: object
+              description: "method=session: header name -> env var holding its value, e.g. Cookie: VERIFIER_A_COOKIE."
+              minProperties: 1
+              propertyNames: { pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$" }
+              additionalProperties: { type: string, minLength: 1 }
             login_url:        { type: [string, "null"], description: "method=form: form submit endpoint." }
             username_field:   { type: [string, "null"] }
             password_field:   { type: [string, "null"] }
+            issuer:           { type: [string, "null"], description: "OIDC issuer; its discovery document names the endpoints not given." }
             token_url:        { type: [string, "null"], description: "OIDC token endpoint." }
             authorize_url:    { type: [string, "null"], description: "oidc-authorization-code: authorize endpoint." }
-            redirect_uri:     { type: [string, "null"] }
+            device_url:       { type: [string, "null"], description: "oidc-device-code: device authorization endpoint." }
+            redirect_uri:
+              type: [string, "null"]
+              description: "oidc-authorization-code: fixed loopback redirect, http://127.0.0.1:<port>/<path> or http://localhost:<port>/<path>; default a free port on 127.0.0.1."
+            prompt:
+              type: [string, "null"]
+              enum: [login, select_account, consent, null]
+              description: "oidc-authorization-code: OIDC prompt; default login, so each role signs in anew."
             client_id:        { type: [string, "null"], description: "Non-secret client id; use client_id_env if confidential." }
             client_id_env:    { type: [string, "null"] }
             client_secret_env: { type: [string, "null"] }
+            client_auth:
+              type: [string, "null"]
+              enum: [post, basic, null]
+              description: "How a confidential client sends its secret: in the body (post, default) or as HTTP Basic."
             scope:            { type: [string, "null"], description: "OIDC scopes, space-separated." }
+            audience:         { type: [string, "null"], description: "audience parameter, for providers that require it (e.g. Auth0)." }
+            resource:         { type: [string, "null"], description: "resource parameter (RFC 8707, e.g. Entra ID v1)." }
+            token:
+              type: [string, "null"]
+              enum: [access, id, null]
+              description: "OIDC: attach the access token (default) or the ID token."
+            command:
+              type: array
+              description: "method=command: the login program and its arguments, run without a shell from this file's directory."
+              minItems: 1
+              items: { type: string, minLength: 1 }
+            headers:
+              type: array
+              description: "method=command: header names the program may set; default [Authorization]."
+              minItems: 1
+              items: { type: string, pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$" }
+            timeout:
+              type: number
+              exclusiveMinimum: 0
+              maximum: 900
+              description: "method=command: seconds the program may take; default 120."
             check_url:
               type: [string, "null"]
               description: |
@@ -85,11 +130,33 @@ properties:
           then: { required: [auth], properties: { auth: { required: [token_env] } } }
         - if:  { properties: { method: { const: basic } } }
           then: { required: [auth], properties: { auth: { required: [username_env, password_env] } } }
+        - if:  { properties: { method: { const: session } } }
+          then: { required: [auth], properties: { auth: { required: [headers_env] } } }
         - if:  { properties: { method: { const: form } } }
           then: { required: [auth], properties: { auth: { required: [login_url, username_env, password_env] } } }
         - if:  { properties: { method: { const: oidc-password } } }
-          then: { required: [auth], properties: { auth: { required: [token_url, username_env, password_env] } } }
+          then:
+            required: [auth]
+            properties: { auth: { required: [username_env, password_env], anyOf: [{ required: [token_url] }, { required: [issuer] }] } }
         - if:  { properties: { method: { const: oidc-client-credentials } } }
-          then: { required: [auth], properties: { auth: { required: [token_url, client_secret_env] } } }
+          then:
+            required: [auth]
+            properties: { auth: { required: [client_secret_env], anyOf: [{ required: [token_url] }, { required: [issuer] }] } }
         - if:  { properties: { method: { const: oidc-authorization-code } } }
-          then: { required: [auth], properties: { auth: { required: [authorize_url, token_url, username_env, password_env] } } }
+          then:
+            required: [auth]
+            properties:
+              auth:
+                allOf:
+                  - anyOf: [{ required: [client_id] }, { required: [client_id_env] }]
+                  - anyOf: [{ required: [issuer] }, { required: [authorize_url, token_url] }]
+        - if:  { properties: { method: { const: oidc-device-code } } }
+          then:
+            required: [auth]
+            properties:
+              auth:
+                allOf:
+                  - anyOf: [{ required: [client_id] }, { required: [client_id_env] }]
+                  - anyOf: [{ required: [issuer] }, { required: [device_url, token_url] }]
+        - if:  { properties: { method: { const: command } } }
+          then: { required: [auth], properties: { auth: { required: [command] } } }

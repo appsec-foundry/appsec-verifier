@@ -3,9 +3,11 @@ default is asked, the severity floor (high) and the profile (claude) are
 defaults that options change, the next lower severity is offered when nothing
 of high or above can be verified, options are not asked again, invalid answers
 are asked again, a found scope file is used as it is or blocks, without one only
-the typed URL's host is tested and no file is written, no secret is asked,
-cancel contacts nothing, Enter confirms in the guided run but not in a run
-without questions, and without a terminal nothing is asked."""
+the typed URL's host is tested and no file is written, no visible question asks
+for a secret (missing values are asked hidden, sessions can be pasted hidden),
+a found file's login programs need their own yes, cancel contacts nothing,
+Enter confirms in the guided run but not in a run without questions, and
+without a terminal nothing is asked."""
 
 from __future__ import annotations
 
@@ -57,9 +59,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.chdir(cwd)
     (run / "assessment.yaml").write_text(yaml.safe_dump({"threats": THREATS}))
     (run / "scope.yaml").write_text(yaml.safe_dump(SCOPE))
-    calls = []
-    monkeypatch.setattr(cli, "cmd_verify", lambda args, invocation=None, default_yes=False:
-                        calls.append((args, invocation, default_yes)) or 0)
+    calls, kws = [], []
+    monkeypatch.setattr(cli, "cmd_verify", lambda args, invocation=None, default_yes=False, **kw:
+                        calls.append((args, invocation, default_yes)) or kws.append(kw) or 0)
     monkeypatch.setattr(cli, "_build_planner_factory",
                         lambda args, environ=None: (object, {"profile": args.profile, "model": "m",
                                                              "runtime": "fake", "auth": "none"}))
@@ -68,14 +70,15 @@ def env(tmp_path, monkeypatch):
         pass
 
     e = Env()
-    e.run, e.cwd, e.calls = run, cwd, calls
+    e.run, e.cwd, e.calls, e.kws = run, cwd, calls, kws
     e.assessment = run / "assessment.yaml"
 
-    def go(*answers, extra=(), interactive=True, environ=None):
+    def go(*answers, extra=(), interactive=True, environ=None, hidden=(), pasted=()):
         args = cli.build_guided_parser().parse_args([str(e.assessment), *extra])
         script, lines = Script(*answers), []
+        e.hidden, e.pasted = Script(*hidden), Script(*pasted)
         rc = guided.run_guided(args, interactive=interactive, ask=script, out=lines.append,
-                               environ={} if environ is None else environ)
+                               environ={} if environ is None else environ, ask_secret=e.hidden, ask_block=e.pasted)
         return rc, args, script.prompts, "\n".join(lines)
 
     e.go = go
@@ -105,7 +108,7 @@ def test_the_overview_leaves_what_findings_need_to_the_test_plan(env):
     assert "Needs" not in out and "without a code location" not in out       # no zero counts either
 
 
-def test_no_question_asks_for_a_secret(env):
+def test_no_visible_question_asks_for_a_secret(env):
     (env.run / "scope.yaml").unlink()
     (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
     _, _, prompts, _ = env.go(BASE, "none")
@@ -260,8 +263,9 @@ def test_missing_credentials_are_named_and_asked_again(env):
     (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
     rc, args, prompts, out = env.go("", "none")
     assert rc == 0 and "ALICE_TOKEN" in out and args.identities is None
-    assert prompts[0].startswith(f"Identities file (test roles; credentials come from environment variables), "
+    assert prompts[0].startswith(f"Identities file (test roles; missing credentials are asked for hidden), "
                                  f"or 'none' [{env.run / 'identities.yaml'}]")
+    assert env.hidden.prompts == ["alice: ALICE_TOKEN (token_env) is not set; enter its value (hidden): "]
 
 
 def test_identities_are_used_and_values_never_shown(env):
@@ -269,6 +273,87 @@ def test_identities_are_used_and_values_never_shown(env):
     rc, args, prompts, out = env.go("", environ={"ALICE_TOKEN": "s3cr3t-value"})
     assert rc == 0 and args.identities == str(env.run / "identities.yaml") and "roles: alice" in out
     assert "s3cr3t-value" not in out + "".join(prompts) + env.calls[0][1]
+
+
+def test_a_missing_value_is_asked_hidden_and_handed_to_verify_only(env, monkeypatch):
+    (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
+    monkeypatch.delenv("ALICE_TOKEN", raising=False)
+    rc, args, prompts, out = env.go("", hidden=["typed-s3cr3t"])
+    assert rc == 0 and args.identities == str(env.run / "identities.yaml")
+    assert env.kws[0]["secrets"] == {"ALICE_TOKEN": "typed-s3cr3t"} and env.kws[0]["pasted"] is None
+    assert "typed-s3cr3t" not in out + "".join(prompts) + env.calls[0][1]
+    import os
+    assert "ALICE_TOKEN" not in os.environ                      # never put into the environment (VER-016)
+
+
+PROGRAM = {"identities": [{"role": "alice", "method": "command", "auth": {"command": ["true"]}}]}
+
+
+def test_login_programs_of_a_found_file_need_their_own_yes(env):
+    (env.run / "identities.yaml").write_text(yaml.safe_dump(PROGRAM))
+    rc, args, prompts, out = env.go("", "", "none")              # accept the file, Enter at the program question
+    assert prompts[1].startswith(f"{env.run / 'identities.yaml'} starts login programs: alice: true") \
+        and prompts[1].endswith("Run them? [y/N]: ")
+    assert rc == 0 and args.identities is None and "choose another file or 'none'" in out
+    rc, args, _, _ = env.go("", "y")
+    assert rc == 0 and args.identities == str(env.run / "identities.yaml")
+
+
+def test_login_programs_of_a_given_file_are_confirmed_with_the_run(env):
+    path = env.run / "identities.yaml"
+    path.write_text(yaml.safe_dump(PROGRAM))
+    rc, args, prompts, _ = env.go(extra=["--identities", str(path)])
+    assert rc == 0 and prompts == [] and args.identities == str(path)   # shown with the VER-002 confirmation
+
+
+COPIED = ("curl 'https://app.example.com/rest/basket/1' \\\n  -H 'accept: application/json' \\\n"
+          "  -H 'authorization: Bearer eyJA.eyJB.sig-{n}' \\\n  -b 'sid=cookie-{n}; lang=en' \\\n"
+          "  -H 'user-agent: Mozilla/5.0'")
+
+
+RESOURCE = {"id": "basket-1", "finding_id": "T-2", "path": "/rest/basket/1", "allowed_roles": ["user-a"],
+            "denied_roles": ["user-b", "anonymous"], "pointer": "/data/marker", "value": "vrfy-basket-1"}
+
+
+@pytest.fixture
+def with_resource(env):
+    (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "test_resources": [RESOURCE]}))
+    return env
+
+
+def test_without_a_file_sessions_can_be_pasted_for_access_control_findings(with_resource):
+    env = with_resource
+    rc, args, prompts, out = env.go("y", pasted=[COPIED.format(n=1), COPIED.format(n=2)])
+    assert rc == 0 and args.identities is None
+    assert prompts[0] == "Paste sessions for user-a, user-b? [y/N]: "
+    assert "1 access-control finding need two signed-in users" in out
+    assert env.pasted.prompts == ["Request copied as user-a (hidden; Enter alone skips this role): ",
+                                  "Request copied as user-b (hidden; Enter alone skips this role): "]
+    pasted, secrets = env.kws[0]["pasted"], env.kws[0]["secrets"]
+    assert [i["role"] for i in pasted] == ["user-a", "user-b"] and all(i["method"] == "session" for i in pasted)
+    first = pasted[0]["auth"]
+    assert first["check_url"] == "https://app.example.com/rest/basket/1"
+    assert {k: secrets[v] for k, v in first["headers_env"].items()} == {
+        "Cookie": "sid=cookie-1; lang=en", "Authorization": "Bearer eyJA.eyJB.sig-1"}
+    assert "user-a: Cookie and Authorization taken; checked at /rest/basket/1" in out
+    assert "cookie-1" not in out and "sig-1" not in out + env.calls[0][1]
+    assert "It does not include the pasted sessions" in env.calls[0][1]
+
+
+def test_a_pasted_request_to_another_site_is_refused_and_asked_again(with_resource):
+    env = with_resource
+    other = COPIED.format(n=1).replace("app.example.com", "evil.example")
+    rc, _, _, out = env.go("y", pasted=[other, "", ""])
+    assert rc == 0 and "the copied request goes to another site, not to https://app.example.com" in out
+    assert env.kws[0]["pasted"] is None and len(env.pasted.prompts) == 3     # asked again, then both skipped
+
+
+def test_the_paste_offer_needs_an_access_control_finding_with_a_test_resource(env):
+    rc, _, prompts, _ = env.go()                                  # T-2 is selected, but has no test resource
+    assert rc == 0 and prompts == []
+    (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "test_resources": [RESOURCE]}))
+    rc, _, prompts, _ = env.go(extra=["--only", "T-1"])
+    assert rc == 0 and prompts == []
 
 
 # ── model, mode, output ──────────────────────────────────────────────────────

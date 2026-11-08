@@ -581,6 +581,41 @@ def test_verify_runs_after_passing_checks(tmp_path, monkeypatch, capsys):
     assert "none given; only anonymous requests are possible" in preflight[1]
 
 
+def test_verify_shows_the_login_programs_before_the_confirmation(tmp_path, monkeypatch, capsys):
+    import sys
+
+    program = {"role": "p", "method": "command",
+               "auth": {"command": [sys.executable, "-c", "print('tok-' + 'from-prog')"]}}
+    rc, asked = _verify(tmp_path, monkeypatch, Target({("GET", BASE): _resp(200)}), identities=[program])
+    out = capsys.readouterr().out
+    settings = out[:out.index("Preflight")]
+    assert rc == cli.EXIT_OK and asked == [1]
+    assert "Login programs" in settings and "outside the scope and limits" in settings and "print(" in settings
+    assert "tok-from-prog" not in out                                 # the session never reaches the console
+
+
+def test_verify_without_a_terminal_refuses_a_sign_in_that_needs_a_person(tmp_path, monkeypatch, capsys):
+    ident = {"role": "a", "method": "oidc-authorization-code",
+             "auth": {"authorize_url": f"{BASE}/auth", "token_url": f"{BASE}/token", "client_id": "cli"}}
+    target = Target({("GET", BASE): _resp(200)})
+    rc, asked = _verify(tmp_path, monkeypatch, target, identities=[ident])
+    assert rc == cli.EXIT_BLOCKED and asked == [] and target.calls == []          # nothing contacted
+    assert "needs a person to sign in" in capsys.readouterr().err
+
+
+def test_verify_stops_when_two_roles_are_the_same_account(tmp_path, monkeypatch, capsys):
+    import base64
+    import json
+
+    payload = base64.urlsafe_b64encode(json.dumps({"iss": BASE, "sub": "alice"}).encode()).rstrip(b"=").decode()
+    monkeypatch.setenv("TOK_A", f"eyJhbGciOiJub25lIn0.{payload}.c2lnLWE")
+    monkeypatch.setenv("TOK_B", f"eyJhbGciOiJub25lIn0.{payload}.c2lnLWI")
+    identities = [{"role": r, "method": "bearer", "auth": {"token_env": f"TOK_{r.upper()}"}} for r in ("a", "b")]
+    rc, asked = _verify(tmp_path, monkeypatch, Target({("GET", BASE): _resp(200)}), identities=identities)
+    assert rc == cli.EXIT_BLOCKED and asked == []
+    assert "a and b are signed in as the same account" in capsys.readouterr().out
+
+
 class _Factory:
     """A planner factory over a fake host, as `_build_planner_factory` returns one."""
 

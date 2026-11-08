@@ -15,9 +15,11 @@ from __future__ import annotations
 import argparse
 import difflib
 import os
+import shutil
 import sys
 import textwrap
 import time
+from collections import ChainMap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from .limits import Limits, RunBudget
 from .loader import AssessmentError, plans_from, read_assessment, select
 from .preflight import (
     Check,
+    check_accounts,
     check_identities,
     check_target,
     confirm_authorization,
@@ -291,24 +294,33 @@ def cmd_scope(args: argparse.Namespace) -> int:
 
 # ── verify ────────────────────────────────────────────────────────────────────
 
-_IDENTITY_ENDPOINTS = ("login_url", "token_url", "authorize_url")
+_IDENTITY_ENDPOINTS = ("login_url", "token_url", "authorize_url", "device_url", "issuer")
 
 
-def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[dict], list[str]]:
-    """Load the identities file and check it before anything is contacted
-    (VER-016, VER-025, VER-028): schema-valid, every `*_env` variable set, each
+def _check_identities(path: str | None, guard: ScopeGuard, env, *, interactive: bool = False,
+                      secrets: dict | None = None, ask_secret=None, doc: dict | None = None
+                      ) -> tuple[list[dict], list[str]]:
+    """Load the identities file (or take `doc`) and check it before anything is contacted
+    (VER-016, VER-025, VER-028, VER-040): schema-valid, every `*_env` variable set, each
     authentication endpoint allowed by the scope for authentication, each
-    `target_origin` inside the scope, and each `check_url` inside the scope on an
-    identity that has credentials (VER-032). Errors name variables, never values."""
-    if not path:
+    `target_origin` inside the scope, each `check_url` inside the scope on an
+    identity that has credentials (VER-032), each login program found, and a
+    sign-in that needs a person only in an interactive run. With `ask_secret`
+    (an interactive run) a variable that is not set is asked for hidden once and
+    kept in `secrets`, never in the environment. Errors name variables, never values."""
+    from .auth.interactive import _loopback
+    from .auth.sessions import INTERACTIVE_METHODS, AuthError, header_problem
+
+    if not path and doc is None:
         return [], []
     import yaml
     from jsonschema.validators import validator_for
 
-    try:
-        doc = _load_yaml(Path(path))
-    except (OSError, yaml.YAMLError) as exc:
-        return [], [f"cannot read the identities file: {type(exc).__name__}"]
+    if doc is None:
+        try:
+            doc = _load_yaml(Path(path))
+        except (OSError, yaml.YAMLError) as exc:
+            return [], [f"cannot read the identities file: {type(exc).__name__}"]
     schema = _load_yaml(resource_root() / "schemas" / "identities.schema.yaml")
     validator = validator_for(schema)(schema)
     errors = [f"{'/'.join(map(str, e.path)) or 'file'}: {e.message}" for e in validator.iter_errors(doc)]
@@ -317,13 +329,41 @@ def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[di
     identities = doc["identities"]
     roles = [i["role"] for i in identities]
     errors += [f"role {r!r} is defined more than once" for r in sorted({r for r in roles if roles.count(r) > 1})]
+    base_dir = Path(path).parent if path else Path.cwd()
+    asked: set[str] = set()
     for ident in identities:
-        role, auth = ident["role"], ident.get("auth") or {}
-        if ident["method"] == "oidc-authorization-code":
-            errors.append(f"{role}: oidc-authorization-code is not implemented yet")
-        for key, name in auth.items():
-            if key.endswith("_env") and name and not env.get(name):
-                errors.append(f"{role}: environment variable {name} ({key}) is not set")
+        role, method, auth = ident["role"], ident["method"], ident.get("auth") or {}
+        if method in INTERACTIVE_METHODS:
+            if not interactive:
+                errors.append(f"{role}: {method} needs a person to sign in; a run without a terminal can use "
+                              "a login program (method command) or client credentials instead")
+            if auth.get("username_env") or auth.get("password_env"):
+                errors.append(f"{role}: {method} signs in in your browser; remove username_env and password_env")
+            try:
+                _loopback(auth.get("redirect_uri"))
+            except AuthError as exc:
+                errors.append(f"{role}: {exc}")
+        named = [(key, name) for key, name in auth.items() if key.endswith("_env") and isinstance(name, str) and name]
+        named += [(f"headers_env {header}", name) for header, name in (auth.get("headers_env") or {}).items()]
+        for key, name in named:
+            if env.get(name) or (secrets or {}).get(name):
+                continue
+            if ask_secret is not None and name not in asked:
+                asked.add(name)
+                value = ask_secret(f"{role}: {name} ({key}) is not set; enter its value (hidden): ")
+                if value:
+                    secrets[name] = value
+                    continue
+            errors.append(f"{role}: environment variable {name} ({key}) is not set")
+        for header in auth.get("headers_env") or {}:
+            if problem := header_problem(header):
+                errors.append(f"{role}: {problem}")
+        if method == "command":
+            errors += [f"{role}: {problem}" for name in auth.get("headers") or [] if (problem := header_problem(name))]
+            program = auth["command"][0]
+            found = (base_dir / program).is_file() if "/" in program else shutil.which(program, path=env.get("PATH"))
+            if not found:
+                errors.append(f"{role}: login program {program!r} not found")
         for key in _IDENTITY_ENDPOINTS:
             decision = guard.authorize(auth[key], "auth") if auth.get(key) else None
             if decision is not None and not decision.allowed:
@@ -337,6 +377,34 @@ def _check_identities(path: str | None, guard: ScopeGuard, env) -> tuple[list[di
             elif not decision.allowed:
                 errors.append(f"{role}: check_url is outside the scope: {decision.reason}")
     return identities, errors
+
+
+def _ask_secret(prompt: str) -> str:
+    """One value typed or pasted without echo; nothing at the end of input."""
+    from .auth.paste import ask_hidden
+
+    try:
+        return ask_hidden(prompt)
+    except EOFError:
+        return ""
+
+
+def _sessions(identities: list[dict], http, env, args, interactive: bool):
+    """The run's SessionManager: values from `env` (environment plus hidden input), sign-ins that need a
+    person only in an interactive run, login programs started from the identities file's directory."""
+    from .auth import SessionManager
+    from .auth.interactive import LoginUI
+
+    base_dir = Path(args.identities).parent if getattr(args, "identities", None) else None
+    return SessionManager(identities, http, env=env, ui=LoginUI() if interactive else None, base_dir=base_dir)
+
+
+def _login_programs(identities: list[dict]) -> str | None:
+    """The login programs the run will start, for the settings shown before the confirmation (VER-040)."""
+    from .auth.program import describe
+
+    shown = [f"{i['role']}: {describe(i['auth'])}" for i in identities if i.get("method") == "command"]
+    return (" · ".join(shown) + " (run with your rights, outside the scope and limits)") if shown else None
 
 
 def _check_proxy(scope: dict, env) -> list[str]:
@@ -392,11 +460,14 @@ def _build_planner_factory(args, environ=None, *, check_access: bool = True):
         raise ProfileError(f"{profile}: {exc}") from exc
 
 
-def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_yes: bool = False) -> int:
+def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_yes: bool = False, *,
+               secrets: dict | None = None, pasted: list[dict] | None = None) -> int:
     """Verify the selected findings. `invocation`, from the guided run, is the
     equivalent non-interactive command line, shown before the confirmation;
     `default_yes` is set by the guided run only, so Enter at its confirmation
-    proceeds (VER-002)."""
+    proceeds (VER-002). `secrets` holds values entered hidden and `pasted` the
+    identities whose sessions were pasted, both from the guided run; they live
+    only in this process (VER-016)."""
     assessment = Path(args.assessment)
     if not assessment.is_file():
         return _blocked(f"The assessment {assessment} was not found", fix="check the path given with --assessment")
@@ -497,7 +568,12 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     safe = not args.allow_intrusive
     read_only = True if safe else (args.read_only or not scope.get("allow_state_change", False))
 
-    identities, id_errors = _check_identities(args.identities, guard, os.environ)
+    interactive = not args.non_interactive and _stdin_is_terminal()
+    secrets = dict(secrets or {})
+    env = ChainMap(secrets, os.environ)
+    identities, id_errors = _check_identities(
+        None if pasted else args.identities, guard, env, interactive=interactive, secrets=secrets,
+        ask_secret=_ask_secret if interactive else None, doc={"identities": pasted} if pasted else None)
     if id_errors:
         return _blocked(
             "The identities cannot be used",
@@ -516,12 +592,11 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     # As in AppSec Analyzer: costs on the console with API billing, in any mode with --show-costs.
     show_costs = args.show_costs or agent_info.get("api_billing", False)
     from .agent import SUBSCRIPTION_PROFILES, SourceReader, agent_registry
-    from .auth import SessionManager
     from .tools import GuardedHttpClient
     from .tools.httpx_transport import transport_from_scope
 
     http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
-    sessions = SessionManager(identities, http, env=os.environ)
+    sessions = _sessions(identities, http, env, args, interactive)
     source = SourceReader(args.source) if args.source else None
     registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
     browser, browser_note, browser_missing = _proof_browser(args, http, sel)
@@ -549,6 +624,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     notes = (
         ("Report", report_note),
         ("Identities", _identities_note(identities, sel)),
+        ("Login programs", _login_programs(identities)),
         ("Browser", browser_note),
         ("Callback", listener_note),
         ("Marker file", _marker_note(scope, sel)),
@@ -630,6 +706,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
                     else [Check("Identities", "info", "none given; only anonymous requests are possible")]
                 )
             )
+        if not failed(checks) and (same := check_accounts(sessions)):
+            add(*same)
+        sessions.end_interactive()      # VER-028: no sign-in that needs a person once findings are tested
         if not failed(checks):
             add(_model_test(planner_factory, budget, show_costs=show_costs))
         if failed(checks):
@@ -785,14 +864,20 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             add(_proxy_check(scope, target))
 
     identities: list[dict] = []
+    interactive = not args.non_interactive and _stdin_is_terminal()
+    secrets: dict = {}
+    env = ChainMap(secrets, os.environ)
     if not args.identities:
         add(Check("Identities", "info", "none given; only anonymous requests are possible"))
     elif guard is None:
         add(Check("Identities", "info", "not checked without a usable scope"))
     else:
-        identities, errors = _check_identities(args.identities, guard, os.environ)
+        identities, errors = _check_identities(args.identities, guard, env, interactive=interactive, secrets=secrets,
+                                               ask_secret=_ask_secret if interactive and not args.offline else None)
         add(Check("Identities", "fail", "; ".join(errors)) if errors else
-            Check("Identities", "ok", f"{', '.join(i['role'] for i in identities)} · environment variables set"))
+            Check("Identities", "ok", f"{', '.join(i['role'] for i in identities)} · credentials available"))
+        if not errors and (programs := _login_programs(identities)):
+            add(Check("Programs", "info", programs))
     plan: list[str] = []
     if not failed(checks):
         plan_check, plan = _preflight_plan(st, doc, plans, scope, identities, target)
@@ -820,7 +905,6 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     if args.offline:
         add(Check("Target", "info", "not contacted (--offline): reachability and logins not checked"))
     else:
-        from .auth import SessionManager
         from .tools import GuardedHttpClient
         from .tools.httpx_transport import transport_from_scope
 
@@ -834,8 +918,10 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             http = GuardedHttpClient(guard, RunBudget(Limits.load()), transport_from_scope(scope))
             add(check_target(http, target, proxy=via))
             if not failed(checks):
-                add(*check_identities(SessionManager(identities, http, env=os.environ), identities, http, target,
-                                      scope=scope))
+                sessions = _sessions(identities, http, env, args, interactive)
+                add(*check_identities(sessions, identities, http, target, scope=scope))
+                if not failed(checks) and (same := check_accounts(sessions)):
+                    add(*same)
     if test_budget is not None:
         if failed(checks):
             add(Check("Model test", "info", "not run: an earlier check failed"))
@@ -1517,7 +1603,9 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         "Without --scope, only this URL's host and port are contacted, read-only",
     )
     src.add_argument(
-        "--identities", metavar="FILE", help="test accounts by role; their credentials come from environment variables"
+        "--identities", metavar="FILE",
+        help="test accounts by role; credentials come from environment variables, sign-in in your browser or a "
+             "login program",
     )
     src.add_argument("--source", metavar="DIR", help="checkout of the application's source code, read by the agent")
 

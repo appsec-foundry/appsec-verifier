@@ -50,7 +50,21 @@ def test_no_identities_file_is_fine():
     ([{"role": "a", "method": "none"}, {"role": "a", "method": "none"}], {}, "more than once"),
     ([{"role": "a", "method": "oidc-authorization-code",
        "auth": {"authorize_url": "https://sso.example.com/a", "token_url": "https://sso.example.com/t",
-                "username_env": "U", "password_env": "P"}}], {"U": "u", "P": "p"}, "not implemented"),
+                "client_id": "cli", "username_env": "U", "password_env": "P"}}], {"U": "u", "P": "p"},
+     "remove username_env and password_env"),
+    ([{"role": "a", "method": "oidc-authorization-code",                    # without a terminal (VER-028)
+       "auth": {"issuer": "https://sso.example.com", "client_id": "cli"}}], {}, "needs a person to sign in"),
+    ([{"role": "a", "method": "oidc-device-code",
+       "auth": {"issuer": "https://sso.example.com", "client_id": "cli"}}], {}, "needs a person to sign in"),
+    ([{"role": "a", "method": "oidc-authorization-code", "auth": {
+        "issuer": "https://sso.example.com", "client_id": "cli", "redirect_uri": "https://evil.example/cb"}}],
+     {}, "redirect_uri must be http://127.0.0.1"),
+    ([{"role": "a", "method": "oidc-authorization-code",                    # discovery host out of scope
+       "auth": {"issuer": "https://rogue.example", "client_id": "cli"}}], {}, "issuer is refused"),
+    ([{"role": "a", "method": "command", "auth": {"command": ["./no-such-login.sh"]}}], {}, "not found"),
+    ([{"role": "a", "method": "command", "auth": {"command": ["true"], "headers": ["Host"]}}], {},
+     "cannot be set by an identity"),
+    ([{"role": "a", "method": "session", "auth": {"headers_env": {"Cookie": "SESS"}}}], {}, "SESS"),
     ([{"role": "a", "method": "form", "auth": {"login_url": "http://sso.example.com/login",   # https-only scope
                                                "username_env": "U", "password_env": "P"}}],
      {"U": "u", "P": "p"}, "scheme 'http' not allowed for authentication"),
@@ -60,6 +74,45 @@ def test_no_identities_file_is_fine():
 def test_unusable_identities_are_reported(tmp_path, identities, env, expected):
     _, errors = _check_identities(_file(tmp_path, identities), GUARD, env)
     assert any(expected in e for e in errors)
+
+
+def test_an_interactive_run_asks_once_for_each_missing_value_and_keeps_it_out_of_the_environment(tmp_path):
+    import os
+
+    path = _file(tmp_path, [
+        {"role": "a", "method": "basic", "auth": {"username_env": "SHARED_U", "password_env": "A_PW"}},
+        {"role": "b", "method": "basic", "auth": {"username_env": "SHARED_U", "password_env": "B_PW"}},
+    ])
+    asked, secrets = [], {}
+
+    def ask(prompt):
+        asked.append(prompt)
+        return "" if "B_PW" in prompt else "typed-value"
+
+    identities, errors = _check_identities(path, GUARD, {}, interactive=True, secrets=secrets, ask_secret=ask)
+    assert sorted(p.split(":")[1].split()[0] for p in asked) == ["A_PW", "B_PW", "SHARED_U"]   # SHARED_U once
+    assert secrets == {"SHARED_U": "typed-value", "A_PW": "typed-value"}
+    assert errors == ["b: environment variable B_PW (password_env) is not set"]          # nothing typed: blocked
+    assert "SHARED_U" not in os.environ and all("typed-value" not in e for e in errors)
+
+
+def test_a_run_without_a_terminal_asks_nothing(tmp_path):
+    path = _file(tmp_path, [{"role": "a", "method": "bearer", "auth": {"token_env": "TOK"}}])
+    _, errors = _check_identities(path, GUARD, {})            # no ask_secret: the variable must be set
+    assert errors == ["a: environment variable TOK (token_env) is not set"]
+
+
+def test_interactive_sign_ins_pass_in_an_interactive_run(tmp_path):
+    path = _file(tmp_path, [
+        {"role": "a", "method": "oidc-authorization-code", "auth": {"issuer": "https://sso.example.com",
+                                                                     "client_id": "cli"}},
+        {"role": "b", "method": "oidc-device-code", "auth": {"device_url": "https://sso.example.com/device",
+                                                              "token_url": "https://sso.example.com/token",
+                                                              "client_id": "cli"}},
+        {"role": "c", "method": "session", "auth": {"headers_env": {"Cookie": "C_COOKIE"}}},
+    ])
+    _, errors = _check_identities(path, GUARD, {"C_COOKIE": "sid=abcd"}, interactive=True)
+    assert errors == []
 
 
 def test_errors_name_variables_never_values(tmp_path):

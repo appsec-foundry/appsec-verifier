@@ -16,9 +16,18 @@ VER-002, where Enter proceeds.
 A scope file given or found next to the assessment or in the working directory
 is used as it is. Without one the run takes the target URL the operator types,
 and the scope is that URL's host and port, read-only, for this run only
-(VER-001, VER-004). The dialog
-contacts nothing, writes no file, never asks for a secret value (credentials
-stay in environment variables, VER-016), and never widens a scope. Text from
+(VER-001, VER-004).
+
+Identities (VER-016, VER-028, VER-031, VER-040): a credential variable the
+identities file names but the environment lacks is asked for hidden. A file the
+run found, rather than one given with --identities, that starts login programs
+needs its own explicit yes, because a file next to a foreign assessment could
+name any program. Without an identities file, when access-control findings are
+selected, the run offers to take each role's session from a request the operator
+copies from the browser ("Copy as cURL"); only its Cookie and Authorization are
+kept. Values entered or pasted stay in this process and are never written.
+
+The dialog contacts nothing, writes no file, and never widens a scope. Text from
 the assessment is untrusted (VER-005) and is shown without control characters.
 Without a terminal, or with --non-interactive, nothing is asked: the run takes
 its settings from the invocation and blocks on a missing target or profile.
@@ -29,13 +38,15 @@ from __future__ import annotations
 import os
 import shlex
 import sys
-from collections import Counter
+from collections import ChainMap, Counter
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
 from . import cli
 from .agent import DEFAULT_PROFILE, PROFILES
+from .auth.paste import PasteError, ask_hidden, ask_hidden_block, session_from_curl
 from .limits import Limits
 from .preflight import printable as clean
 from .scope import ScopeGuard
@@ -61,9 +72,28 @@ class Cancelled(Exception):
 
 
 class Dialog:
-    def __init__(self, ask, out):
+    def __init__(self, ask, out, secret=None, block=None):
         self._ask = ask
         self.out = out
+        self._secret = secret or ask_hidden
+        self._block = block or ask_hidden_block
+
+    def secret(self, text: str) -> str:
+        """One value without echo; empty at the end of input."""
+        return self._hidden(self._secret, text)
+
+    def block(self, text: str) -> str:
+        """A pasted multi-line command without echo; empty when nothing was pasted."""
+        return self._hidden(self._block, text)
+
+    @staticmethod
+    def _hidden(read, text: str) -> str:
+        try:
+            return read(text)
+        except EOFError:
+            return ""
+        except KeyboardInterrupt:
+            raise Cancelled from None
 
     def question(self, text: str, default: str | None = None) -> str:
         try:
@@ -93,7 +123,7 @@ def _err(message: str) -> None:
           file=sys.stderr)
 
 
-def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) -> int:
+def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, ask_secret=None, ask_block=None) -> int:
     """Collect the settings of a run into `args` (the `verify` options) and hand them to verify."""
     if not interactive:
         args.non_interactive = True
@@ -124,7 +154,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         _err(f"model profile unavailable: {exc}\nchoose another with --profile ({', '.join(PROFILES)}).")
         return cli.EXIT_BLOCKED
 
-    d = Dialog(ask or input, out)
+    d = Dialog(ask or input, out, ask_secret, ask_block)
     out(overview(assessment, plans))
     if not any(p.status == "dynamic" for p in plans):
         _err("\nno finding in this assessment can be verified dynamically; nothing to do.")
@@ -136,15 +166,21 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None) ->
         if found is None:
             return cli.EXIT_BLOCKED
         scope, guard = found
-        if _ask_identities(d, args, guard, environ, assessment, cwd) is None:
+        chosen = _ask_identities(d, args, guard, environ, assessment, cwd, scope, plans)
+        if chosen is None:
             return cli.EXIT_BLOCKED
+        secrets, pasted = chosen
         _ask_mode(d, args, scope)
         if not _ask_output(d, args):
             return cli.EXIT_BLOCKED
     except Cancelled:
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
-    return cli.cmd_verify(args, invocation=equivalent_invocation(args), default_yes=True)
+    invocation = equivalent_invocation(args)
+    if pasted:
+        invocation += ("\n  It does not include the pasted sessions: put them in an identities file "
+                       "(method session) and pass it with --identities.")
+    return cli.cmd_verify(args, invocation=invocation, default_yes=True, secrets=secrets, pasted=pasted)
 
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
@@ -269,32 +305,90 @@ def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
 
 # ── identities (VER-010, VER-016, VER-028) ──────────────────────────────────
 
-def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Path, cwd: Path):
-    """The identities given, or a found identities.yaml unless the operator answers 'none'; [] without one."""
+def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Path, cwd: Path, scope: dict, plans):
+    """(secrets, pasted identities or None) for verify, or None when the run stops. The identities given,
+    or a found identities.yaml unless the operator answers 'none'; without a file the offer to paste
+    sessions. Missing credential values are asked for hidden and kept in `secrets` (VER-016)."""
+    secrets: dict = {}
+    env = ChainMap(secrets, environ)
+
+    def check(path):
+        return cli._check_identities(path, guard, env, interactive=True, secrets=secrets, ask_secret=d.secret)
+
     if args.identities:
-        identities, errors = cli._check_identities(args.identities, guard, environ)
+        identities, errors = check(args.identities)
         if errors:
             _err("identities are not usable; nothing was contacted:\n"
                  + "\n".join(f"  - {clean(e)}" for e in errors))
             return None
-        return identities
+        return secrets, None
     dirs = [Path(args.scope).parent] if args.scope else []
     found = _candidates("identities.yaml", *dirs, assessment.parent, cwd)
     if not found:
-        return []
+        return secrets, _ask_pasted(d, args, guard, scope, plans, secrets) or None
     while True:
-        answer = d.question("Identities file (test roles; credentials come from environment variables), "
+        answer = d.question("Identities file (test roles; missing credentials are asked for hidden), "
                             "or 'none'", str(found[0]))
         if answer.lower() == "none":
-            return []
-        identities, errors = cli._check_identities(answer, guard, environ)
+            return secrets, None
+        identities, errors = check(answer)
         if not errors:
+            programs = cli._login_programs(identities)
+            if programs and not d.yes(f"{clean(answer)} starts login programs: {clean(programs)}. Run them?"):
+                d.out("  choose another file or 'none'")
+                continue
             args.identities = answer
             d.out(f"  roles: {', '.join(clean(i['role']) for i in identities)}")
-            return identities
+            return secrets, None
         for e in errors:
             d.out(f"  {clean(e)}")
         d.out("  set missing variables and start again, or choose another file or 'none'")
+
+
+def _ask_pasted(d: Dialog, args, guard: ScopeGuard, scope: dict, plans, secrets: dict) -> list[dict]:
+    """Identities with method session from requests the operator copies from the browser, when selected
+    access-control findings have test resources in the scope, so two identities are all they lack (VER-010,
+    VER-031). The roles are those the test resources name."""
+    resources = [r for r in scope.get("test_resources", [])
+                 if any(p.id == r.get("finding_id") and p.status == "dynamic" and p.cls == "access-control"
+                        for p in cli._select(args, plans))]
+    roles = sorted({str(r) for res in resources
+                    for r in [*res.get("allowed_roles", []), *res.get("denied_roles", [])]} - {"anonymous"})
+    if not roles:
+        return []
+    need = {r["finding_id"] for r in resources}
+    target = scope["base_url"]
+    d.out(f"{len(need)} access-control finding{'' if len(need) == 1 else 's'} need two signed-in users, and there "
+          "is no identities file. You can take each role's session from your browser: sign in as that user "
+          f"(a private window for the second), copy a request to {clean(target)} in the developer tools with "
+          "'Copy as cURL (bash)' and paste it here. It is read hidden; only its Cookie and Authorization are "
+          "kept, for this run only.")
+    if not d.yes(f"Paste sessions for {', '.join(clean(r) for r in roles)}?"):
+        return []
+    pasted = []
+    for role in roles:
+        while True:
+            text = d.block(f"Request copied as {clean(role)} (hidden; Enter alone skips this role): ")
+            if not text:
+                break
+            try:
+                headers, method, url = session_from_curl(text, target)
+            except PasteError as exc:
+                d.out(f"  {clean(exc)}")
+                continue
+            names = {}
+            for header, value in headers.items():
+                names[header] = f"APPSEC_VERIFIER_PASTED_{len(secrets) + 1}"
+                secrets[names[header]] = value
+            auth = {"headers_env": names}
+            checked = method == "GET" and guard.authorize(url, "target").allowed
+            if checked:
+                auth["check_url"] = url            # a request this user just made; accepted means signed in
+            d.out(f"  {clean(role)}: {' and '.join(headers)} taken"
+                  + (f"; checked at {clean(urlsplit(url).path)} before the first finding" if checked else ""))
+            pasted.append({"role": role, "method": "session", "auth": auth})
+            break
+    return pasted
 
 
 # ── limits, mode, output (VER-015, VER-020, VER-027, VER-030) ──
