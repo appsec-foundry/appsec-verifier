@@ -64,27 +64,28 @@ def mask_credentials(page, redact, *, protected=(), timeout=5000) -> tuple[bool,
     if redact is None:
         return False, "the screenshot text could not be checked for credentials"
     try:
-        if any(redact(text) != text for text in protected):
-            return False, "masking credentials would obscure the decisive observation"
-        session = page.context.new_cdp_session(page)
-        session.send("Emulation.setScriptExecutionDisabled", {"value": True})
-        session.send("Page.setWebLifecycleState", {"state": "frozen"})
-        snapshot = page.wait_for_function(_READ, timeout=timeout)
-        original = snapshot.evaluate("s => s.items.map(i => i.text)")
-        clean = redact(original)
-        if not (isinstance(clean, list) and len(clean) == len(original)
-                and all(isinstance(t, str) for t in clean)):
-            return False, "the screenshot text could not be checked for credentials"
-        replacements = [[i, text] for i, text in enumerate(clean) if text != original[i]]
-        if replacements:
-            snapshot.evaluate(_APPLY, replacements)
-        snapshot.dispose()
-        checked = page.wait_for_function(_READ, timeout=timeout)
-        remaining = checked.evaluate("s => s.items.map(i => i.text).concat(s.extra)")
-        checked.dispose()
-        if redact(remaining) != remaining:
-            return False, "a credential could not be masked in the screenshot text"
-        return bool(replacements), None
+        with execution_deadline(timeout / 1000, kind="time"):
+            if any(redact(text) != text for text in protected):
+                return False, "masking credentials would obscure the decisive observation"
+            session = page.context.new_cdp_session(page)
+            session.send("Emulation.setScriptExecutionDisabled", {"value": True})
+            session.send("Page.setWebLifecycleState", {"state": "frozen"})
+            snapshot = page.wait_for_function(_READ, timeout=timeout)
+            original = snapshot.evaluate("s => s.items.map(i => i.text)")
+            clean = redact(original)
+            if not (isinstance(clean, list) and len(clean) == len(original)
+                    and all(isinstance(t, str) for t in clean)):
+                return False, "the screenshot text could not be checked for credentials"
+            replacements = [[i, text] for i, text in enumerate(clean) if text != original[i]]
+            if replacements:
+                snapshot.evaluate(_APPLY, replacements)
+            snapshot.dispose()
+            checked = page.wait_for_function(_READ, timeout=timeout)
+            remaining = checked.evaluate("s => s.items.map(i => i.text).concat(s.extra)")
+            checked.dispose()
+            if redact(remaining) != remaining:
+                return False, "a credential could not be masked in the screenshot text"
+            return bool(replacements), None
     except Exception:  # noqa: BLE001 - keep the proof but omit an image whose masking cannot be verified
         return False, "the screenshot text could not be safely masked and checked"
 
