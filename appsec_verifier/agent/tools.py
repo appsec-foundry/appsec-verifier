@@ -198,13 +198,12 @@ class AgentTools:
             problems.append("select an evidenced finding variant for this plan")
         if plan.get("variant") and not variants:
             problems.append("this finding has no variants; omit variant")
-        if plan["kind"] in ("boolean", "timing") and (
-            plan.get("method", "GET") not in SAFE_METHODS or plan.get("input_location") == "form"
-        ):
-            # Each control is sent twice and a write never repeats (VER-036), so such a plan could only fail;
-            # a form field travels only in a write (below).
-            problems.append("an experiment sends every control twice and a write is never repeated; use a GET "
-                            "request that carries the input as a query parameter")
+        if plan["kind"] in ("boolean", "timing"):
+            is_write = plan.get("method", "GET") not in SAFE_METHODS
+            intrusive = not (self.ctx.safe or self.ctx.read_only)
+            if is_write and not intrusive:
+                # VER-011 + VER-030: writes repeat only in intrusive mode; the agent sends each control itself.
+                problems.append("an experiment sends every control twice; a write needs --allow-intrusive")
         if problems:
             raise ToolError("; ".join(problems))
         from .experiments import expression_controls, ldap_controls, operator_controls, sql_controls
@@ -212,15 +211,18 @@ class AgentTools:
         if any(
             plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge")
         ):
-            if not any(
-                r["finding_id"] == self.ctx.plan.id
-                and r["path"] == plan["path"]
+            # VER-011: an operator-declared injection_inputs entry pins the input for this finding; without one,
+            # the agent chooses it from a read request the finding names.
+            pinned = [r for r in self.ctx.scope.get("injection_inputs", [])
+                      if r["finding_id"] == self.ctx.plan.id]
+            if pinned and not any(
+                r["path"] == plan["path"]
                 and r["input_location"] == plan.get("input_location")
                 and r["input_name"] == plan.get("input_name")
                 and r["semantics"] == "literal"
-                for r in self.ctx.scope.get("injection_inputs", [])
+                for r in pinned
             ):
-                raise ToolError("declare literal input semantics in scope.injection_inputs before expression proof")
+                raise ToolError("the plan's input does not match a declared injection_inputs entry for this finding")
         if plan.get("operator_challenge"):
             if self.ctx.plan.cwe != "CWE-943" or plan.get("input_location") != "json" or plan["kind"] != "boolean":
                 raise ToolError("NoSQL operator challenges need a JSON boolean experiment for CWE-943")
@@ -241,8 +243,10 @@ class AgentTools:
                     or plan["expression_template"] != baseline + "; printf '%s' \"$(({{expression}}))\""
                 ):
                     raise ToolError("command proof uses only a plain baseline followed by harmless printf arithmetic")
-            if self.ctx.plan.cwe not in ("CWE-78", "CWE-1336", "CWE-643") or plan["kind"] != "boolean":
-                raise ToolError("expression challenges need a command, template or XPath injection finding")
+            if (self.ctx.plan.cwe not in ("CWE-78", "CWE-94", "CWE-95", "CWE-1336", "CWE-643")
+                    or plan["kind"] != "boolean"):
+                raise ToolError("expression challenges need a command, code-evaluation, template or XPath "
+                                "injection finding")
             try:
                 plan = expression_controls(plan)
             except ValueError as exc:
@@ -263,6 +267,12 @@ class AgentTools:
             raise ToolError("timing uses baseline and positive only")
         if plan.get("input_location") == "form" and plan.get("method", "GET") in SAFE_METHODS:
             raise ToolError("form experiments need a body-capable write method and intrusive authorization")
+        if plan.get("input_location") == "path":
+            from .experiments import _placeholder_name
+
+            segments = urlsplit(plan["path"]).path.split("/")
+            if not any(_placeholder_name(s) == plan.get("input_name") for s in segments):
+                raise ToolError("path-input experiments need a placeholder with the declared input_name in the path")
         if plan.get("variant"):
             variant = next((v for v in variants if v["id"] == plan["variant"]), None)
             if variant is None:
@@ -349,15 +359,26 @@ class AgentTools:
             raise ToolError("run_experiment needs an accepted SQL challenge plan")
         if plan.get("method", "GET") not in SAFE_METHODS:
             raise ToolError("automatic repetitions are read-only; writes are never automatically repeated")
+
+        from urllib.parse import quote
+
+        def request_for(group: str) -> dict:
+            base = {"method": plan.get("method", "GET"), **({"role": role} if role else {})}
+            if plan.get("input_location") == "path":
+                from .experiments import _placeholder_name
+
+                template_segments = urlsplit(plan["path"]).path.split("/")
+                segments = [quote(str(plan[group]), safe="")
+                            if _placeholder_name(s) == plan["input_name"] else s
+                            for s in template_segments]
+                return {**base, "path": "/".join(segments)}
+            return {**base, "path": plan["path"], plan["input_location"]: {plan["input_name"]: plan[group]}}
+
         return [
-            {
-                "path": plan["path"],
-                "method": plan.get("method", "GET"),
-                **({"role": role} if role else {}),
-                plan["input_location"]: {plan["input_name"]: plan[group]},
-            }
+            request_for(group)
             for _ in range(2)
             for group in ("baseline", "positive", "negative", "positive_other", "negative_other")
+            if group in plan
         ]
 
     def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:

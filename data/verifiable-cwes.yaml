@@ -138,6 +138,20 @@ verifiable_cwes:
     proof_method: mechanism-specific
     may_require_state_change: false
 
+  - cwe: CWE-94
+    name: Code Injection
+    class: injection
+    technique: code-evaluation
+    proof_method: mechanism-specific
+    may_require_state_change: false
+
+  - cwe: CWE-95
+    name: Eval Injection
+    class: injection
+    technique: code-evaluation
+    proof_method: mechanism-specific
+    may_require_state_change: false
+
   - cwe: CWE-643
     name: XPath Injection
     class: injection

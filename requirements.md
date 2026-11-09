@@ -136,13 +136,19 @@ optional hardening.
   condition flipping a response, or a bounded, clearly-marked timing difference —
   not by dumping database contents. The Verifier never attempts to read, copy, or
   exfiltrate real application data to prove a point. Declare the hypothesis,
-  changed input and observation before gathering proof. Repeat baseline and
+  changed input and observation before gathering proof. The test agent chooses
+  that input — a query parameter, JSON field or path segment of a read request
+  the finding names — unless a scope file declares it; the report names the
+  input the proof treated as literal data. Injection carried only by a write
+  request is proven only in intrusive mode (VER-030); the agent sends each
+  control itself, since a write never repeats automatically. Repeat baseline and
   true/false controls; compare a stable non-reflected field, not arbitrary
   response differences. Timing needs alternating independent controls with
   identical responses and repeated separations of 2–5 seconds, but timing alone
   remains inconclusive because ordinary computation can cause the same effect.
   SQL confirmation requires fresh complementary predicate controls. Command,
-  template and XPath confirmation requires fresh computed arithmetic results.
+  code-evaluation, template and XPath confirmation requires fresh computed
+  arithmetic results.
 
 - **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path traversal is confirmed by reading a pre-placed, non-sensitive marker file; open redirect by landing on an operator-controlled benign URL; SSRF by a request arriving at a callback the Verifier itself listens on, bound to the host and port the scope declares or, for a target on a loopback address without one, to a free loopback port, where a hit confirms the finding because the application fetched an internal address. The Verifier does not read system files, follow redirects to arbitrary hosts, or reach internal or metadata addresses to demonstrate impact. The callback destination is the only place those two probe classes are steered toward.
 

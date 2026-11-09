@@ -4,10 +4,37 @@ from __future__ import annotations
 
 import json
 import secrets
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ..planning import STRATEGY_SCHEMA
-from ..verification_context import planned_route, record_segments, route_matches
+from ..verification_context import _PLACEHOLDER, planned_route, record_segments, route_matches
+
+
+def _placeholder_name(segment: str) -> str | None:
+    """The name inside a route placeholder segment, or None if `segment` is not one.
+    Supports `:id`, `{id}` and `<id>`."""
+    if not _PLACEHOLDER.fullmatch(segment):
+        return None
+    return segment.strip(":{<>}")
+
+
+def _path_input_value(template: str, actual: str, input_name: str) -> tuple[str | None, str]:
+    """For a path-input experiment: the value of the placeholder `input_name` in `actual`, and a signature
+    string of `actual` where that one segment is masked. Non-input placeholder segments and literal segments
+    keep their actual values, so varying anything other than the chosen input shows up as a different signature."""
+    template_segments = urlsplit(template).path.split("/")
+    actual_segments = actual.split("/")
+    value: str | None = None
+    masked: list[str] = []
+    for i, segment in enumerate(template_segments):
+        name = _placeholder_name(segment)
+        taken = actual_segments[i] if i < len(actual_segments) else ""
+        if name == input_name:
+            value = unquote(taken)
+            masked.append("<input>")
+        else:
+            masked.append(taken)
+    return value, "/".join(masked)
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
@@ -20,7 +47,7 @@ PLAN_SCHEMA = {
         "variant": {"type": "string", "maxLength": 80},
         "path": {"type": "string", "minLength": 1, "maxLength": 2000},
         "method": {"enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH"]},
-        "input_location": {"enum": ["params", "json", "form"]},
+        "input_location": {"enum": ["params", "json", "form", "path"]},
         "input_name": {"type": "string", "minLength": 1, "maxLength": 128},
         "baseline": SCALAR,
         "positive": SCALAR,
@@ -209,9 +236,13 @@ def experiment_groups(history, cited):
         path, _, query = (args.get("path") or "").partition("?")
         sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers")}
         sent["params"].update(parse_qsl(query, keep_blank_values=True))
-        values = sent[plan.get("input_location", "params")]
-        value = values.pop(plan.get("input_name"), None)
-        signatures.add(token([args.get("role"), path, sent]))
+        if plan.get("input_location") == "path":
+            value, path_signature = _path_input_value(plan["path"], path, plan.get("input_name") or "")
+            signatures.add(token([args.get("role"), path_signature, sent]))
+        else:
+            values = sent[plan.get("input_location", "params")]
+            value = values.pop(plan.get("input_name"), None)
+            signatures.add(token([args.get("role"), path, sent]))
         bucket = next((k for k in groups if token(value) == token(plan[k])), None)
         if bucket is None:
             return plan, {}, f"a cited request did not use a declared control value: step {n}"

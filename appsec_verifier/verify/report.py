@@ -216,8 +216,8 @@ _STEP = re.compile(r"(\S+) (\S+) (.+) as (\S+) → (.*)", re.S)
 # Why a finding was not tested (cli._blocker, loader.classify, verify/runner.py), said as what the run lacks.
 _NOT_TESTED = (
     (r"no supported proof method for (.+)", r"no test method for \1"),
-    (r"no literal-input contract for this finding in injection_inputs",
-     "needs the input to inject into: injection_inputs in a scope file"),
+    (r"no read request to run controls on, and no injection_inputs entry",
+     "needs a read request, or an injection_inputs entry in a scope file"),
     (r"the proof repeats each control, and every request the assessment names writes",
      "needs a read request: the injection proof repeats requests and never repeats a write"),
     (r"the assessment names no request for this finding.*", "needs a request: the assessment names none"),

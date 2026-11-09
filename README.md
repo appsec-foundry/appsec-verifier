@@ -53,7 +53,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 ## What it verifies
 
-A finding counts as `confirmed` only with the proof in the last column. The CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml); the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013).
+Explicit finding requests and resolved route references take precedence over shared handler or registration locations when choosing test requests. A finding counts as `confirmed` only with the proof in the last column. The CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml); the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013).
 
 | Class | CWEs | Needs | Confirmed when |
 | --- | --- | --- | --- |

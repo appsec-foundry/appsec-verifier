@@ -314,8 +314,8 @@ def test_findings_not_tested_say_what_the_run_lacked_and_keep_their_text_in_one_
 
 @pytest.mark.parametrize(("rationale", "said"), [
     ("not tested: no supported proof method for CWE-922", "no test method for CWE-922"),
-    ("not tested: no literal-input contract for this finding in injection_inputs",
-     "needs the input to inject into: injection_inputs in a scope file"),
+    ("not tested: no read request to run controls on, and no injection_inputs entry",
+     "needs a read request, or an injection_inputs entry in a scope file"),
     ("not tested: no GET request to read with, and no write request that changes the record",
      "needs a request that reads or changes the record; the finding names none"),
     ("not tested: the run was interrupted", "the run was interrupted"),                     # no wording: as recorded

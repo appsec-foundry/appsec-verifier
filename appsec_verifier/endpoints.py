@@ -10,6 +10,9 @@ entry point whose `route_ids` hold one the finding names, an entry point whose
 handler or registration sits at one of the finding's locations, and a browser
 route (`/#/search`) for client-side findings.
 
+Handler and registration locations are used only when explicit requests and route
+references resolve no request. Shared generator locations cannot widen a resolved finding.
+
 The result is a hint from the input file. It is shown to the operator, decides
 whether the run can test a finding at all (a login without a test identity,
 only write requests in safe mode), and is given to the agent. That a request
@@ -134,10 +137,13 @@ def finding_endpoints(threat: dict, surface) -> tuple[Endpoint, ...]:
         for entry in entries:
             if ref in entry.route_ids:
                 add(Endpoint(entry.method, entry.template, entry.login))
-    locations = _locations(threat)
-    for entry in entries:
-        if entry.handler in locations or entry.registered in locations:
-            add(Endpoint(entry.method, entry.template, entry.login))
+    # VER-008: one generator line may register unrelated resources. Source locations
+    # are a fallback, never grounds for widening an already resolved request set.
+    if not found:
+        locations = _locations(threat)
+        for entry in entries:
+            if entry.handler in locations or entry.registered in locations:
+                add(Endpoint(entry.method, entry.template, entry.login))
     for text in texts:
         for match in _PAGE.finditer(text):
             add(Endpoint("PAGE", match.group(0), None))

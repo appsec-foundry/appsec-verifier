@@ -472,21 +472,26 @@ def test_a_plan_names_its_variant_problem(tmp_path):
         AgentTools(ctx).plan_test(**xss_plan()["args"])
 
 
-def test_an_experiment_on_a_write_is_refused_before_anything_is_sent(tmp_path):
-    """Every control is sent twice and a write never repeats, so the plan could only fail (VER-036)."""
-    sent = []
-    ctx = context(tmp_path, lambda *a, **kw: sent.append(a) or Resp())
-    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", endpoints=(Endpoint("POST", "/login", None),))
-    ctx.scope = {**ctx.scope, "injection_inputs": [{"finding_id": ctx.plan.id, "path": "/login",
-                 "input_location": "json", "input_name": "email", "semantics": "literal"}]}
-    tools = AgentTools(ctx)
-    plan = {"kind": "boolean", "hypothesis": "The email is part of the SQL text", "path": "/login",
-            "method": "POST", "strategy": STRATEGY, "input_location": "json", "input_name": "email",
-            "baseline": "plain", "pointer": "/result", "sql_template": "plain' AND {{predicate}} -- "}
-    timing = {k: v for k, v in plan.items() if k != "sql_template"}
-    form = {**plan, "method": "GET", "input_location": "form"}                 # a form field needs a write
-    for refused in (plan, {**timing, "kind": "timing", "method": "PATCH", "positive": "slow"}, form):
-        with pytest.raises(ToolError, match="an experiment sends every control twice and a write is never repeated"):
-            tools.plan_test(**refused)
-    assert sent == []
-    assert tools.plan_test(**{**plan, "method": "GET"})["accepted"] is True               # the same plan as a read
+def test_an_experiment_on_a_write_needs_intrusive_mode(tmp_path):
+    """VER-011 + VER-030: writes repeat only in --allow-intrusive; the agent sends each control itself."""
+    from test_agent_tools import _ctx
+
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    def mk(safe):
+        ctx = _ctx(tmp_path, lambda *a, **kw: Resp(), safe=safe, read_only=safe)
+        ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", endpoints=(Endpoint("POST", "/login", None),))
+        return AgentTools(ctx)
+
+    plan_write = {"kind": "boolean", "hypothesis": "The email is part of the SQL text", "path": "/login",
+                  "method": "POST", "strategy": STRATEGY, "input_location": "json", "input_name": "email",
+                  "baseline": "plain", "pointer": "/result", "sql_template": "plain' AND {{predicate}} -- "}
+    timing_write = {k: v for k, v in plan_write.items() if k != "sql_template"}
+    form_safe_method = {**plan_write, "method": "GET", "input_location": "form"}      # form implies write
+    for refused in (plan_write, {**timing_write, "kind": "timing", "method": "PATCH", "positive": "slow"},
+                    form_safe_method):
+        with pytest.raises(ToolError, match="a write needs --allow-intrusive|form experiments need a body-capable"):
+            mk(safe=True).plan_test(**refused)
+    # Intrusive mode accepts the same write-based plan.
+    assert mk(safe=False).plan_test(**plan_write)["accepted"] is True
+    assert mk(safe=True).plan_test(**{**plan_write, "method": "GET"})["accepted"] is True    # read is OK in safe

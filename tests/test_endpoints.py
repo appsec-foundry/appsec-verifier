@@ -97,6 +97,49 @@ def test_a_finding_at_the_registration_or_at_the_handler_definition_names_the_en
     assert finding_endpoints({"evidence": [{"file": "routes/profileImageUrlUpload.ts", "line": 24}]}, ROUTED) == ()
 
 
+@pytest.mark.parametrize("source", ["finding-id", "instance-id", "scenario", "attack-step", "context"])
+def test_explicit_requests_do_not_pick_up_other_resources_at_the_same_generator_line(source):
+    from appsec_verifier.endpoints import preparation_endpoints
+
+    surface = [
+        {"entry_point": f"GET /api/Unrelated{n}", "route_ids": [f"R-{n:03d}"],
+         "notes": "registered: server.ts:501; handler: generator.ts:10"}
+        for n in range(1, MAX_ENDPOINTS + 2)
+    ] + [
+        {"entry_point": "PUT /api/Products/:id", "route_ids": ["R-130"],
+         "notes": "registered: server.ts:501; handler: generator.ts:10"},
+        {"entry_point": "POST /api/Products", "route_ids": ["R-131"],
+         "notes": "registered: server.ts:501; handler: generator.ts:10"},
+    ]
+    threat = {"cwe": "CWE-639", "evidence": {"file": "server.ts", "line": 501}}
+    if source == "finding-id":
+        threat["route_ids"] = ["R-130"]
+    elif source == "instance-id":
+        threat["instances"] = [{"file": "generator.ts", "line": 10, "route_ids": ["R-130"]}]
+    elif source == "scenario":
+        threat["scenario"] = "PUT /api/Products/:id changes another user's product."
+    elif source == "attack-step":
+        threat["attack_steps"] = ["Send PUT /api/Products/:id."]
+    else:
+        threat["verification_context"] = {"version": 1, "variants": [
+            {"request": {"method": "PUT", "path": "/api/Products/:id"}}
+        ]}
+    endpoints = finding_endpoints(threat, surface)
+    assert endpoints == (Endpoint("PUT", "/api/Products/:id", None),)
+    assert preparation_endpoints(threat, surface, endpoints) == (Endpoint("POST", "/api/Products", None),)
+
+
+def test_unresolved_route_reference_still_allows_location_fallback():
+    threat = {"route_ids": ["R-999"], "evidence": {"file": "server.ts", "line": 311}}
+    assert finding_endpoints(threat, ROUTED) == (Endpoint("POST", "/profile/image/url", True),)
+
+
+def test_multiple_explicit_routes_keep_their_scope_without_location_additions():
+    threat = {"route_ids": ["R-008", "R-090"], "evidence": {"file": "server.ts", "line": 620}}
+    assert finding_endpoints(threat, ROUTED) == (Endpoint("POST", "/profile/image/url", True),
+                                               Endpoint("GET", "/redirect", None))
+
+
 def test_odd_input_yields_nothing_and_the_list_is_bounded():
     assert finding_endpoints({"scenario": 7, "attack_steps": "GET /a", "instances": "x"}, "not a list") == ()
     many = {"scenario": " ".join(f"GET /p{n}" for n in range(10))}
@@ -164,33 +207,40 @@ def test_the_requests_a_finding_names_decide_whether_safe_mode_or_a_missing_logi
     assert blocker(_plan("open-redirect")) is None                                             # nothing named: tried
 
 
-def test_injection_without_its_contract_or_with_only_writes_is_not_tested():
+def test_an_injection_finding_with_a_read_request_is_tested_without_a_scope_contract():
+    """VER-011: the agent picks the input from a read request the finding names; a scope entry only pins it."""
     get = Endpoint("GET", "/a", None)
-    assert _blocker(_plan("injection", get)) == ("contract", "no literal-input contract for this finding in "
-                                                             "injection_inputs")
+    assert _blocker(_plan("injection", get)) is None                                      # no contract needed
     elsewhere = {"injection_inputs": [{**CONTRACT["injection_inputs"][0], "finding_id": "T-9"}]}
-    assert _blocker(_plan("injection", get), scope=elsewhere)[0] == "contract"            # another finding's
-    assert _blocker(_plan("injection", get), scope=CONTRACT) is None
-    # Every proof repeats its controls and a write is never repeated, so --allow-intrusive cannot help.
-    assert _blocker(_plan("injection", POST), safe=False) == ("repeat", "the proof repeats each control, and "
-                                                                        "every request the assessment names writes")
-    assert _blocker(_plan("injection", POST))[0] == "repeat"                              # not "intrusive mode"
+    assert _blocker(_plan("injection", get), scope=elsewhere) is None                     # another finding's pin
+    assert _blocker(_plan("injection", get), scope=CONTRACT) is None                      # this finding's pin
+    # A write-only finding needs --allow-intrusive: the agent sends each control itself.
+    assert _blocker(_plan("injection", POST)) == ("intrusive", "safe mode; every request the finding names "
+                                                                "writes, and the proof sends each control twice")
+    assert _blocker(_plan("injection", POST), safe=False) is None                         # intrusive unlocks it
     written = _plan("injection")
     written.verification_context = {"variants": [{"id": "v", "request": {"method": "PATCH", "path": "/b"}}]}
-    assert _blocker(written, safe=False)[0] == "repeat"
-    assert _blocker(_plan("injection", POST, get), safe=False)[0] == "contract"            # a read can carry it
+    assert _blocker(written)[0] == "intrusive"
+    assert _blocker(written, safe=False) is None
+    assert _blocker(_plan("injection", POST, get)) is None                                # a read can carry it
+    # A finding naming no request at all, and no contract, still cannot run controls.
+    assert _blocker(_plan("injection")) == ("contract", "no read request to run controls on, and no "
+                                                        "injection_inputs entry")
 
 
-def test_a_contract_does_not_make_writes_repeatable_but_a_declared_query_parameter_is_read():
+def test_a_contract_declares_how_the_proof_reaches_the_input():
     """A JSON or form field travels in the body of the write the finding names; a query parameter the
-    contract declares travels in a GET on its path, which the proof may repeat, also in safe mode."""
+    contract declares travels in a GET on its path, which the proof may repeat even in safe mode. A write-only
+    body contract still needs --allow-intrusive because the proof sends each control twice."""
     body = {"injection_inputs": [{**CONTRACT["injection_inputs"][0], "path": "/b", "input_location": "json",
                                   "input_name": "email"}]}
+    assert _blocker(_plan("injection", POST), scope=body)[0] == "intrusive"
+    assert _blocker(_plan("injection", POST), scope=body, safe=False) is None
+    form = {"injection_inputs": [{**body["injection_inputs"][0], "input_location": "form"}]}
+    assert _blocker(_plan("injection", POST), scope=form)[0] == "intrusive"
+    assert _blocker(_plan("injection", POST), scope=form, safe=False) is None
+    query = {"injection_inputs": [{**body["injection_inputs"][0], "input_location": "params"}]}
     for safe in (True, False):
-        assert _blocker(_plan("injection", POST), scope=body, safe=safe)[0] == "repeat"
-        form = {"injection_inputs": [{**body["injection_inputs"][0], "input_location": "form"}]}
-        assert _blocker(_plan("injection", POST), scope=form, safe=safe)[0] == "repeat"
-        query = {"injection_inputs": [{**body["injection_inputs"][0], "input_location": "params"}]}
         assert _blocker(_plan("injection", POST), scope=query, safe=safe) is None
     assert _blocker(_plan("injection", GET_LOGIN), scope=body)[0] == "identity"            # the read needs a login
     assert _blocker(_plan("injection"), scope=body) is None                    # nothing named: the contract's path
@@ -268,9 +318,9 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     assert "  T-1  critical  injection  sqli in search · GET /rest/products/search\n" in out
     assert "Not testable  2 findings need what this run does not have (--test-all tries anyway)" in out
     assert "test identity" in out and "→ test accounts: --account, or --identities FILE" in " ".join(out.split())
-    # T-2's contract declares a JSON field of the login POST: no read request carries it, so no mode helps.
-    assert "unsupported write-injection proof" in out
-    assert "→ this proof method cannot repeat write requests" in " ".join(out.split())
+    # T-2 names only a POST; the proof sends each control twice, so --allow-intrusive is required.
+    assert "intrusive mode" in out
+    assert "→ run with --allow-intrusive" in " ".join(out.split())
     # verify gives a few words per need; preflight shows how to provide it
     assert "how to provide each, with lines to copy: appsec-verifier preflight" in out
     assert "create an identities file" not in out and "the injection proof sends every control twice" not in out
@@ -278,12 +328,12 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     listed = out[out.index("\nResults\n"):]
     assert "T-1  critical  injection       not attempted (low)" in listed
     assert "no answered target request" in listed
-    assert "· T-2 high injection needs unsupported write-injection proof sqli in login" in " ".join(listed.split())
+    assert "· T-2 high injection needs intrusive mode sqli in login" in " ".join(listed.split())
     assert "· T-3 high access-control needs test identity idor" in " ".join(listed.split())
     assert "Verdicts   : 3 not tested\n" in out
     assert results["T-1"][0] == "not-attempted"
-    assert results["T-2"] == ("not-attempted", "not tested: the proof repeats each control, and every request the "
-                                               "assessment names writes")
+    assert results["T-2"] == ("not-attempted", "not tested: safe mode; every request the finding names writes, "
+                                               "and the proof sends each control twice")
     assert results["T-3"] == ("not-attempted", "not tested: no test identity; the proof compares two identities")
 
 

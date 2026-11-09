@@ -220,7 +220,7 @@ properties:
       properties:
         finding_id: {type: string, minLength: 1, maxLength: 80}
         path: {type: string, minLength: 1, maxLength: 2000}
-        input_location: {enum: [params, json, form]}
+        input_location: {enum: [params, json, form, path]}
         input_name: {type: string, minLength: 1, maxLength: 128}
         semantics: {const: literal}
 

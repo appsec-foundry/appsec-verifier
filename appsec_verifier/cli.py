@@ -1350,18 +1350,13 @@ _NEEDS = {
                   'callback: {host: 127.0.0.1, port: 8099, base_url: "http://127.0.0.1:8099"}',
                   "(docs/cli.md, Scope file)"]),
     "intrusive": ("intrusive mode", "run with --allow-intrusive", ["run with --allow-intrusive"]),
-    "contract": ("injection contract", "an injection_inputs entry in a scope file: a query parameter or JSON field",
-                 ["add to a scope file (--scope) the input the application must treat as literal data; the proof "
-                  "repeats read requests, so a query parameter or a JSON field, not a path parameter or a write:",
+    "contract": ("injection contract", "the finding names no read request, so needs an injection_inputs entry",
+                 ["the finding names no GET request for controls to run on; add to a scope file (--scope) the "
+                  "input the application must treat as literal data, as a query parameter or a JSON field, not a "
+                  "path parameter or a write:",
                   "injection_inputs: [{finding_id: ID, path: /route, input_location: params, input_name: NAME, "
                   "semantics: literal}]",
                   "(docs/cli.md, Scope file)"]),
-    "repeat": ("unsupported write-injection proof", "this proof method cannot repeat write requests",
-               ["the injection proof sends every control twice and never repeats a write, and every request these "
-                "findings name writes; if a GET request of the application carries the same input as a query "
-                "parameter, declare that one in a scope file (--scope):",
-                "injection_inputs: [{finding_id: ID, path: /route, input_location: params, input_name: NAME, "
-                "semantics: literal}]"]),
     "access": ("access request", "a test_resources entry in a scope file",
                ["without a test_resources entry the proof reads the resource with a GET request the finding names, "
                 "and an account creates its own resource with a write request the finding names that has no "
@@ -1466,17 +1461,17 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
             return "intrusive", "safe mode; every declared variant needs a state change"
         return "capability", "declared variants need unavailable capabilities: " + ", ".join(needs)
     if plan.cls == "injection":
-        # VER-011: the proof needs the operator's contract and sends every control twice, but a write never
-        # repeats (VER-014, VER-036), with or without --allow-intrusive. A contracted query parameter travels in a
-        # read request on its path (agent/controller.py); a JSON or form field in the body of a named request.
+        # VER-011: the proof sends every control twice. For a read request the agent repeats automatically;
+        # for a write-only finding the agent sends each control itself in intrusive mode (VER-030).
         contracts = [r for r in scope.get("injection_inputs", []) if r["finding_id"] == plan.id]
         methods = [e.method for e in plan.endpoints if e.method != "PAGE"]
         methods += [v["request"].get("method", "GET") for v in variants]
         methods += ["GET" for r in contracts if r["input_location"] == "params"]
-        if methods and all(m in WRITE_METHODS for m in methods):
-            return "repeat", "the proof repeats each control, and every request the assessment names writes"
-        if not contracts:
-            return "contract", "no literal-input contract for this finding in injection_inputs"
+        if methods and all(m in WRITE_METHODS for m in methods) and safe:
+            return "intrusive", ("safe mode; every request the finding names writes, and the proof sends each "
+                                 "control twice")
+        if not methods and not contracts:
+            return "contract", "no read request to run controls on, and no injection_inputs entry"
     requests = [e for e in plan.endpoints if e.method != "PAGE"]
     # An injection finding that gets here has a read request, and its proof never writes.
     if requests and safe and plan.cls != "injection" and all(e.method in WRITE_METHODS for e in requests):

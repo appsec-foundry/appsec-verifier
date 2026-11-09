@@ -373,13 +373,24 @@ def test_session_screenshot_selection_and_console_plan(tmp_path):
     assert not any(key in out for key in ("data_flow", "counter_hypothesis", "expected:", "stop:", "prerequisite"))
 
 
-def test_expression_proof_needs_an_operator_input_contract(tmp_path):
+def test_expression_proof_without_a_scope_contract_accepts_the_agents_input(tmp_path):
+    """VER-011: the agent chooses the input from a read request the finding names; a scope entry pins it instead.
+    An entry for another finding does not pin this one."""
     from appsec_verifier.agent.tools import AgentTools, ToolError
 
-    ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request before input contract"))
+    ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request before plan"))
     ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-1336")
-    with pytest.raises(ToolError, match="literal input semantics"):
-        AgentTools(ctx).plan_test(**(plan()["args"] | {"expression_template": "{{ {{expression}} }}"}))
+    agents_plan = plan()["args"] | {"expression_template": "{{ {{expression}} }}"}
+    assert AgentTools(ctx).plan_test(**agents_plan)["accepted"] is True
+    # A pin for another finding does not block this finding's agent-chosen input.
+    ctx.scope = {**ctx.scope, "injection_inputs": [{"finding_id": "T-9", "path": "/other",
+                 "input_location": "params", "input_name": "x", "semantics": "literal"}]}
+    assert AgentTools(ctx).plan_test(**agents_plan)["accepted"] is True
+    # A pin for THIS finding must match the plan's input.
+    ctx.scope = {**ctx.scope, "injection_inputs": [{"finding_id": ctx.plan.id, "path": "/other",
+                 "input_location": "params", "input_name": "x", "semantics": "literal"}]}
+    with pytest.raises(ToolError, match="does not match a declared injection_inputs entry"):
+        AgentTools(ctx).plan_test(**agents_plan)
 
 
 @pytest.mark.parametrize("mechanism", ["nosql", "ldap"])
