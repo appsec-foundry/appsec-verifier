@@ -872,6 +872,11 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
 
 
 def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
+    for step in history:
+        if step.get("tool") == "browser_check" and (problem := step.get("result", {}).get("screenshot_error")):
+            note = "Application screenshot unavailable: " + problem + "."
+            if note not in result.observations:
+                result.observations.append(note)
     # The plan as accepted: plan_test may have counted an unsupported observed prerequisite as assumed.
     accepted = [(n, h["result"].get("experiment") or h["args"]) for n, h in enumerate(history, 1)
                 if h.get("tool") == "plan_test" and h.get("result", {}).get("accepted") is True]
@@ -912,7 +917,7 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     result.evidence = [*(result.evidence or []), *shots]
     if result.verdict == "confirmed" and not any(
         e.get("presentation") == "application" for e in result.evidence
-    ):
+    ) and not any(o.startswith("Application screenshot unavailable:") for o in result.observations):
         if browser is None:
             reason = "the proof browser is unavailable"
         elif cls not in getattr(browser, "screenshots", ()):

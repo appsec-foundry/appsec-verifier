@@ -1,5 +1,5 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
-VER-020). Pure, injectable logic: the probe registry, HTTP client, budget, and
+VER-020, VER-037). Pure, injectable logic: the probe registry, HTTP client, budget, and
 clock are all passed in, so the whole flow is tested offline. An optional
 `progress` (progress.RunProgress) shows each finding with a probe, its
 steps, its proof and, once its last variant is done, a changed rating
@@ -165,6 +165,7 @@ def run_verification(
     guard = ScopeGuard(scope)
     if browser is not None:
         browser.private_text = _private_text(sessions, scope)
+        browser.redact = sessions.redact if sessions is not None else lambda value: value
 
     contexts = {}
 
@@ -215,6 +216,7 @@ def run_verification(
     stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
+        started = _iso(datetime.now(timezone.utc))
         if evidence_id(plan) in skipped:
             res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[evidence_id(plan)]}")
         elif shown and interrupted:
@@ -244,6 +246,8 @@ def run_verification(
             if res.limits_hit in _RUN_LIMITS:
                 stopped = res.limits_hit
         results.append(_result_entry(i, plan, res))
+        if res.verdict != "not-attempted":
+            results[-1]["timing"] = {"started": started, "finished": _iso(datetime.now(timezone.utc))}
         ctx = contexts.get(evidence_id(plan))
         if ctx is not None and res.verdict != "not-attempted":
             groups.setdefault(plan.id, []).append((i - 1, plan, ctx, res))
@@ -258,7 +262,10 @@ def run_verification(
             elif review_stop in _RUN_LIMITS:
                 stopped = review_stop
             for idx, reviewed_plan, _, reviewed_result in group:
+                timing = results[idx].get("timing")
                 results[idx] = _result_entry(idx + 1, reviewed_plan, reviewed_result)
+                if timing is not None:
+                    results[idx]["timing"] = timing
                 contexts.pop(evidence_id(reviewed_plan), None)
         if shown and progress is not None and not interrupted:
             rating = None

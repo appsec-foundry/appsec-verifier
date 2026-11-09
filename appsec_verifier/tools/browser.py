@@ -1,4 +1,4 @@
-"""Proof browser for XSS findings (VER-009, VER-018, VER-022).
+"""Proof browser for XSS findings (VER-009, VER-016, VER-018, VER-022).
 
 Loads one target page in headless Google Chrome, driven by Playwright (optional
 extra `appsec-verifier[browser]`), and reports whether the finding's marker
@@ -438,10 +438,11 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
       }
     }
   }
-  // What the page shows as text, with the values of its fields, for the check whether a model may see the image.
+  // Page text and field values must be checked before saving an image or sending it to a model.
   const text = ((root.innerText || '') + '\\n' + Array.from(root.querySelectorAll('input,textarea'))
-    .map((el) => el.value || '').join('\\n')).slice(0, 200000);
-  return JSON.stringify({marks: marks.length, hidden, clip, crop, carrier: carrier && carrier.slice(0, 300), text});
+    .map((el) => el.value || '').join('\\n'));
+  return JSON.stringify({marks: marks.length, hidden, clip, crop, carrier: carrier && carrier.slice(0, 300),
+    text: text.length <= 200000 ? text : null});
 }"""
 
 
@@ -524,8 +525,20 @@ class ProofBrowser:
         # Whether a text holds a credential value or marker-file content; set by the run. Without it no
         # application screenshot is cleared for a model (VER-042).
         self.private_text = None
+        self.redact = None  # Run credential redactor; marker-file content may be stored, but never sent to a model.
         self._playwright = self._browser = None
         self._counts: dict[str, int] = {}
+
+    def _capture_error(self, marked, *texts) -> str | None:
+        """Reject live screenshots with known credentials or incomplete text checks (VER-016, VER-022)."""
+        if self.redact is None or not marked or not isinstance(marked.get("text"), str):
+            return "the screenshot text could not be checked for credentials"
+        try:
+            if any(self.redact(t) != t for t in (marked["text"], *texts) if t):
+                return "a credential was detected in the screenshot text"
+        except Exception:  # noqa: BLE001 - omit the image, keeping the technical proof
+            return "the screenshot text could not be checked for credentials"
+        return None
 
     def _reviewable(self, marked, *texts) -> bool:
         """Whether a model may see a screenshot (VER-042): only when the page's text and every text drawn around
@@ -698,6 +711,10 @@ class ProofBrowser:
                                f"recorded proof step {observation['step']} · read-only browser observation"],
                         values=values, label="values from the confirmed proof")
                     if marked and marked["marks"]:
+                        problem = self._capture_error(marked, url)
+                        if problem:
+                            result["error"] = problem
+                            return result
                         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                         shot = self._dir / f"{self._stem(name or finding_id, 'application')}.png"
                         page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
@@ -710,6 +727,8 @@ class ProofBrowser:
             elif executed:
                 result["evidence"] = self._save(page, finding_id, url, status, events, marker, role,
                                                execution_contexts=contexts, attempt=attempt, name=name)
+                if problem := result["evidence"][0].get("screenshot_omitted"):
+                    result["screenshot_error"] = problem
             return result
         finally:
             _quietly(context.close)
@@ -751,8 +770,8 @@ class ProofBrowser:
             carrier, text = out.get("carrier"), out.get("text")
             return {"marks": int(out["marks"]), "hidden": [str(h)[:80] for h in out.get("hidden") or []][:5],
                     "clip": clip, "crop": crop, "carrier": carrier[:300] if isinstance(carrier, str) else None,
-                    "text": text[:200000] if isinstance(text, str) else None}
-        except Exception:  # noqa: BLE001 - the screenshot is still taken, unmarked
+                    "text": text if isinstance(text, str) and len(text) <= 200000 else None}
+        except Exception:  # noqa: BLE001 - live images need checked text; redacted records may render unmarked
             return None
 
     @staticmethod
@@ -780,22 +799,26 @@ class ProofBrowser:
             data["marked_elements"] = marked["marks"] if marked else None
             if marked and marked["hidden"]:
                 data["hidden_for_screenshot"] = marked["hidden"]
-            try:
-                image = page.screenshot(timeout=EVIDENCE_TIMEOUT_MS)
-            except PlaywrightError:      # a page that does not answer: the event record still proves execution
-                image = None
+            origin = next((c["origin"] for c in execution_contexts or []
+                           if c.get("verified") and c.get("is_marker")), url)
+            lines = [f"AppSec Verifier · {finding_id} · XSS · as {role or 'anonymous'} · HTTP {status} · "
+                     f"captured {shown_time(captured)}"]
+            if via:
+                lines.append("The dialog shows a random value the payload assembled at runtime; a page that "
+                             "only echoed the payload would show the expression.")
+            lines.append(f"Outlined: payload element {marked['carrier']}" if marked and marked["carrier"]
+                         else "(the element that carries the payload was not found in the page)")
+            if marked and marked["hidden"]:
+                lines.append("Hidden for the screenshot: " + ", ".join(marked["hidden"]))
+            image = None
+            if problem := self._capture_error(marked, url, origin, joined, *lines):
+                data["screenshot_omitted"] = problem
+            else:
+                try:
+                    image = page.screenshot(timeout=EVIDENCE_TIMEOUT_MS)
+                except PlaywrightError:  # a page that does not answer: the event record still proves execution
+                    pass
             if image is not None:
-                origin = next((c["origin"] for c in execution_contexts or []
-                               if c.get("verified") and c.get("is_marker")), url)
-                lines = [f"AppSec Verifier · {finding_id} · XSS · as {role or 'anonymous'} · HTTP {status} · "
-                         f"captured {shown_time(captured)}"]
-                if via:
-                    lines.append("The dialog shows a random value the payload assembled at runtime; a page that "
-                                 "only echoed the payload would show the expression.")
-                lines.append(f"Outlined: payload element {marked['carrier']}" if marked and marked["carrier"]
-                             else "(the element that carries the payload was not found in the page)")
-                if marked and marked["hidden"]:
-                    lines.append("Hidden for the screenshot: " + ", ".join(marked["hidden"]))
                 frame = xss_frame(url=url, image=image, crop=marked["crop"] if marked else None,
                                   dialog=(via[0], urlsplit(origin).netloc or origin, joined) if via else None,
                                   lines=lines)
@@ -810,8 +833,15 @@ class ProofBrowser:
                     framed = None
                 if framed is None:       # the outlined page alone still shows the exploit
                     shot.write_bytes(image)
+        if self.redact is not None:
+            try:
+                data = self.redact(data)
+            except Exception:  # noqa: BLE001 - retain execution facts without unchecked page metadata
+                data = {k: data[k] for k in ("status", "marker", "executed_via", "captured", "screenshot_omitted")
+                        if k in data}
         record.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        entries = [self._entry(record, "browser-event")]
+        entries = [self._entry(record, "browser-event", **(
+            {"screenshot_omitted": data["screenshot_omitted"]} if data.get("screenshot_omitted") else {}))]
         if shot is not None:
             entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
                                        presentation="application", source="live-browser",

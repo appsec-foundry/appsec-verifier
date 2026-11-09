@@ -375,6 +375,10 @@ properties:
             started:  { type: [string, "null"] }
             finished: { type: [string, "null"] }
 
+        source_generated:
+          type: [string, "null"]
+          description: Original report time retained on merge; fallback for older results without a test timestamp.
+
 $defs:
   evidence_review:
     type: object

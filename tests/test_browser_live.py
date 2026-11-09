@@ -84,6 +84,7 @@ def browser(tmp_path):
     target = Target()
     http = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target)
     b = ProofBrowser(http, tmp_path / "evidence")
+    b.redact = lambda value: value  # this fake target has no credentials unless a test supplies one
     yield b, target, tmp_path
     b.close()
 
@@ -242,14 +243,24 @@ def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browse
 
 
 @pytest.mark.parametrize("extra, reviewable", [("", True), (" s3cret-token", False)])
-def test_a_screenshot_is_cleared_for_a_model_only_without_a_secret_in_its_page_text(browser, extra, reviewable):
-    """VER-042: the page text and the frame's own text are checked when the image is taken."""
-    b, _, _ = browser
+def test_a_screenshot_is_saved_only_without_a_secret_in_its_page_text(browser, extra, reviewable):
+    """VER-016/022/042: credentials exclude the image from disk as well as the model."""
+    import json
+
+    b, _, tmp = browser
+    b.redact = lambda value: json.loads(json.dumps(value).replace("s3cret-token", "[redacted]"))
     b.private_text = lambda text: "s3cret-token" in text
     payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>{extra}"
     result = _check(b, "/reflect?q=" + quote(payload, safe=""))
-    shot = next(e for e in result["evidence"] if e["kind"] == "screenshot")
-    assert shot["reviewable"] is reviewable
+    shots = [e for e in result["evidence"] if e["kind"] == "screenshot"]
+    assert bool(shots) is reviewable
+    assert bool(list((tmp / "evidence").glob("*.png"))) is reviewable
+    assert result["executed"] is True
+    if shots:
+        assert shots[0]["reviewable"] is True
+    else:
+        assert "credential" in result["screenshot_error"]
+        assert all("s3cret-token" not in p.read_text() for p in (tmp / "evidence").glob("*.json"))
 
 
 def test_floating_layers_are_hidden_for_the_screenshot_while_the_header_stays(browser):

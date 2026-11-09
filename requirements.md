@@ -53,13 +53,7 @@ optional hardening.
 
 ## Read the assessment
 
-- **VER-005: Consume the assessment as untrusted input.** The input is a
-  validated `security-assessment.yaml`. The Verifier reads the fields it needs
-  from each `threats[]` entry — identifier, title, `cwe`, `evidence` file and
-  line, `scenario`, and the finding's `verification` hint — and validates their
-  types and values before use. Unknown, missing, or malformed fields for a given
-  finding mean that finding is reported as *not verifiable from the input*, never
-  silently skipped and never guessed.
+- **VER-005: Consume the assessment as untrusted input.** The input is a validated `security-assessment.yaml`. The Verifier reads the fields it needs from each `threats[]` entry — identifier, title, `cwe`, `evidence` file and line, `scenario`, and the finding's `verification` hint — and validates their types and values before use. Invalid assessment structure or field types block the run. Missing information needed to test an otherwise valid finding is reported for that finding, never guessed. Additional fields the Verifier does not use are ignored.
 
 - **VER-026: Let the operator choose what to verify.** From the referenced
   assessment the operator selects which findings to verify — by weakness class,
@@ -129,7 +123,7 @@ optional hardening.
   executed*, never as confirmed, so DOM handling and sanitisers are not mistaken
   for exploitable output.
 
-- **VER-010: Prove access-control findings by comparison.** An IDOR or missing-authorisation finding is confirmed by showing that identity A can perform or read something that belongs to identity B, or that an unauthenticated caller reaches a protected operation. This requires at least two independent test identities (see VER-016). The result records which identity saw what, with the requests and responses as evidence. A single successful request without the cross-identity contrast is not sufficient. The operator can declare the known harmless resource, expected marker, allowed and denied roles; a declared resource takes precedence. Without one, given two normal accounts and intrusive mode (VER-030), the Verifier creates the resource: the owning account writes a random marker and reads it back, an unauthenticated read must not show it, and the other account's read decides. If the finding's request changes a record, the other account then writes a second random marker to the created resource, addressed by the identifier its creation returned, and the owner's next read decides: the second marker confirms, the first alone after a 403 or 404 gives blocked-by-control. A privileged function is confirmed when a normal account receives the same response as a privileged account (VER-041) and an unauthenticated caller is refused. Both count at medium confidence (VER-013). Different role labels backed by the same credentials do not establish independent identities.
+- **VER-010: Prove access-control findings by comparison.** An IDOR or missing-authorisation finding is confirmed by showing that identity A can perform or read something that belongs to identity B, or that an unauthenticated caller reaches a protected operation. This requires at least two independent test identities (see VER-016). The result records which identity saw what, with the requests and responses as evidence. A single successful request without the cross-identity contrast is not sufficient. The operator can declare the known harmless resource, expected marker, allowed and denied roles; a declared resource takes precedence. Without one, given two normal accounts and intrusive mode (VER-030), the Verifier creates the resource: the owning account writes a random marker and reads it back, an unauthenticated read must not show it, and the other account's read decides. If the finding's request changes a record, the other account then writes a second random marker to the created resource, addressed by the identifier its creation returned, and the owner's next read decides: the second marker confirms, the first alone after a 403 or 404 gives blocked-by-control. The proofs using a resource created by the Verifier count at medium confidence (VER-013). For a finding that identifies a function as privileged, matching responses for independent normal and privileged accounts, with anonymous access refused, confirm the observed access at medium confidence. The report states that the intended restriction comes from the finding unless an operator-declared test resource establishes it; the response comparison does not establish that restriction independently. Different role labels backed by the same credentials do not establish independent identities.
 
 - **VER-011: Prove injection without exfiltration.** Injection findings are
   confirmed through controlled, observable behavioural differences — a boolean
@@ -153,7 +147,7 @@ optional hardening.
 
 - **VER-044: Verify injection through path inputs.** Operators can verify injection in an evidenced path parameter using repeatable, harmless controls and a stable response-field contrast; scope and input encoding remain enforced.
 
-- **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path traversal is confirmed by reading a pre-placed, non-sensitive marker file; open redirect by landing on an operator-controlled benign URL; SSRF by a request arriving at a callback the Verifier itself listens on, bound to the host and port the scope declares or, for a target on a loopback address without one, to a free loopback port, where a hit confirms the finding because the application fetched an internal address. The Verifier does not read system files, follow redirects to arbitrary hosts, or reach internal or metadata addresses to demonstrate impact. The callback destination is the only place those two probe classes are steered toward.
+- **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path traversal is confirmed by reading a pre-placed, non-sensitive marker file. Open redirect is confirmed by a redirect response whose Location points to the finding's unique .invalid marker host, without following it. SSRF requires a correlated hit on the Verifier's loopback callback listener and a scope declaration that fetching this destination should be rejected; the automatically provided callback for a loopback target carries that declaration. A hit proves retrieval of that destination only. The Verifier does not read system files, follow redirects to arbitrary hosts, or reach internal or metadata addresses to demonstrate impact. The callback destination is the only place those two probe classes are steered toward.
 
 - **VER-045: Verify archive-upload traversal.** Operators can verify an evidenced archive-upload traversal using a bounded, marked test archive and an explicitly designated test location; confirmation requires proof of the marker escaping the intended extraction directory, with state-change authorization and a recorded cleanup outcome.
 
@@ -187,15 +181,9 @@ optional hardening.
 
 ## Stay safe and in scope
 
-- **VER-014: Use safe, marked, reversible probes.** Probes use unique,
-  identifiable markers so every artefact they create can be found and attributed.
-  State-changing requests are allowed only with those markers, are logged, and
-  are cleaned up afterwards where the application allows it. Deleting data,
-  bulk or destructive operations, denial-of-service, and detection-evasion
-  techniques are never performed. A probe whose outcome is unknown is reconciled
-  or treated as having had an effect, never blindly retried.
+- **VER-014: Use safe, marked, reversible probes.** Probes use unique, identifiable markers so every artefact they create can be found and attributed. State-changing requests are allowed only with those markers and are logged. Created test artifacts are identified in the evidence. Automatic cleanup uses only an explicitly designated cleanup operation for the test's own artifacts and records its outcome; otherwise the artifacts remain for manual cleanup. Deleting other data, bulk or destructive operations, denial-of-service, and detection-evasion techniques are never performed. A probe whose outcome is unknown is reconciled or treated as having had an effect, never blindly retried.
 
-- **VER-030: Safe mode is the default.** By default the Verifier runs in a cautious mode: it stays read-only even when the scope permits state change, sends the single most benign payload that can still decide a verdict, keeps the request count and rate low, and avoids pervasive or noisy behaviour such as wordlist fuzzing, broad parameter sweeps, or trying many payload variants. Going beyond this — the marked, cleaned-up state-changing probes of VER-014, or more thorough probing — requires an explicit opt-out, and that choice is recorded in the report. The opt-out alone permits state change for the scope in effect, unless a scope file explicitly forbids it. Safe mode never disables a safety control; it only tightens behaviour. A single class can be verified on its own (VER-026), and safe mode applies the same way to that one class.
+- **VER-030: Safe mode is the default.** By default the Verifier runs in a cautious mode: it stays read-only even when the scope permits state change, sends the single most benign payload that can still decide a verdict, keeps the request count and rate low, and avoids pervasive or noisy behaviour such as wordlist fuzzing, broad parameter sweeps, or trying many payload variants. Going beyond this — the marked state-changing probes of VER-014, or more thorough probing — requires an explicit opt-out, and that choice is recorded in the report. The opt-out alone permits state change for the scope in effect, unless a scope file explicitly forbids it. Safe mode never disables a safety control; it only tightens behaviour. A single class can be verified on its own (VER-026), and safe mode applies the same way to that one class.
 
 - **VER-015: Bound every run.** Limits on total requests, per-finding attempts,
   retries, request rate, wall-clock time, and model spend are enforced outside
@@ -233,15 +221,7 @@ optional hardening.
   before it runs, and any request to act outside the scope is refused and logged,
   not executed.
 
-- **VER-018: Confine the browser and outbound requests.** The headless browser
-  and any outbound request the agent makes are restricted at connection time to
-  the authorised scope plus the explicitly declared proxy and authentication/
-  identity-provider hosts, including after redirects and for IPv6, so a probe
-  cannot be steered to internal, loopback, or metadata endpoints. Resolved
-  addresses are checked against that boundary when the connection is made, not by
-  a separate earlier DNS lookup. A session token or credential is attached only
-  to its intended origin and is dropped, never forwarded, when a redirect leads
-  to a different origin.
+- **VER-018: Confine the browser and outbound requests.** The headless browser and any outbound request the agent makes are restricted at connection time to the authorised scope plus the explicitly declared proxy and authentication/identity-provider hosts, including after redirects and for IPv6, so a probe cannot be steered to internal, loopback, or metadata endpoints. For direct connections, resolved target addresses are checked at connection time. With a declared proxy, the Verifier still checks target URLs against scope and checks the proxy's connection address; the operator must ensure that the proxy enforces the destination address restrictions when resolving and connecting to the target. A session token or credential is attached only to its intended origin and is dropped, never forwarded, when a redirect leads to a different origin.
 
 - **VER-019: Keep model and tool output from steering the run.** Content from the
   target, from retrieved pages, and from the model is data, not instructions. It
@@ -323,7 +303,7 @@ optional hardening.
   scope or URL, profile, or confirmation blocks the run and names what is
   missing.
 
-- **VER-032: Check inputs and access before the first finding.** Before a run tests a finding, it checks the assessment's structure (VER-005), that the target answers through the declared proxy (VER-003, VER-029), that every identity obtains a session and, where it names a check URL, is accepted there, and that no two identities whose tokens name their account are the same account (VER-010, VER-028), that the model profile is usable, for an API profile by one metadata request, and that the model answers one fixed prompt without target data, findings or credentials with a valid step, within the run's limits. A failed check blocks the run and names its cause, never a secret or raw error (VER-016); what a check cannot prove is said. Checks that contact the target follow the confirmation of VER-002, and each login is tried once. A separate command runs the same checks without verifying, offline if asked; there the fixed prompt runs only on explicit request and with its own limit, and it shows the test plan of VER-008 and warns when a finding cannot be tested.
+- **VER-032: Check inputs and access before the first finding.** Before a run tests a finding, it checks the assessment's structure (VER-005), that the target answers through the declared proxy (VER-003, VER-029), that every identity obtains a session and, where it names a check URL, is accepted there, and that no two identities whose tokens name their account are the same account (VER-010, VER-028), that the model profile is usable, for an API profile by one metadata request, and that the model answers one fixed prompt without target data, findings or credentials with a valid step, within the run's limits. A failed check blocks the run and names its cause, never a secret or raw error (VER-016); what a check cannot prove is said. Checks that contact the target follow the confirmation of VER-002. Each configured login is tried once, except for the at most two field-pair attempts per command-line account in VER-041. A separate command runs the same checks without verifying, offline if asked; there the fixed prompt runs only on explicit request and with its own limit, and it shows the test plan of VER-008 and warns when a finding cannot be tested.
 
 - **VER-033: Update its own installation on request.** A separate command
   reinstalls a pipx installation of the Verifier from the source it was

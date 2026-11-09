@@ -346,7 +346,9 @@ def _access_hint(ctx) -> str:
     if "reference" in methods:
         hint += (
             "\nPrivileged-function proof: call plan_test with kind access-control, reference set to a privileged "
-            "role and path the GET of the privileged function. Send it with the same inputs as that role, without "
+            "role and path the GET of the function the finding identifies as privileged. The intended restriction "
+            "comes from the finding, not from matching responses; do not infer it from the reference account. "
+            "Send it with the same inputs as that role, without "
             "a role, and as a normal account. Confirmed needs a 2xx with content for the privileged role, 401 or "
             "403 without a role, and the identical answer for the normal account; an answer that names the "
             "signed-in user is never identical. Cite the three requests."

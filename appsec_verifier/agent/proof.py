@@ -162,7 +162,7 @@ def _checked(result, history, cited, ctx=None):
         events["marker"] = "".join(getattr(ctx, "marker", None) or ())
     elif plan.get("reference"):
         scope = (f"cited requests only; the same answer as for {plan['reference']} does not show that the "
-                 "function is meant for privileged accounts only")
+                 "function is meant for privileged accounts only; that restriction is taken from the finding")
     result.proof = {
         **events,
         "checked": True,

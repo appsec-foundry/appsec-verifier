@@ -21,7 +21,8 @@ references them (VER-022).
 Reports and an annotated assessment are written through a temporary file and a
 rename, so an interrupted write leaves the old file or the new one, never a
 cut-off one. A report read back for `--resume` or `export` is checked against
-schemas/verification.schema.yaml first.
+schemas/verification.schema.yaml first. Resuming preserves each result's test
+time; legacy results retain their original report time as a fallback (VER-037).
 """
 
 from __future__ import annotations
@@ -87,10 +88,13 @@ def merge_reports(existing: dict, new: dict) -> dict:
     """Continue a prior report with a new run's results (VER-027, `--resume`): a
     finding tested again replaces its earlier result; findings not re-tested are
     kept. Result ids are renumbered and the summary recomputed. Meta comes from
-    the new run; the earlier generated time is kept as `previous_generated`."""
+    the new run; the earlier generated time is kept as `previous_generated`.
+    Each result retains its source report time for legacy timestamp fallback (VER-037)."""
     by_id: dict[str, dict] = {}
     order: list[str] = []
-    for r in (existing.get("results") or []) + (new.get("results") or []):
+    rows = [dict(r, source_generated=r.get("source_generated", doc.get("meta", {}).get("generated")))
+            for doc in (existing, new) for r in doc.get("results") or []]
+    for r in rows:
         ref = r.get("finding_ref", {})
         key = (ref.get("id") or r.get("result_id"), ref.get("variant_digest") or
                (r.get("proof") or {}).get("variant"))
@@ -580,6 +584,12 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
                           if v)
     head = ["Result", "Severity", "Weakness"]
     cells = [result, _rating_text(rating, unchanged=True) if rating else "–", weakness or "–"]
+    if tested := (r.get("timing") or {}).get("finished"):
+        head.append("Tested")
+        cells.append(_when(tested))
+    elif generated := r.get("source_generated"):
+        head.append("Original report")
+        cells.append(_when(generated))
     if analyzer_report and fr.get("id") and anchor:
         head.append("In the assessment report")
         cells.append(f"[{_inline(_display_id(fid), cell=True)}]({analyzer_report}#{anchor})")
@@ -758,7 +768,8 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
             "tested_scope": {k: (r.get("proof") or {})[k]
                              for k in ("checked", "contract", "variant", "tested_path", "scope")
                              if k in (r.get("proof") or {})},
-            "verified_at": meta.get("generated"),
+            "verified_at": ((r.get("timing") or {}).get("finished")
+                            or r.get("source_generated") or meta.get("generated")),
             "result_ref": r.get("result_id"),
             # Screenshots and recorded responses can show target data and stay out of the export (VER-022).
             "evidence_ref": next((e.get("path") for e in r.get("evidence") or []
