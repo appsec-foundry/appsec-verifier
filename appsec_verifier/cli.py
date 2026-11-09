@@ -923,18 +923,24 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         from .verify import merge_reports
 
         doc = merge_reports(existing, doc)
-    paths = write_reports(doc, out_dir)
+    import yaml
+
+    try:            # the Analyzer's ratings for the rating after verification (VER-039); the results go out anyway
+        source = _load_yaml(assessment)
+    except (OSError, yaml.YAMLError):
+        source = None
+    source = source if isinstance(source, dict) else None
+    paths = write_reports(doc, out_dir, source)
     extra = []
     if contact:
         extra.append(("Run", _run_usage(budget, time.monotonic() - started, agent_info, show_costs)))
     if action_log is not None:
         extra.append(("Action log", str(action_log.path)))
     if args.annotate:
-        import yaml
-
         from .verify.annotated_report import write_annotated_report
 
-        annotated = annotate_assessment(_load_yaml(assessment), doc, verification_report=str(paths["yaml"]))
+        annotated = annotate_assessment(source or _load_yaml(assessment), doc,
+                                        verification_report=str(paths["yaml"]))
         dest = out_dir / "security-assessment.annotated.yaml"
         write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
         extra.append(("Annotated", str(dest)))

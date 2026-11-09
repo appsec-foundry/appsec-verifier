@@ -26,7 +26,7 @@ import secrets
 from pathlib import Path
 
 from .poc import TARGET_DATA_NOTE
-from .report import _VERDICT_LABEL, _poc_markdown, write_text_atomically
+from .report import _VERDICT_LABEL, _poc_markdown, _review_markdown, _when, write_text_atomically
 
 ANNOTATED_REPORT = "security-assessment.annotated.md"
 MAX_REPORT_BYTES = 32 * 1024 * 1024
@@ -213,12 +213,6 @@ def _cell(value) -> str:
     return _one_line(value).replace("|", "\\|") or "–"
 
 
-def _when(value) -> str:
-    """An ISO-8601 UTC time as the Analyzer's changelog shows times, to the minute."""
-    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|\+00:00)", str(value or ""))
-    return f"{m.group(1)} {m.group(2)} UTC" if m else _one_line(value)
-
-
 def _verdict(block: dict) -> str:
     label = _VERDICT_LABEL.get(block.get("verdict"), block.get("verdict"))
     return f"{label} ({block['confidence']})" if block.get("confidence") else str(label)
@@ -248,7 +242,7 @@ def _section(t: dict, results: dict) -> list[str]:
             out += ["", f"**Variant {_one_line(r['finding_ref'].get('variant'))}:** {_verdict(r)}"]
         if r.get("rationale"):            # the model's words, quoted so that they cannot start a section
             out += ["", *(f"> {line}".rstrip() for line in str(r["rationale"]).splitlines())]
-        out += _poc_markdown(r, level=6)
+        out += _poc_markdown(r, level=6) + _review_markdown(r, 6)
     return out
 
 

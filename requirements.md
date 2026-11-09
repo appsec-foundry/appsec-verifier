@@ -240,14 +240,7 @@ optional hardening.
 
 ## Report the results
 
-- **VER-020: Write a standalone verification report by default.** Unless the
-  operator asks otherwise, each run writes its own `verification.md` for reading
-  and `verification.yaml` for further processing, and leaves the source
-  assessment untouched. Every entry names the finding it tested (identifier and
-  cross-run key), the verdict and its confidence, the evidence (requests,
-  responses, browser events, screenshots, callback hits), the target and build
-  tested, any deviation from the finding, and the authorisation under which the
-  test ran.
+- **VER-020: Write a standalone verification report by default.** Unless the operator asks otherwise, each run writes its own `verification.md` for reading and `verification.yaml` for further processing, and leaves the source assessment untouched. Every entry names the finding it tested (identifier and cross-run key), the verdict and its confidence, the evidence (requests, responses, browser events, screenshots, callback hits), the target and build tested, any deviation from the finding, and the authorisation under which the test ran. The report opens with an overview of the selected findings, each linked to its entry, with its verdict and its rating before and after verification (VER-039). A tested entry leads with its verdict, the steps its proof rests on as the code checked them, and its proof of concept (VER-034, VER-035); the test plan, the test agent's own explanation and the evidence review (VER-042) follow in an appendix.
 
 - **VER-027: Annotate a copy of the assessment.** On request, a run also writes a copy of the assessment annotated with the verification results; the standalone report (VER-020) is always written. Annotating only adds each tested finding's verdict, confidence, rating after verification (VER-039) and pointers to its proof of concept and screenshots next to the existing finding; it never changes or removes the static result, and it records that the file was annotated and by which run. The added fields follow a published schema, and the copy stays valid against the Analyzer's assessment schema. Annotating works in interactive and in non-interactive runs and never changes the source assessment.
 

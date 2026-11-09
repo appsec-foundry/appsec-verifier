@@ -25,7 +25,9 @@ def capture_application(ctx, tools, history, sent, result, proposal, cited):
     if result.verdict != "confirmed" or not proposal:
         return
     if ctx.plan.cls not in PAGE_CLASSES:
-        result.observations.append("Application screenshot unavailable: this class uses its existing proof capture.")
+        if not any(e.get("presentation") == "application" for e in result.evidence or []):   # e.g. XSS has one
+            result.observations.append("Application screenshot unavailable: this class uses its existing proof "
+                                       "capture.")
         return
     if ctx.browser is None or ctx.plan.cls not in getattr(ctx.browser, "screenshots", ()):
         return

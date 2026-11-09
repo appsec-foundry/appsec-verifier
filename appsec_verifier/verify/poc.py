@@ -328,7 +328,11 @@ def _line(step: dict, history: list[dict]) -> str:
     e = _shown_entry(step)
     res = (history[step["step"] - 1].get("result") or {}) if step["step"] <= len(history) else {}
     who = e.get("_role") or "anonymous"
-    text = f"{step['tool']} {e['request']['method']} {e['request']['url'][:200]} as {who} → " \
+    url = e["request"]["url"][:200]
+    if step["tool"] == "browser_check":     # the page the browser opened; its # part never reaches the server
+        opened = (history[step["step"] - 1].get("args") or {}).get("path") if step["step"] <= len(history) else None
+        url = str(opened)[:200] if opened else url
+    text = f"{step['tool']} {e['request']['method']} {url} as {who} → " \
            f"{e['response']['status']}, {e['response']['content']['size']} bytes"
     if step["tool"] == "browser_check":
         text += f", marker {'executed' if res.get('executed') is True else 'not executed'}, " \
@@ -473,22 +477,29 @@ def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
 
 
 class _CodeMarks(HTMLParser):
-    """Reuse deterministic proof locations as plain code-block annotations (VER-035)."""
+    """Reuse deterministic proof locations as plain code-block annotations (VER-035): ⟦…⟧ around what is
+    marked. The image's labels stay out, so a recorded value reads as it was sent or answered."""
 
     def __init__(self):
         super().__init__()
         self.parts = []
+        self._label = False
 
     def handle_starttag(self, tag, attrs):
         if tag == "mark":
             self.parts.append("⟦")
+        elif tag == "span" and ("class", "tag") in attrs:
+            self._label = True
 
     def handle_endtag(self, tag):
         if tag == "mark":
             self.parts.append("⟧")
+        elif tag == "span":
+            self._label = False
 
     def handle_data(self, data):
-        self.parts.append(data)
+        if not self._label:
+            self.parts.append(data)
 
 
 def _code_excerpt(text, needles=(), lines=()):
@@ -497,13 +508,38 @@ def _code_excerpt(text, needles=(), lines=()):
     return "".join(parser.parts)
 
 
+_SHORT_BODY = 600
+
+
+def _report_body(ctx, e, body, marks) -> str:
+    """The decisive part of a response body for the report (VER-034): a short body whole; a page an XSS marker
+    did not reach as no source, since the browser decides; another page as its visible text; a JSON body,
+    except for injection, as its marked and ownership fields; else a window around the first located value."""
+    text, content = _text(e), e["response"]["content"]
+    mime, cls = content.get("mimeType", "").lower(), getattr(ctx.plan, "cls", None)
+    located = any(v and v in text for v in (m[2] if isinstance(m, tuple) else m for _, m in marks))
+    if not content.get("_omitted") and len(text) > _SHORT_BODY:
+        if "html" in mime and cls == "xss" and not located:
+            return "[page source omitted: the browser observation above decides the XSS test; full record in HAR]"
+        if "html" in mime and not located:
+            parser = _VisibleText()
+            parser.feed(text[:MAX_BODY_CHARS])
+            return _image_excerpt("Visible text: " + " ".join(" ".join(parser.parts).split()), marks, limit=400)
+        if "json" in mime and cls != "injection":
+            try:
+                return _json_fields(json.loads(text), marks)
+            except (ValueError, RecursionError):
+                pass
+    return _image_excerpt(body, marks, limit=1000)
+
+
 def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path):
     req, res, lines, facts = _exchange_marks(ctx, history, n, entry, shown, highlight)
     response = _raw_response(entry, _focus(ctx, [e for _, e in shown], entry), har_path)
     headers, _, body = response.partition("\n\n")
     kept = [line for i, line in enumerate(headers.splitlines())
             if i == 0 or line.lower().startswith(("content-type:", "location:", "www-authenticate:", "set-cookie:"))]
-    response = "\n".join(kept) + "\n\n" + _image_excerpt(body, res, limit=1000)
+    response = "\n".join(kept) + "\n\n" + _report_body(ctx, entry, body, res)
     return {"request_excerpt": _code_excerpt(_image_request(entry, req), req),
             "response_excerpt": _code_excerpt(response, res, lines),
             "facts": [fact for fact, decisive in facts if decisive]}

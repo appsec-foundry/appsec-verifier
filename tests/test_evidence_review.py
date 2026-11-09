@@ -27,7 +27,7 @@ from appsec_verifier.verify.evidence_review import (
     review_finding,
 )
 from appsec_verifier.verify.probes import ProbeContext, ProbeRegistry, ProbeResult
-from appsec_verifier.verify.report import _poc_markdown
+from appsec_verifier.verify.report import _review_markdown, to_markdown
 
 CLEAR = {"status": "clear", "issues": []}
 SCOPE = {"base_url": "https://app.example.com", "hosts": ["app.example.com"], "ports": [443], "schemes": ["https"]}
@@ -304,7 +304,7 @@ def test_report_fences_untrusted_explanation_and_console_shows_rounds():
     text = stream.getvalue()
     assert all(word in text for word in ("evidence reviewer started", "revise", "evidence reviewer finished", "T-1",
                                          "1/2", "no screenshot shown"))
-    report = "\n".join(_poc_markdown({"evidence_review": res.evidence_review}))
+    report = "\n".join(_review_markdown({"evidence_review": res.evidence_review}, 4))
     assert "````text" in report and "No screenshot was shown to a model." in report
     assert "Technical verdict unchanged" in report and "not additional proof" in report
 
@@ -478,15 +478,19 @@ def test_inconclusive_without_excerpts_can_be_explained_without_inventing_quotes
     assert ctx.budget.requests == 0
 
 
-def test_application_image_precedes_http_and_review_in_report():
+def test_application_image_precedes_http_and_the_review_follows_in_the_appendix():
+    """VER-020, VER-035: the entry leads with the application image and the HTTP proof; the evidence review
+    is in the appendix."""
     ctx, res, *_ = pair([CLEAR])
     res.evidence = [{"kind": "screenshot", "path": "evidence/app.png", "presentation": "application"},
                     {"kind": "screenshot", "path": "evidence/exchange.png"}]
     review_finding([(ctx, res)])
     from dataclasses import asdict
 
-    text = "\n".join(_poc_markdown(asdict(res)))
-    assert text.index("![Application") < text.index("Evidence review") < text.index("GET /x HTTP")
+    row = {**asdict(res), "result_id": "VF-001", "finding_ref": {"id": "T-1", "title": "XSS"}}
+    text = to_markdown({"meta": {}, "results": [row]})
+    assert (text.index("![Application") < text.index("GET /x HTTP") < text.index("## Appendix")
+            < text.index("Evidence presentation review"))
     assert text.count("](evidence/app.png)") == 1
     assert "](evidence/exchange.png)" not in text
 

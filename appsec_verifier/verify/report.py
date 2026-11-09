@@ -4,11 +4,15 @@ an additive annotation of a copy of the assessment (VER-027) with the rating
 after verification (VER-039, verify/rating.py). The Analyzer's Markdown report
 with the results is verify/annotated_report.py (VER-038).
 
-Each tested finding's section in verification.md ends with its proof of
-concept (VER-034): one line per step and the decisive steps as raw HTTP, in
-code fences that target content cannot close, and its screenshots (VER-035).
-Recorded responses and screenshots can show target data; the report says so
-and the export never references them (VER-022).
+verification.md opens with an overview of the selected findings, linked to
+their entries, with verdict and rating (VER-020, VER-039). A tested finding's
+entry leads with its verdict and what the code checked, then the steps its
+verdict rests on and its proof of concept (VER-034): the decisive steps as
+HTTP excerpts in code fences that target content cannot close, and its
+screenshots (VER-035). The findings not tested follow with the reason (VER-024),
+and an appendix holds the test plan, the test agent's own text and the evidence
+review (VER-042). Recorded responses and screenshots can show target data; the
+report says so and the export never references them (VER-022).
 
 Reports and an annotated assessment are written through a temporary file and a
 rename, so an interrupted write leaves the old file or the new one, never a
@@ -19,7 +23,6 @@ schemas/verification.schema.yaml first.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import re
 import secrets
@@ -155,78 +158,268 @@ def write_text_atomically(path: Path, text: str) -> None:
         raise
 
 
-def write_reports(doc: dict, out_dir: Path) -> dict:
+def write_reports(doc: dict, out_dir: Path, assessment: dict | None = None) -> dict:
     """Write verification.yaml + verification.md (+ an empty evidence/ dir) into
-    out_dir. Returns the written paths."""
+    out_dir. With `assessment`, the report shows each finding's rating before and
+    after verification (VER-039). Returns the written paths."""
     out_dir = Path(out_dir)
     (out_dir / "evidence").mkdir(parents=True, exist_ok=True)
     yaml_path = out_dir / "verification.yaml"
     md_path = out_dir / "verification.md"
     write_text_atomically(yaml_path, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
-    write_text_atomically(md_path, to_markdown(doc))
+    write_text_atomically(md_path, to_markdown(doc, assessment))
     return {"yaml": yaml_path, "md": md_path, "evidence": out_dir / "evidence"}
 
 
-def to_markdown(doc: dict) -> str:
-    meta, results = doc["meta"], doc["results"]
-    s = meta.get("summary", {})
-    tgt = meta.get("target", {})
-    lines = [
-        "# AppSec Verifier — verification report",
-        "",
-        f"- **Assessment:** {meta.get('source_assessment')}",
-        f"- **Target:** {tgt.get('base_url')} ({tgt.get('environment')}) · build {tgt.get('build_match')}",
-        f"- **Scope owner:** {meta.get('scope', {}).get('owner')}" if meta.get("scope", {}).get("file")
-        else "- **Scope:** no scope file; only the target's host and port",
-        f"- **Authorisation:** confirmed={meta.get('authorization', {}).get('confirmed')} "
-        f"({meta.get('authorization', {}).get('mode')})",
-        f"- **Mode:** {meta.get('safety', {}).get('mode')} · "
-        f"{'read-only' if meta.get('safety', {}).get('read_only') else 'state-changing'} · "
-        f"target contacted: {meta.get('contacted_target')}",
-        f"- **Generated:** {meta.get('generated')} · verifier {meta.get('verifier_version')}",
-        *([f"- **Evidence:** the proofs of concept and screenshots below {TARGET_DATA_NOTE}"]
-          if any(r.get("poc") or r.get("evidence") for r in results) else []),
-        "",
-        "## Summary",
-        "",
-        f"{s.get('total', 0)} findings — "
-        f"{s.get('confirmed', 0)} confirmed · {s.get('not_reproducible', 0)} not reproducible · "
-        f"{s.get('blocked', 0)} blocked · {s.get('inconclusive', 0)} inconclusive · "
-        f"{s.get('not_attempted', 0)} not attempted",
-        "",
-        "## Findings",
-        "",
-    ]
-    for r in results:
-        fr = r.get("finding_ref", {})
-        verdict = _VERDICT_LABEL.get(r["verdict"], r["verdict"])
-        conf = f" ({r['confidence']})" if r.get("confidence") else ""
-        lines.append(f"### {r['result_id']} · {fr.get('id')} · {fr.get('title') or fr.get('cwe')} — {verdict}{conf}")
-        lines.append(f"- class: {r.get('class')} · CWE: {fr.get('cwe')} · match_key: `{fr.get('match_key')}`")
-        if r.get("rationale"):
-            lines.append(f"- {r['rationale']}")
-        if r.get("selection_reason"):
-            lines.append(f"- Additionally selected: {r['selection_reason']}")
-        if r.get("planning"):
-            lines += ["", "Test planning (assumptions are not proof):",
-                      _fenced(json.dumps(r["planning"], ensure_ascii=False, indent=2), "json")]
-        proof = r.get("proof") or {}
-        if proof.get("checked"):
-            detail = {k: proof[k] for k in ("variant", "tested_path", "hypothesis", "observation_pointer", "steps")
-                      if proof.get(k) is not None}
-            scope = proof.get("scope") or "cited requests only"
-            lines += ["", f"Checked scope: {scope}; other variants remain untested.",
-                      _fenced(json.dumps(detail, ensure_ascii=False, indent=2), "json")]
-        if proof.get("missing"):
-            lines += ["", "Missing evidence:", _fenced("\n".join(proof["missing"]), "text")]
-        if r.get("deviation"):
-            lines.append(f"- deviation: {r['deviation']}")
-        for ev in r.get("evidence") or []:
-            note = f" ({ev['note']})" if ev.get("note") else ""
-            lines.append(f"- evidence: {ev.get('kind')} → {ev.get('path')}{note}")
-        lines += _poc_markdown(r)
-        lines.append("")
-    return "\n".join(lines)
+_ORDER = ("confirmed", "blocked-by-control", "not-reproducible", "inconclusive", "not-attempted")
+_LABEL = {**_VERDICT_LABEL, "not-attempted": "not tested"}
+# A verdict the proof check lowered names its reason before the agent's claim (agent/proof.py, _downgrade).
+_LOWERED = re.compile(r"indicative, not (?:proven|executed): (.*?)\. Agent's claim:", re.S)
+
+
+def _inline(value, limit: int = 300, *, cell: bool = False) -> str:
+    """Text from the assessment, the model or the target on one line of Markdown: no line break or HTML, and
+    in a table `cell` no column separator."""
+    text = " ".join(str("" if value is None else value).split())[:limit].replace("<", "&lt;").replace(">", "&gt;")
+    return text.replace("|", "\\|") if cell else text
+
+
+def _sentence(value, limit: int = 600) -> str:
+    text = _inline(value, limit)
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def _when(value) -> str:
+    """An ISO-8601 UTC time to the minute, as the Analyzer's changelog shows times."""
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|\+00:00)", str(value or ""))
+    return f"{m.group(1)} {m.group(2)} UTC" if m else " ".join(str(value or "").split())[:300]
+
+
+def _anchor(finding_id) -> str:
+    return re.sub(r"[^a-z0-9_-]", "", str(finding_id or "").lower())
+
+
+def _overall(rows: list[dict]) -> str:
+    """One verdict for a finding's results: theirs when they agree, confirmed when a variant was, else
+    inconclusive."""
+    verdicts = {r["verdict"] for r in rows}
+    if len(verdicts) == 1:
+        return verdicts.pop()
+    return "confirmed" if "confirmed" in verdicts else "inconclusive"
+
+
+def _rank(rows: list[dict]) -> int:
+    verdict = _overall(rows)
+    return _ORDER.index(verdict) if verdict in _ORDER else len(_ORDER)
+
+
+def _rating_text(rating: dict | None, threat: dict | None = None) -> str:
+    """`High, unchanged`, `**High → Critical**` for a change (VER-039), for a finding not tested the Analyzer's
+    severity alone, or – when unknown."""
+    if rating is None:
+        severity = (threat or {}).get("effective_severity") or (threat or {}).get("risk")
+        return _inline(severity, 40, cell=True) or "–"
+    before, after = (_inline(rating[k].get("severity"), 40, cell=True) or "–"
+                     for k in ("analyzer", "after_verification"))
+    return f"**{before} → {after}**" if rating["changed"] else f"{before}, unchanged"
+
+
+def _step_line(step: dict) -> str:
+    """A recorded step without the target's origin and the name of the HTTP tool. The line carries a URL the
+    model chose, so it is only ever shown in a code fence."""
+    tool, _, rest = str(step["line"]).partition(" ")
+    rest = re.sub(r"^(\S+ )[a-z][a-z0-9+.-]*://[^/\s]+", r"\1", rest, count=1)   # METHOD scheme://host/path
+    name = {"http_request": "", "browser_check": "browser "}.get(tool, tool + " ")
+    return f"step {step['step']}: {name}{rest}"
+
+
+def _why_not(r: dict) -> str | None:
+    """Why a tested finding is not confirmed, as the code knows it: what the proof check missed, the limit
+    that stopped the test, or why the check lowered the agent's verdict."""
+    if r["verdict"] not in ("inconclusive", "not-attempted"):
+        return None
+    proof = r.get("proof") or {}
+    if proof.get("missing"):
+        return "; ".join(str(m) for m in proof["missing"])
+    if r.get("limits_hit"):
+        return r.get("rationale") or f"stopped by the {r['limits_hit']} limit"
+    lowered = _LOWERED.match(r.get("rationale") or "")
+    if lowered:
+        return lowered.group(1)
+    return "the test agent ended without a checked proof; its explanation is in the appendix"
+
+
+def to_markdown(doc: dict, assessment: dict | None = None) -> str:
+    """verification.md (VER-020): the run; an overview of the selected findings, each linked to its entry,
+    with verdict and rating before and after verification (VER-039); each tested finding led by its verdict,
+    the steps its proof rests on and its proof of concept (VER-034, VER-035); the findings not tested with
+    the reason (VER-024); an appendix with the test plan, the test agent's explanation and the evidence
+    review (VER-042). Text from the assessment, the model or the target stays on one line or in a fence."""
+    threats = {t.get("id"): t for t in (assessment or {}).get("threats") or [] if isinstance(t, dict)}
+    groups: dict[str, list[dict]] = {}
+    for r in doc["results"]:
+        groups.setdefault((r.get("finding_ref") or {}).get("id") or r["result_id"], []).append(r)
+    ordered = sorted(groups.items(), key=lambda item: _rank(item[1]))
+    ratings = {fid: rating_after_verification(threats[fid], rows) if fid in threats and any(
+        r["verdict"] != "not-attempted" for r in rows) else None for fid, rows in groups.items()}
+    tested = [(fid, rows) for fid, rows in ordered if _overall(rows) != "not-attempted"]
+    untested = [(fid, rows) for fid, rows in ordered if _overall(rows) == "not-attempted"]
+    details = {id(r): _details(r) for _, rows in tested for r in rows}
+    lines = _run_lines(doc) + _overview(ordered, threats, ratings)
+    if tested:
+        lines += ["", "## Tested findings"]
+        for fid, rows in tested:
+            for i, r in enumerate(rows):
+                lines += _entry(r, ratings[fid], first=i == 0, details=bool(details[id(r)]))
+    if untested:
+        lines += ["", "## Not tested", "", "| Finding | Why not |", "| --- | --- |"]
+        for fid, rows in untested:
+            fr, anchor = (rows[0].get("finding_ref") or {}), _anchor(fid)
+            mark = f'<a id="{anchor}"></a>' if anchor else ""
+            why = re.sub(r"^not tested: ", "", str(rows[0].get("rationale") or ""))
+            title = _inline(fr.get("title") or fr.get("cwe"), 120, cell=True)
+            lines.append(f"| {mark}{_inline(fid, cell=True)} {title} | {_inline(why, cell=True) or '–'} |")
+    if any(details.values()):
+        lines += ["", "## Appendix: test details"]
+        for fid, rows in tested:
+            for i, r in enumerate(rows):
+                if details[id(r)]:
+                    anchor = _anchor(fid)
+                    lines += ["", *([f'<a id="details-{anchor}"></a>'] if i == 0 and anchor else []),
+                              f"### {_inline(fid)}{_variant(r)}", *details[id(r)]]
+    return "\n".join(lines) + "\n"
+
+
+def _variant(r: dict) -> str:
+    variant = (r.get("finding_ref") or {}).get("variant")
+    return f" · variant {_inline(variant)}" if variant else ""
+
+
+def _run_lines(doc: dict) -> list[str]:
+    meta = doc["meta"]
+    target, safety = meta.get("target") or {}, meta.get("safety") or {}
+    auth, scope = meta.get("authorization") or {}, meta.get("scope") or {}
+    if safety.get("read_only"):
+        mode = f"{safety.get('mode') or 'safe'}, read-only"
+    else:
+        mode = f"{safety.get('mode') or 'intrusive'}, writes allowed"
+        if not safety.get("state_changes_cleaned"):
+            mode += "; what the test created stays on the target"
+    if not meta.get("contacted_target"):
+        mode += "; the target was not contacted"
+    where = _inline(target.get("base_url")) + (f" ({_inline(target['environment'])})" if target.get("environment")
+                                               else "")
+    lines = ["# Verification report", "",
+             f"- **Target:** {where} · build {_inline(target.get('build_match') or 'unknown')}",
+             f"- **Assessment:** {_inline(meta.get('source_assessment'))}",
+             f"- **Run:** {_when(meta.get('generated'))} · AppSec Verifier {_inline(meta.get('verifier_version'))}"
+             + (f" · model {_inline(meta['model'])}" if meta.get("model") else ""),
+             f"- **Mode:** {mode}",
+             f"- **Scope:** scope file of {_inline(scope.get('owner'))}" if scope.get("file")
+             else "- **Scope:** no scope file; only the target's host and port",
+             "- **Authorisation:** " + (f"confirmed ({_inline(auth.get('mode'))}) at {_when(auth.get('at'))}"
+                                       if auth.get("confirmed") else "not confirmed")]
+    if meta.get("previous_generated"):
+        lines.append(f"- **Continues:** the report of {_when(meta['previous_generated'])}")
+    if meta.get("interrupted"):
+        lines.append("- **Interrupted:** the findings the run did not reach are listed as not tested.")
+    if any(r.get("poc") or r.get("evidence") for r in doc["results"]):
+        lines.append(f"- **Evidence:** the proofs of concept and screenshots {TARGET_DATA_NOTE}.")
+    return lines
+
+
+def _overview(ordered, threats: dict, ratings: dict) -> list[str]:
+    tally: dict[str, int] = {}
+    for _, rows in ordered:
+        tally[_overall(rows)] = tally.get(_overall(rows), 0) + 1
+    counts = " · ".join(f"{n} {_LABEL.get(v, v)}" for v, n in sorted(tally.items(), key=lambda kv: (
+        _ORDER.index(kv[0]) if kv[0] in _ORDER else len(_ORDER))))
+    of = f" of {len(threats)}" if threats else ""
+    lines = ["", "## Overview", "", f"{len(ordered)}{of} findings selected: {counts or 'none'}.", "",
+             "| Finding | Result | Rating, Analyzer → after verification |", "| --- | --- | --- |"]
+    changed = []
+    for fid, rows in ordered:
+        verdict, anchor, fr = _overall(rows), _anchor(fid), (rows[0].get("finding_ref") or {})
+        label = _LABEL.get(verdict, verdict) + (f" ({len(rows)} variants)" if len(rows) > 1 else "")
+        link = f"[{_inline(fid, cell=True)}](#{anchor})" if anchor else _inline(fid, cell=True)
+        lines.append(f"| {link} {_inline(fr.get('title') or fr.get('cwe'), 120, cell=True)} | "
+                     f"{'**' + label + '**' if verdict == 'confirmed' else label} | "
+                     f"{_rating_text(ratings[fid], threats.get(fid))} |")
+        if ratings[fid] and ratings[fid]["changed"]:
+            changed.append(f"[{_inline(fid)}](#{anchor}) {_inline(ratings[fid]['reason'])}")
+    if changed:
+        lines += ["", "Ratings changed: " + "; ".join(changed) + "."]
+    elif any(ratings.values()):
+        lines += ["", "No rating changed."]
+    return lines
+
+
+def _entry(r: dict, rating: dict | None, *, first: bool, details: bool) -> list[str]:
+    """A tested finding: verdict first, then what the code checked, the steps the verdict rests on and the
+    proof of concept (VER-020)."""
+    fr, proof, verdict = (r.get("finding_ref") or {}), r.get("proof") or {}, r["verdict"]
+    fid = fr.get("id") or r["result_id"]
+    anchor = _anchor(fid)
+    head = [f"**{_LABEL.get(verdict, verdict).capitalize()}**"]
+    if rating is not None:
+        head.append("rating " + _rating_text(rating))
+    if r.get("confidence"):
+        head.append(f"confidence {_inline(r['confidence'])}")
+    head += [_inline(v) for v in (fr.get("cwe"), r.get("class")) if v]
+    if fr.get("match_key"):
+        head.append(f"key {_inline(fr['match_key'])}")
+    out = ["", *([f'<a id="{anchor}"></a>'] if first and anchor else []),
+           f"### {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r)}", "", " · ".join(head), ""]
+    facts = []
+    if verdict == "confirmed" and proof.get("checked"):
+        from ..progress import _PROVEN
+
+        shown = _PROVEN.get(r.get("class"))
+        facts.append("Proof checked by the code" + (f": {shown}." if shown else "."))
+    if why := _why_not(r):
+        facts.append(f"Not confirmed: {_sentence(why)}")
+    if proof.get("checked") and proof.get("scope"):
+        facts.append(f"Checked scope: {_sentence(proof['scope'])}")
+    if rating and rating["changed"]:
+        facts.append(f"Rating changed: {_sentence(rating['reason'])}")
+    deviations = [*([f"Deviation: {r['deviation']}"] if r.get("deviation") else []),
+                  *(o for o in r.get("observations") or [] if o.startswith("Deviation:"))]
+    facts += [_sentence(d) for d in deviations]
+    if r.get("selection_reason"):
+        facts.append(f"Additionally selected: {_sentence(r['selection_reason'])}")
+    out += [f"- {fact}" for fact in facts]
+    steps = (r.get("poc") or {}).get("steps") or []
+    decisive = [s for s in steps if s.get("decisive")]
+    rest = [s for s in steps if not s.get("decisive")]
+    if decisive:
+        label = "Steps the proof rests on" if verdict == "confirmed" else "Steps the verdict rests on"
+        out += ["", f"{label}:", "", _fenced("\n".join(_step_line(s) for s in decisive), "text")]
+    if rest:
+        out += ["", "Other requests:" if decisive else "Requests sent:", "",
+                _fenced("\n".join(_step_line(s) for s in rest), "text")]
+    out += _poc_markdown(r, level=4, steps=False)
+    files = [_inline(e["path"]) for e in r.get("evidence") or [] if e.get("path")]
+    if files:
+        out += ["", "Files: " + ", ".join(files)]
+    if details and first and anchor:
+        out += ["", f"Test plan, the test agent's explanation and the evidence review: [details](#details-{anchor})"]
+    return out
+
+
+def _details(r: dict) -> list[str]:
+    """The appendix part of a tested finding (VER-020): the test plan, the test agent's own explanation and
+    observations, and the evidence review (VER-042). Model text, so it stays in code fences."""
+    out = []
+    if r.get("planning"):
+        plan = yaml.safe_dump(r["planning"], sort_keys=False, allow_unicode=True, width=110).rstrip()
+        out += ["", "Test plan (assumptions are not proof):", "", _fenced(plan, "yaml")]
+    if r.get("rationale") and not r.get("limits_hit"):
+        out += ["", "Test agent's explanation (not proof):", "", _fenced(str(r["rationale"]), "text")]
+    notes = [o for o in r.get("observations") or []
+             if not o.startswith(("Application screenshot unavailable:", "Deviation:"))]
+    if notes:
+        out += ["", "Other observations, not verified:", "", _fenced("\n".join(notes), "text")]
+    return out + _review_markdown(r, 4)
 
 
 def _fenced(text: str, info: str = "http") -> str:
@@ -258,8 +451,10 @@ def _review_markdown(r: dict, level: int) -> list[str]:
     return out
 
 
-def _poc_markdown(r: dict, level: int = 4) -> list[str]:
-    """The proof of concept (VER-034): one line per step, then the steps the verdict rests on as raw HTTP."""
+def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True) -> list[str]:
+    """The proof of concept (VER-034, VER-035): the application screenshots with the test agent's explanation,
+    with `steps` one line per request, then the steps the verdict rests on as HTTP excerpts, ⟦…⟧ around
+    what the proof rests on."""
     poc = r.get("poc") or {}
     application = [e for e in r.get("evidence") or []
                    if e.get("kind") == "screenshot" and (e.get("presentation") == "application" or
@@ -273,27 +468,27 @@ def _poc_markdown(r: dict, level: int = 4) -> list[str]:
                 out += [_fenced(f"Test agent's explanation: {ev['explanation']}", "text"), ""]
     limitations = [o for o in r.get("observations") or []
                    if o.startswith("Application screenshot unavailable:")]
-    if limitations:
-        out += ["", _fenced("\n".join(dict.fromkeys(limitations)), "text")]
-    out += _review_markdown(r, level)
-    if not poc.get("steps"):
+    out += ["", *(_sentence(o) for o in dict.fromkeys(limitations))] if limitations else []
+    if not poc.get("steps") or not (steps or poc.get("shown")):
         return out
     out += ["", f"{'#' * level} Proof of concept", ""]
-    if poc.get("file"):
-        out += [f"All requests and responses: `{poc['file']}` (HAR, {TARGET_DATA_NOTE}).", ""]
-    # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.
-    out.append(_fenced("\n".join(f"step {s['step']}: {s['line']}" + (" (shown below)" if s.get("decisive") else "")
-                                 for s in poc["steps"]), "text"))
+    if steps:
+        # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.
+        out += [_fenced("\n".join(_step_line(s) + (" (shown below)" if s.get("decisive") else "")
+                                  for s in poc["steps"]), "text"), ""]
+    har = f"All requests and responses: {_inline(poc['file'])}." if poc.get("file") else ""
     if any("request_excerpt" in s for s in poc.get("shown") or []):
-        out += ["", "Relevant HTTP excerpts; labels and ⟦…⟧ mark evidence added by the Verifier. "
-                "The complete unmarked exchanges are saved in the HAR."]
+        har = f"⟦…⟧ marks what the proof rests on. {har}".rstrip()
+    out += [har] if har else []
     for shown in poc.get("shown") or []:
-        took = f" (answered in {shown['elapsed_ms']} ms)" if shown.get("elapsed_ms") else ""
-        if shown.get("facts"):
-            out += ["", _fenced("\n".join(shown["facts"]), "text")]
-        out += ["", f"Step {shown['step']}{took}, request:", "",
-                _fenced(shown.get("request_excerpt", shown["request"])), "", "Response:", "",
-                _fenced(shown.get("response_excerpt", shown["response"]))]
+        facts = shown.get("facts") or []
+        if facts:
+            out += ["", _fenced("\n".join(facts), "text")]
+        browser = any(str(f).startswith("opened in the browser:") for f in facts)
+        request = ("the page's first request; the part after # stays in the browser" if browser else "request")
+        out += ["", f"Step {shown['step']}, {request}:", "",
+                _fenced(shown.get("request_excerpt", shown["request"]).rstrip()), "", "Response:", "",
+                _fenced(shown.get("response_excerpt", shown["response"]).rstrip())]
     return out
 
 
@@ -395,10 +590,15 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
     from .rating import rate
 
     by_id = {r["finding_ref"]["id"]: r for r in doc["results"] if r["finding_ref"].get("id")}
+    # The cross-run key finds a result whose finding has another id in this assessment, and only for a finding
+    # that alone carries that key: another finding that shares the key of a tested one was not tested.
+    threats = [t for t in assessment.get("threats") or [] if isinstance(t, dict)]
+    present = {t.get("id") for t in threats}
+    unmatched = [match_key(t) for t in threats if t.get("id") not in by_id]
     by_key = {}
     for r in doc["results"]:
         mk = r["finding_ref"].get("match_key")
-        if mk:
+        if mk and r["finding_ref"].get("id") not in present and unmatched.count(mk) == 1:
             by_key.setdefault(mk, r)
 
     import copy

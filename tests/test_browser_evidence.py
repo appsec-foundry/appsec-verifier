@@ -73,6 +73,16 @@ def test_classes_without_a_page_effect_never_open_one(tmp_path, cls):
     assert calls == [] and any("existing proof capture" in o for o in result.observations)
 
 
+def test_an_executed_xss_with_its_screenshot_is_not_called_without_one(tmp_path):
+    """The XSS proof took the application screenshot itself; no note may say there is none (VER-035)."""
+    ctx, calls, history, sent, _ = setup_capture(tmp_path, cls="xss")
+    result = ProbeResult("confirmed", proof={"checked": True}, evidence=[
+        {"kind": "screenshot", "path": "evidence/T-1-xss-1.png", "presentation": "application"}])
+    capture_application(ctx, AgentTools(ctx), history, sent, result,
+                        {"path": "/#/search", "step": 1, "values": ["bob@shop.test"]}, [1])
+    assert calls == [] and result.observations == []
+
+
 @pytest.mark.parametrize("proposal", [
     {"path": "/ui", "step": 1, "values": ["known"], "script": "fetch('/write')"},
     {"path": "/ui", "step": True, "values": ["known"]},

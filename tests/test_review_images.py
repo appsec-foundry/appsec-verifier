@@ -28,7 +28,7 @@ from appsec_verifier.agent.host_openai import OpenAIHost
 from appsec_verifier.agent.hosts import HostCallError, HostPlanner, HostReply, png_base64
 from appsec_verifier.tools.browser import ProofBrowser
 from appsec_verifier.verify.evidence_review import MAX_REVIEW_IMAGES, review_finding
-from appsec_verifier.verify.report import _poc_markdown
+from appsec_verifier.verify.report import _review_markdown
 from appsec_verifier.verify.runner import _private_text
 
 
@@ -158,7 +158,8 @@ def test_only_cleared_application_screenshots_reach_the_model_and_the_report_nam
     review = res.evidence_review
     assert review["visual_review"] == "performed" and review["images_reviewed"] == ["evidence/app.png"]
     assert "1 screenshot reviewed" in review["reason"]
-    assert "Screenshots a model reviewed: `evidence/app.png`." in "\n".join(_poc_markdown({"evidence_review": review}))
+    assert "Screenshots a model reviewed: `evidence/app.png`." in "\n".join(
+        _review_markdown({"evidence_review": review}, 4))
 
 
 def test_at_most_three_screenshots_per_review_call(tmp_path):

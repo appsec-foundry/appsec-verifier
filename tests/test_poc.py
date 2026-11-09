@@ -540,9 +540,44 @@ def _doc(tmp_path):
 def test_report_shows_the_proof_of_concept_as_raw_http_that_target_content_cannot_break(tmp_path):
     md = to_markdown(_doc(tmp_path))
     assert "#### Proof of concept" in md and "evidence/T-001-poc.har" in md
-    assert "Authorization: identity ▸⟦[identity customer-a]⟧" in md and TA not in md
+    assert "Authorization: ⟦[identity customer-a]⟧" in md and TA not in md
+    assert "identity ▸" not in md                       # the image's labels stay out of the recorded text
     assert "`````http\nHTTP/1.1 200 OK" in md          # a fence longer than the body's four backticks
-    assert "review before sharing" in md.split("## Summary")[0]
+    assert "review before sharing" in md.split("## Overview")[0]
+
+
+_NOTES = json.dumps({"data": [{"id": i, "role": "customer", "note": "n" * 40} for i in range(30)]})
+
+
+@pytest.mark.parametrize("cls, mime, body, marks, shown, hidden", [
+    # A page the XSS marker did not reach: the browser decides, its source is noise.
+    ("xss", "text/html", "<html><title>Shop</title>" + "x" * 900 + "</html>", [("payload", "m1")],
+     "page source omitted", "<title>"),
+    # A page that holds the marker keeps the window around it.
+    ("xss", "text/html", "<p>" + "a" * 900 + "m1</p>", [("payload", "m1")], "m1", "page source omitted"),
+    ("access-control", "text/html", "<html><style>body{margin:0}</style><h1>No Authorization header</h1>"
+     + " " * 900 + "</html>", [], "Visible text: No Authorization header", "margin:0"),
+    ("access-control", "application/json", _NOTES, [], "/data/0/role", "/note"),
+    ("access-control", "application/json", '{"id":50,"description":"m1 marker"}', [("marker", "m1")],
+     '{"id":50,"description":"m1 marker"}', "Selected JSON fields"),           # short: whole
+])
+def test_the_report_shows_the_decisive_part_of_a_long_response(cls, mime, body, marks, shown, hidden):
+    """VER-034: each step the verdict rests on with the decisive part of its response."""
+    e = poc.entry(poc.capture(Resp(200, body, {"content-type": mime}), method="GET",
+                              url="https://shop.example.com/x"))
+    ctx = SimpleNamespace(plan=SimpleNamespace(cls=cls), marker=("m1", "m2"))
+    text = poc._report_body(ctx, e, body, marks)
+    assert shown in text and hidden not in text
+
+
+def test_a_browser_step_names_the_page_it_opened(tmp_path):
+    """The # part of the opened page never reaches the server: the step line names the page, not GET /."""
+    raw = poc.capture(Resp(200, "<html></html>", {"content-type": "text/html"}), method="GET",
+                      url="https://shop.example.com/")
+    step = {"step": 1, "tool": "browser_check", "entries": [poc.entry(raw)]}
+    history = [{"tool": "browser_check", "args": {"path": "/#/search?q=<img>"}, "result": {"executed": True}}]
+    line = poc._line(step, history)
+    assert line.startswith("browser_check GET /#/search?q=<img> as anonymous → 200") and "marker executed" in line
 
 
 def test_step_lines_with_markup_stay_inside_a_fence(tmp_path):

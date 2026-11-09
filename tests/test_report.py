@@ -12,7 +12,7 @@ import yaml
 from appsec_verifier.limits import Limits
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.verify import build_annotations, run_verification, write_reports
-from appsec_verifier.verify.report import annotate_assessment
+from appsec_verifier.verify.report import annotate_assessment, to_markdown
 
 SCOPE = {"base_url": "https://app.example.com", "hosts": ["app.example.com"], "ports": [443],
          "schemes": ["https"], "window": {"from": "2026-01-01T00:00:00Z", "until": "2026-12-31T23:59:59Z"},
@@ -119,6 +119,23 @@ def test_annotation_leaves_the_analyzers_verification_block_alone():
     assert tested["verification"] == ANALYZER_BLOCK and untested["verification"] == ANALYZER_BLOCK
     assert tested["dynamic_verification"]["result_ref"] == "VF-001"
     assert "dynamic_verification" not in untested
+
+
+def test_a_finding_that_only_shares_the_key_of_a_tested_one_gets_no_result():
+    """VER-027: another finding with the same cross-run key was not tested and must not carry the result."""
+    assessment = {"threats": [{"id": "T-037", "cwe": "CWE-79", "evidence": [{"file": "about.ts", "line": 119}]},
+                              {"id": "T-086", "cwe": "CWE-79", "evidence": [{"file": "about.ts", "line": 7}]}]}
+    tested, other = annotate_assessment(assessment, _doc(), verification_report="v.yaml")["threats"]
+    assert tested["dynamic_verification"]["result_ref"] == "VF-001"
+    assert "dynamic_verification" not in other
+
+
+def test_the_key_finds_a_result_whose_finding_has_a_new_id_only_when_it_is_unique():
+    threat = {"id": "T-100", "cwe": "CWE-79", "evidence": [{"file": "about.ts", "line": 119}]}
+    out = annotate_assessment({"threats": [threat]}, _doc(), verification_report="v.yaml")
+    assert out["threats"][0]["dynamic_verification"]["result_ref"] == "VF-001"
+    twins = annotate_assessment({"threats": [threat, {**threat, "id": "T-101"}]}, _doc(), verification_report="v")
+    assert all("dynamic_verification" not in t for t in twins["threats"])
 
 
 def test_variant_annotation_goes_to_the_verifiers_own_block():
@@ -242,3 +259,66 @@ def test_a_block_lowers_the_rating_only_when_every_variant_was_blocked():
     assert rating("blocked-by-control", "inconclusive")["changed"] is False
     both = rating("blocked-by-control", "blocked-by-control")
     assert both["changed"] is True and both["after_verification"]["severity"] == "Medium"
+
+
+# ── verification.md: overview, entry, not tested, appendix (VER-020, VER-024, VER-039) ──
+
+DEVIATION = ("Deviation: the owner created its own test resource with POST /items, a route the assessment names "
+             "for this resource outside this finding (VER-043).")
+
+
+def _report_doc():
+    doc = _confirmed_doc()
+    tested = doc["results"][0]
+    tested.update(rationale="The agent's account\n```\n# not a heading", observations=[DEVIATION],
+                  planning=[{"step": 1, "path": "/x", "hypothesis": "q reaches innerHTML"}])
+    doc["results"].append({**tested, "result_id": "VF-002", "verdict": "not-attempted", "confidence": None,
+                           "rationale": "not tested: no marker_file in the scope", "poc": None, "evidence": [],
+                           "planning": [], "observations": [], "proof": None,
+                           "finding_ref": {"id": "T-038", "title": "Path | traversal\n<b>x</b>", "cwe": "CWE-22",
+                                           "match_key": "f|CWE-22"}})
+    return doc
+
+
+def _report():
+    assessment = {"threats": [_analyzer_threat(), {"id": "T-038", "risk": "High"}]}
+    return to_markdown(_report_doc(), assessment)
+
+
+def test_the_overview_links_every_finding_and_marks_confirmed_results_and_changed_ratings():
+    md = _report()
+    overview = md.split("## Overview", 1)[1].split("## Tested findings", 1)[0]
+    assert "| [T-037](#t-037) Stored XSS | **confirmed** | **High → Critical** |" in overview
+    assert "| [T-038](#t-038) " in overview and "| not tested | High |" in overview
+    assert "Ratings changed: [T-037](#t-037)" in overview
+    assert md.index("## Overview") < md.index('<a id="t-037"></a>\n### T-037') < md.index("## Not tested")
+
+
+def test_a_tested_entry_leads_with_its_verdict_rating_and_deviation():
+    entry = _report().split("### T-037", 1)[1].split("## Not tested", 1)[0]
+    assert entry.split("\n")[2].startswith("**Confirmed** · rating **High → Critical** · confidence high")
+    assert "- Proof checked by the code: script executed in the browser." in entry
+    assert f"- {DEVIATION}" in entry and "- Rating changed: " in entry
+    assert "The agent's account" not in entry and "q reaches innerHTML" not in entry    # in the appendix
+    assert "[details](#details-t-037)" in entry
+
+
+def test_findings_not_tested_say_why_and_keep_their_text_in_one_cell():
+    rows = [line for line in _report().split("## Not tested", 1)[1].splitlines() if "T-038" in line]
+    assert rows == ['| <a id="t-038"></a>T-038 Path \\| traversal &lt;b&gt;x&lt;/b&gt; | no marker_file in the scope |']
+
+
+def test_the_appendix_holds_plan_explanation_and_observations_as_fenced_text():
+    appendix = _report().split("## Appendix: test details", 1)[1]
+    assert '<a id="details-t-037"></a>' in appendix and "q reaches innerHTML" in appendix
+    assert "````text\nThe agent's account\n```\n# not a heading\n````" in appendix   # model text cannot escape
+
+
+def test_without_the_assessment_the_report_still_lists_every_finding():
+    md = to_markdown(_report_doc())
+    assert "| [T-037](#t-037) Stored XSS | **confirmed** | – |" in md and "No rating changed" not in md
+
+
+def test_write_reports_shows_the_rating_from_the_assessment(tmp_path):
+    paths = write_reports(_report_doc(), tmp_path, {"threats": [_analyzer_threat()]})
+    assert "**High → Critical**" in paths["md"].read_text()
