@@ -257,24 +257,34 @@ def test_confirmed_xss_with_executed_marker_keeps_browser_evidence_only():
 
 
 @pytest.mark.parametrize(
-    "sent",
+    "path",
     [
-        {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaabb"}},  # pre-joined in the URL
-        {"tool": "browser_check", "args": {"path": "/notify?msg=vrfaa%2562b"}},  # and encoded
-        {"tool": "http_request", "args": {"method": "POST", "path": "/msg", "json": {"text": "vrfaabb"}}},  # stored
+        "/notify?msg=vrfaabb",  # pre-joined in the proof step's own URL
+        "/notify?msg=vrfaa%2562b",  # and encoded
     ],
 )
-def test_an_executed_marker_that_was_sent_joined_does_not_confirm(sent):
-    """A page that legitimately shows a parameter with alert() would echo a joined marker (VER-009)."""
+def test_an_executed_marker_whose_proof_url_already_carried_it_does_not_confirm(path):
+    """The browser_check's own URL cannot carry the joined marker: the dialog may read it back (VER-009)."""
     browser = FakeBrowser(
         {"executed": True, "context_verified": True, "evidence": [{"kind": "screenshot", "path": "evidence/x.png"}]}
     )
+    planner = Scripted([{"tool": "browser_check", "args": {"path": path}}, CONFIRM])
+    res = AgentProbe("xss", lambda: planner).run(_ctx(browser=browser))
+    assert res.verdict == "inconclusive" and "already joined marker" in res.rationale
+
+
+def test_a_prior_unrelated_step_with_the_joined_marker_does_not_poison_later_proof():
+    """The echo guard looks at the proof step's own URL, not at unrelated earlier history (VER-009)."""
+    browser = FakeBrowser({"executed": True, "context_verified": True, "evidence": []})
     http = SimpleNamespace(request=lambda *a, **k: SimpleNamespace(status_code=200, text="", headers={}))
-    planner = Scripted([sent, {"tool": "browser_check", "args": {"path": "/notify"}}, CONFIRM])
+    planner = Scripted([
+        {"tool": "http_request", "args": {"method": "POST", "path": "/msg", "json": {"text": "vrfaabb"}}},
+        {"tool": "browser_check", "args": {"path": "/s?q=<script>alert('vrfaa'+'bb')</script>"}},
+        CONFIRM,
+    ])
     ctx = _ctx(browser=browser, safe=False)
     ctx.http = http
-    res = AgentProbe("xss", lambda: planner).run(ctx)
-    assert res.verdict == "inconclusive" and "already joined marker" in res.rationale
+    assert AgentProbe("xss", lambda: planner).run(ctx).verdict == "confirmed"
 
 
 def test_an_executed_marker_joined_at_runtime_confirms():

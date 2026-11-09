@@ -312,8 +312,8 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
     ):
         return _downgrade(result, "declare an execution plan that selects the XSS variant; its route decides which "
                                   "browser_check counts")
-    proofs = [
-        h["result"]
+    proof_steps = [
+        h
         for h in history
         if h.get("tool") == "browser_check"
         and (not plan.get("path") or planned_route(plan["path"], h.get("args", {}).get("path") or ""))
@@ -321,18 +321,20 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
         and h["result"].get("executed") is True
         and h["result"].get("context_verified") is True
     ]
-    if not proofs:
+    if not proof_steps:
         where = f" on the planned route {plan['path']}" if plan.get("path") else ""
         return _downgrade(result, "no browser_check saw the marker execute" + where, "indicative, not executed")
     joined = "".join(getattr(ctx, "marker", None) or ())
-    if joined and any(joined in _decoded(json.dumps(h.get("args") or {}, default=str)) for h in history):
-        # A page that shows a parameter with alert() would echo it: only a marker joined at runtime counts.
+    # The echo guard applies to the proof step's own request: a browser_check whose URL already carries the
+    # joined marker could be reading back what it just sent. Earlier unrelated history (plan hypotheses,
+    # read_source, stored writes elsewhere) does not bear on whether this dialog was a runtime execution.
+    if joined and any(joined in _decoded(h.get("args", {}).get("path") or "") for h in proof_steps):
         return _downgrade(
             result,
             "a request carried the already joined marker, so the dialog may be an echo, not executed script",
             "indicative, not executed",
         )
-    result.evidence = [e for p in proofs for e in p.get("evidence") or []]
+    result.evidence = [e for p in (h["result"] for h in proof_steps) for e in p.get("evidence") or []]
     result.proof = {"executed": True}
     return result
 
