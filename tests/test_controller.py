@@ -71,6 +71,16 @@ def test_missing_route_never_guessed(tmp_path):
         Controller(ctx).before("http_request", {"path": "/search"})
 
 
+def test_route_rejection_names_the_allowed_routes(tmp_path):
+    ctx = context(tmp_path)
+    ctx.plan = replace(
+        ctx.plan,
+        endpoints=(Endpoint("GET", "/api/Feedbacks", None), Endpoint("POST", "/api/Feedbacks", None)),
+    )
+    with pytest.raises(ToolError, match=r"allowed: GET /api/Feedbacks, POST /api/Feedbacks"):
+        Controller(ctx).before("plan_test", {"path": "/#/search"})
+
+
 def test_control_repetitions_allowed_but_rewording_does_not_reset(tmp_path):
     c = Controller(context(tmp_path))
     for _ in range(2):

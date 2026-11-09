@@ -30,6 +30,20 @@ from .experiments import normal_roles, token
 from .tools import ToolError, _strings
 
 
+def _route_list(routes) -> str:
+    """Compact rendering of the routes the controller will accept, for a tool error that the model reads."""
+    seen, out = set(), []
+    for r in routes:
+        key = (r.get("method", "GET"), r.get("path", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{key[0]} {key[1]}")
+        if len(out) == 8:
+            break
+    return ", ".join(out) if out else "no route in this finding"
+
+
 class Controller:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -112,7 +126,9 @@ class Controller:
         route_path = path
         change = args.get("change") if name == "plan_test" else (self.plan or {}).get("change")
         if name == "plan_test" and change and not self._names_change(self._routes(), change):
-            raise ToolError("change must be a write request this finding names")
+            writes = [r for r in self._routes() if r.get("method") not in SAFE_METHODS]
+            raise ToolError("change must be a write request this finding names"
+                            + (f"; writes it names: {_route_list(writes)}" if writes else ""))
         matching = [r for r in self._routes(change) if (r["method"] in (method, "ALL")
                     or r["method"] == "PAGE" and method == "GET")
                     and self._matches(r["path"], route_path)]
@@ -121,7 +137,8 @@ class Controller:
                 raise ToolError("preparation is only for the accepted test resource owner")
             self._preparing = f"{method} {matching[0]['path']}"   # a deviation once it is answered (observe)
         if not matching:
-            raise ToolError("request has no matching route in this finding or its operator-declared resources")
+            raise ToolError("request has no matching route in this finding or its operator-declared resources; "
+                            f"allowed: {_route_list(self._routes(change))}")
         if name != "plan_test" and all(r.get("derived") for r in matching) and not self._created(change, path):
             raise ToolError("a GET the finding does not name may read only the record the owner created (VER-010)")
         # Under a change plan another normal account writes the second marker to what the owner created (VER-010).
