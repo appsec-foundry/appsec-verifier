@@ -113,7 +113,9 @@ Changes to these controls need tests that cover the refused case (out of scope, 
 
 Applies to `README.md`, `docs/`, changelog and release notes, help texts and messages users read.
 
-- Write for the user: what changes for them, what they have to do, what they will see. Leave out internals (class names, refactorings, how a bug was found) unless the user needs them to act.
+- `README.md` is the overview: what the Verifier does, quick start, what it verifies, safety, model profiles, commands, output, install, limitations. Flags, proof rules, file formats, limits and edge cases go into `docs/cli.md`, by command or file, and the README links there. A change adds to the README at most a table row or a sentence in the section it concerns, never a paragraph appended at the end. Where both files describe the same rule, the README only summarises it and must not contradict `docs/cli.md` or the code.
+- Work a change into the existing text: rewrite the sentence or section it changes and remove what it makes wrong, instead of adding a paragraph next to it. Before adding a sentence, search the file for where it already says that.
+- Write for the user: what changes for them, what they have to do, what they will see. Leave out internals (class, function and module names, refactorings, how a bug was found, implementation allowances) unless the user needs them to act. No words that age, such as "new", "now" or "currently".
 - Plain, factual sentences. No promotional or inflated words ("powerful", "seamless", "robust", "comprehensive", "significantly"), no filler ("It's worth noting", "Note that", "In summary"), no closing summary section.
 - Say each thing once. No extra headings, lists, tables or examples that add nothing new; a short paragraph is often clearer than a nested list. Bold sparingly, no emoji, no dashes in place of commas or full stops.
 - Name things as the user sees them: command, flag, file, message text. Describe only what the code does now.
