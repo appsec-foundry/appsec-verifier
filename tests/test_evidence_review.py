@@ -292,7 +292,9 @@ def test_revision_render_uses_existing_quotes_and_keeps_original_evidence(tmp_pa
     assert res.evidence_review["status"] == "clear"
 
 
-def test_report_fences_untrusted_explanation_and_console_shows_rounds():
+def test_report_leaves_out_the_revised_explanation_and_console_shows_rounds():
+    """The report keeps the review's status and first sentence per issue, fenced; the revised explanations and
+    quotes the reviewer saw repeat the proof of concept and stay in verification.yaml."""
     ctx, res, host, *_ = pair([issue(), revision("```\n<script>unsafe()</script>"), CLEAR])
     stream = io.StringIO()
     progress = RunProgress(stream=stream)
@@ -305,8 +307,9 @@ def test_report_fences_untrusted_explanation_and_console_shows_rounds():
     assert all(word in text for word in ("evidence reviewer started", "revise", "evidence reviewer finished", "T-1",
                                          "1/2", "no screenshot shown"))
     report = "\n".join(_review_markdown({"evidence_review": res.evidence_review}, 4))
-    assert "````text" in report and "No screenshot was shown to a model." in report
-    assert "Technical verdict unchanged" in report and "not additional proof" in report
+    assert "```text" in report and "No screenshot was shown to a model." in report
+    assert "judges how the evidence is presented, not the verdict" in report
+    assert "unsafe()" not in report and res.evidence_review["presentations"]
 
 
 def test_runner_groups_variants_and_report_matches_schema():
@@ -490,7 +493,7 @@ def test_application_image_precedes_http_and_the_review_follows_in_the_appendix(
     row = {**asdict(res), "result_id": "VF-001", "finding_ref": {"id": "T-1", "title": "XSS"}}
     text = to_markdown({"meta": {}, "results": [row]})
     assert (text.index("![Application") < text.index("GET /x HTTP") < text.index("## Appendix")
-            < text.index("Evidence presentation review"))
+            < text.index("#### Evidence review"))
     assert text.count("](evidence/app.png)") == 1
     assert "](evidence/exchange.png)" not in text
 

@@ -4,15 +4,19 @@ an additive annotation of a copy of the assessment (VER-027) with the rating
 after verification (VER-039, verify/rating.py). The Analyzer's Markdown report
 with the results is verify/annotated_report.py (VER-038).
 
-verification.md opens with an overview of the selected findings, linked to
-their entries, with verdict and rating (VER-020, VER-039). A tested finding's
-entry leads with its verdict and what the code checked, then the steps its
-verdict rests on and its proof of concept (VER-034): the decisive steps as
-HTTP excerpts in code fences that target content cannot close, and its
-screenshots (VER-035). The findings not tested follow with the reason (VER-024),
-and an appendix holds the test plan, the test agent's own text and the evidence
-review (VER-042). Recorded responses and screenshots can show target data; the
-report says so and the export never references them (VER-022).
+verification.md opens with a summary (VER-020, VER-039): the tested findings,
+linked to their entries, with result, rating and what the test showed, and the
+findings not tested with what the run lacked (VER-024). Results and severities
+carry colours, the severities as in AppSec Analyzer's report. A tested
+finding's entry leads with a card of result, rating, weakness and a link to the
+finding in the Analyzer's report, then what the checked proof showed (built
+from the cited steps, never from the model's words) or why it is not
+confirmed, its requests and its proof of concept (VER-034): the decisive steps
+as HTTP excerpts in code fences that target content cannot close, and its
+screenshots (VER-035). A collapsed appendix holds the test plan, the test
+agent's own text and the evidence review (VER-042). Recorded responses and
+screenshots can show target data; the report says so and the export never
+references them (VER-022).
 
 Reports and an annotated assessment are written through a temporary file and a
 rename, so an interrupted write leaves the old file or the new one, never a
@@ -23,10 +27,12 @@ schemas/verification.schema.yaml first.
 from __future__ import annotations
 
 import contextlib
+import html
 import os
 import re
 import secrets
 from pathlib import Path
+from urllib.parse import quote
 
 import yaml
 
@@ -167,14 +173,71 @@ def write_reports(doc: dict, out_dir: Path, assessment: dict | None = None) -> d
     yaml_path = out_dir / "verification.yaml"
     md_path = out_dir / "verification.md"
     write_text_atomically(yaml_path, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True))
-    write_text_atomically(md_path, to_markdown(doc, assessment))
+    write_text_atomically(md_path, to_markdown(doc, assessment, analyzer_report=_analyzer_report(doc, out_dir)))
     return {"yaml": yaml_path, "md": md_path, "evidence": out_dir / "evidence"}
+
+
+def _analyzer_report(doc: dict, out_dir: Path) -> str | None:
+    """The link from out_dir to the Analyzer's report, found as for the annotated report (VER-038): the
+    assessment's name with .md, next to it, not a symlink. None when there is none."""
+    source = doc["meta"].get("source_assessment")
+    if not source:
+        return None
+    report = Path(str(source)).with_suffix(".md")
+    if report.is_symlink() or not report.is_file():
+        return None
+    relative = os.path.relpath(os.path.abspath(report), os.path.abspath(out_dir))
+    return quote(Path(relative).as_posix())
 
 
 _ORDER = ("confirmed", "blocked-by-control", "not-reproducible", "inconclusive", "not-attempted")
 _LABEL = {**_VERDICT_LABEL, "not-attempted": "not tested"}
+# Colours as AppSec Analyzer's report shows them: its severity badges (scripts/renderers/compact_tables.py,
+# BADGES), and for the result of a test a square, so that a result never reads as a severity.
+_SEVERITY_BADGE = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢", "informational": "⚪", "info": "⚪"}
+_RESULT_BADGE = {"confirmed": "🟥", "blocked-by-control": "🟩", "not-reproducible": "🟩", "inconclusive": "🟨",
+                 "not-attempted": "⬜"}
+_LEGEND = ("🟥 confirmed · 🟩 not reproducible or blocked by control · 🟨 inconclusive · ⬜ not tested. Severity as "
+           "in the assessment: 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low.")
+_CLASS = {"xss": "XSS", "ssrf": "SSRF", "access-control": "access control", "open-redirect": "open redirect",
+          "path-traversal": "path traversal"}
+# What a confirmed proof of a class showed, where its steps do not tell more (_shown).
+_SHOWN = {"xss": "The injected script ran in the browser", "ssrf": "The target called the Verifier's listener",
+          "open-redirect": "The target redirected to the Verifier's marker host",
+          "path-traversal": "The response contained the content of the marker file",
+          "injection": "The response followed the Verifier's fresh control values for the declared input",
+          "access-control": "Access differed between the identities",
+          "session": "The cookie attribute was missing in repeated responses"}
+_MAX_STEP_ROWS = 15
 # A verdict the proof check lowered names its reason before the agent's claim (agent/proof.py, _downgrade).
 _LOWERED = re.compile(r"indicative, not (?:proven|executed): (.*?)\. Agent's claim:", re.S)
+# A recorded step (verify/poc.py, _line): tool, method, URL or opened page, identity and answer.
+_STEP = re.compile(r"(\S+) (\S+) (.+) as (\S+) → (.*)", re.S)
+# Why a finding was not tested (cli._blocker, loader.classify, verify/runner.py), said as what the run lacks.
+_NOT_TESTED = (
+    (r"no supported proof method for (.+)", r"no test method for \1"),
+    (r"no literal-input contract for this finding in injection_inputs",
+     "needs the input to inject into: injection_inputs in a scope file"),
+    (r"the proof repeats each control, and every request the assessment names writes",
+     "needs a read request: the injection proof repeats requests and never repeats a write"),
+    (r"the assessment names no request for this finding.*", "needs a request: the assessment names none"),
+    (r"no marker_file in the scope", "needs a marker file on the target: marker_file in a scope file"),
+    (r"no callback in the scope", "needs a callback listener: callback in a scope file"),
+    (r"no proof browser.*", "needs the proof browser: Playwright and Google Chrome"),
+    (r"no test identity.*", "needs test accounts: --identities"),
+    (r"safe mode; without a declared test resource.*",
+     "needs --allow-intrusive: the Verifier would create its own test record"),
+    (r"safe mode;.*", "needs --allow-intrusive: every request it names writes"),
+    (r"no declared test resource, and neither.*",
+     "needs a test resource (test_resources), two test accounts with --allow-intrusive, or a privileged account"),
+    (r"a declared test resource names roles unavailable in this run", "needs the accounts its test resource names"),
+    (r"no write request that creates a record.*", "needs a request that creates a test record; the finding names none"),
+    (r"no GET request to read with, and no write request that changes the record",
+     "needs a request that reads or changes the record; the finding names none"),
+    (r"no GET request to read with", "needs a request that reads the record; the finding names none"),
+    (r"no operator-identified session cookie.*", "needs the session cookie to check: session_checks in a scope file"),
+    (r"declared variants need unavailable capabilities: (.+)", r"needs a capability the Verifier lacks: \1"),
+)
 
 
 def _inline(value, limit: int = 300, *, cell: bool = False) -> str:
@@ -187,6 +250,22 @@ def _inline(value, limit: int = 300, *, cell: bool = False) -> str:
 def _sentence(value, limit: int = 600) -> str:
     text = _inline(value, limit)
     return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def _code(value, limit: int = 90, *, cell: bool = False) -> str:
+    """A request or path in a code span, shortened; as plain text where a backtick would end the span."""
+    text = " ".join(str(value or "").split())
+    text = text if len(text) <= limit else text[:limit - 1] + "…"
+    if "`" in text:
+        return _inline(text, cell=cell)
+    return "`" + (text.replace("|", "\\|") if cell else text) + "`"
+
+
+def _first_sentence(value, limit: int = 240) -> str:
+    """The first sentence of a model's text, one line, for a list of issues in a code fence."""
+    text = " ".join(str(value or "").split())
+    text = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _when(value) -> str:
@@ -213,15 +292,33 @@ def _rank(rows: list[dict]) -> int:
     return _ORDER.index(verdict) if verdict in _ORDER else len(_ORDER)
 
 
-def _rating_text(rating: dict | None, threat: dict | None = None) -> str:
-    """`High, unchanged`, `**High → Critical**` for a change (VER-039), for a finding not tested the Analyzer's
-    severity alone, or – when unknown."""
+def _severity(value) -> str:
+    """`🟠 High` with the Analyzer's colour, or – when unknown."""
+    text = _inline(value, 40, cell=True)
+    badge = _SEVERITY_BADGE.get(text.lower())
+    return f"{badge} {text.capitalize()}" if badge else (text or "–")
+
+
+def _severity_of(threat: dict | None) -> str | None:
+    threat = threat or {}
+    return threat.get("effective_severity") or threat.get("risk") or threat.get("severity")
+
+
+def _rating_text(rating: dict | None, threat: dict | None = None, *, unchanged: bool = False) -> str:
+    """`🟠 High`, with `unchanged` `🟠 High, unchanged`, and `**🟠 High → 🔴 Critical**` for a change (VER-039); for
+    a finding not tested the Analyzer's severity alone, or – when unknown."""
     if rating is None:
-        severity = (threat or {}).get("effective_severity") or (threat or {}).get("risk")
-        return _inline(severity, 40, cell=True) or "–"
-    before, after = (_inline(rating[k].get("severity"), 40, cell=True) or "–"
-                     for k in ("analyzer", "after_verification"))
-    return f"**{before} → {after}**" if rating["changed"] else f"{before}, unchanged"
+        return _severity(_severity_of(threat))
+    before, after = (_severity(rating[k].get("severity")) for k in ("analyzer", "after_verification"))
+    if rating["changed"]:
+        return f"**{before} → {after}**"
+    return f"{before}, unchanged" if unchanged else before
+
+
+def _display_id(finding_id) -> str:
+    """The id a reader sees in the Analyzer's report: T-NNN appears there as F-NNN, as AppSec Analyzer's
+    display_id (scripts/_severity_rollup.py) renders it; other ids stay as they are."""
+    return re.sub(r"^T-(\d+)$", r"F-\1", str(finding_id or ""))
 
 
 def _step_line(step: dict) -> str:
@@ -233,28 +330,121 @@ def _step_line(step: dict) -> str:
     return f"step {step['step']}: {name}{rest}"
 
 
+def _steps(r: dict) -> list[dict]:
+    """A result's recorded steps (verify/poc.py), with method, path, identity and answer where the line has them."""
+    out = []
+    for s in (r.get("poc") or {}).get("steps") or []:
+        line = str(s.get("line") or "")
+        m = _STEP.fullmatch(line)
+        tool, method, url, role, answer = m.groups() if m else ("", "", "", "", "")
+        status = re.match(r"\d{3}\b", answer)
+        path = re.sub(r"^[a-z][a-z0-9+.-]*://[^/\s]+", "", url) or ("/" if url else "")
+        out.append({"step": s.get("step"), "decisive": bool(s.get("decisive")), "line": line, "tool": tool,
+                    "method": method, "path": path, "role": role, "answer": answer,
+                    "status": int(status.group()) if status else None})
+    return out
+
+
+def _refs(*steps) -> str:
+    """`step 6`, `steps 2 and 3`."""
+    numbers = [str(n) for n in sorted({s["step"] for s in steps if s and isinstance(s.get("step"), int)})]
+    if not numbers:
+        return ""
+    return ("step " if len(numbers) == 1 else "steps ") + (
+        numbers[0] if len(numbers) == 1 else ", ".join(numbers[:-1]) + " and " + numbers[-1])
+
+
+def _shown(r: dict, *, detail: bool = True) -> str | None:
+    """What a confirmed result showed, in one sentence built from the proof the code checked and its cited
+    steps, never from the model's words. With `detail` the request and step numbers follow in brackets."""
+    proof = r.get("proof") or {}
+    if r["verdict"] != "confirmed" or not proof.get("checked"):
+        return None
+    cited = [s for s in _steps(r) if s["decisive"] and s["role"]]
+
+    def at(step, *more, request: bool = True) -> str:
+        if not detail or not step:
+            return ""
+        parts = [_code(f"{step['method']} {step['path']}")] if request else []
+        return f" ({', '.join([*parts, _refs(step, *more)])})"
+
+    def who(step) -> str:
+        return _inline(step["role"], 60)
+
+    if proof.get("kind") == "access-control" and cited:
+        writes = [s for s in cited if s["method"] in ("POST", "PUT", "PATCH")]
+        reads = [s for s in cited if s["method"] == "GET"]
+        owner = writes[0] if writes else None
+        anonymous = next((s for s in cited if s["role"] == "anonymous"), None)
+        reference = re.search(r"the same answer as for (\S+) ", str(proof.get("scope") or ""))
+        if proof.get("second_marker") and owner:
+            change = next((s for s in writes if s["role"] != owner["role"]), None)
+            after = change and next((s for s in reads if s["role"] == owner["role"] and s["step"] > change["step"]),
+                                    None)
+            if change and after:
+                return (f"{who(change)} changed a record that {who(owner)} created{at(change)}; "
+                        f"{who(owner)}'s next read showed {who(change)}'s marker{at(after, request=False)}.")
+        elif proof.get("marker") and owner:
+            other = next((s for s in reads if s["role"] not in (owner["role"], "anonymous")
+                          and (s["status"] or 0) < 300), None)
+            if other:
+                text = f"{who(other)} read the record that {who(owner)} created, with its marker{at(other)}"
+                if anonymous:
+                    text += f"; without a login the marker did not show{at(anonymous, request=False)}"
+                return text + "."
+        elif reference:
+            privileged = next((s for s in reads if s["role"] == reference.group(1)), None)
+            normal = next((s for s in reads if s["role"] not in (reference.group(1), "anonymous")), None)
+            if privileged and normal:
+                text = f"{who(normal)} got the same answer as {who(privileged)}{at(normal, privileged)}"
+                if anonymous and anonymous["status"]:
+                    text += f"; without a login: {anonymous['status']}{at(anonymous, request=False)}"
+                return text + "."
+    shown = _SHOWN.get(r.get("class"))
+    if not shown:
+        return None
+    first = next((s for s in cited if s["tool"] == "browser_check"), None) if r.get("class") == "xss" else None
+    steps = [first] if first else [s for s in _steps(r) if s["decisive"]]
+    return shown + (f" ({_refs(*steps)})" if detail and _refs(*steps) else "") + "."
+
+
+def _not_tested(rationale) -> str:
+    """Why a finding was not tested, as what the run lacks; the recorded reason where no wording fits."""
+    why = re.sub(r"^not tested: ", "", " ".join(str(rationale or "").split()))
+    for pattern, said in _NOT_TESTED:
+        if m := re.fullmatch(pattern, why):
+            return m.expand(said)
+    return why
+
+
 def _why_not(r: dict) -> str | None:
     """Why a tested finding is not confirmed, as the code knows it: what the proof check missed, the limit
-    that stopped the test, or why the check lowered the agent's verdict."""
+    that stopped the test, why the check lowered the agent's verdict, or which comparison is missing."""
     if r["verdict"] not in ("inconclusive", "not-attempted"):
         return None
     proof = r.get("proof") or {}
     if proof.get("missing"):
         return "; ".join(str(m) for m in proof["missing"])
     if r.get("limits_hit"):
-        return r.get("rationale") or f"stopped by the {r['limits_hit']} limit"
+        stopped = re.sub(r"^stopped by limit: ", "", str(r.get("rationale") or ""))
+        return f"stopped: {stopped}" if stopped else f"stopped by the {r['limits_hit']} limit"
     lowered = _LOWERED.match(r.get("rationale") or "")
     if lowered:
         return lowered.group(1)
-    return "the test agent ended without a checked proof; its explanation is in the appendix"
+    accounts = {s["role"] for s in _steps(r) if s["role"] and s["status"] is not None} - {"anonymous"}
+    if r.get("class") == "access-control" and len(accounts) == 1:
+        return f"only {next(iter(accounts))} sent requests; the comparison with another account is missing"
+    return "the test agent ended without a proof the Verifier could check"
 
 
-def to_markdown(doc: dict, assessment: dict | None = None) -> str:
-    """verification.md (VER-020): the run; an overview of the selected findings, each linked to its entry,
-    with verdict and rating before and after verification (VER-039); each tested finding led by its verdict,
-    the steps its proof rests on and its proof of concept (VER-034, VER-035); the findings not tested with
-    the reason (VER-024); an appendix with the test plan, the test agent's explanation and the evidence
-    review (VER-042). Text from the assessment, the model or the target stays on one line or in a fence."""
+def to_markdown(doc: dict, assessment: dict | None = None, *, analyzer_report: str | None = None) -> str:
+    """verification.md (VER-020): the run; a summary of the selected findings, the tested ones linked to their
+    entries with result, rating before and after verification (VER-039) and what the test showed, the ones not
+    tested with what the run lacked (VER-024); each tested finding led by its result, what the checked proof
+    showed, its steps and its proof of concept (VER-034, VER-035), and with `analyzer_report` (a link to the
+    Analyzer's report) a link to the finding there; an appendix, collapsed, with the test plan, the test agent's
+    explanation and the evidence review (VER-042). Text from the assessment, the model or the target stays on
+    one line, in a code span or in a fence."""
     threats = {t.get("id"): t for t in (assessment or {}).get("threats") or [] if isinstance(t, dict)}
     groups: dict[str, list[dict]] = {}
     for r in doc["results"]:
@@ -265,28 +455,25 @@ def to_markdown(doc: dict, assessment: dict | None = None) -> str:
     tested = [(fid, rows) for fid, rows in ordered if _overall(rows) != "not-attempted"]
     untested = [(fid, rows) for fid, rows in ordered if _overall(rows) == "not-attempted"]
     details = {id(r): _details(r) for _, rows in tested for r in rows}
-    lines = _run_lines(doc) + _overview(ordered, threats, ratings)
+    lines = _run_lines(doc, analyzer_report) + _summary(tested, untested, threats, ratings)
     if tested:
         lines += ["", "## Tested findings"]
         for fid, rows in tested:
             for i, r in enumerate(rows):
-                lines += _entry(r, ratings[fid], first=i == 0, details=bool(details[id(r)]))
-    if untested:
-        lines += ["", "## Not tested", "", "| Finding | Why not |", "| --- | --- |"]
-        for fid, rows in untested:
-            fr, anchor = (rows[0].get("finding_ref") or {}), _anchor(fid)
-            mark = f'<a id="{anchor}"></a>' if anchor else ""
-            why = re.sub(r"^not tested: ", "", str(rows[0].get("rationale") or ""))
-            title = _inline(fr.get("title") or fr.get("cwe"), 120, cell=True)
-            lines.append(f"| {mark}{_inline(fid, cell=True)} {title} | {_inline(why, cell=True) or '–'} |")
+                lines += _entry(r, ratings[fid], first=i == 0, details=bool(details[id(r)]),
+                                analyzer_report=analyzer_report, several=len(rows) > 1)
     if any(details.values()):
-        lines += ["", "## Appendix: test details"]
+        lines += ["", "## Appendix: test details", "",
+                  "The test agent's plan and own words and the evidence review, per finding. They are not proof: "
+                  "a verdict rests only on the steps the Verifier checked."]
         for fid, rows in tested:
             for i, r in enumerate(rows):
                 if details[id(r)]:
                     anchor = _anchor(fid)
-                    lines += ["", *([f'<a id="details-{anchor}"></a>'] if i == 0 and anchor else []),
-                              f"### {_inline(fid)}{_variant(r)}", *details[id(r)]]
+                    name = html.escape(f"{fid}{_variant(r) if len(rows) > 1 else ''}")
+                    lines += ["", *([f'<a id="details-{anchor}"></a>'] if i == 0 and anchor else []), "<details>",
+                              f"<summary>{name}: test plan, the test agent's explanation, evidence review</summary>",
+                              *details[id(r)], "", "</details>"]
     return "\n".join(lines) + "\n"
 
 
@@ -295,7 +482,7 @@ def _variant(r: dict) -> str:
     return f" · variant {_inline(variant)}" if variant else ""
 
 
-def _run_lines(doc: dict) -> list[str]:
+def _run_lines(doc: dict, analyzer_report: str | None = None) -> list[str]:
     meta = doc["meta"]
     target, safety = meta.get("target") or {}, meta.get("safety") or {}
     auth, scope = meta.get("authorization") or {}, meta.get("scope") or {}
@@ -311,7 +498,8 @@ def _run_lines(doc: dict) -> list[str]:
                                                else "")
     lines = ["# Verification report", "",
              f"- **Target:** {where} · build {_inline(target.get('build_match') or 'unknown')}",
-             f"- **Assessment:** {_inline(meta.get('source_assessment'))}",
+             f"- **Assessment:** {_inline(meta.get('source_assessment'))}"
+             + (f" · [the Analyzer's report]({analyzer_report})" if analyzer_report else ""),
              f"- **Run:** {_when(meta.get('generated'))} · AppSec Verifier {_inline(meta.get('verifier_version'))}"
              + (f" · model {_inline(meta['model'])}" if meta.get("model") else ""),
              f"- **Mode:** {mode}",
@@ -328,82 +516,139 @@ def _run_lines(doc: dict) -> list[str]:
     return lines
 
 
-def _overview(ordered, threats: dict, ratings: dict) -> list[str]:
+def _summary(tested, untested, threats: dict, ratings: dict) -> list[str]:
+    """The overview of the selected findings (VER-020): the counts; the tested findings, each linked to its entry
+    with result, rating (VER-039) and what the test showed or why it is not confirmed; the findings not tested,
+    most severe first, with what the run lacked. Their row is their entry."""
     tally: dict[str, int] = {}
-    for _, rows in ordered:
+    for _, rows in [*tested, *untested]:
         tally[_overall(rows)] = tally.get(_overall(rows), 0) + 1
-    counts = " · ".join(f"{n} {_LABEL.get(v, v)}" for v, n in sorted(tally.items(), key=lambda kv: (
-        _ORDER.index(kv[0]) if kv[0] in _ORDER else len(_ORDER))))
-    of = f" of {len(threats)}" if threats else ""
-    lines = ["", "## Overview", "", f"{len(ordered)}{of} findings selected: {counts or 'none'}.", "",
-             "| Finding | Result | Rating, Analyzer → after verification |", "| --- | --- | --- |"]
-    changed = []
-    for fid, rows in ordered:
-        verdict, anchor, fr = _overall(rows), _anchor(fid), (rows[0].get("finding_ref") or {})
-        label = _LABEL.get(verdict, verdict) + (f" ({len(rows)} variants)" if len(rows) > 1 else "")
-        link = f"[{_inline(fid, cell=True)}](#{anchor})" if anchor else _inline(fid, cell=True)
-        lines.append(f"| {link} {_inline(fr.get('title') or fr.get('cwe'), 120, cell=True)} | "
-                     f"{'**' + label + '**' if verdict == 'confirmed' else label} | "
-                     f"{_rating_text(ratings[fid], threats.get(fid))} |")
-        if ratings[fid] and ratings[fid]["changed"]:
-            changed.append(f"[{_inline(fid)}](#{anchor}) {_inline(ratings[fid]['reason'])}")
+    counts = [f"{_RESULT_BADGE.get(v, '')} " + (f"**{n} {_LABEL.get(v, v)}**" if v == "confirmed"
+                                                  else f"{n} {_LABEL.get(v, v)}")
+              for v, n in sorted(tally.items(), key=lambda kv: _ORDER.index(kv[0]) if kv[0] in _ORDER else 99)]
+    selected = len(tested) + len(untested)
+    counts.append(f"{selected} of {len(threats)} findings selected" if threats else f"{selected} findings selected")
+    changed = [(fid, ratings[fid]) for fid, _ in tested if ratings.get(fid) and ratings[fid]["changed"]]
+    if any(ratings.values()) and not changed:
+        counts.append("no rating changed")
+    lines = ["", "## Summary", "", " · ".join(counts)]
+    if tested:
+        lines += ["", "| Result | Finding | Severity | What the test showed |", "| --- | --- | --- | --- |"]
+        for fid, rows in tested:
+            verdict, anchor, fr = _overall(rows), _anchor(fid), (rows[0].get("finding_ref") or {})
+            label = _LABEL.get(verdict, verdict).capitalize() + (f" ({len(rows)} variants)" if len(rows) > 1 else "")
+            result = f"{_RESULT_BADGE.get(verdict, '')} " + (f"**{label}**" if verdict == "confirmed" else label)
+            link = f"[{_inline(fid, cell=True)}](#{anchor})" if anchor else _inline(fid, cell=True)
+            what = next((s for s in (_shown(r, detail=False) for r in rows) if s), None)
+            if what is None:
+                why = next((w for w in (_why_not(r) for r in rows) if w), "")
+                what = why[:1].upper() + why[1:] + ("." if why and not why.endswith(".") else "")
+            lines.append(f"| {result} | {link} · {_inline(fr.get('title') or fr.get('cwe'), 110, cell=True)} | "
+                         f"{_rating_text(ratings[fid], threats.get(fid))} | {_inline(what, 220, cell=True) or '–'} |")
+        lines += ["", _LEGEND]
     if changed:
-        lines += ["", "Ratings changed: " + "; ".join(changed) + "."]
-    elif any(ratings.values()):
-        lines += ["", "No rating changed."]
+        lines += ["", "Ratings changed after verification: " + "; ".join(
+            f"[{_inline(fid)}](#{_anchor(fid)}) {_inline(rating['reason'])}" for fid, rating in changed) + "."]
+    if untested:
+        def rank(item):
+            severity = str(_severity_of(threats.get(item[0])) or "").lower()
+            return (list(_SEVERITY_BADGE).index(severity) if severity in _SEVERITY_BADGE else 99, str(item[0]))
+
+        lines += ["", "### Not tested", "", "| Finding | Severity | Why not tested |", "| --- | --- | --- |"]
+        for fid, rows in sorted(untested, key=rank):
+            fr, anchor = (rows[0].get("finding_ref") or {}), _anchor(fid)
+            mark = f'<a id="{anchor}"></a>' if anchor else ""
+            title = _inline(fr.get("title") or fr.get("cwe"), 110, cell=True)
+            why = _inline(_not_tested(rows[0].get("rationale")), 220, cell=True)
+            lines.append(f"| {mark}{_inline(fid, cell=True)} · {title} | {_rating_text(None, threats.get(fid))} | "
+                         f"{why or '–'} |")
     return lines
 
 
-def _entry(r: dict, rating: dict | None, *, first: bool, details: bool) -> list[str]:
-    """A tested finding: verdict first, then what the code checked, the steps the verdict rests on and the
-    proof of concept (VER-020)."""
+def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer_report: str | None = None,
+           several: bool = False) -> list[str]:
+    """A tested finding (VER-020): a card with result, rating, weakness and the link to the finding in the
+    Analyzer's report; what the checked proof showed or why it is not confirmed; limits and deviations; the
+    requests; the proof of concept; the cross-run key and files."""
     fr, proof, verdict = (r.get("finding_ref") or {}), r.get("proof") or {}, r["verdict"]
     fid = fr.get("id") or r["result_id"]
-    anchor = _anchor(fid)
-    head = [f"**{_LABEL.get(verdict, verdict).capitalize()}**"]
-    if rating is not None:
-        head.append("rating " + _rating_text(rating))
+    anchor, badge = _anchor(fid), _RESULT_BADGE.get(verdict, "")
+    result = f"{badge} **{_LABEL.get(verdict, verdict).capitalize()}**"
     if r.get("confidence"):
-        head.append(f"confidence {_inline(r['confidence'])}")
-    head += [_inline(v) for v in (fr.get("cwe"), r.get("class")) if v]
-    if fr.get("match_key"):
-        head.append(f"key {_inline(fr['match_key'])}")
+        result += f", {_inline(r['confidence'], 20, cell=True)} confidence"
+    weakness = " · ".join(_inline(v, 60, cell=True) for v in (fr.get("cwe"), _CLASS.get(r.get("class"), r.get("class")))
+                          if v)
+    head = ["Result", "Severity", "Weakness"]
+    cells = [result, _rating_text(rating, unchanged=True) if rating else "–", weakness or "–"]
+    if analyzer_report and fr.get("id") and anchor:
+        head.append("In the assessment report")
+        cells.append(f"[{_inline(_display_id(fid), cell=True)}]({analyzer_report}#{anchor})")
     out = ["", *([f'<a id="{anchor}"></a>'] if first and anchor else []),
-           f"### {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r)}", "", " · ".join(head), ""]
-    facts = []
-    if verdict == "confirmed" and proof.get("checked"):
-        from ..progress import _PROVEN
-
-        shown = _PROVEN.get(r.get("class"))
-        facts.append("Proof checked by the code" + (f": {shown}." if shown else "."))
+           f"### {badge} {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r) if several else ''}",
+           "",
+           "| " + " | ".join(head) + " |", "|" + " --- |" * len(head), "| " + " | ".join(cells) + " |"]
+    if shown := _shown(r):
+        out += ["", f"**What the test showed:** {shown}"]
     if why := _why_not(r):
-        facts.append(f"Not confirmed: {_sentence(why)}")
-    if proof.get("checked") and proof.get("scope"):
-        facts.append(f"Checked scope: {_sentence(proof['scope'])}")
+        out += ["", f"**Why not confirmed:** {_sentence(why)}"]
+    notes = []
+    limits = re.sub(r"^cited requests only[;,]?\s*", "", str(proof.get("scope") or "")) if proof.get("checked") else ""
+    limits = re.sub(r"^on ", "tested on ", limits)
+    if limits:
+        notes.append(f"**Limits:** {_sentence(limits[:1].upper() + limits[1:])}")
     if rating and rating["changed"]:
-        facts.append(f"Rating changed: {_sentence(rating['reason'])}")
-    deviations = [*([f"Deviation: {r['deviation']}"] if r.get("deviation") else []),
+        notes.append(f"**Rating changed:** {_sentence(rating['reason'])}")
+    deviations = [*([r["deviation"]] if r.get("deviation") else []),
                   *(o for o in r.get("observations") or [] if o.startswith("Deviation:"))]
-    facts += [_sentence(d) for d in deviations]
+    notes += [f"**Deviation:** {_sentence(re.sub(r'^Deviation:[ ]*', '', d))}" for d in deviations]
     if r.get("selection_reason"):
-        facts.append(f"Additionally selected: {_sentence(r['selection_reason'])}")
-    out += [f"- {fact}" for fact in facts]
-    steps = (r.get("poc") or {}).get("steps") or []
-    decisive = [s for s in steps if s.get("decisive")]
-    rest = [s for s in steps if not s.get("decisive")]
-    if decisive:
-        label = "Steps the proof rests on" if verdict == "confirmed" else "Steps the verdict rests on"
-        out += ["", f"{label}:", "", _fenced("\n".join(_step_line(s) for s in decisive), "text")]
-    if rest:
-        out += ["", "Other requests:" if decisive else "Requests sent:", "",
-                _fenced("\n".join(_step_line(s) for s in rest), "text")]
-    out += _poc_markdown(r, level=4, steps=False)
-    files = [_inline(e["path"]) for e in r.get("evidence") or [] if e.get("path")]
+        notes.append(f"**Additionally selected:** {_sentence(r['selection_reason'])}")
+    if not _application(r):
+        unavailable = [o for o in r.get("observations") or [] if o.startswith("Application screenshot unavailable:")]
+        if unavailable:
+            reason = re.sub(r"^Application screenshot unavailable:\s*", "", unavailable[0]).split(";")[0]
+            notes.append(f"**Screenshot:** none, {_sentence(reason)}")
+    out += ["", *(f"- {note}" for note in notes)] if notes else []
+    table = _step_table(r)
+    if table:
+        rests = "proof rests on" if verdict == "confirmed" else "verdict rests on"
+        bold = any(s["decisive"] for s in _steps(r))
+        out += ["", f"**Requests**{f' (bold: the steps the {rests})' if bold else ''}", "", *table]
+    out += _poc_markdown(r, level=4, steps=False, limitations=False)
+    footer = [f"Cross-run key {_code(fr['match_key'])}"] if fr.get("match_key") else []
+    files = [_code(e["path"]) for e in r.get("evidence") or [] if e.get("path")]
     if files:
-        out += ["", "Files: " + ", ".join(files)]
+        footer.append("files: " + ", ".join(files))
     if details and first and anchor:
-        out += ["", f"Test plan, the test agent's explanation and the evidence review: [details](#details-{anchor})"]
+        footer.append(f"[test details](#details-{anchor})")
+    out += ["", " · ".join(footer)] if footer else []
     return out
+
+
+def _application(r: dict) -> list[dict]:
+    """The application screenshots of a result (VER-035)."""
+    return [e for e in r.get("evidence") or []
+            if e.get("kind") == "screenshot" and (e.get("presentation") == "application" or
+                re.search(r"-(?:xss|access-control)-[0-9]+\.png$", e.get("path", ""))) and e.get("path")]
+
+
+def _step_table(r: dict) -> list[str]:
+    """The requests of a result as a table, the steps its verdict rests on in bold; a line format the table
+    cannot split stays as lines in a fence. Paths are the model's choice, so they stay in code spans."""
+    steps = _steps(r)
+    if not steps:
+        return []
+    if not all(s["method"] for s in steps):
+        return [_fenced("\n".join(_step_line(s) for s in steps), "text")]
+    rows = ["| Step | Request | Identity | Answer |", "| --- | --- | --- | --- |"]
+    for s in steps[:_MAX_STEP_ROWS]:
+        number = f"**{s['step']}**" if s["decisive"] else str(s["step"])
+        request = ("browser " if s["tool"] == "browser_check" else "") + f"{s['method']} {s['path']}"
+        rows.append(f"| {number} | {_code(request, cell=True)} | {_inline(s['role'], 60, cell=True)} | "
+                    f"{_inline(s['answer'], 120, cell=True)} |")
+    if len(steps) > _MAX_STEP_ROWS:
+        rows.append(f"| … | {len(steps) - _MAX_STEP_ROWS} more in the HAR file | | |")
+    return rows
 
 
 def _details(r: dict) -> list[str]:
@@ -412,13 +657,13 @@ def _details(r: dict) -> list[str]:
     out = []
     if r.get("planning"):
         plan = yaml.safe_dump(r["planning"], sort_keys=False, allow_unicode=True, width=110).rstrip()
-        out += ["", "Test plan (assumptions are not proof):", "", _fenced(plan, "yaml")]
+        out += ["", "**Test plan** (assumptions are not proof)", "", _fenced(plan, "yaml")]
     if r.get("rationale") and not r.get("limits_hit"):
-        out += ["", "Test agent's explanation (not proof):", "", _fenced(str(r["rationale"]), "text")]
+        out += ["", "**Test agent's explanation** (not proof)", "", _fenced(str(r["rationale"]), "text")]
     notes = [o for o in r.get("observations") or []
              if not o.startswith(("Application screenshot unavailable:", "Deviation:"))]
     if notes:
-        out += ["", "Other observations, not verified:", "", _fenced("\n".join(notes), "text")]
+        out += ["", "**Other observations** (not verified)", "", _fenced("\n".join(notes), "text")]
     return out + _review_markdown(r, 4)
 
 
@@ -436,29 +681,28 @@ def _review_markdown(r: dict, level: int) -> list[str]:
     shown = review.get("images_reviewed") or []
     seen = ("Screenshots a model reviewed: " + ", ".join(f"`{p}`" for p in shown) + "." if shown
             else "No screenshot was shown to a model.")
-    out = ["", f"{'#' * level} Evidence presentation review", "",
-           f"Technical verdict unchanged. {seen}", "",
-           _fenced(f"Status: {review['status']} · corrections: {review['rounds']}/2 · "
-                   f"reviews: {review['reviews']}\n{review['reason']}", "text")]
+    status = (f"{_inline(review['status'], 40)} after {_inline(review['rounds'], 4)} of 2 correction rounds and "
+              f"{_inline(review['reviews'], 4)} reviews")
+    out = ["", f"{'#' * level} Evidence review", "",
+           f"{status[:1].upper() + status[1:]}. The review judges how the evidence is presented, not the verdict. "
+           f"{seen}"]
+    # The reviewer's words, first sentence each: model text, so it stays in a fence.
+    text = [_first_sentence(review.get("reason"), 300)] if review.get("reason") else []
+    variants = {i.get("variant") for i in review["issues"]}
     if review["issues"]:
-        out += ["", "Unresolved presentation issues:", "",
-                _fenced("\n".join(f"{i['variant']}: {i['detail']}" for i in review["issues"]), "text")]
-    for presentation in review["presentations"]:
-        out += ["", "Original test agent explanation (not additional proof):", "",
-                _fenced(f"{presentation['variant']}: {presentation['explanation']}", "text")]
-        for quote in presentation["quotes"]:
-            out += ["", f"Recorded excerpt, step {quote['step']}, {quote['part']}:", "", _fenced(quote["text"])]
+        text += ["", "Open issues:", *(f"- {i['variant'] + ': ' if len(variants) > 1 else ''}"
+                                      f"{_first_sentence(i['detail'])}" for i in review["issues"])]
+    if text:
+        out += ["", _fenced("\n".join(text), "text")]
     return out
 
 
-def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True) -> list[str]:
+def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: bool = True) -> list[str]:
     """The proof of concept (VER-034, VER-035): the application screenshots with the test agent's explanation,
-    with `steps` one line per request, then the steps the verdict rests on as HTTP excerpts, ⟦…⟧ around
-    what the proof rests on."""
+    with `limitations` why there is none, with `steps` the requests as a table, then each step the verdict rests
+    on as one HTTP excerpt of request and response, ⟦…⟧ around what the proof rests on."""
     poc = r.get("poc") or {}
-    application = [e for e in r.get("evidence") or []
-                   if e.get("kind") == "screenshot" and (e.get("presentation") == "application" or
-                       re.search(r"-(?:xss|access-control)-[0-9]+\.png$", e.get("path", ""))) and e.get("path")]
+    application = _application(r)
     out = []
     if application:
         out += ["", f"{'#' * level} Exploit in the application", ""]
@@ -466,29 +710,34 @@ def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True) -> list[str]:
             out += [f"![Application screenshot {ev['path']}]({ev['path']})", ""]
             if ev.get("explanation"):      # model text: fenced, so it stays text (VER-035)
                 out += [_fenced(f"Test agent's explanation: {ev['explanation']}", "text"), ""]
-    limitations = [o for o in r.get("observations") or []
-                   if o.startswith("Application screenshot unavailable:")]
-    out += ["", *(_sentence(o) for o in dict.fromkeys(limitations))] if limitations else []
+    elif limitations:
+        unavailable = [o for o in r.get("observations") or [] if o.startswith("Application screenshot unavailable:")]
+        out += ["", *(_sentence(o) for o in dict.fromkeys(unavailable))] if unavailable else []
     if not poc.get("steps") or not (steps or poc.get("shown")):
         return out
     out += ["", f"{'#' * level} Proof of concept", ""]
     if steps:
-        # The lines carry URLs the model chose: inside a fence they stay text, whatever they contain.
-        out += [_fenced("\n".join(_step_line(s) + (" (shown below)" if s.get("decisive") else "")
-                                  for s in poc["steps"]), "text"), ""]
-    har = f"All requests and responses: {_inline(poc['file'])}." if poc.get("file") else ""
-    if any("request_excerpt" in s for s in poc.get("shown") or []):
-        har = f"⟦…⟧ marks what the proof rests on. {har}".rstrip()
-    out += [har] if har else []
+        out += [*_step_table(r), ""]
+    note = "⟦…⟧ marks what the proof rests on. " if any("request_excerpt" in s for s in poc.get("shown") or []) else ""
+    if poc.get("file"):
+        note += f"All requests and responses: {_code(poc['file'])}."
+    out += [note.strip()] if note.strip() else []
+    parsed = {s["step"]: s for s in _steps(r)}
     for shown in poc.get("shown") or []:
+        s = parsed.get(shown["step"]) or {}
+        title = f"**Step {_inline(shown['step'], 8)}**"
+        if s.get("method"):
+            title += (f" · {_code(s['method'] + ' ' + s['path'])} as {_inline(s['role'], 60)} → "
+                      f"{_inline(s['answer'], 80)}")
         facts = shown.get("facts") or []
+        out += ["", title]
         if facts:
             out += ["", _fenced("\n".join(facts), "text")]
-        browser = any(str(f).startswith("opened in the browser:") for f in facts)
-        request = ("the page's first request; the part after # stays in the browser" if browser else "request")
-        out += ["", f"Step {shown['step']}, {request}:", "",
-                _fenced(shown.get("request_excerpt", shown["request"]).rstrip()), "", "Response:", "",
-                _fenced(shown.get("response_excerpt", shown["response"]).rstrip())]
+        if any(str(f).startswith("opened in the browser:") for f in facts):
+            out += ["", "The page's first request below; the part after # stays in the browser."]
+        request = shown.get("request_excerpt", shown["request"]).rstrip()
+        response = shown.get("response_excerpt", shown["response"]).rstrip()
+        out += ["", _fenced(f"{request}\n\n{response}")]
     return out
 
 

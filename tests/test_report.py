@@ -12,6 +12,7 @@ import yaml
 from appsec_verifier.limits import Limits
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.verify import build_annotations, run_verification, write_reports
+from appsec_verifier.verify import report as report_module
 from appsec_verifier.verify.report import annotate_assessment, to_markdown
 
 SCOPE = {"base_url": "https://app.example.com", "hosts": ["app.example.com"], "ports": [443],
@@ -285,40 +286,114 @@ def _report():
     return to_markdown(_report_doc(), assessment)
 
 
-def test_the_overview_links_every_finding_and_marks_confirmed_results_and_changed_ratings():
+def test_the_summary_links_tested_findings_with_colour_rating_and_what_the_test_showed():
     md = _report()
-    overview = md.split("## Overview", 1)[1].split("## Tested findings", 1)[0]
-    assert "| [T-037](#t-037) Stored XSS | **confirmed** | **High → Critical** |" in overview
-    assert "| [T-038](#t-038) " in overview and "| not tested | High |" in overview
-    assert "Ratings changed: [T-037](#t-037)" in overview
-    assert md.index("## Overview") < md.index('<a id="t-037"></a>\n### T-037') < md.index("## Not tested")
+    summary = md.split("## Summary", 1)[1].split("## Tested findings", 1)[0]
+    assert summary.splitlines()[2] == "🟥 **1 confirmed** · ⬜ 1 not tested · 2 of 2 findings selected"
+    assert ("| 🟥 **Confirmed** | [T-037](#t-037) · Stored XSS | **🟠 High → 🔴 Critical** | "
+            "The injected script ran in the browser. |") in summary
+    assert "Ratings changed after verification: [T-037](#t-037)" in summary
+    assert md.index("## Summary") < md.index('<a id="t-037"></a>\n### 🟥 T-037') < md.index("## Appendix")
 
 
-def test_a_tested_entry_leads_with_its_verdict_rating_and_deviation():
-    entry = _report().split("### T-037", 1)[1].split("## Not tested", 1)[0]
-    assert entry.split("\n")[2].startswith("**Confirmed** · rating **High → Critical** · confidence high")
-    assert "- Proof checked by the code: script executed in the browser." in entry
-    assert f"- {DEVIATION}" in entry and "- Rating changed: " in entry
+def test_a_tested_entry_leads_with_its_card_what_the_test_showed_and_deviation():
+    entry = _report().split("### 🟥 T-037", 1)[1].split("## Appendix", 1)[0]
+    assert "| 🟥 **Confirmed**, high confidence | **🟠 High → 🔴 Critical** | CWE-79 · XSS |" in entry
+    assert "**What the test showed:** The injected script ran in the browser." in entry
+    assert f"- **Deviation:** {DEVIATION.removeprefix('Deviation: ')}" in entry and "- **Rating changed:** " in entry
     assert "The agent's account" not in entry and "q reaches innerHTML" not in entry    # in the appendix
-    assert "[details](#details-t-037)" in entry
+    assert "Cross-run key `about.ts|CWE-79`" in entry and "[test details](#details-t-037)" in entry
+    assert "In the assessment report" not in entry                                    # no Analyzer report given
 
 
-def test_findings_not_tested_say_why_and_keep_their_text_in_one_cell():
-    rows = [line for line in _report().split("## Not tested", 1)[1].splitlines() if "T-038" in line]
-    assert rows == ['| <a id="t-038"></a>T-038 Path \\| traversal &lt;b&gt;x&lt;/b&gt; | no marker_file in the scope |']
+def test_findings_not_tested_say_what_the_run_lacked_and_keep_their_text_in_one_cell():
+    rows = [line for line in _report().split("### Not tested", 1)[1].splitlines() if "T-038" in line]
+    assert rows == ['| <a id="t-038"></a>T-038 · Path \\| traversal &lt;b&gt;x&lt;/b&gt; | 🟠 High | '
+                    'needs a marker file on the target: marker_file in a scope file |']
 
 
-def test_the_appendix_holds_plan_explanation_and_observations_as_fenced_text():
+@pytest.mark.parametrize(("rationale", "said"), [
+    ("not tested: no supported proof method for CWE-922", "no test method for CWE-922"),
+    ("not tested: no literal-input contract for this finding in injection_inputs",
+     "needs the input to inject into: injection_inputs in a scope file"),
+    ("not tested: no GET request to read with, and no write request that changes the record",
+     "needs a request that reads or changes the record; the finding names none"),
+    ("not tested: the run was interrupted", "the run was interrupted"),                     # no wording: as recorded
+])
+def test_a_reason_not_to_test_is_said_as_what_the_run_lacked(rationale, said):
+    assert report_module._not_tested(rationale) == said
+
+
+def test_the_appendix_is_collapsed_and_holds_plan_explanation_and_observations_as_fenced_text():
     appendix = _report().split("## Appendix: test details", 1)[1]
-    assert '<a id="details-t-037"></a>' in appendix and "q reaches innerHTML" in appendix
+    assert '<a id="details-t-037"></a>\n<details>\n<summary>T-037: test plan' in appendix
+    assert "q reaches innerHTML" in appendix and appendix.rstrip().endswith("</details>")
     assert "````text\nThe agent's account\n```\n# not a heading\n````" in appendix   # model text cannot escape
 
 
 def test_without_the_assessment_the_report_still_lists_every_finding():
     md = to_markdown(_report_doc())
-    assert "| [T-037](#t-037) Stored XSS | **confirmed** | – |" in md and "No rating changed" not in md
+    assert "| 🟥 **Confirmed** | [T-037](#t-037) · Stored XSS | – |" in md and "no rating changed" not in md
+    assert "<a id=\"t-038\"></a>T-038" in md
 
 
-def test_write_reports_shows_the_rating_from_the_assessment(tmp_path):
-    paths = write_reports(_report_doc(), tmp_path, {"threats": [_analyzer_threat()]})
-    assert "**High → Critical**" in paths["md"].read_text()
+def test_write_reports_shows_the_rating_and_links_the_analyzer_s_report_next_to_the_assessment(tmp_path):
+    source = tmp_path / "in" / "security-assessment.yaml"
+    source.parent.mkdir()
+    doc = _report_doc()
+    doc["meta"]["source_assessment"] = str(source)
+    paths = write_reports(doc, tmp_path / "out", {"threats": [_analyzer_threat()]})
+    md = paths["md"].read_text()
+    assert "**🟠 High → 🔴 Critical**" in md and "In the assessment report" not in md      # no report next to it
+    (source.parent / "security-assessment.md").write_text("<a id=\"t-037\"></a><a id=\"f-037\"></a>\n")
+    md = write_reports(doc, tmp_path / "out", {"threats": [_analyzer_threat()]})["md"].read_text()
+    assert "[F-037](../in/security-assessment.md#t-037)" in md
+    assert "[the Analyzer's report](../in/security-assessment.md)" in md
+    assert "[T-038]" not in md.split("### Not tested", 1)[1].split("## Tested", 1)[0]  # an untested row is its entry
+
+
+def test_a_symlinked_analyzer_report_is_not_linked(tmp_path):
+    source = tmp_path / "security-assessment.yaml"
+    (tmp_path / "elsewhere.md").write_text("x")
+    (tmp_path / "security-assessment.md").symlink_to(tmp_path / "elsewhere.md")
+    doc = _report_doc()
+    doc["meta"]["source_assessment"] = str(source)
+    assert report_module._analyzer_report(doc, tmp_path / "out") is None
+
+
+def _steps_doc(scope: str, lines: list[tuple[int, str]], **proof) -> dict:
+    return {"verdict": "confirmed", "class": "access-control",
+            "proof": {"checked": True, "kind": "access-control", "scope": scope, **proof},
+            "poc": {"steps": [{"step": n, "line": f"http_request {line}", "decisive": True} for n, line in lines]}}
+
+
+@pytest.mark.parametrize(("result", "said"), [
+    (_steps_doc("cited requests only, on a resource u-a created and another account wrote to", [
+        (3, "POST https://app.example.com/api/Products as u-a → 201, 9 bytes"),
+        (6, "PUT https://app.example.com/api/Products/5 as u-b → 200, 9 bytes"),
+        (7, "GET https://app.example.com/api/Products/5 as u-a → 200, 9 bytes")], marker="m1", second_marker="m2"),
+     "u-b changed a record that u-a created (`PUT /api/Products/5`, step 6); u-a's next read showed u-b's marker "
+     "(step 7)."),
+    (_steps_doc("cited requests only, on a resource u-a created", [
+        (2, "POST https://app.example.com/api/Notes as u-a → 201, 9 bytes"),
+        (3, "GET https://app.example.com/api/Notes/9 as anonymous → 401, 9 bytes"),
+        (4, "GET https://app.example.com/api/Notes/9 as u-b → 200, 9 bytes")], marker="m1"),
+     "u-b read the record that u-a created, with its marker (`GET /api/Notes/9`, step 4); without a login the "
+     "marker did not show (step 3)."),
+    (_steps_doc("cited requests only; the same answer as for admin-1 does not show that the function is meant", [
+        (2, "GET https://app.example.com/rest/users as admin-1 → 200, 9 bytes"),
+        (3, "GET https://app.example.com/rest/users as u-a → 200, 9 bytes"),
+        (4, "GET https://app.example.com/rest/users as anonymous → 401, 9 bytes")]),
+     "u-a got the same answer as admin-1 (`GET /rest/users`, steps 2 and 3); without a login: 401 (step 4)."),
+])
+def test_what_an_access_control_proof_showed_is_built_from_its_checked_steps(result, said):
+    assert report_module._shown(result) == said
+    assert "(" not in report_module._shown(result, detail=False)                # the summary: no requests, no steps
+
+
+def test_an_unchecked_or_unconfirmed_result_shows_nothing_and_a_one_account_test_says_what_is_missing():
+    doc = _steps_doc("x", [(1, "GET https://app.example.com/a/1 as u-a → 200, 9 bytes")])
+    assert report_module._shown({**doc, "proof": {**doc["proof"], "checked": False}}) is None
+    tested = {**doc, "verdict": "inconclusive", "proof": None}
+    assert report_module._shown(tested) is None
+    assert report_module._why_not(tested) == "only u-a sent requests; the comparison with another account is missing"

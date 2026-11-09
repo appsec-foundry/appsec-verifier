@@ -542,8 +542,10 @@ def test_report_shows_the_proof_of_concept_as_raw_http_that_target_content_canno
     assert "#### Proof of concept" in md and "evidence/T-001-poc.har" in md
     assert "Authorization: ⟦[identity customer-a]⟧" in md and TA not in md
     assert "identity ▸" not in md                       # the image's labels stay out of the recorded text
-    assert "`````http\nHTTP/1.1 200 OK" in md          # a fence longer than the body's four backticks
-    assert "review before sharing" in md.split("## Overview")[0]
+    # Request and response in one fence longer than the body's four backticks.
+    block = md.split("`````http\n", 1)[1].split("\n`````", 1)[0]
+    assert "HTTP/1.1 200 OK" in block and block.index("HTTP/1.1") < block.index("HTTP/1.1 200 OK")
+    assert "review before sharing" in md.split("## Summary")[0]
 
 
 _NOTES = json.dumps({"data": [{"id": i, "role": "customer", "note": "n" * 40} for i in range(30)]})

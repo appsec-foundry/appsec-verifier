@@ -120,7 +120,8 @@ def test_the_section_shows_verdict_rating_rationale_and_proof():
     assert "**Verdict:** confirmed (high) · tested 2026-11-08 07:48 UTC by AppSec Verifier 0.9" in first
     assert "likelihood Medium → High, severity High → Critical; impact unchanged" in first
     assert "###### Proof of concept" in first
-    assert "````http\nHTTP/1.1 200 OK\n\n```<b>x</b>\n````" in first        # target content stays fenced
+    # Request and response share one fence, longer than the target's backticks, so its content stays fenced.
+    assert "````http\nGET /about?q=x HTTP/1.1\n\nHTTP/1.1 200 OK\n\n```<b>x</b>\n````" in first
     assert "![Application screenshot evidence/T-001-xss-1.png](evidence/T-001-xss-1.png)" in first
     assert "> the marker ran\n> ## not a section" in first                     # the model's words stay quoted
     assert "\n## not a section" not in first

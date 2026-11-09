@@ -79,6 +79,7 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 | `export`, `schemas/analyzer-annotations.schema.yaml` (VER-021) | no reader yet |
 | `verify/report.py` `annotate_assessment`, `schemas/annotated-assessment.schema.yaml` (VER-027) | `threats[]` and the root of `schemas/threat-model.output.schema.yaml` must keep accepting additional fields; `threats[].verification` is the Analyzer's |
 | `verify/annotated_report.py` (VER-038) | one `<a id="t-…"></a>` line per finding from `scripts/renderers/compose_threat_model.py`, the `## Changelog` table from `templates/fragments/changelog-table.md.j2` |
+| `verify/report.py` severity colours and the link to a finding in the Analyzer's report (VER-020) | `BADGES` in `scripts/renderers/compact_tables.py`, `display_id` in `scripts/_severity_rollup.py` (T-NNN shown as F-NNN), the `<a id="t-…"></a>` anchor per finding |
 | `verify/rating.py` (VER-039) | the levels of `threats[].likelihood`, `impact`, `risk` and `effective_severity` |
 
 ## Safety invariants (do not weaken)
