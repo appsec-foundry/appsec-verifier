@@ -106,6 +106,18 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
             if h.get("tool") == "http_request" and h.get("result", {}).get("callback_hit") is True
         ]
         return _checked(_ssrf(ctx, result, history), history, hits)
+    if cls == "path-traversal" and any(
+        r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", [])
+    ):
+        proof = getattr(ctx, "archive_proof", None)
+        selected = [n for n in cited or [] if type(n) is int and 1 <= n <= len(history)
+                    and history[n - 1].get("tool") == "archive_probe"
+                    and history[n - 1].get("result") == proof]
+        if not proof or not proof.get("escaped_marker") or not selected:
+            return _downgrade(result, "archive traversal needs a fresh escaped-marker readback after its upload")
+        result = _checked(result, history, selected, ctx)
+        result.proof["archive"] = proof
+        return result
     check, minimum = {
         "access-control": (None, 2),
         "injection": (None, 2),
@@ -167,7 +179,7 @@ def _checked(result, history, cited, ctx=None):
         {
             h.get("args", {}).get("role") or "anonymous"
             for h in history
-            if h.get("tool") in ("http_request", "browser_check")
+            if h.get("tool") in ("http_request", "browser_check", "archive_probe")
         }
     )
     return result
@@ -177,7 +189,8 @@ def _negative(ctx, history, result, cited):
     answered = [
         h
         for h in history
-        if h.get("tool") in ("http_request", "browser_check") and type(h.get("result", {}).get("status")) is int
+        if h.get("tool") in ("http_request", "browser_check", "archive_probe")
+        and type(h.get("result", {}).get("status")) is int
     ]
     if not answered:
         return ProbeResult(

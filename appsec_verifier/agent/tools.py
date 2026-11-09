@@ -458,6 +458,7 @@ class AgentTools:
 
     def call(self, name: str, args: dict) -> dict:
         tool = {
+            "archive_probe": self.archive_probe,
             "http_request": self.http_request,
             "read_source": self.read_source,
             "browser_check": self.browser_check,
@@ -468,6 +469,11 @@ class AgentTools:
         if tool is None:
             raise ToolError(f"unknown tool {name!r}; available: http_request, read_source, browser_check")
         return _hide(tool(**args), self._marker_content)  # the model never sees the marker file's content
+
+    def archive_probe(self, *, check_id: str, role: str | None = None) -> dict:
+        from .archive_probe import run
+
+        return run(self, check_id, role)
 
     def _check_steering(self, params, body) -> None:
         """Path-traversal and SSRF probes aim only at the marker file and the callback listener (VER-012)."""
@@ -578,14 +584,21 @@ class AgentTools:
         params: dict | None = None,
         json: dict | None = None,
         form: dict | None = None,
+        path_inputs: dict | None = None,
     ) -> dict:
         m = (method or "GET").upper()
+        original_path = path
+        if path_inputs is not None:
+            self._check_steering(None, path_inputs)
+            from .path_inputs import bind_path_input
+
+            path = bind_path_input(self.ctx, getattr(self, "_experiment", {}), path, path_inputs)
         if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
             experiment = getattr(self, "_experiment", {})
-            supplied = {"params": params, "json": json, "form": form}
+            supplied = {"params": params, "json": json, "form": form, "path": path_inputs}
             selected = supplied.get(experiment.get("input_location")) or {}
             if (
-                path != experiment.get("path")
+                original_path != experiment.get("path")
                 or urlsplit(path).query
                 or urlsplit(path).fragment
                 or m != experiment.get("method", "GET")

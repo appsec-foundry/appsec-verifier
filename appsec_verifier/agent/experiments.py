@@ -234,9 +234,14 @@ def experiment_groups(history, cited):
                               f"{plan.get('method', 'GET')} {plan['path']}")
         # A query in the path counts as params, as the controller sends it; the rest of the path stays fixed.
         path, _, query = (args.get("path") or "").partition("?")
-        sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers")}
+        sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers", "path_inputs")}
         sent["params"].update(parse_qsl(query, keep_blank_values=True))
-        if plan.get("input_location") == "path":
+        if plan.get("input_location") == "path" and args.get("path_inputs"):
+            if path != plan["path"]:
+                return plan, {}, "path input requests must retain the exact declared template"
+            value = sent["path_inputs"].pop(plan.get("input_name"), None)
+            signatures.add(token([args.get("role"), path, sent]))
+        elif plan.get("input_location") == "path":
             value, path_signature = _path_input_value(plan["path"], path, plan.get("input_name") or "")
             signatures.add(token([args.get("role"), path_signature, sent]))
         else:
@@ -337,7 +342,8 @@ def access_observations(ctx, history, cited):
             or type(res.get("status")) is not int
             or args.get("path") != resource["path"]
             or (args.get("method") or "GET").upper() != resource.get("method", "GET")
-            or any((args.get(k) or {}) != resource.get(k, {}) for k in ("params", "json", "form", "headers"))
+            or any((args.get(k) or {}) != resource.get(k, {})
+                   for k in ("params", "json", "form", "headers", "path_inputs"))
         ):
             return [], resource, "every citation must request the declared resource with the same inputs"
         response = getattr(ctx, "responses", {}).get(n, {})

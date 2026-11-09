@@ -150,7 +150,11 @@ optional hardening.
   code-evaluation, template and XPath confirmation requires fresh computed
   arithmetic results.
 
+- **VER-044: Verify injection through path inputs.** Operators can verify injection in an evidenced path parameter using repeatable, harmless controls and a stable response-field contrast; scope and input encoding remain enforced.
+
 - **VER-012: Prove traversal, redirect, and SSRF with harmless markers.** Path traversal is confirmed by reading a pre-placed, non-sensitive marker file; open redirect by landing on an operator-controlled benign URL; SSRF by a request arriving at a callback the Verifier itself listens on, bound to the host and port the scope declares or, for a target on a loopback address without one, to a free loopback port, where a hit confirms the finding because the application fetched an internal address. The Verifier does not read system files, follow redirects to arbitrary hosts, or reach internal or metadata addresses to demonstrate impact. The callback destination is the only place those two probe classes are steered toward.
+
+- **VER-045: Verify archive-upload traversal.** Operators can verify an evidenced archive-upload traversal using a bounded, marked test archive and an explicitly designated test location; confirmation requires proof of the marker escaping the intended extraction directory, with state-change authorization and a recorded cleanup outcome.
 
 - **VER-013: State each verdict and its confidence.** Every tested finding gets
   one verdict — confirmed, not reproducible, blocked by a control, or

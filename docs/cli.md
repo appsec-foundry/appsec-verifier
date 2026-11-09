@@ -216,7 +216,9 @@ A `confirmed` verdict must name the steps that prove it in `proof_steps`, with s
 
 Roles with the same name and the same session never count as two accounts. For the preparation request the Verifier can add for these proofs, see [Runtime candidates and test preparation](#runtime-candidates-and-test-preparation).
 
-**Injection (CWE-89, 943, 78, 94, 95, 1336, 643, 90).** The Verifier generates the controls itself. The agent chooses the input to treat as literal data from a request the finding names (a query parameter, JSON field or path segment of a read request, or a body field of a write in intrusive mode); a scope entry in [`injection_inputs`](#scope-file--scopeyaml-authorisation-ver-001) pins it instead, and takes precedence. The pin separates injection from an intended calculator, template editor or query language; fresh observations must still prove evaluation. The agent declares the hypothesis, the one input to change and the observation before collecting evidence. A working baseline, a true condition and a false condition are each repeated at least twice, with all other inputs and the identity fixed. The selected JSON field must be stable, reproduce the nonempty baseline for the true condition and differ for the false one. A timing experiment never confirms injection, however clear the delay; it can only support a negative verdict, when all responses are identical successful answers within 0.5 seconds of each other. Reflected input, status changes, generic errors and ordinary search differences never confirm injection either, and citing one request several times does not count as a repetition. `run_experiment` collects the read-only controls twice, within the request, time and step limits. It never repeats a write automatically; in intrusive mode (`--allow-intrusive`) the agent sends each control itself with `http_request`, so a write-only injection finding is tested only there. The scope file may also forbid writes with `allow_state_change: false`. Declare a GET input only if that endpoint implements the same operation. Per mechanism:
+**Archive-upload traversal (CWE-22).** An `archive_checks` entry declares the finding, evidenced POST upload route, multipart field, isolated test extraction directory and read URL for a file in its parent directory. The operator must ensure that URL maps to the parent directory, outside the extraction directory, and that both are disposable test locations. The `archive_probe` action first requires a 404 or 410 at the generated marker URL, then uploads one ZIP containing only `../<marker>.txt` or `../<marker>.md`, matching the declared read URL, with a fresh harmless value, and reads the declared URL. Only an exact fresh value after a successful upload confirms escape. A successful upload alone proves nothing. Intrusive mode and scope permission for state change are required; privileged accounts cannot upload. One upload is attempted per finding, including when the response is lost; it is never retried automatically. A declared cleanup endpoint receives one POST with the marker filename, followed by a read checking absence. Otherwise cleanup is `manual-required`; failed or interrupted cleanup is recorded too. No DELETE is sent. The fixed requests count against the run's request and time limits. Other archive formats, deeper paths, arbitrary content and automatic filesystem discovery are unsupported.
+
+**Injection (CWE-89, 943, 78, 94, 95, 1336, 643, 90).** The Verifier generates the controls itself. The agent chooses the input to treat as literal data from a request the finding names (a query parameter, JSON field or path segment of a read request, or a body field of a write in intrusive mode); a scope entry in [`injection_inputs`](#scope-file--scopeyaml-authorisation-ver-001) pins it instead, and takes precedence. The pin separates injection from an intended calculator, template editor or query language; fresh observations must still prove evaluation. The agent declares the hypothesis, the one input to change and the observation before collecting evidence. A working baseline, a true condition and a false condition are each repeated at least twice, with all other inputs and the identity fixed. The selected JSON field must be stable, reproduce the nonempty baseline for the true condition and differ for the false one. A timing experiment never confirms injection, however clear the delay; it can only support a negative verdict, when all responses are identical successful answers within 0.5 seconds of each other. Reflected input, status changes, generic errors and ordinary search differences never confirm injection either, and citing one request several times does not count as a repetition. `run_experiment` collects the read-only controls twice, within the request, time and step limits. It never repeats a write automatically; in intrusive mode (`--allow-intrusive`) the agent sends each control itself with `http_request`, so a write-only injection finding is tested only there. The scope file may also forbid writes with `allow_state_change: false`. Declare a GET input only if that endpoint implements the same operation. A path input can also retain its whole-segment template and send the value as `path_inputs: {id: "value"}`; the tool encodes it and the scope guard checks the resulting URL. This explicit input API supports one placeholder, without a query or fragment in the template. NoSQL operator controls still require JSON input. Per mechanism:
 
 | Mechanism | Plan | Controls |
 | --- | --- | --- |
@@ -224,7 +226,6 @@ Roles with the same name and the same session never count as two accounts. For t
 | NoSQL (CWE-943) | `operator_challenge: nosql` with `input_location: json` | a literal baseline lookup against fresh equality and membership operators, ten recorded requests |
 | LDAP (CWE-90) | `predicate_template` with one `{{predicate}}` placeholder and an evidenced `predicate_attribute` | complementary filters that repeat the baseline for true predicates and suppress it for false ones, ten recorded requests |
 | Command, code evaluation, template, XPath (CWE-78, 94, 95, 1336, 643) | `expression_template` with one `{{expression}}` placeholder | fresh arithmetic expressions whose products and sums are returned as the selected JSON value |
-| Command, template, XPath (CWE-78, 1336, 643) | `expression_template` with one `{{expression}}` placeholder | fresh products and sums that must appear in a selected JSON field |
 
 Command templates are limited to a plain baseline followed by `; printf '%s' "$(({{expression}}))"`; other commands and extra inputs are refused.
 
@@ -404,6 +405,7 @@ Without a scope file, `--url` alone is the scope for that run: the URL's scheme,
 | `callback` | Listener for SSRF proofs; `expect_rejected: true` states that the target must not fetch it (see [SSRF](#proof-per-class-ver-009-to-ver-013)). |
 | `marker_file` | Path and token of the marker file for path-traversal proofs. |
 | `test_resources` | Known harmless resources for access-control checks, each bound to a finding, a concrete request, allowed and denied roles, and an expected response marker. |
+| `archive_checks` | Operator-declared disposable archive test locations and optional cleanup endpoints, per finding (VER-045). |
 | `injection_inputs` | Inputs that must treat their value as literal data, per finding; needed for injection proofs. |
 | `session_checks` | Session cookies to check, each with a harmless GET that issues it. |
 
@@ -452,6 +454,23 @@ Anything outside the scope, whether target, login host or proxy, is refused and 
 Addresses are checked when the connection is made (VER-018). Each host name is resolved once, every address it resolves to is checked, and the connection goes to a checked address, so a DNS answer that changes later cannot redirect a request. Public addresses are allowed. Loopback, private and other non-public addresses need `networks`, unless the host is written as that address or as `localhost`. Link-local addresses (including cloud metadata at 169.254.169.254), other known metadata addresses, multicast, unspecified and reserved addresses are never contacted. If any address of a host is refused, the request is refused. Through a proxy only the proxy's address is checked; hosts in `proxy.no_proxy` are checked as without a proxy.
 
 The `window` is checked before every request and every planning step. Once it has closed, the current finding ends `inconclusive` with `limits_hit: window`, no further request is sent, and the run exits with 3.
+
+#### Archive test location
+
+Use only a disposable test area for which you have write authorization. This example assumes `/archive-test/{marker}.txt` serves the parent of `/srv/test-area/extract`, and the cleanup endpoint removes only the named test marker. Without such a mapping the HTTP read cannot establish where a file was written, so leave this finding unresolved.
+
+```yaml
+archive_checks:
+  - id: zip-traversal
+    finding_id: T-027
+    upload_path: /file-upload
+    field: file
+    extraction_directory: /srv/test-area/extract
+    read_path: /archive-test/{marker}.txt
+    cleanup_path: /archive-test/cleanup/{marker}
+```
+
+The cleanup endpoint receives JSON such as `{"marker": "vrf….txt"}`. The report records `removed` only after a successful cleanup response and a 404 or 410 at the read URL. Otherwise use the reported marker to reconcile and remove any test file before another run.
 
 ### Identities file — `identities.yaml` (sessions, VER-016/028/040)
 
