@@ -83,8 +83,8 @@ against the recorded excerpts. State concrete presentation problems and refer on
 The code_checked_proof and browser_observations are recorded checker output, not model assertions.
 For XSS, an executed marker in its verified context is the proof; a root HTTP document does not
 show a URL fragment or the execution. Do not require a fresh baseline, source inspection or other
-new tests to review that presentation. Application screenshots are primary for UI findings; HTTP
-excerpts are always supplemental proof and primary for API-only findings.
+new tests to review that presentation. Available application screenshots lead the visual explanation
+of a visible effect; the code-checked technical evidence determines the verdict in every class.
 The attached images are the application screenshots listed with sent_to_model true, in the order of
 their image_index. For each, judge whether a reader sees the exploit or its effect clearly: the marked
 element or value visible and not covered, enough application context, and the caption and the test
@@ -92,7 +92,9 @@ agent's explanation consistent with what is visible. Report an image problem wit
 Screenshots listed with sent_to_model false were not shown to you: never judge their pixels, and
 dimensions or extracted panel text are not a visual inspection.
 Review the current presentation as an explicit clarification of the original rationale, not as a
-claim to have changed old records. An honest explanation of an unavailable screenshot is acceptable.
+claim to have changed old records. A missing screenshot with a stated reason is not by itself a
+presentation issue, including API-only findings, disabled captures, masking limits and unavailable
+browsers. Labelled credential masking is acceptable when the decisive observation remains visible.
 For inconclusive results explain missing evidence honestly; never demand new tests or invent proof.
 Return clear with no issues only if the supplied presentation is understandable. An understandable
 inconclusive result can be clear. Otherwise return needs-attention with actionable issues.

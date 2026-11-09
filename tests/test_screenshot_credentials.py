@@ -1,4 +1,4 @@
-"""Credential-bearing screenshots are omitted before persistence; other evidence remains (VER-016/022/035)."""
+"""Mask or omit credentials before capture; preserve technical proof (VER-016/022/035)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ from types import SimpleNamespace
 import pytest
 
 from appsec_verifier.tools.browser import ProofBrowser
+from appsec_verifier.tools.browser_mask import mask_credentials
 from appsec_verifier.verify import poc
 from appsec_verifier.verify.probes import ProbeResult
+from appsec_verifier.verify.report import _poc_markdown
 
 SECRET = "fixture-token-1234"
 URL = "https://app.example.test/page"
@@ -30,6 +32,8 @@ def capture(tmp_path, monkeypatch):
     browser.private_text = lambda text: SECRET in text or "marker-file-value" in text
     marked = {"marks": 1, "hidden": [], "crop": None, "carrier": "<img>", "text": "ordinary page"}
     monkeypatch.setattr(browser, "_mark", lambda *a, **k: marked)
+    # DOM masking is exercised against Chrome in test_browser_live; these cases check the persistence gate.
+    monkeypatch.setattr("appsec_verifier.tools.browser.mask_credentials", lambda *a, **k: (False, None))
     calls = []
 
     def screenshot(**kwargs):
@@ -39,6 +43,8 @@ def capture(tmp_path, monkeypatch):
         return b"fake-png"
 
     page = SimpleNamespace(screenshot=screenshot)
+    monkeypatch.setattr("appsec_verifier.tools.browser.capture_masked",
+                        lambda page, *a, **k: (screenshot(), marked["text"]))
 
     def framed(**kwargs):
         kwargs["path"].write_bytes(b"framed-fake-png")
@@ -52,16 +58,12 @@ def save(browser, page, url=URL):
     return browser._save(page, "T-1", url, 200, [("alert", "".join(MARKER))], MARKER, None)
 
 
-@pytest.mark.parametrize("location", ["page", "url", "caption", "missing-text", "no-check", "failed-check"])
+@pytest.mark.parametrize("location", ["page", "missing-text", "no-check", "failed-check"])
 def test_xss_keeps_execution_record_but_never_captures_unsafe_image(capture, location):
     browser, marked, page, calls = capture
     url = URL
     if location == "page":
         marked["text"] += SECRET
-    elif location == "url":
-        url += "?token=" + SECRET
-    elif location == "caption":
-        marked["carrier"] = SECRET
     elif location == "missing-text":
         marked["text"] = None
     elif location == "no-check":
@@ -75,6 +77,43 @@ def test_xss_keeps_execution_record_but_never_captures_unsafe_image(capture, loc
     record = next(browser._dir.glob("*.json")).read_text()
     assert SECRET not in record
     assert json.loads(record)["executed_via"] == ["alert"]
+
+
+def test_captions_are_masked_before_rendering_and_marked_in_evidence(capture, monkeypatch):
+    browser, marked, page, calls = capture
+    marked["carrier"] = '<img title="' + SECRET + '">'
+    frames = []
+
+    def framed(**kwargs):
+        frames.append(kwargs["body"])
+        kwargs["path"].write_bytes(b"fake-png")
+        return kwargs["path"], None
+
+    monkeypatch.setattr(browser, "_shoot_recorded", framed)
+    entries = save(browser, page, URL + "?token=" + SECRET)
+    assert calls and len(frames) == 1
+    assert SECRET not in frames[0] and "[redacted]" in frames[0]
+    assert "Known credentials masked" in frames[0]
+    image = next(e for e in entries if e["kind"] == "screenshot")
+    assert image["credential_masked"] and image["redacted"] and image["reviewable"]
+
+
+def test_failed_framing_does_not_save_an_unlabelled_fallback(capture, monkeypatch):
+    browser, _, page, _ = capture
+    monkeypatch.setattr(browser, "_shoot_recorded", lambda **k: (None, None))
+    [event] = save(browser, page)
+    assert "labelled" in event["screenshot_omitted"]
+    assert not list(browser._dir.glob("*.png"))
+
+
+@pytest.mark.parametrize("case", ["missing-redactor", "freeze-failed", "protected-value"])
+def test_masking_failures_never_allow_capture(case):
+    page = SimpleNamespace()  # cannot freeze; no screenshot is attempted
+    masked, error = mask_credentials(page, None if case == "missing-redactor" else redact,
+                                     protected=[SECRET] if case == "protected-value" else [])
+    assert not masked and error and SECRET not in error
+    if case == "protected-value":
+        assert "decisive observation" in error
 
 
 @pytest.mark.parametrize("text, reviewable", [("ordinary page", True), ("marker-file-value", False)])
@@ -129,3 +168,19 @@ def test_omission_reason_is_kept_without_changing_the_verdict():
     poc._attach(SimpleNamespace(sessions=None), history, [], result, [1])
     assert result.verdict == "confirmed" and result.proof == {"executed": True}
     assert result.observations == ["Application screenshot unavailable: " + reason + "."]
+
+
+def test_report_labels_source_identity_steps_and_masking():
+    image = {"kind": "screenshot", "presentation": "application", "path": "evidence/proof.png",
+             "source": "live-browser", "role": "owner", "credential_masked": True, "executed_via": ["alert"]}
+    result = ProbeResult("confirmed", evidence=[image])
+    history = [{"tool": "browser_check", "result": {"executed": True, "evidence": [dict(image)]}}]
+    poc._attach(SimpleNamespace(sessions=None), history, [], result, [1])
+    text = "\n".join(_poc_markdown({"evidence": result.evidence}))
+    assert "Application browser capture" in text and "View as owner" in text
+    assert "recorded step 1" in text and "Dialog drawn from the recorded execution event" in text
+    assert "Known credentials masked with [redacted]" in text
+    assert result.verdict == "confirmed"
+    image.update(source="recorded-html", executed_via=[])
+    text = "\n".join(_poc_markdown({"evidence": [image]}))
+    assert "Rendered from a recorded response" in text and "Dialog drawn" not in text

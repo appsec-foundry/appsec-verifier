@@ -242,25 +242,142 @@ def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browse
     assert event["marked_elements"] == 1 and event["hidden_for_screenshot"] == ["div#welcome"]
 
 
-@pytest.mark.parametrize("extra, reviewable", [("", True), (" s3cret-token", False)])
-def test_a_screenshot_is_saved_only_without_a_secret_in_its_page_text(browser, extra, reviewable):
-    """VER-016/022/042: credentials exclude the image from disk as well as the model."""
+@pytest.mark.parametrize("extra", ["", " s3cret-token"])
+def test_a_screenshot_masks_credentials_before_capture_and_review(browser, monkeypatch, extra):
+    """VER-016/022/035/042: the actual page pixels are captured only after text masking."""
     import json
+
+    from appsec_verifier.tools.browser_mask import capture_masked
 
     b, _, tmp = browser
     b.redact = lambda value: json.loads(json.dumps(value).replace("s3cret-token", "[redacted]"))
     b.private_text = lambda text: "s3cret-token" in text
+    captured_text = []
+    def capture(page, *args, **kwargs):
+        if page.url.startswith(BASE):
+            captured_text.append(page.locator("body").inner_text())
+        return capture_masked(page, *args, **kwargs)
+
+    monkeypatch.setattr("appsec_verifier.tools.browser.capture_masked", capture)
     payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>{extra}"
     result = _check(b, "/reflect?q=" + quote(payload, safe=""))
     shots = [e for e in result["evidence"] if e["kind"] == "screenshot"]
-    assert bool(shots) is reviewable
-    assert bool(list((tmp / "evidence").glob("*.png"))) is reviewable
+    assert len(shots) == 1 and list((tmp / "evidence").glob("*.png"))
     assert result["executed"] is True
-    if shots:
-        assert shots[0]["reviewable"] is True
+    assert shots[0]["reviewable"] is True and shots[0]["credential_masked"] is bool(extra)
+    assert captured_text and all("s3cret-token" not in text for text in captured_text)
+    assert ("[redacted]" in captured_text[0]) is bool(extra)
+    assert all("s3cret-token" not in p.read_text() for p in (tmp / "evidence").glob("*.json"))
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_username_and_fields_are_masked_or_omitted_if_the_page_restores_them(browser, monkeypatch, restore):
+    from appsec_verifier.auth.sessions import SessionManager
+    from appsec_verifier.tools.browser_mask import capture_masked
+
+    b, _, _ = browser
+    username, password = "fixture-user@example.invalid", "fixture-password-1234"
+    sessions = SessionManager([{"role": "customer-a", "method": "form", "auth": {
+        "username_env": "FIXTURE_USER", "password_env": "FIXTURE_PASSWORD"}}], None,
+        env={"FIXTURE_USER": username, "FIXTURE_PASSWORD": password})
+    b.redact = sessions.redact
+    b.private_text = lambda text: sessions.redact(text) != text
+    seen = []
+
+    def capture(page, *args, **kwargs):
+        if page.url.startswith(BASE):
+            # Give timers time to undo the masking if scripts were left running.
+            page.wait_for_timeout(100)
+            seen.append(page.evaluate("() => ({text: document.body.innerText, "
+                                      "fields: [...document.querySelectorAll('input')].map(e => "
+                                      "[e.value, e.placeholder]), restored: window.restored})"))
+        return capture_masked(page, *args, **kwargs)
+
+    monkeypatch.setattr("appsec_verifier.tools.browser.capture_masked", capture)
+    payload = (f'<span id=account>{username}</span><input value="{password}">'
+               f'<input placeholder="{username}"><img src=x onerror=alert({marker_expression(MARKER)})>'
+               '<script>window.restored = 0; const account = document.querySelector("#account");'
+               'setInterval(() => {if (account.textContent.includes("[redacted]")) window.restored++; '
+               f'account.textContent = "{username}";'
+               '}, 20);</script>')
+    if not restore:
+        payload = payload.split("<script>")[0] + "<script>window.restored = 0;</script>"
+    result = _check(b, "/reflect?q=" + quote(payload, safe=""))
+    if restore and result.get("screenshot_error"):
+        assert result["executed"] and not any(e["kind"] == "screenshot" for e in result["evidence"])
+        return
+    assert not result.get("screenshot_error")
+    [shot] = [e for e in result["evidence"] if e["kind"] == "screenshot"]
+    assert result["executed"] and shot["credential_masked"] and shot["reviewable"]
+    assert len(seen) == 1 and seen[0]["restored"] == 0
+    assert username not in str(seen) and password not in str(seen)
+    assert seen[0]["fields"] == [["[redacted]", ""], ["", "[redacted]"]]
+
+
+@pytest.mark.parametrize("case", ["generated", "restored", "after-highlighting"])
+def test_unmaskable_text_omits_image_but_keeps_xss_proof(browser, monkeypatch, case):
+    import json
+
+    from appsec_verifier.tools.browser_mask import capture_masked
+
+    b, _, tmp = browser
+    secret = "fixture-generated-token"
+    def checked_capture(page, *args, **kwargs):
+        assert secret not in page.locator("body").inner_text()
+        return capture_masked(page, *args, **kwargs)
+    monkeypatch.setattr("appsec_verifier.tools.browser.capture_masked", checked_capture)
+    b.redact = lambda value: json.loads(json.dumps(value).replace(secret, "[redacted]"))
+    payload = (f'<style>#account::before {{content:"{secret}"}}</style><span id=account></span>'
+               f'<img id=payload src=x onerror=alert({marker_expression(MARKER)})>')
+    if case != "generated":
+        observed = "payload" if case == "after-highlighting" else "account"
+        payload = (f'<span id=account>{secret}</span>'
+                   f'<img id=payload src=x onerror=alert({marker_expression(MARKER)})>'
+                   '<script>new MutationObserver(() => {'
+                   f'document.querySelector("#account").textContent = "{secret}";'
+                   f'}}).observe(document.querySelector("#{observed}"), '
+                   '{attributes:true, characterData:true, childList:true, subtree:true});</script>')
+    result = _check(b, "/reflect?q=" + quote(payload, safe=""))
+    assert result["executed"]
+    if case == "generated":
+        assert result["screenshot_error"]
+        assert [e["kind"] for e in result["evidence"]] == ["browser-event"]
+        assert not list((tmp / "evidence").glob("*.png"))
     else:
-        assert "credential" in result["screenshot_error"]
-        assert all("s3cret-token" not in p.read_text() for p in (tmp / "evidence").glob("*.json"))
+        assert not result.get("screenshot_error")
+        assert any(e["kind"] == "screenshot" and e["credential_masked"] for e in result["evidence"])
+
+
+@pytest.mark.parametrize("sensitive_proof", [False, True])
+def test_application_masking_preserves_visible_effect_and_read_only_capture(tmp_path, sensitive_proof):
+    import json
+
+    secret, effect = "fixture-user@example.invalid", "verifier-test-effect"
+    calls = []
+
+    def target(method, url, headers, **kwargs):
+        calls.append((method, url))
+        return SimpleNamespace(status_code=200, headers={"content-type": "text/html"},
+                               content=f"<html><body><p>{secret}</p><h1>{effect}</h1></body></html>".encode())
+
+    b = ProofBrowser(GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target), tmp_path / "evidence")
+    b.redact = lambda value: json.loads(json.dumps(value).replace(secret, "[redacted]"))
+    b.private_text = lambda text: secret in text
+    try:
+        result = b.check(BASE + "/record", identity_headers={}, target_base=BASE, marker=MARKER,
+                         finding_id="T-UI", wait_ms=100, safe=True, role="owner",
+                         observation={"resource_url": BASE + "/record", "step": 4,
+                                      "values": [secret if sensitive_proof else effect]})
+    finally:
+        b.close()
+    assert calls == [("GET", BASE + "/record")]
+    assert result["_exchanges"] and bool(result["evidence"]) is not sensitive_proof
+    if sensitive_proof:
+        assert "decisive observation" in result["error"] and not list((tmp_path / "evidence").glob("*.png"))
+    else:
+        [image] = result["evidence"]
+        assert image["credential_masked"] and image["reviewable"]
+        assert image["proof_step"] == 4 and image["role"] == "owner"
 
 
 def test_floating_layers_are_hidden_for_the_screenshot_while_the_header_stays(browser):
@@ -364,6 +481,7 @@ def test_application_capture_requires_visible_effect_and_matching_resource(tmp_p
 
     http = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target)
     b = ProofBrowser(http, tmp_path / "evidence")
+    b.redact = lambda value: value
     path = "/api/proof" if case == "api-only" else "/ui"
     url = "https://outside.example/ui" if case == "blocked" else BASE + path
     try:
@@ -401,6 +519,7 @@ def test_application_capture_accepts_another_request_that_shows_the_marked_recor
         return SimpleNamespace(status_code=200, headers={"content-type": mime}, content=body.encode())
 
     b = ProofBrowser(GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target), tmp_path / "evidence")
+    b.redact = lambda value: value
     try:
         result = b.check(BASE + path, identity_headers={}, target_base=BASE, marker=MARKER, finding_id="T-UI",
                          name="T-UI-product-update", wait_ms=300, safe=True, role="customer-a",

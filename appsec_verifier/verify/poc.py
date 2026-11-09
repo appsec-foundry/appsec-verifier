@@ -394,9 +394,11 @@ def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
                    f"captured {shown_time(e['startedDateTime'])} · rendered from the recorded response, "
                    "no new request"]
         try:
-            out += browser.render(url=e["request"]["url"], status=e["response"]["status"],
-                                  content_type=e["response"]["content"]["mimeType"], html=text,
-                                  name=evidence_name(ctx.plan), caption=caption, highlight=values)
+            images = browser.render(url=e["request"]["url"], status=e["response"]["status"],
+                                    content_type=e["response"]["content"]["mimeType"], html=text,
+                                    name=evidence_name(ctx.plan), caption=caption, highlight=values)
+            out += [{**image, "finding_id": ctx.plan.id, "proof_step": step["step"],
+                     "role": e.get("_role") or "anonymous"} for image in images]
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             continue
     return out
@@ -872,7 +874,13 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
 
 
 def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
-    for step in history:
+    for number, step in enumerate(history, 1):
+        if step.get("tool") == "browser_check":
+            paths = {e.get("path") for e in step.get("result", {}).get("evidence", [])
+                     if e.get("kind") == "screenshot"}
+            for image in result.evidence or []:
+                if image.get("kind") == "screenshot" and image.get("path") in paths:
+                    image["proof_step"] = number
         if step.get("tool") == "browser_check" and (problem := step.get("result", {}).get("screenshot_error")):
             note = "Application screenshot unavailable: " + problem + "."
             if note not in result.observations:

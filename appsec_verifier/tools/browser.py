@@ -81,6 +81,7 @@ from ..verify.poc import (
     capture,
     shown_time,
 )
+from .browser_mask import capture_masked, mask_credentials
 from .http import ScopeViolation, same_origin
 
 _SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
@@ -471,7 +472,7 @@ def xss_frame(*, url: str, image: bytes, crop: dict | None, dialog: tuple[str, s
     around the outlined payload from `image` (a 1280 by 900 viewport screenshot; `crop` gives its rows), and a
     caption below the page, so nothing covers it. All text is escaped; the page loads nothing but its image."""
     top, height = (crop["top"], crop["height"]) if crop else (0, 900)
-    parts = [f'<div class=bar><div class=url>{escape(unquote(url)[:2000])}</div></div>']
+    parts = [f'<div class=bar><div class=url>{escape(url[:2000])}</div></div>']
     if dialog:
         kind, origin, message = dialog
         buttons = '<span class="btn alt">Cancel</span><span class=btn>OK</span>' if kind != "alert" \
@@ -704,25 +705,41 @@ class ProofBrowser:
                     for e in exchanges
                 )
                 if values and application_page and same_origin(page.url, url):
+                    masked, problem = mask_credentials(page, self.redact, protected=values,
+                                                       timeout=EVIDENCE_TIMEOUT_MS)
+                    if problem:
+                        result["error"] = problem
+                        return result
+                    lines = [f"AppSec Verifier · {finding_id} · observed exploit effect",
+                             f"{url[:300]} as {role or 'anonymous'}",
+                             f"captured {shown_time(datetime.now(timezone.utc).isoformat())}",
+                             f"recorded proof step {observation['step']} · read-only browser observation"]
+                    clean_lines = self.redact(lines)
+                    masked = masked or clean_lines != lines
+                    if masked:
+                        clean_lines.append("Known credentials masked with [redacted] for this screenshot.")
                     marked = self._mark(
-                        page, [f"AppSec Verifier · {finding_id} · observed exploit effect",
-                               f"{url[:300]} as {role or 'anonymous'}",
-                               f"captured {shown_time(datetime.now(timezone.utc).isoformat())}",
-                               f"recorded proof step {observation['step']} · read-only browser observation"],
+                        page, clean_lines,
                         values=values, label="values from the confirmed proof")
                     if marked and marked["marks"]:
-                        problem = self._capture_error(marked, url)
+                        problem = self._capture_error(marked, *clean_lines)
                         if problem:
                             result["error"] = problem
                             return result
                         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                         shot = self._dir / f"{self._stem(name or finding_id, 'application')}.png"
-                        page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
+                        try:
+                            image, marked["text"] = capture_masked(page, self.redact, timeout=EVIDENCE_TIMEOUT_MS)
+                        except Exception:  # noqa: BLE001 - preserve HTTP proof when the final capture is unsafe
+                            result["error"] = "the application screenshot could not be safely captured"
+                            return result
+                        shot.write_bytes(image)
                         result["evidence"] = [self._entry(
-                            shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
+                            shot, "screenshot", redacted=masked, credential_masked=masked, note=SCREENSHOT_NOTE,
                             presentation="application", proof_step=observation["step"],
+                            finding_id=self.redact(finding_id), role=self.redact(role or "anonymous"),
                             marked=marked["marks"], source="live-browser",
-                            reviewable=self._reviewable(marked, url))]
+                            reviewable=self._reviewable(marked, *clean_lines))]
                         result.pop("error", None)
             elif executed:
                 result["evidence"] = self._save(page, finding_id, url, status, events, marker, role,
@@ -792,10 +809,12 @@ class ProofBrowser:
         via = sorted({k for k, m in events if m == joined})
         data = {"finding_id": finding_id, "url": url, "status": status, "marker": joined, "executed_via": via,
                 "captured": captured, "execution_contexts": execution_contexts or [], "attempt": attempt}
-        shot, reviewable = None, False
+        shot, reviewable, masked = None, False, False
         if "xss" in self.screenshots:
+            masked, problem = mask_credentials(page, self.redact, protected=(*marker, joined),
+                                               timeout=EVIDENCE_TIMEOUT_MS)
             # The page gets only the outline; address bar, dialog and caption are drawn around it (xss_frame).
-            marked = self._mark(page, None, part=marker[0])
+            marked = self._mark(page, None, part=marker[0]) if not problem else None
             data["marked_elements"] = marked["marks"] if marked else None
             if marked and marked["hidden"]:
                 data["hidden_for_screenshot"] = marked["hidden"]
@@ -811,18 +830,30 @@ class ProofBrowser:
             if marked and marked["hidden"]:
                 lines.append("Hidden for the screenshot: " + ", ".join(marked["hidden"]))
             image = None
-            if problem := self._capture_error(marked, url, origin, joined, *lines):
+            # Decode before redaction: the displayed URL must not decode a masked value back into a secret.
+            display = [unquote(url), origin, *lines]
+            try:
+                clean = self.redact(display) if self.redact is not None else display
+                masked = masked or clean != display
+                display_url, display_origin, *lines = clean
+                if masked:
+                    lines.append("Known credentials masked with [redacted] for this screenshot.")
+            except Exception:  # noqa: BLE001 - no capture without checked captions
+                problem = "the screenshot captions could not be checked for credentials"
+            problem = problem or self._capture_error(marked, display_url, display_origin, joined, *lines)
+            if problem:
                 data["screenshot_omitted"] = problem
             else:
                 try:
-                    image = page.screenshot(timeout=EVIDENCE_TIMEOUT_MS)
-                except PlaywrightError:  # a page that does not answer: the event record still proves execution
-                    pass
+                    image, marked["text"] = capture_masked(page, self.redact, timeout=EVIDENCE_TIMEOUT_MS)
+                except Exception:  # noqa: BLE001 - retain execution when the final capture cannot be checked
+                    data["screenshot_omitted"] = "the application screenshot could not be safely captured"
             if image is not None:
-                frame = xss_frame(url=url, image=image, crop=marked["crop"] if marked else None,
-                                  dialog=(via[0], urlsplit(origin).netloc or origin, joined) if via else None,
+                frame = xss_frame(url=display_url, image=image, crop=marked["crop"] if marked else None,
+                                  dialog=(via[0], urlsplit(display_origin).netloc or display_origin, joined)
+                                  if via else None,
                                   lines=lines)
-                reviewable = self._reviewable(marked, url, *lines)
+                reviewable = self._reviewable(marked, display_url, display_origin, joined, *lines)
                 shot = self._dir / f"{stem}.png"
                 try:
                     framed, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200,
@@ -831,8 +862,10 @@ class ProofBrowser:
                                                      width=1280, path=shot)
                 except PlaywrightError:
                     framed = None
-                if framed is None:       # the outlined page alone still shows the exploit
-                    shot.write_bytes(image)
+                if framed is None:
+                    shot = None
+                    data["screenshot_omitted"] = "the browser could not render the labelled screenshot"
+            data["credential_masked"] = masked
         if self.redact is not None:
             try:
                 data = self.redact(data)
@@ -843,14 +876,17 @@ class ProofBrowser:
         entries = [self._entry(record, "browser-event", **(
             {"screenshot_omitted": data["screenshot_omitted"]} if data.get("screenshot_omitted") else {}))]
         if shot is not None:
-            entries.append(self._entry(shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
+            entries.append(self._entry(shot, "screenshot", redacted=masked, credential_masked=masked,
+                                       note=SCREENSHOT_NOTE, finding_id=data.get("finding_id"),
+                                       role=self.redact(role or "anonymous"),
                                        presentation="application", source="live-browser",
                                        executed_via=via, marked=data.get("marked_elements"),
                                        reviewable=reviewable))
         return entries
 
     def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, name: str,
-                        kind: str, mark=None, full_page: bool = False, width: int = 1200, path: Path | None = None):
+                        kind: str, mark=None, full_page: bool = False, width: int = 1200, path: Path | None = None,
+                        check_credentials: bool = False):
         """Screenshot of a page answered from a record: the navigation gets `body`, every other request is
         aborted and scripts are off, so nothing reaches the target. Saved at `path`, by default the next name
         `_stem` gives `name` and `kind`. Returns (path, marks) or (None, None)."""
@@ -878,12 +914,22 @@ class ProofBrowser:
             except PlaywrightError:
                 return None, None
             marked = mark(page) if mark is not None else None
+            if check_credentials and (not marked or marked.get("error")):
+                return None, marked
             if full_page:              # as tall as the content: a short page leaves no empty window below it
                 page.set_viewport_size({"width": page.viewport_size["width"], "height": 1})
             self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             shot = path or self._dir / f"{self._stem(name, kind)}.png"
-            page.screenshot(path=str(shot), full_page=full_page,
-                            **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
+            if check_credentials:
+                try:
+                    image, marked["text"] = capture_masked(page, self.redact, timeout=EVIDENCE_TIMEOUT_MS,
+                                                          clip=marked.get("clip"))
+                except Exception:  # noqa: BLE001 - keep the recorded HTTP proof without an unchecked image
+                    return None, marked
+                shot.write_bytes(image)
+            else:
+                page.screenshot(path=str(shot), full_page=full_page,
+                                **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
             return shot, marked
         finally:
             _quietly(context.close)
@@ -892,15 +938,27 @@ class ProofBrowser:
                caption: list[str], highlight=()) -> list[dict]:
         """A screenshot of a recorded HTML response for an access-control proof (VER-035)."""
         none = "(no highlighted value was found in the page)" if highlight else None
+
+        def mark(page):
+            masked, problem = mask_credentials(page, self.redact, protected=highlight, timeout=EVIDENCE_TIMEOUT_MS)
+            if problem:
+                return {"error": problem}
+            lines = self.redact(caption)
+            masked = masked or lines != caption
+            if masked:
+                lines.append("Known credentials masked with [redacted] for this screenshot.")
+            marked = self._mark(page, lines, values=highlight, none=none, label="value named in the verdict")
+            return {**marked, "credential_masked": masked} if marked else None
+
         shot, marked = self._guarded(
             self._shoot_recorded,
             url=url, status=status, content_type=content_type, body=html, name=name,
-            kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none,
-                                                                label="value named in the verdict"))
+            kind="access-control", mark=mark, check_credentials=True)
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
+                                                    credential_masked=marked.get("credential_masked", False),
                                                     presentation="application", source="recorded-html",
                                                     marked=marked["marks"] if marked else None,
-                                                    reviewable=self._reviewable(marked, url))]
+                                                    reviewable=self._reviewable(marked))]
 
     def render_exchanges(self, *, html: str, name: str, marked: int, kind: str = "http") -> list[dict]:
         """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035), or with

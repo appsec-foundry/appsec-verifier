@@ -718,6 +718,21 @@ def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: b
         out += ["", f"{'#' * level} Exploit in the application", ""]
         for ev in application:
             out += [f"![Application screenshot {ev['path']}]({ev['path']})", ""]
+            details = []
+            if ev.get("source") == "recorded-html":
+                details.append("Rendered from a recorded response; scripts and external resources disabled.")
+            elif ev.get("source") == "live-browser":
+                details.append("Application browser capture; highlights and captions added by the Verifier.")
+            if ev.get("proof_step"):
+                details.append(f"Illustrates recorded step {ev['proof_step']}.")
+            if ev.get("role"):
+                details.append(f"View as {ev['role']}.")
+            if ev.get("executed_via"):
+                details.append("Dialog drawn from the recorded execution event.")
+            if ev.get("credential_masked"):
+                details.append("Known credentials masked with [redacted].")
+            if details:
+                out += [_fenced(" ".join(details), "text"), ""]
             if ev.get("explanation"):      # model text: fenced, so it stays text (VER-035)
                 out += [_fenced(f"Test agent's explanation: {ev['explanation']}", "text"), ""]
     elif limitations:

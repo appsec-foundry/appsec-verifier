@@ -126,7 +126,7 @@ Before it contacts the target, `verify` shows the test plan: the findings it wil
 - `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on, as raw HTTP with the decisive part of the response, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
-- `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data; check them before sharing. Application screenshots with detected credentials are omitted; other screenshots remain available.
+- `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots; an image is omitted with a reason if masking cannot preserve the decisive observation or its text cannot be checked.
 
 After testing a finding, a second model call reviews whether the evidence is clear and can send it back to the test agent for correction. The review does not change verdicts and uses at most five extra model calls per finding, within the run's limits ([details](docs/cli.md#evidence-presentation-review)).
 
