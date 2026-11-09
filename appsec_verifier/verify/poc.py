@@ -837,6 +837,12 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
     """
     from ..limits import LimitExceeded, execution_deadline
 
+    if getattr(ctx, "archive_attempt", None):
+        attempt = dict(ctx.archive_attempt)
+        result.proof = {**(result.proof or {}), "archive_attempt": attempt}
+        result.observations.append(
+            f"Archive test marker {attempt['marker']}; cleanup: {attempt['cleanup']}."
+        )
     remaining = ctx.budget.remaining_time()
     window = ctx.guard.remaining_time()
     kind = "window" if window is not None and window <= remaining else "time"

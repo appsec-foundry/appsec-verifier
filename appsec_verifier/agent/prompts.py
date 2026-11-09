@@ -82,6 +82,15 @@ def _tool_defs() -> list[dict]:
             },
         },
         {
+            "name": "archive_probe",
+            "description": "One operator-declared ZIP upload traversal check. Intrusive mode only. "
+            "Uses a bounded marker archive, absence baseline and escaped-marker readback; records cleanup outcome. "
+            "Never retries a write. Cite this action for archive traversal proof.",
+            "input_schema": {"type": "object", "required": ["check_id"], "properties": {
+                "check_id": {"type": "string", "maxLength": 80}, "role": {"type": "string", "maxLength": 80}
+            }},
+        },
+        {
             "name": "http_request",
             "description": "Send one HTTP request to the target as a test identity. "
             "Path is relative to the target base URL. Safe mode allows only GET/HEAD/OPTIONS; "
@@ -94,6 +103,11 @@ def _tool_defs() -> list[dict]:
                     "role": {"type": "string", "description": "identity role label, or omit for unauthenticated"},
                     "method": {"type": "string", "default": "GET"},
                     "path": {"type": "string"},
+                    "path_inputs": {
+                        "type": "object", "minProperties": 1, "maxProperties": 1,
+                        "additionalProperties": {"type": "string", "maxLength": 4000},
+                        "description": "One declared path input; retain the plan path template. Encoded by the tool.",
+                    },
                     "params": {
                         "type": "object",
                         "additionalProperties": {"type": ["string", "integer", "number", "boolean"]},
@@ -361,6 +375,13 @@ def _marker_hint(ctx) -> str:
             "validation requires, but keep that host). The host never resolves and the redirect is not followed. "
             "Cite in proof_steps the http_request answered 301/302/303/307/308 with that host in its location."
         )
+    if cls == "path-traversal" and any(
+        r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", [])
+    ):
+        checks = [r for r in ctx.scope["archive_checks"] if r["finding_id"] == ctx.plan.id]
+        return ("\nFor this archive-upload finding use archive_probe with the operator-declared check_id: "
+                + json.dumps(checks) + ". It checks absence, uploads once, observes the escaped marker and records "
+                "cleanup. A successful upload alone is not proof. Never retry an attempted upload.")
     if cls == "path-traversal":
         path = ((getattr(ctx, "scope", None) or {}).get("marker_file") or {}).get("path")
         if not path:

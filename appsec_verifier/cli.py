@@ -1449,7 +1449,10 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
                 ", and no write request that changes the record" if "owner" in methods else "")
     if plan.cls == "xss" and browser is None:
         return "browser", "no proof browser; XSS counts only when the payload executes"
-    if plan.cls == "path-traversal" and not (scope.get("marker_file") or {}).get("path"):
+    archive = [r for r in scope.get("archive_checks", []) if r["finding_id"] == plan.id]
+    if plan.cls == "path-traversal" and archive and (safe or scope.get("allow_state_change") is False):
+        return "intrusive", "archive upload proof needs state-change authorization and intrusive mode"
+    if plan.cls == "path-traversal" and not archive and not (scope.get("marker_file") or {}).get("path"):
         return "marker", "no marker_file in the scope"
     if plan.cls == "ssrf" and listener is None:
         return "callback", "no callback in the scope"

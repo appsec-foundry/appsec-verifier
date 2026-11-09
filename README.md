@@ -59,9 +59,9 @@ Explicit finding requests and resolved route references take precedence over sha
 | --- | --- | --- | --- |
 | Cross-site scripting | 79 | the proof browser | a marker script runs in the browser; reflected text does not count |
 | Access control | 639, 862, 863, 306, 200 | a test resource in the scope (`test_resources`) with its accounts; for 639, 862 and 863 alternatively two accounts and `--allow-intrusive`, or an `--account` and an `--admin-account` | the declared resource reaches an account that must not get it. Without one (confidence `medium`): another account reads a record the first one created with a random marker, or a normal account gets the admin's answer while a request without login is refused |
-| SQL, NoSQL and LDAP injection | 89, 943, 90 | the input declared as literal data in the scope (`injection_inputs`) | a JSON field in the response follows true and false conditions the Verifier generates, repeated with fresh controls; a delay alone never counts |
+| SQL, NoSQL and LDAP injection | 89, 943, 90 | a query, body or single path input declared as literal data in the scope (`injection_inputs`); NoSQL operators require JSON | a JSON field in the response follows true and false conditions the Verifier generates, repeated with fresh controls; a delay alone never counts |
 | Command, template and XPath injection | 78, 1336, 643 | `injection_inputs` | the target computes fresh harmless arithmetic to the expected results |
-| Path traversal | 22 | a marker file on the target, named in the scope (`marker_file`) | the response contains the marker file |
+| Path traversal | 22 | a declared marker file, or a disposable archive test location (`archive_checks`) with intrusive mode | the marker file is read, or a freshly uploaded ZIP marker is read outside the declared extraction directory |
 | Open redirect | 601 | nothing | the target redirects to a random host under `.invalid`; the redirect is not followed |
 | SSRF | 918 | a listener the target can reach: started by the Verifier for a `localhost` target, otherwise named in the scope (`callback`) | the target calls the listener |
 | Session cookie | 614, 1004, 1275 | the cookie named in the scope (`session_checks`) | the cookie repeatedly lacks Secure, HttpOnly, or SameSite Lax or Strict |

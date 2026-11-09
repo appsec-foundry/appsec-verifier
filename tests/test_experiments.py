@@ -267,44 +267,6 @@ def test_route_and_query_of_experiment_requests_fail_closed(change, reason):
     assert result.verdict == "inconclusive" and reason in result.rationale
 
 
-def test_path_segment_input_matches_controls_across_the_placeholder():
-    """VER-011 path input: controls differ only in the chosen placeholder segment; other segments and the body
-    stay fixed."""
-    from appsec_verifier.agent.experiments import _path_input_value
-
-    value, signature = _path_input_value("/rest/track-order/:id", "/rest/track-order/TR123", "id")
-    assert value == "TR123" and signature == "/rest/track-order/<input>"
-    # A second placeholder stays as its actual value, so changing it breaks the signature.
-    _, sig_a = _path_input_value("/x/:userId/orders/:id", "/x/u1/orders/A", "id")
-    _, sig_b = _path_input_value("/x/:userId/orders/:id", "/x/u2/orders/A", "id")
-    assert sig_a != sig_b
-
-    # End-to-end: plan with input_location=path, requests on /rest/track-order/<value>, no body.
-    def path_req(id_value, result="fixture-record", status=200):
-        body = json.dumps({"result": result})
-        return {
-            "tool": "http_request",
-            "args": {"path": f"/rest/track-order/{id_value}", "role": "alice"},
-            "result": {
-                "status": status,
-                "length": len(body),
-                "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
-                "elapsed_ms": 80,
-            },
-            "_body": body,
-        }
-
-    p = plan(path="/rest/track-order/:id", input_location="path", input_name="id",
-             baseline="TR123", positive="TR123' AND '1'='1", negative="TR123' AND '1'='2",
-             sql_template="TR123' AND {{predicate}} -- ",
-             positive_other="TR123' AND '2'='2", negative_other="TR123' AND '2'='3")
-    history = [p, *[path_req(p["args"][k], value) for _ in range(2)
-                    for k, value in [("baseline", "fixture-record"), ("positive", "fixture-record"),
-                                     ("negative", []), ("positive_other", "fixture-record"),
-                                     ("negative_other", [])]]]
-    assert check(history).verdict == "confirmed"
-
-
 def test_error_does_not_count_as_target_control():
     history = [plan("control"), req(), req("changed", status=500)]
     assert check(history, verdict="blocked-by-control").verdict == "inconclusive"

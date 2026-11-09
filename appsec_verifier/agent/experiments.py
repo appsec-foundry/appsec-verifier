@@ -4,37 +4,10 @@ from __future__ import annotations
 
 import json
 import secrets
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, unquote
 
 from ..planning import STRATEGY_SCHEMA
-from ..verification_context import _PLACEHOLDER, planned_route, record_segments, route_matches
-
-
-def _placeholder_name(segment: str) -> str | None:
-    """The name inside a route placeholder segment, or None if `segment` is not one.
-    Supports `:id`, `{id}` and `<id>`."""
-    if not _PLACEHOLDER.fullmatch(segment):
-        return None
-    return segment.strip(":{<>}")
-
-
-def _path_input_value(template: str, actual: str, input_name: str) -> tuple[str | None, str]:
-    """For a path-input experiment: the value of the placeholder `input_name` in `actual`, and a signature
-    string of `actual` where that one segment is masked. Non-input placeholder segments and literal segments
-    keep their actual values, so varying anything other than the chosen input shows up as a different signature."""
-    template_segments = urlsplit(template).path.split("/")
-    actual_segments = actual.split("/")
-    value: str | None = None
-    masked: list[str] = []
-    for i, segment in enumerate(template_segments):
-        name = _placeholder_name(segment)
-        taken = actual_segments[i] if i < len(actual_segments) else ""
-        if name == input_name:
-            value = unquote(taken)
-            masked.append("<input>")
-        else:
-            masked.append(taken)
-    return value, "/".join(masked)
+from ..verification_context import planned_route, record_segments, route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
@@ -234,11 +207,13 @@ def experiment_groups(history, cited):
                               f"{plan.get('method', 'GET')} {plan['path']}")
         # A query in the path counts as params, as the controller sends it; the rest of the path stays fixed.
         path, _, query = (args.get("path") or "").partition("?")
-        sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers")}
+        sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers", "path_inputs")}
         sent["params"].update(parse_qsl(query, keep_blank_values=True))
         if plan.get("input_location") == "path":
-            value, path_signature = _path_input_value(plan["path"], path, plan.get("input_name") or "")
-            signatures.add(token([args.get("role"), path_signature, sent]))
+            if path != plan["path"]:
+                return plan, {}, "path input requests must retain the exact declared template (VER-044)"
+            value = sent["path_inputs"].pop(plan.get("input_name"), None)
+            signatures.add(token([args.get("role"), path, sent]))
         else:
             values = sent[plan.get("input_location", "params")]
             value = values.pop(plan.get("input_name"), None)
@@ -337,7 +312,8 @@ def access_observations(ctx, history, cited):
             or type(res.get("status")) is not int
             or args.get("path") != resource["path"]
             or (args.get("method") or "GET").upper() != resource.get("method", "GET")
-            or any((args.get(k) or {}) != resource.get(k, {}) for k in ("params", "json", "form", "headers"))
+            or any((args.get(k) or {}) != resource.get(k, {})
+                   for k in ("params", "json", "form", "headers", "path_inputs"))
         ):
             return [], resource, "every citation must request the declared resource with the same inputs"
         response = getattr(ctx, "responses", {}).get(n, {})

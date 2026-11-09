@@ -271,3 +271,19 @@ properties:
           items: {type: string, minLength: 1}
         pointer: {type: string, pattern: '^/|^$', maxLength: 256, description: 'JSON Pointer, or empty for a literal text marker.'}
         value: {type: [string, number, boolean], minLength: 3, maxLength: 200}
+
+  archive_checks:
+    type: array
+    maxItems: 20
+    items:
+      type: object
+      additionalProperties: false
+      required: [id, finding_id, upload_path, field, extraction_directory, read_path]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 80}
+        finding_id: {type: string, minLength: 1, maxLength: 80}
+        upload_path: {type: string, minLength: 1, maxLength: 2000, pattern: '^/[^?#]*$'}
+        field: {type: string, pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$'}
+        extraction_directory: {type: string, minLength: 1, maxLength: 500}
+        read_path: {type: string, maxLength: 2000, pattern: '^/[^?#]*\{marker\}\.(txt|md)$'}
+        cleanup_path: {type: string, maxLength: 2000, pattern: '^/[^?#]*\{marker\}[^?#]*$'}

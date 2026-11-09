@@ -87,6 +87,7 @@ def test_tool_defs_expose_only_the_confined_tools():
     names = {t["name"] for t in _tool_defs()}
     assert names == {
         "http_request",
+        "archive_probe",         # bounded operator-declared archive check (VER-045)
         "read_source",
         "browser_check",
         "submit_verdict",

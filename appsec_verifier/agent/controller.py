@@ -143,13 +143,14 @@ class Controller:
         if name == "http_request" and self.plan:
             plan = self.plan
             if plan.get("kind") in ("boolean", "timing"):
-                supplied = {k: dict(args.get(k) or {}) for k in ("params", "json", "form")}
+                supplied = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "path_inputs")}
                 pairs = parse_qsl(parsed.query, keep_blank_values=True)
                 names = [k for k, _ in pairs] + list(supplied["params"])
                 if len(names) != len(set(names)):
                     raise ToolError("experiment requests cannot contain duplicate query inputs")
                 supplied["params"].update(pairs)
-                selected = supplied.pop(plan["input_location"], {})
+                location = "path_inputs" if plan["input_location"] == "path" else plan["input_location"]
+                selected = supplied.pop(location, {})
                 controls = [plan[k] for k in ("baseline", "positive", "negative", "positive_other", "negative_other")
                             if k in plan]
                 if (set(selected) != {plan["input_name"]} or any(supplied.values())
@@ -168,14 +169,15 @@ class Controller:
         for r in matching:
             if "inputs" not in r:
                 return
-            names = {"query": set(), "json": set(), "form": set()}
+            names = {"query": set(), "json": set(), "form": set(), "path": set()}
             for i in r["inputs"]:
                 if i["location"] in names:
                     names[i["location"]].add(i["name"])
             query = {k for k, _ in parse_qsl(urlsplit(path).query)} | set(args.get("params") or {})
             if name == "browser_check":
                 query |= {k for k, _ in parse_qsl(urlsplit(urlsplit(path).fragment).query)}
-            if query <= names["query"] and all(set(args.get(k) or {}) <= names[k] for k in ("json", "form")):
+            if (query <= names["query"] and all(set(args.get(k) or {}) <= names[k] for k in ("json", "form"))
+                    and set(args.get("path_inputs") or {}) <= names["path"]):
                 return
         raise ToolError("request inputs do not match the finding variant")
 

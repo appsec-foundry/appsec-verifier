@@ -268,11 +268,9 @@ class AgentTools:
         if plan.get("input_location") == "form" and plan.get("method", "GET") in SAFE_METHODS:
             raise ToolError("form experiments need a body-capable write method and intrusive authorization")
         if plan.get("input_location") == "path":
-            from .experiments import _placeholder_name
+            from .path_inputs import validate_path_input
 
-            segments = urlsplit(plan["path"]).path.split("/")
-            if not any(_placeholder_name(s) == plan.get("input_name") for s in segments):
-                raise ToolError("path-input experiments need a placeholder with the declared input_name in the path")
+            validate_path_input(plan["path"], plan.get("input_name") or "")
         if plan.get("variant"):
             variant = next((v for v in variants if v["id"] == plan["variant"]), None)
             if variant is None:
@@ -360,22 +358,14 @@ class AgentTools:
         if plan.get("method", "GET") not in SAFE_METHODS:
             raise ToolError("automatic repetitions are read-only; writes are never automatically repeated")
 
-        from urllib.parse import quote
-
-        def request_for(group: str) -> dict:
-            base = {"method": plan.get("method", "GET"), **({"role": role} if role else {})}
-            if plan.get("input_location") == "path":
-                from .experiments import _placeholder_name
-
-                template_segments = urlsplit(plan["path"]).path.split("/")
-                segments = [quote(str(plan[group]), safe="")
-                            if _placeholder_name(s) == plan["input_name"] else s
-                            for s in template_segments]
-                return {**base, "path": "/".join(segments)}
-            return {**base, "path": plan["path"], plan["input_location"]: {plan["input_name"]: plan[group]}}
-
+        location = "path_inputs" if plan.get("input_location") == "path" else plan["input_location"]
         return [
-            request_for(group)
+            {
+                "path": plan["path"],
+                "method": plan.get("method", "GET"),
+                **({"role": role} if role else {}),
+                location: {plan["input_name"]: str(plan[group]) if location == "path_inputs" else plan[group]},
+            }
             for _ in range(2)
             for group in ("baseline", "positive", "negative", "positive_other", "negative_other")
             if group in plan
@@ -458,6 +448,7 @@ class AgentTools:
 
     def call(self, name: str, args: dict) -> dict:
         tool = {
+            "archive_probe": self.archive_probe,
             "http_request": self.http_request,
             "read_source": self.read_source,
             "browser_check": self.browser_check,
@@ -468,6 +459,11 @@ class AgentTools:
         if tool is None:
             raise ToolError(f"unknown tool {name!r}; available: http_request, read_source, browser_check")
         return _hide(tool(**args), self._marker_content)  # the model never sees the marker file's content
+
+    def archive_probe(self, *, check_id: str, role: str | None = None) -> dict:
+        from .archive_probe import run
+
+        return run(self, check_id, role)
 
     def _check_steering(self, params, body) -> None:
         """Path-traversal and SSRF probes aim only at the marker file and the callback listener (VER-012)."""
@@ -578,14 +574,21 @@ class AgentTools:
         params: dict | None = None,
         json: dict | None = None,
         form: dict | None = None,
+        path_inputs: dict | None = None,
     ) -> dict:
         m = (method or "GET").upper()
+        original_path = path
+        if path_inputs is not None:
+            self._check_steering(None, path_inputs)
+            from .path_inputs import bind_path_input
+
+            path = bind_path_input(self.ctx, getattr(self, "_experiment", {}), path, path_inputs)
         if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
             experiment = getattr(self, "_experiment", {})
-            supplied = {"params": params, "json": json, "form": form}
+            supplied = {"params": params, "json": json, "form": form, "path": path_inputs}
             selected = supplied.get(experiment.get("input_location")) or {}
             if (
-                path != experiment.get("path")
+                original_path != experiment.get("path")
                 or urlsplit(path).query
                 or urlsplit(path).fragment
                 or m != experiment.get("method", "GET")
