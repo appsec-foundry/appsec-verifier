@@ -31,8 +31,9 @@ bodies only for documents, XHR and fetch.
 
 A post-proof observation can also capture an access-control effect on a known
 application route (VER-035), read-only under the decisive response's identity.
-It requires a successful read of that same resource and its selected value in
-visible page text; it never establishes or changes a verdict. Live captures
+It requires a successful read of that same resource, or of another response
+with a selected value that carries the finding's marker (`observed_values`),
+and the value in visible page text; it never establishes or changes a verdict. Live captures
 retain the application viewport. Requests remain guarded and are recorded.
 
 `render` screenshots a recorded HTML response for an access-control proof,
@@ -254,6 +255,25 @@ def answer(method: str, url: str, headers: dict, body: bytes | None, *, http, id
             out[name] = str(value)
     return Fulfil(int(getattr(resp, "status_code", 0) or 0), out, content,
                   capture(resp, method=method, url=url, headers=send, body=body))
+
+
+def observed_values(exchanges: list[dict], observation: dict, marker_part: str, url: str) -> list[str]:
+    """The selected values a read-only page observation may mark (VER-035). A visible value alone could be
+    unrelated page text, so the page must have read it during this navigation, under the observation's identity,
+    in a successful GET: every value when that was the cited resource; otherwise only the values that carry this
+    finding's marker and do not stand in the opened URL, e.g. when a list or a search shows the marked record.
+    Empty: no screenshot."""
+    values = list(observation["values"])[:3]
+
+    def read(e, value):
+        return (e.get("method") == "GET" and 200 <= e.get("status", 0) < 300
+                and value in e.get("content", b"").decode("utf-8", errors="replace"))
+
+    if any(e.get("url") == observation["resource_url"] and read(e, v) for e in exchanges for v in values):
+        return values
+    opened = (url, unquote(url))
+    return [v for v in values if marker_part and marker_part in v and not any(v in u for u in opened)
+            and any(read(e, v) for e in exchanges)]
 
 
 def _init_script() -> str:
@@ -661,23 +681,16 @@ class ProofBrowser:
             if error:
                 result["error"] = error
             if observation is not None:
-                # A visible value alone could be unrelated page text: also require the cited resource
-                # to have been read successfully during this navigation, under the same identity.
-                values = list(observation["values"])[:3]
-                resource_seen = any(
-                    e.get("method") == "GET" and e.get("url") == observation["resource_url"]
-                    and 200 <= e.get("status", 0) < 300
-                    and any(v in e.get("content", b"").decode("utf-8", errors="replace") for v in values)
-                    for e in exchanges
-                )
+                values = observed_values(exchanges, observation, marker[0], url)
                 result["evidence"] = []
-                result["error"] = "The browser did not read the cited resource and display its evidence values."
+                result["error"] = ("The browser read neither the cited resource nor another response with a "
+                                   "selected value that carries the finding's marker, or the page did not show it.")
                 application_page = any(
                     e.get("navigation") and any(k.lower() == "content-type" and "html" in v.lower()
                                                 for k, v in e.get("response_headers", []))
                     for e in exchanges
                 )
-                if resource_seen and application_page and same_origin(page.url, url):
+                if values and application_page and same_origin(page.url, url):
                     marked = self._mark(
                         page, [f"AppSec Verifier · {finding_id} · observed exploit effect",
                                f"{url[:300]} as {role or 'anonymous'}",

@@ -370,3 +370,33 @@ def test_application_capture_requires_visible_effect_and_matching_resource(tmp_p
         assert (tmp_path / shot["path"]).is_file()
     else:
         assert "error" in result
+
+
+@pytest.mark.parametrize("value, path, captured", [
+    (MARKER[0] + "e99d52fe", "/ui", True),                              # a list shows the marked record
+    ("verifier-test-effect", "/ui", False),                             # no marker: only the cited resource counts
+    (MARKER[0] + "e99d52fe", "/ui?q=" + MARKER[0] + "e99d52fe", False),  # the route itself carries the value
+])
+def test_application_capture_accepts_another_request_that_shows_the_marked_record(tmp_path, value, path, captured):
+    def target(method, url, headers, **kw):
+        if "/api/list" in url:
+            body, mime = '{"data":[{"description":"' + value + '"}]}', "application/json"
+        else:
+            body = ("<html><body><h1>Products</h1><div id=list></div><script>"
+                    "fetch('/api/list').then(r => r.json()).then(j => "
+                    "document.querySelector('#list').textContent = j.data[0].description);"
+                    "</script></body></html>")
+            mime = "text/html"
+        return SimpleNamespace(status_code=200, headers={"content-type": mime}, content=body.encode())
+
+    b = ProofBrowser(GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target), tmp_path / "evidence")
+    try:
+        result = b.check(BASE + path, identity_headers={}, target_base=BASE, marker=MARKER, finding_id="T-UI",
+                         name="T-UI-product-update", wait_ms=300, safe=True, role="customer-a",
+                         observation={"resource_url": BASE + "/api/Products/51", "step": 6, "values": [value]})
+    finally:
+        b.close()
+    assert bool(result["evidence"]) is captured
+    if captured:
+        assert result["evidence"][0]["path"] == "evidence/T-UI-product-update.png"
+        assert (tmp_path / result["evidence"][0]["path"]).is_file()

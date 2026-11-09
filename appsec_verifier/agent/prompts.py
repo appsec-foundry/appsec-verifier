@@ -179,8 +179,11 @@ def _tool_defs() -> list[dict]:
                         "the effect: the evidenced application route, a decisive successful GET proof step and up "
                         "to three exact values from its response to mark. The browser opens that route read-only "
                         "as role (one of the run's identities; by default the cited step's identity) and must "
-                        "read the same resource and display a value. Use the owner's read-back step for a "
-                        "confirmed write effect. Never guess a UI route or substitute an API endpoint. "
+                        "read the same resource and display a value; a page that loads the record through "
+                        "another request, such as a list or a search, also counts for a value that carries the "
+                        "finding's marker and does not stand in the route. Use the owner's read-back step for a "
+                        "confirmed write effect. Take the UI route from the assessment or the source; never guess "
+                        "one or substitute an API endpoint. "
                         "Omit for API-only findings. XSS already captures the page where its marker executed.",
                     },
                     "image_explanation": {"type": "string", "minLength": 10, "maxLength": 300},

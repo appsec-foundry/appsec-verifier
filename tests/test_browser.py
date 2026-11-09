@@ -594,3 +594,27 @@ def test_browser_check_names_its_files_after_the_finding_variant_and_title():
     ctx = _ctx(browser=browser)
     AgentTools(ctx).call("browser_check", {"path": "/s?q=x"})
     assert browser.calls[0]["name"] == evidence_name(ctx.plan) != browser.calls[0]["finding_id"]
+
+
+def _read(url, text, status=200, method="GET"):
+    return {"method": method, "url": url, "status": status, "content": text.encode()}
+
+
+@pytest.mark.parametrize("exchanges, values, url, shown", [
+    ([_read(BASE + "/api/Products/51", '{"d":"plain"}')], ["plain", "other"], BASE + "/ui",
+     ["plain", "other"]),                                                         # the cited resource: as before
+    ([_read(BASE + "/rest/search", '{"d":"vrfaa01"}')], ["vrfaa01", "plain"], BASE + "/ui",
+     ["vrfaa01"]),                                                                # another request: marked only
+    ([_read(BASE + "/rest/search", '{"d":"plain"}')], ["plain"], BASE + "/ui", []),  # no marker in the value
+    ([_read(BASE + "/rest/search", '{"d":"vrfaa01"}')], ["vrfaa01"], BASE + "/ui#/s?q=vrfaa01", []),   # in the URL
+    ([_read(BASE + "/rest/search", '{"d":"vrfaa01"}')], ["vrfaa01"], BASE + "/ui?q=%76rfaa01", []),    # encoded
+    ([_read(BASE + "/rest/search", '{"d":"vrfaa01"}', status=403)], ["vrfaa01"], BASE + "/ui", []),   # refused
+    ([_read(BASE + "/rest/search", '{"d":"vrfaa01"}', method="POST")], ["vrfaa01"], BASE + "/ui", []),
+    ([], ["vrfaa01"], BASE + "/ui", []),                                           # nothing read
+])
+def test_a_page_observation_marks_only_values_it_read(exchanges, values, url, shown):
+    from appsec_verifier.tools.browser import observed_values
+
+    observation = {"resource_url": BASE + "/api/Products/51", "step": 6, "values": values}
+    assert observed_values(exchanges, observation, "vrfaa", url) == shown
+    assert observed_values(exchanges, observation, "", url) == (shown if "plain" in shown else [])   # no marker

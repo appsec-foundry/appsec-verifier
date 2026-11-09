@@ -5,7 +5,9 @@ control, injection), the test agent picks that page, the test identity, up to
 three values to mark and one sentence that explains the image. Only one
 read-only observation is allowed. The values must come from a decisive
 successful GET response of the proof, and the browser must read that same
-resource and show one of them. The agent never supplies a script or a new
+resource, or another response with a value that carries the finding's marker
+(a list or search showing the marked record), and show it. The agent never
+supplies a script or a new
 proof. XSS keeps the page where its marker executed; the explanation is
 attached to whichever application screenshot leads the report.
 """
