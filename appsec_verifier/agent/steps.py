@@ -122,10 +122,13 @@ def _with_note(action: dict, note) -> dict:
 
 
 def _validated(name: str, args) -> dict:
-    """A verdict, a tool call, or an inconclusive verdict. A tool call whose arguments break its schema becomes
-    {"refused": name, "args", "error"}, without a "tool" key, so nothing takes it for a call: the loop runs
-    nothing and returns the error to the planner."""
+    """A verdict, a tool call, or an inconclusive verdict. A tool call whose arguments are not one JSON object or
+    break its schema becomes {"refused": name, "args", "error"} ("args" None for the former), without a "tool"
+    key, so nothing takes it for a call: the loop runs nothing and returns the error to the planner."""
     if not isinstance(args, dict):
+        if name != "submit_verdict":
+            return {"refused": name, "args": None,
+                    "error": f"invalid {name} arguments: args_json must be one JSON object without duplicate keys"}
         return inconclusive(f"agent sent {name} arguments that are not a JSON object")
     error = next(iter(sorted(_ARG_VALIDATORS[name].iter_errors(args), key=str)), None)
     if error is not None:

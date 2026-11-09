@@ -105,6 +105,10 @@ def test_check_action_refuses_a_bad_note_or_an_extra_key(action):
     _wire("http_request", path=7),                                                 # wrong type
     _wire("http_request"),                                                         # missing path
     _wire("plan_test", kind="access-control", hypothesis="h" * 12, path="/a/:id", strategy={}, method="DELETE"),
+    {"action": "http_request", "args_json": '{"path": "/a", "path": "/b"}'},       # duplicate key
+    {"action": "http_request", "args_json": "[1]"},                                # not an object
+    {"action": "plan_test", "args_json": '{"kind": "xss", "path": "/#/search?q=<img src=x>\\x"}'},  # no JSON
+    {"action": "plan_test", "args_json": {"kind": "xss"}},                         # an object, not JSON text
 ])
 def test_invalid_arguments_are_refused_without_a_tool_call(step):
     """Nothing runs, and no caller can take the refusal for a call: it has no "tool" key; the error goes back."""
@@ -125,8 +129,7 @@ def test_a_refused_call_cannot_be_turned_into_a_call():
 @pytest.mark.parametrize("step", [
     {"action": "shell", "args_json": "{}"},                                        # unknown action
     _wire("submit_verdict", verdict="owned", rationale="x"),                       # verdict not allowed
-    {"action": "http_request", "args_json": '{"path": "/a", "path": "/b"}'},       # duplicate key
-    {"action": "http_request", "args_json": "[1]"},                                # not an object
+    {"action": "submit_verdict", "args_json": '{"verdict": "confirmed",'},         # verdict not JSON
     {"action": "http_request", "args_json": "{", "extra": 1},                      # extra field
     {**_wire("http_request", path="/a"), "note": 7},                               # note not a string
     {**_wire("http_request", path="/a"), "note": "x", "extra": 1},                 # extra field beside a note

@@ -144,11 +144,12 @@ class AgentProbe:
             if "refused" in action:
                 # VER-017: refused and logged, nothing runs; counted like a failed action (VER-036)
                 controller.refuse()
-                call = {"tool": action["refused"], "args": action["args"],
+                args = action["args"] if isinstance(action["args"], dict) else {}   # None: not one JSON object
+                call = {"tool": action["refused"], "args": args,
                         **({"note": action["note"]} if action.get("note") else {})}
                 result = {"error": action["error"]}
                 _log(ctx, step, **call, result=result)
-                history.append({"tool": action["refused"], "args": action["args"], "result": result})
+                history.append({"tool": action["refused"], "args": args, "result": result})
                 continue
             if "verdict" in action:
                 if action != proposal:  # the step contract refused what the planner proposed (VER-017)

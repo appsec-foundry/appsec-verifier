@@ -257,6 +257,25 @@ def test_invalid_arguments_go_back_to_the_planner_which_can_correct_them(tmp_pat
     assert sent == ["GET"]  # the refused call never ran, the corrected one did
 
 
+def test_arguments_that_are_not_one_json_object_go_back_to_the_planner(tmp_path):
+    sent, seen = [], []
+
+    class Planner(ScriptedPlanner):
+        def next_step(self, ctx, history):
+            seen.append([(h.get("args"), h.get("result")) for h in history])
+            return super().next_step(ctx, history)
+
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: sent.append(m) or Resp())
+    planner = Planner([
+        {"tool": "http_request", "args": '{"role": "customer-a", "path": "/rest/basket/2",'},
+        {"tool": "http_request", "args": {"role": "customer-a", "path": "/rest/basket/2"}},
+    ])
+    AgentProbe("access-control", lambda: planner, max_steps=5).run(ctx)
+    args, result = seen[1][0]
+    assert args == {} and "must be one JSON object" in result["error"]
+    assert sent == ["GET"]  # nothing ran for the broken step, the corrected one did
+
+
 def test_three_refused_calls_stop_the_finding_before_another_model_call(tmp_path):
     calls = []
 
