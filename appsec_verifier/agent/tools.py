@@ -51,6 +51,7 @@ import httpx
 from jsonschema import Draft202012Validator
 
 from ..auth.sessions import AuthError
+from ..planning import evidence_name
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
 from ..verification_context import missing_capabilities, record_segments, route_matches
 from ..verify import poc
@@ -504,6 +505,7 @@ class AgentTools:
                 target_base=origin,
                 marker=self.ctx.marker,
                 finding_id=self.ctx.plan.id,
+                name=evidence_name(self.ctx.plan),
                 wait_ms=wait_ms,
                 safe=self.ctx.safe or self.ctx.read_only or bool(role and self._privileged(role)),
                 role=role,

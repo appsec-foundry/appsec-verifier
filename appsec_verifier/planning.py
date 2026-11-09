@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import replace
 from urllib.parse import urlsplit
 
@@ -193,3 +194,20 @@ def expand_variants(plans):
 def evidence_id(plan):
     digest = getattr(plan, "variant_digest", None)
     return plan.id + ("-" + digest[:16] if digest else "")
+
+
+_TITLE_LOCATION = re.compile(r"\s+[—–-]\s+[^\s—–]+:\d+\s*$")   # " — server.ts:369" as the Analyzer appends it
+
+
+def evidence_name(plan) -> str:
+    """The evidence id and the finding's title as file-name words, e.g.
+    `T-042-product-update-route-has-no-authorization-guard`: lowercase ASCII letters, digits and hyphens, at most
+    60 characters of title, without the location after the title. Nothing of the title can leave the evidence
+    directory or change the extension."""
+    title = _TITLE_LOCATION.sub("", (getattr(plan, "title", None) or "")[:300])   # bounded before the regex
+    ascii_title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    words = re.sub(r"[^a-z0-9]+", "-", ascii_title.lower()).strip("-")
+    if len(words) > 60:
+        cut = words[:61]
+        words = cut.rsplit("-", 1)[0] if "-" in cut else cut[:60]
+    return evidence_id(plan) + (f"-{words}" if words else "")

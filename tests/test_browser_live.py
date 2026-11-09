@@ -285,7 +285,7 @@ def test_render_draws_a_recorded_page_without_contacting_the_target(browser):
     b, target, tmp = browser
     html = ('<html><body><h1>Basket of bob@shop.test</h1><img src="/logo.png">'
             '<script src="https://shop.example.com/app.js"></script></body></html>')
-    [shot] = b.render(url=BASE + "/basket/2", status=200, content_type="text/html", html=html, finding_id="T-2",
+    [shot] = b.render(url=BASE + "/basket/2", status=200, content_type="text/html", html=html, name="T-2",
                       caption=["AppSec Verifier · T-2 · access control"], highlight=["bob@shop.test"])
     assert target.seen == []
     assert shot["marked"] == 1 and shot["note"] == SCREENSHOT_NOTE
@@ -309,10 +309,10 @@ def test_render_exchanges_draws_the_recorded_exchanges_without_contacting_the_ta
              (2, exchange("x%27%20OR%201%3D2--", '{"items":[]}'))]
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-3", cls="injection"), marker=("vrfa", "b"), scope={})
     page, marked = poc.exchange_document(ctx, [{}, {}], shown, "confirmed", "evidence/T-3-poc.har")
-    [shot] = b.render_exchanges(html=page, finding_id="T-3", marked=marked)
+    [shot] = b.render_exchanges(html=page, name="T-3-sql-injection", marked=marked)
     assert target.seen == [] and shot["marked"] == marked == 4 and shot["note"] == SCREENSHOT_NOTE
     path = tmp / shot["path"]
-    assert path.name == "T-3-exchange-1.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert path.name == "T-3-sql-injection-http-1.png" and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert int.from_bytes(path.read_bytes()[20:24], "big") < 720       # as tall as the content, not the window
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
@@ -326,7 +326,7 @@ def test_evidence_revision_panel_is_compact_and_sends_no_requests(browser):
                 "quotes": [{"step": 2, "part": "response", "text": 'HTTP/1.1 200 OK\n{"marker":"vrf-demo"}'},
                            {"step": 3, "part": "response", "text": 'HTTP/1.1 200 OK\n{"marker":"vrf-demo"}'}]}
     page = presentation_document("T-2", "confirmed", revision)
-    [shot] = b.render_exchanges(html=page, finding_id="T-2-review", marked=0)
+    [shot] = b.render_exchanges(html=page, name="T-2", marked=0, kind="explanation")
     assert target.seen == []
     width, height = struct.unpack(">II", (tmp / shot["path"]).read_bytes()[16:24])
     assert width <= 1280 and 0 < height <= 1200

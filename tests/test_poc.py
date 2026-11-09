@@ -336,7 +336,7 @@ def test_exchange_image_marks_the_redirect(tmp_path):
                           {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}])
     assert result.verdict == "confirmed"
     assert f"<mark>location: https://{host}/</mark>" in shot["html"] and f"<mark>{host}</mark>" in shot["html"]
-    assert shot["marked"] >= 2 and shot["finding_id"] == "T-001"
+    assert shot["marked"] >= 2 and shot["name"] == "T-001-missing-ownership-check"
 
 
 def test_exchange_image_marks_the_marker_file(tmp_path):

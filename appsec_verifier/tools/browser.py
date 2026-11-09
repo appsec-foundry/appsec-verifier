@@ -40,7 +40,9 @@ retain the application viewport. Requests remain guarded and are recorded.
 exchanges for every other screenshot (VER-035). Either page is answered from
 the record, every other request is aborted and scripts are off, so they send
 nothing to the target. Screenshots can show target data, so their evidence
-entry says so.
+entry says so. Files are named after the finding and its title
+(`planning.evidence_name`): the application screenshot `<name>.png`, the
+HTTP images `<name>-http-<n>.png`.
 
 A Playwright error outside the page load, such as a crashed Chrome, is a
 BrowserError and closes the browser; the next use starts a new one. A check
@@ -97,6 +99,7 @@ _NETNS_ARGS = ("--user", "--net", "--map-current-user")
 SCREENSHOT_NOTE = TARGET_DATA_NOTE
 SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf", "session")
 _EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves; answered from the record
+_PAGE_KINDS = ("xss", "application", "access-control")          # application screenshots, named after the finding
 _HIGHLIGHT = "#b00020"
 
 
@@ -563,7 +566,8 @@ class ProofBrowser:
 
     def _check(self, url: str, *, identity_headers: dict, target_base: str, marker: tuple[str, str],
                finding_id: str, wait_ms: int, safe: bool, role: str | None = None,
-               observation: dict | None = None) -> dict:
+               observation: dict | None = None, name: str | None = None) -> dict:
+        """`finding_id` is shown in the captions, `name` (by default `finding_id`) names the files."""
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -682,7 +686,7 @@ class ProofBrowser:
                         values=values, label="values from the confirmed proof")
                     if marked and marked["marks"]:
                         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-                        shot = self._dir / f"{self._stem(finding_id, 'application')}.png"
+                        shot = self._dir / f"{self._stem(name or finding_id, 'application')}.png"
                         page.screenshot(path=str(shot), timeout=EVIDENCE_TIMEOUT_MS)
                         result["evidence"] = [self._entry(
                             shot, "screenshot", redacted=False, note=SCREENSHOT_NOTE,
@@ -692,14 +696,20 @@ class ProofBrowser:
                         result.pop("error", None)
             elif executed:
                 result["evidence"] = self._save(page, finding_id, url, status, events, marker, role,
-                                               execution_contexts=contexts, attempt=attempt)
+                                               execution_contexts=contexts, attempt=attempt, name=name)
             return result
         finally:
             _quietly(context.close)
 
-    def _stem(self, finding_id: str, kind: str) -> str:
-        n = self._counts[(finding_id, kind)] = self._counts.get((finding_id, kind), 0) + 1
-        return f"{re.sub(r'[^A-Za-z0-9_.-]', '_', finding_id)}-{kind}-{n}"
+    def _stem(self, name: str, kind: str) -> str:
+        """`<name>` for a finding's first application screenshot (XSS, application page, access-control page),
+        then `<name>-2`, …; `<name>-<kind>-<n>` for the other images, e.g. `<name>-http-1`."""
+        group = "page" if kind in _PAGE_KINDS else kind
+        n = self._counts[(name, group)] = self._counts.get((name, group), 0) + 1
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+        if group == "page":
+            return safe if n == 1 else f"{safe}-{n}"
+        return f"{safe}-{kind}-{n}"
 
     @staticmethod
     def _mark(page, lines: list[str] | None, *, part: str = "", values=(), none: str | None = None,
@@ -739,12 +749,12 @@ class ProofBrowser:
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **extra}
 
     def _save(self, page, finding_id: str, url: str, status, events, marker: tuple[str, str],
-              role: str | None, *, execution_contexts=None, attempt=None) -> list[dict]:
+              role: str | None, *, execution_contexts=None, attempt=None, name: str | None = None) -> list[dict]:
         from playwright.sync_api import Error as PlaywrightError
 
         self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         joined = marker[0] + marker[1]
-        stem = self._stem(finding_id, "xss")
+        stem = self._stem(name or finding_id, "xss")
         record = self._dir / f"{stem}.json"
         captured = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         via = sorted({k for k, m in events if m == joined})
@@ -781,7 +791,7 @@ class ProofBrowser:
                 try:
                     framed, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200,
                                                      content_type="text/html; charset=utf-8", body=frame,
-                                                     finding_id=finding_id, kind="xss", full_page=True,
+                                                     name=stem, kind="xss", full_page=True,
                                                      width=1280, path=shot)
                 except PlaywrightError:
                     framed = None
@@ -796,11 +806,11 @@ class ProofBrowser:
                                        reviewable=reviewable))
         return entries
 
-    def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, finding_id: str,
+    def _shoot_recorded(self, *, url: str, status: int, content_type: str, body: str, name: str,
                         kind: str, mark=None, full_page: bool = False, width: int = 1200, path: Path | None = None):
         """Screenshot of a page answered from a record: the navigation gets `body`, every other request is
-        aborted and scripts are off, so nothing reaches the target. Saved at `path`, by default the next
-        `<finding>-<kind>-<n>.png`. Returns (path, marks) or (None, None)."""
+        aborted and scripts are off, so nothing reaches the target. Saved at `path`, by default the next name
+        `_stem` gives `name` and `kind`. Returns (path, marks) or (None, None)."""
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -828,20 +838,20 @@ class ProofBrowser:
             if full_page:              # as tall as the content: a short page leaves no empty window below it
                 page.set_viewport_size({"width": page.viewport_size["width"], "height": 1})
             self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            shot = path or self._dir / f"{self._stem(finding_id, kind)}.png"
+            shot = path or self._dir / f"{self._stem(name, kind)}.png"
             page.screenshot(path=str(shot), full_page=full_page,
                             **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
             return shot, marked
         finally:
             _quietly(context.close)
 
-    def render(self, *, url: str, status: int, content_type: str, html: str, finding_id: str,
+    def render(self, *, url: str, status: int, content_type: str, html: str, name: str,
                caption: list[str], highlight=()) -> list[dict]:
         """A screenshot of a recorded HTML response for an access-control proof (VER-035)."""
         none = "(no highlighted value was found in the page)" if highlight else None
         shot, marked = self._guarded(
             self._shoot_recorded,
-            url=url, status=status, content_type=content_type, body=html, finding_id=finding_id,
+            url=url, status=status, content_type=content_type, body=html, name=name,
             kind="access-control", mark=lambda page: self._mark(page, caption, values=highlight, none=none,
                                                                 label="value named in the verdict"))
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
@@ -849,10 +859,11 @@ class ProofBrowser:
                                                     marked=marked["marks"] if marked else None,
                                                     reviewable=self._reviewable(marked, url))]
 
-    def render_exchanges(self, *, html: str, finding_id: str, marked: int) -> list[dict]:
-        """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035)."""
+    def render_exchanges(self, *, html: str, name: str, marked: int, kind: str = "http") -> list[dict]:
+        """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035), or with
+        kind "explanation" of an evidence review's explanation panel (VER-042)."""
         shot, _ = self._guarded(self._shoot_recorded, url=_EXCHANGE_PAGE, status=200,
-                                content_type="text/html; charset=utf-8", body=html, finding_id=finding_id,
-                                kind="exchange", full_page=True)
+                                content_type="text/html; charset=utf-8", body=html, name=name,
+                                kind=kind, full_page=True)
         return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
                                                     marked=marked)]

@@ -23,7 +23,7 @@ from jsonschema import Draft202012Validator
 from ..agent.hosts import HostCallError
 from ..agent.steps import strict_json
 from ..limits import LimitExceeded, execution_deadline
-from ..planning import evidence_id
+from ..planning import evidence_id, evidence_name
 
 MAX_REVIEW_IMAGES = 3
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -297,7 +297,8 @@ def _render(ctx, res, revision):
     kind = "window" if window is not None and window <= remaining else "time"
     with execution_deadline(seconds, kind=kind):
         shots = ctx.browser.render_exchanges(
-            html=presentation_document(ctx.plan.id, res.verdict, revision), finding_id=evidence_id(ctx.plan), marked=0
+            html=presentation_document(ctx.plan.id, res.verdict, revision), name=evidence_name(ctx.plan), marked=0,
+            kind="explanation",
         )
     if shots:
         # Keep original proof images and HAR. Replace only the previous explanation panel.

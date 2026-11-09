@@ -557,3 +557,40 @@ def test_xss_frame_draws_the_kind_of_dialog_that_ran(kind, cancel, field):
 def test_xss_frame_without_a_dialog_draws_none():
     page = xss_frame(url="https://shop.example.com/", image=b"x", crop=None, dialog=None, lines=["c"])
     assert "class=dialog" not in page and "Drawn by" not in page
+
+
+@pytest.mark.parametrize("title, digest, name", [
+    ("Product update route has no authorization guard — server.ts:369", None,
+     "T-042-product-update-route-has-no-authorization-guard"),
+    ("Basket item update lacks ownership check - routes/basketItems.ts:68", None,
+     "T-042-basket-item-update-lacks-ownership-check"),
+    ("XSS — reflected in search", None, "T-042-xss-reflected-in-search"),               # no location: kept whole
+    ("Prüfung fehlt", "c48351929e145b242813", "T-042-c48351929e145b24-prufung-fehlt"),  # variant, accents
+    ("../../etc/passwd\x00.png", None, "T-042-etc-passwd-png"),                        # never a path
+    ("", None, "T-042"),
+    (None, None, "T-042"),
+    ("沒有標題", None, "T-042"),
+    ("a" * 70, None, "T-042-" + "a" * 60),
+    ("word " * 20, None, "T-042-" + "-".join(["word"] * 12)),
+])
+def test_evidence_files_are_named_after_the_finding_and_its_title(title, digest, name):
+    from appsec_verifier.planning import evidence_name
+
+    assert evidence_name(SimpleNamespace(id="T-042", title=title, variant_digest=digest)) == name
+
+
+def test_the_application_screenshot_takes_the_name_and_other_images_say_what_they_show(tmp_path):
+    b = ProofBrowser(None, tmp_path)
+    name = "T-042-product-update-route-has-no-authorization-guard"
+    assert [b._stem(name, kind) for kind in ("application", "http", "http", "xss", "explanation", "access-control")] \
+        == [name, f"{name}-http-1", f"{name}-http-2", f"{name}-2", f"{name}-explanation-1", f"{name}-3"]
+    assert b._stem("T-1/../x", "http") == "T-1_.._x-http-1"         # never a path
+
+
+def test_browser_check_names_its_files_after_the_finding_variant_and_title():
+    from appsec_verifier.planning import evidence_name
+
+    browser = FakeBrowser()
+    ctx = _ctx(browser=browser)
+    AgentTools(ctx).call("browser_check", {"path": "/s?q=x"})
+    assert browser.calls[0]["name"] == evidence_name(ctx.plan) != browser.calls[0]["finding_id"]

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from ..agent.tools import ToolError
 from ..limits import LimitExceeded, execution_deadline
-from ..planning import evidence_id
+from ..planning import evidence_id, evidence_name
 from ..tools.browser import BrowserError
 from .poc import decisive_steps
 
@@ -56,7 +56,7 @@ def capture_application(ctx, tools, history, sent, result, proposal, cited):
         with execution_deadline(seconds, kind=kind):
             observation = ctx.browser.check(
                 url, identity_headers=headers, target_base=origin, marker=ctx.marker,
-                finding_id=evidence_id(ctx.plan), wait_ms=1500, safe=True, role=role,
+                finding_id=evidence_id(ctx.plan), name=evidence_name(ctx.plan), wait_ms=1500, safe=True, role=role,
                 observation={"step": step, "values": values, "resource_url": entry["request"]["url"]},
             )
         for raw in observation.pop("_exchanges", []) or []:

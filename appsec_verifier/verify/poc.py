@@ -58,7 +58,7 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlencode, urlsplit, 
 
 import httpx
 
-from ..planning import evidence_id
+from ..planning import evidence_id, evidence_name
 
 REDACTED = "[redacted]"
 TARGET_DATA_NOTE = "may show target data; review before sharing"
@@ -396,7 +396,7 @@ def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
         try:
             out += browser.render(url=e["request"]["url"], status=e["response"]["status"],
                                   content_type=e["response"]["content"]["mimeType"], html=text,
-                                  finding_id=evidence_id(ctx.plan), caption=caption, highlight=values)
+                                  name=evidence_name(ctx.plan), caption=caption, highlight=values)
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             continue
     return out
@@ -823,7 +823,7 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
         visible.feed(page)
         ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
         try:
-            shots += ctx.browser.render_exchanges(html=page, finding_id=evidence_id(ctx.plan), marked=marked)
+            shots += ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             break
     return shots
