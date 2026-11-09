@@ -1372,11 +1372,16 @@ _NEEDS = {
                 "test_resources: [{id: NAME, finding_id: ID, path: /route, method: GET, allowed_roles: [ROLE], "
                 "denied_roles: [ROLE], pointer: /field, value: VALUE}]",
                 "(docs/cli.md, Scope file)"]),
-    "route": ("request information", "--source, or a scope entry for the finding that names its request",
-              ["the assessment names no request for the finding: pass the application's source with --source when "
-               "the file of the finding declares its route, or name the request in a scope entry for the finding "
-               "(injection_inputs, test_resources)"]),
+    "route": ("request information", "--source, if the finding's file declares its route",
+              ["the assessment names no request for the finding, neither as METHOD /path in its scenario or attack "
+               "steps nor as an attack_surface entry whose handler is at its location; with --source, a route "
+               "declared in the finding's file up to 40 lines before its location can supply one (docs/cli.md, "
+               "Continuous control)"]),
 }
+# Only an access-control finding can name its request in a scope entry (VER-010); other classes have none for it.
+_ACCESS_ROUTE = ("; for access control a test_resources entry",
+                 "an access-control finding can name its request in a test_resources entry of a scope file "
+                 "(--scope; docs/cli.md, Scope file)")
 
 
 _EXAMPLE_IDENTITIES = "https://github.com/appsec-foundry/appsec-verifier/blob/main/examples/juice-shop/identities.yaml"
@@ -1523,9 +1528,11 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     if not blocked:
         return lines
     groups: dict[str, list[str]] = {}
+    access_route = False
     for p in plans:
         if evidence_id(p) in blocked:
             groups.setdefault(blocked[evidence_id(p)][0], []).append(printable(p.id))
+            access_route |= blocked[evidence_id(p)][0] == "route" and p.cls == "access-control"
     lines += [
         "",
         f"{st('Not testable', 'bold')}  {_count(len(blocked), 'finding')} "
@@ -1537,6 +1544,8 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     for key, ids in sorted(groups.items(), key=lambda group: -len(group[1])):
         label, brief, how = _NEEDS[key]
         how = (hints or {}).get(key) or how
+        if key == "route" and access_route:
+            brief, how = brief + _ACCESS_ROUTE[0], [*how, _ACCESS_ROUTE[1]]
         if not full:
             how = how[:1] if key == "browser" else [brief]
         how = [printable(text) for text in how]

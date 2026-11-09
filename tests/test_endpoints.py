@@ -33,6 +33,22 @@ def test_a_request_without_a_matching_entry_is_kept_once_without_a_login_claim()
                                                   Endpoint("GET", "/ftp/:file", None))
 
 
+BASKET = ["GET /rest/basket/:id (login)", "PUT /rest/basket/7", "PATCH /rest/basket/7"]
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("GET and DELETE /api/BasketItems/:id need only a login.",
+     ["GET /api/BasketItems/:id", "DELETE /api/BasketItems/:id"]),
+    ("GET, PUT or PATCH /rest/basket/7.", BASKET),
+    ("GET, PUT, and PATCH /rest/basket/7", BASKET),
+    ("GET/POST /ftp/a.md", ["GET /ftp/:file", "POST /ftp/:file"]),
+    ("GET the list, then DELETE /api/Products/1.", ["DELETE /api/Products/1"]),        # a method without its path
+    ("GET or the like /x", []),
+])
+def test_methods_that_share_one_path_each_name_a_request(text, expected):
+    assert [str(e) for e in finding_endpoints({"scenario": text}, SURFACE)] == expected
+
+
 def test_an_entry_whose_handler_is_at_a_finding_location_and_a_browser_route_count():
     threat = {"instances": [{"file": "server.ts", "line": 602, "scenario": "Open /#/search?q=<img src=x>."}]}
     assert finding_endpoints(threat, SURFACE) == (Endpoint("GET", "/rest/products/search", None),
@@ -41,10 +57,52 @@ def test_an_entry_whose_handler_is_at_a_finding_location_and_a_browser_route_cou
         "GET /rest/basket/:id (login)"]
 
 
+# The Analyzer's attack surface since it publishes route IDs: an imported handler is named where it is defined,
+# its registration as `registered:`.
+ROUTED = [
+    {"entry_point": "POST /profile/image/url", "auth_required": True, "route_ids": ["R-008"],
+     "notes": "authorization-review-required; registered: server.ts:311; handler: routes/profileImageUrlUpload.ts:16"},
+    {"entry_point": "POST /rest/user/data-export", "route_ids": ["R-070", "R-071"], "notes": "handler: server.ts:620"},
+    {"entry_point": "GET /redirect", "route_ids": ["R-090", "not-an-id", 7], "notes": "handler: server.ts:659"},
+]
+
+
+def test_a_route_id_of_the_finding_or_an_instance_names_the_entry_point_that_lists_it():
+    ssrf = {"instances": [{"file": "routes/profileImageUrlUpload.ts", "line": 24, "route_ids": []},
+                          {"file": "routes/profileImageUrlUpload.ts", "line": 24, "route_ids": ["R-008"]}]}
+    assert [str(e) for e in finding_endpoints(ssrf, ROUTED)] == ["POST /profile/image/url (login)"]
+    export = {"route_ids": ["R-071"], "evidence": {"file": "routes/dataExport.ts", "line": 33}}
+    assert [str(e) for e in finding_endpoints(export, ROUTED)] == ["POST /rest/user/data-export"]
+    # A named request comes first; the same route by ID is not added twice.
+    both = {"scenario": "POST /rest/user/data-export with a crafted email.", "route_ids": ["R-070", "R-090"]}
+    assert [str(e) for e in finding_endpoints(both, ROUTED)] == ["POST /rest/user/data-export", "GET /redirect"]
+
+
+@pytest.mark.parametrize("refs", [["R-999"], ["r-008"], ["R-8"], ["R-008 "], "R-008", [8], None])
+def test_a_route_id_the_attack_surface_does_not_list_or_a_malformed_one_names_nothing(refs):
+    assert finding_endpoints({"route_ids": refs, "instances": [{"route_ids": refs}]}, ROUTED) == ()
+
+
+def test_route_ids_without_published_ones_in_the_attack_surface_name_nothing():
+    """Assessments written before the attack surface listed route IDs carry them on instances only."""
+    assert finding_endpoints({"instances": [{"file": "routes/a.ts", "line": 1, "route_ids": ["R-008"]}]},
+                             SURFACE) == ()
+
+
+def test_a_finding_at_the_registration_or_at_the_handler_definition_names_the_entry_point():
+    at_registration = {"evidence": [{"file": "server.ts", "line": 311}]}
+    at_handler = {"evidence": [{"file": "routes/profileImageUrlUpload.ts", "line": 16}]}
+    for threat in (at_registration, at_handler):
+        assert [str(e) for e in finding_endpoints(threat, ROUTED)] == ["POST /profile/image/url (login)"]
+    assert finding_endpoints({"evidence": [{"file": "routes/profileImageUrlUpload.ts", "line": 24}]}, ROUTED) == ()
+
+
 def test_odd_input_yields_nothing_and_the_list_is_bounded():
     assert finding_endpoints({"scenario": 7, "attack_steps": "GET /a", "instances": "x"}, "not a list") == ()
     many = {"scenario": " ".join(f"GET /p{n}" for n in range(10))}
     assert len(finding_endpoints(many, [])) == MAX_ENDPOINTS
+    late = {"route_ids": [f"R-{n}" for n in range(100, 140)] + ["R-008"]}       # only the first 40 IDs are read
+    assert finding_endpoints(late, ROUTED) == ()
 
 
 def test_the_brief_joins_scenario_and_steps_on_one_line_and_is_capped():
@@ -258,6 +316,23 @@ def test_the_test_plan_gives_lines_to_copy_and_the_browser_s_actual_cause(monkey
                                       full=False))
     assert "→ a callback in a scope file\n" in brief and "callback: {host" not in brief
     assert "→ Playwright is not installed\n" in brief and "appsec-verifier preflight" in brief
+
+
+def test_the_request_hint_names_a_scope_entry_only_where_one_can_name_the_request(monkeypatch):
+    """--source helps only when the finding's file declares its route; a test_resources entry names the request
+    of an access-control finding, and no scope entry does that for SSRF and the other classes."""
+    monkeypatch.setenv("COLUMNS", "200")
+    reason = ("route", "the assessment names no request for this finding, and without --source none can be read")
+    ssrf, access = _plan("ssrf"), _plan("access-control")
+    access.id = "T-2"
+    for full, source, scope in ((True, "with --source, a route declared in the finding's file", "access-control "
+                                 "finding can name its request in a test_resources entry"),
+                                (False, "→ --source, if the finding's file declares its route",
+                                 "for access control a test_resources entry")):
+        alone = "\n".join(cli._test_cases(cli.Style(False), [ssrf], {"T-1": reason}, full=full))
+        assert source in alone and "test_resources" not in alone and "scope entry" not in alone
+        both = "\n".join(cli._test_cases(cli.Style(False), [ssrf, access], {"T-1": reason, "T-2": reason}, full=full))
+        assert source in both and scope in both and "injection_inputs" not in both
 
 
 def test_the_identity_hint_names_the_login_the_assessment_lists_and_an_example():

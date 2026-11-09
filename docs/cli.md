@@ -74,7 +74,7 @@ A run has five steps:
 4. Test each selected finding, bounded and inside the scope (VER-008, VER-015, VER-017).
 5. Write the report with its evidence and, with `--annotate`, the annotated copies (VER-020, VER-022, VER-027, VER-038).
 
-Before the confirmation, `Test plan` lists the findings the run will test, each with severity, class, title and the requests the assessment names for it (for example `GET /rest/basket/:id (login)`). The requests come from the finding's scenario and attack steps and from the assessment's `attack_surface`: an entry point that matches a named request, or whose handler is at the finding's location, gives the path template, and `auth_required: true` adds the `(login)` mark. `page /#/search` is a browser route. The agent gets these requests and the finding's scenario and attack steps; it reads source code only with `--source`.
+Before the confirmation, `Test plan` lists the findings the run will test, each with severity, class, title and the requests the assessment names for it (for example `GET /rest/basket/:id (login)`). The requests come from the finding's scenario and attack steps, where several methods before one path, as in `GET and DELETE /api/BasketItems/:id`, each name a request, and from the assessment's `attack_surface`: an entry point that matches a named request, whose `route_ids` hold an ID the finding or one of its instances lists in `route_ids`, or whose handler or registration (`handler:` and `registered:` in its notes) is at the finding's location, gives the path template, and `auth_required: true` adds the `(login)` mark. `page /#/search` is a browser route. The agent gets these requests and the finding's scenario and attack steps; it reads source code only with `--source`.
 
 `Not testable` groups the findings this run cannot confirm by what they need, with how to provide it:
 
@@ -86,7 +86,7 @@ Before the confirmation, `Test plan` lists the findings the run will test, each 
 | marker file | path traversal |
 | callback | SSRF |
 | injection contract | an injection finding without its `injection_inputs` entry |
-| route | the assessment names no request for the finding and there is no `--source` to read one from |
+| request information | the assessment names no request for the finding and there is no `--source` to read one from. `--source` helps only when the finding's file declares its route (see [Continuous control](#continuous-control-ver-036)); an access-control finding can name its request in a `test_resources` entry instead. |
 | intrusive mode | every named request writes |
 | test capability | a reported variant needs a tool the run lacks |
 | repeatable request | every request an injection finding names writes, and its `injection_inputs` entry, if any, declares no query parameter that a GET on its path would carry. The proof sends each control twice but never repeats a write, so `--allow-intrusive` does not help. |

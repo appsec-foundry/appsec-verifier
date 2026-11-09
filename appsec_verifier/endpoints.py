@@ -2,10 +2,13 @@
 
 An AppSec Analyzer assessment describes a finding in prose: its scenario and
 attack steps often name the request (`GET /rest/basket/:id`). Its attack surface
-lists each entry point with `auth_required` and the file and line of its
-handler. The Verifier joins the two: a request named in the text, matched to an
-entry point where one fits, an entry point whose handler sits at one of the
-finding's locations, and a browser route (`/#/search`) for client-side findings.
+lists each entry point with `auth_required`, the file and line of its handler
+and, where that is elsewhere, of its registration, and the route-inventory IDs
+(`route_ids`) that a finding and its instances refer to. The Verifier joins the
+two: a request named in the text, matched to an entry point where one fits, an
+entry point whose `route_ids` hold one the finding names, an entry point whose
+handler or registration sits at one of the finding's locations, and a browser
+route (`/#/search`) for client-side findings.
 
 The result is a hint from the input file. It is shown to the operator, decides
 whether the run can test a finding at all (a login without a test identity,
@@ -24,9 +27,15 @@ from typing import NamedTuple
 MAX_ENDPOINTS = 4
 BRIEF_CAP = 1500
 _TEXT_CAP = 4000          # per text field: the input is untrusted, the scan stays bounded
-_REQUEST = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE)\s+(/(?:[A-Za-z0-9_\-.:~%/]|<[^<>\s]{1,40}>|\{[^{}\s]{1,40}\})*)")
+_METHOD = r"(?:GET|POST|PUT|PATCH|DELETE)"
+# Methods that share one path each name a request: "GET and DELETE /x", "GET, PUT or PATCH /x", "GET/POST /x".
+_REQUEST = re.compile(rf"\b({_METHOD}(?:(?:\s*[,/]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+){_METHOD}){{0,4}})\s+"
+                      r"(/(?:[A-Za-z0-9_\-.:~%/]|<[^<>\s]{1,40}>|\{[^{}\s]{1,40}\})*)")
 _PAGE = re.compile(r"/#/[A-Za-z0-9_\-/]+")
 _HANDLER = re.compile(r"handler:\s*([^\s;,]+:\d+)")
+_REGISTERED = re.compile(r"registered:\s*([^\s;,]+:\d+)")
+_ROUTE_ID = re.compile(r"R-[0-9]{3,5}")
+_MAX_REFS = 40            # route IDs read per finding, instance or entry point; the input stays bounded
 WRITE_METHODS = frozenset(("POST", "PUT", "PATCH", "DELETE"))
 
 
@@ -44,7 +53,15 @@ class _Entry(NamedTuple):
     method: str
     template: str
     login: bool | None
-    handler: str | None
+    handler: str | None         # `handler: file:line` in the notes: where the handler is defined
+    registered: str | None      # `registered: file:line`: where the route is registered, when the handler is elsewhere
+    route_ids: frozenset[str]   # the route-inventory IDs of the registrations this entry point stands for
+
+
+def _route_ids(holder) -> list[str]:
+    """The well-formed route-inventory IDs (`R-008`) a finding, instance or entry point lists in `route_ids`."""
+    ids = holder.get("route_ids") if isinstance(holder, dict) else None
+    return [i for i in _list(ids)[:_MAX_REFS] if isinstance(i, str) and _ROUTE_ID.fullmatch(i)]
 
 
 def _entries(surface) -> list[_Entry]:
@@ -55,10 +72,12 @@ def _entries(surface) -> list[_Entry]:
         method, _, template = item["entry_point"].strip().partition(" ")
         if not template.startswith("/"):
             continue
-        handler = _HANDLER.search(str(item.get("notes") or "")[:_TEXT_CAP])
+        notes = str(item.get("notes") or "")[:_TEXT_CAP]
+        handler, registered = _HANDLER.search(notes), _REGISTERED.search(notes)
         template = re.sub(r"\(.*?\)", "", template.strip())       # Express regex groups: /ftp(?!/quarantine)/:file
         entries.append(_Entry(method.upper(), template, True if item.get("auth_required") is True else None,
-                              handler.group(1) if handler else None))
+                              handler.group(1) if handler else None, registered.group(1) if registered else None,
+                              frozenset(_route_ids(item))))
     return entries
 
 
@@ -105,12 +124,19 @@ def finding_endpoints(threat: dict, surface) -> tuple[Endpoint, ...]:
         add(Endpoint(request["method"], request["path"], entry.login if entry else None))
     for text in texts:
         for match in _REQUEST.finditer(text):
-            method, path = match.group(1), match.group(2).rstrip(".:")
-            entry = next((e for e in entries if e.method in (method, "ALL") and _fits(e.template, path)), None)
-            add(Endpoint(method, entry.template, entry.login) if entry else Endpoint(method, path, None))
+            path = match.group(2).rstrip(".:")
+            for method in re.findall(_METHOD, match.group(1)):
+                entry = next((e for e in entries if e.method in (method, "ALL") and _fits(e.template, path)), None)
+                add(Endpoint(method, entry.template, entry.login) if entry else Endpoint(method, path, None))
+    # The routes the finding and its instances refer to by ID; an ID the attack surface does not list names nothing.
+    holders = (threat, *_list(threat.get("instances")))
+    for ref in dict.fromkeys(ref for holder in holders for ref in _route_ids(holder)):
+        for entry in entries:
+            if ref in entry.route_ids:
+                add(Endpoint(entry.method, entry.template, entry.login))
     locations = _locations(threat)
     for entry in entries:
-        if entry.handler in locations:
+        if entry.handler in locations or entry.registered in locations:
             add(Endpoint(entry.method, entry.template, entry.login))
     for text in texts:
         for match in _PAGE.finditer(text):
