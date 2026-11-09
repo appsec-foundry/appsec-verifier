@@ -287,7 +287,8 @@ def test_verify_signs_accounts_in_at_the_assessments_login_and_shows_it_before_t
                        env={"JP": "ncc-1701", "BP": "liquor", "AP": "admin123"})
     out = capsys.readouterr().out
     assert rc == cli.EXIT_OK, out
-    assert f"sign in at POST {LOGIN} (from the assessment)" in out and "admin-1 (privileged, read-only)" in out
+    assert "sign in at POST /rest/user/login (from the assessment)\n" in out   # below the target: its path
+    assert "admin-1 (privileged, read-only)" in out
     assert "email/password worked" in out
     logins = [c for c in target.calls if c[0] == "POST"]
     assert len(logins) == 4                     # account-1 tries two pairs, the others use the one that worked

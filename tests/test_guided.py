@@ -88,9 +88,8 @@ def env(tmp_path, monkeypatch):
 def test_with_a_scope_file_nothing_is_asked_and_the_defaults_apply(env):
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
-    assert "4 total · 3 candidates for runtime testing · 1 unsupported\n" in out
-    assert "critical 1 · high 1 · medium 1" in out
-    assert "→ 2 findings to verify, severity high and above (--min-severity to change)" in out
+    assert "3 runtime candidates of 4 · critical 1 · high 1 · medium 1\n" in out
+    assert "to verify" not in out              # the selection is shown once, with the run settings
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
     assert args.scope == str(env.run / "scope.yaml") and f"scope   {env.run / 'scope.yaml'}" in out
     assert args.target is None                                  # verify takes the scope's base_url
@@ -129,12 +128,11 @@ def test_options_given_are_not_asked(env):
     assert rc == 0 and prompts == []
     assert (args.target, args.profile, args.min_severity, args.category) == (
         BASE + "/app", "anthropic-api", "medium", "xss,idor")
-    assert "→ 2 findings to verify, severity medium and above" in out
 
 
 def test_a_selection_by_id_or_exact_severity_has_no_floor(env):
     _, args, _, out = env.go(extra=["--only", "T-3"])
-    assert args.min_severity is None and "→ 1 finding to verify" in out and "and above" not in out
+    assert args.min_severity is None
     _, args, _, _ = env.go(extra=["--severity", "medium"])
     assert args.min_severity is None
 
@@ -151,7 +149,6 @@ def test_without_high_findings_the_next_lower_severity_is_offered(env, threats, 
     assert rc == 0 and args.min_severity == lower
     assert prompts == [f"No finding of severity high or above can be verified dynamically. "
                        f"Verify the 1 of severity {lower}? [Y/n]: "]
-    assert f"→ 1 finding to verify, severity {lower} and above" in out
     assert f"--min-severity {lower}" in env.calls[0][1]
 
 
@@ -173,7 +170,6 @@ def test_a_floor_given_as_option_is_not_lowered(env):
     env.assessment.write_text(yaml.safe_dump({"threats": [THREATS[2]]}))
     rc, args, prompts, out = env.go(extra=["--min-severity", "high"])
     assert rc == 0 and prompts == [] and args.min_severity == "high"
-    assert "→ 0 findings to verify, severity high and above" in out
 
 
 # ── without a scope file: the typed URL alone (VER-001, VER-004) ─────────────
@@ -546,6 +542,7 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
         rc, _, _, _ = env.go(extra=["--category", "access-control", "--test-all"])
     out = capsys.readouterr()
     assert rc == cli.EXIT_BLOCKED and asked == [{"non_interactive": False, "assume_yes": False, "default_yes": True}]
-    assert "Selection  : 1 finding, severity high and above · 1 candidates for runtime testing\n" in out.out
+    assert "Selection  : 1 finding, severity high and above (--min-severity to change)\n" in out.out
+    assert "Assessment :" not in out.out and "▶ AppSec Verifier" not in out.out   # shown once, at the start
     assert "The same run without questions" in out.out and "Not authorised to proceed" in out.err
     assert not (env.cwd / "verification").exists()

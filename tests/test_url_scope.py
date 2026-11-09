@@ -87,7 +87,7 @@ def test_verify_with_the_url_alone_contacts_only_that_host_and_says_so(tmp_path,
     rc, target, asked = _verify(tmp_path, monkeypatch, "--url", URL)
     assert rc == cli.EXIT_OK and asked == ["T-1"]
     assert target.calls and all(url.startswith(URL + "/") or url == URL for _, url in target.calls)
-    assert f"no scope file: only {URL}'s host and port" in capsys.readouterr().out
+    assert f"Target     : {URL} (no scope file: only this host and port)" in capsys.readouterr().out
     doc, errors = read_report(tmp_path / "out" / "verification.yaml")
     assert errors == [] and doc["meta"]["scope"] == {"file": None, "sha256": None, "owner": None,
                                                      "window_from": None, "window_until": None}

@@ -438,12 +438,16 @@ def _prepare_accounts(args, doc: dict, scope: dict, guard: ScopeGuard, target: s
     return identities, {"url": login_url, "source": source}, guard, errors
 
 
-def _accounts_note(identities: list[dict], login: dict | None) -> str | None:
-    """The accounts and their login endpoint, for the settings shown before the confirmation (VER-002, VER-041)."""
+def _accounts_note(identities: list[dict], login: dict | None, target: str | None = None) -> str | None:
+    """The accounts and their login endpoint, for the settings shown before the confirmation (VER-002, VER-041);
+    a login below the target is shown by its path."""
     if not login:
         return None
     roles = ", ".join(i["role"] + (" (privileged, read-only)" if i.get("privileged") else "") for i in identities)
-    return f"{roles} · sign in at POST {login['url']} ({login['source']}); the model chooses the field names"
+    url, base = login["url"], (target or "").rstrip("/")
+    if base and url.startswith(base + "/"):
+        url = url[len(base):]
+    return f"{roles} · sign in at POST {url} ({login['source']})"
 
 
 def _sign_in_accounts(sessions, identities: list[dict], login: dict, host, budget, doc: dict,
@@ -746,20 +750,15 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     summary = _assessment_summary(doc)
     st = Style.for_stream(sys.stdout)
     out = Path(args.output)
-    report_note = resumed or (
-        ("replaces " if report_exists(args.output) else "")
-        + f"{out / 'verification.md'} (Markdown, and verification.yaml for tools)"
-    )
+    report_note = resumed or ("replaces " if report_exists(args.output) else "") + str(out / "verification.md")
     notes = (
-        ("Report", report_note),
-        ("Accounts", _accounts_note(identities, login)),
+        ("Accounts", _accounts_note(identities, login, target)),
         ("Identities", None if login else _identities_note(identities, sel)),  # Accounts names the roles
         ("Login programs", _login_programs(identities)),
         ("Browser", browser_note),
-        ("Evidence", "text review per finding; at most 2 corrections / 5 extra model calls within run limits; "
-                     "no image-pixel review"),
         ("Callback", listener_note),
         ("Marker file", _marker_note(scope, sel)),
+        ("Report", report_note),
     )
     if not args.test_all:  # what is missing is said once, in the test plan
         notes = tuple(
@@ -776,10 +775,10 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
                 limits,
                 safe,
                 read_only,
-                contact,
                 agent_info,
                 notes,
                 floor=args.min_severity,
+                guided=invocation is not None,
             )
         )
     )
@@ -1247,10 +1246,10 @@ def _proof_browser(args, http, sel):
         lost = "XSS findings cannot be confirmed" if xss else "findings get no screenshot"
         return None, f"unavailable ({exc}); {lost}", str(exc)
     browser = ProofBrowser(http, Path(args.output) / "evidence", headless=not args.headful, screenshots=shots)
-    listed = ("all classes" if shots == set(SCREENSHOT_CLASSES)
-              else ", ".join(c for c in SCREENSHOT_CLASSES if c in shots) or "none")
-    return browser, ("Google Chrome via Playwright" + (", visible" if args.headful else "")
-                     + f", started on first use · screenshots: {listed}"), None
+    listed = ("screenshots of all classes" if shots == set(SCREENSHOT_CLASSES)
+              else "screenshots of " + ", ".join(c for c in SCREENSHOT_CLASSES if c in shots) if shots
+              else "no screenshots")
+    return browser, "Google Chrome" + (", visible" if args.headful else "") + f", {listed}", None
 
 
 def _auto_callback(scope: dict, target: str, sel) -> bool:
@@ -1294,10 +1293,11 @@ def _callback_listener(scope, sel, *, auto: bool = False):
         listener = CallbackListener(scope.get("callback"))
     except CallbackUnavailable as exc:
         return None, f"unavailable ({exc}); SSRF findings cannot be confirmed"
-    note = f"will listen on {listener.host}:{listener.port}, reached as {listener.base_url}"
+    note = f"{listener.host}:{listener.port}"
+    if listener.base_url.rstrip("/") != f"http://{note}":
+        note += f", reached as {listener.base_url}"
     if auto:
-        note += (" (automatic for a local target; the target must reach this machine's loopback, e.g. run "
-                 "directly or with docker --network host, not docker -p)")
+        note += " (the target must reach this machine's loopback, not via docker -p)"
     return listener, note
 
 
@@ -1497,10 +1497,12 @@ def _wrap_whole(text: str, width: int) -> list[str]:
 
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,
                 full: bool = True) -> list[str]:
-    """The test plan before the confirmation: each finding the run tests with the requests the
-    assessment names, then those it cannot test, grouped by what they need and how to provide it.
+    """The test plan before the confirmation: one line per finding the run tests, with its title and
+    the requests the assessment names, those that prepare a test resource marked `(prepares)`; then
+    those it cannot test, grouped by what they need and how to provide it.
     `hints` replaces a need's how-to with what is actually missing (the browser's cause). Without
-    `full` (in `verify`) each need gets a few words and a pointer to `preflight`, which shows the how-tos."""
+    `full` (in `verify`) a line is cut to fit a terminal, and each need gets one row with a few words
+    and a pointer to `preflight`, which shows the how-tos."""
     if not plans:
         return []
     from .planning import evidence_id
@@ -1514,15 +1516,22 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         else "this run cannot test it"
     )
     lines = ["", f"{st('Test plan', 'bold')}     {head}"]
-    width = max(len(printable(p.id)) for p in plans)
+    id_w, sev_w, cls_w = (max((len(printable(getattr(p, k) or "")) for p in tested), default=0)
+                          for k in ("id", "severity", "cls"))
+
+    def request(endpoint) -> str:      # whether it needs a login is settled: without an account it is not tested
+        return printable(str(endpoint)).removesuffix(" (login)")
+
     for p in tested:
-        what = " · ".join(printable(x) for x in (", ".join(map(str, p.endpoints[:2])), p.title or p.cwe) if x)
-        lines.append(
-            f"  {printable(p.id):<{width}}  {st(f'{printable(p.severity).lower():<8}', 'muted')}  "
-            f"{printable(p.cls or ''):<14}  {what}"
-        )
-        for request in getattr(p, "preparation", ()):
-            lines.append(f"    Preparation: {printable(str(request))} · owner creates a marked test resource")
+        title = printable(p.title or p.cwe or "")
+        requests = ", ".join([*map(request, p.endpoints[:2]),
+                              *(request(e) + " (prepares)" for e in getattr(p, "preparation", ()))])
+        text = " · ".join(x for x in (title, requests) if x)
+        if st.enabled and not full:
+            text = _fit(text, max(columns() - 1 - (2 + id_w + 2 + sev_w + 2 + cls_w + 2), 20))
+        rest = text[len(title):]
+        lines.append(f"  {printable(p.id):<{id_w}}  {st(f'{printable(p.severity).lower():<{sev_w}}', 'muted')}  "
+                     f"{printable(p.cls or ''):<{cls_w}}  {text[:len(title)]}" + (st(rest, "muted") if rest else ""))
         if p.selection_reason:
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
@@ -1538,16 +1547,25 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         f"{st('Not testable', 'bold')}  {_count(len(blocked), 'finding')} "
         f"{'needs' if len(blocked) == 1 else 'need'} what this run does not have (--test-all tries anyway)",
     ]
-    label_width = max(len(_NEEDS[key][0]) for key in groups)
-    indent = 2 + label_width + 2 + 2 + 2
+    widths = [len(_NEEDS[key][0]) for key in groups]
+    # a row of its own per need without `full`: a longer label moves only its own row, not every row's column
+    label_width = max(widths) if full else max((w for w in widths if w <= 20), default=20)
+    indent = 2 + label_width + 2 + (4 if full else 0)
     room = max(columns() - 1 - indent, 30)
     for key, ids in sorted(groups.items(), key=lambda group: -len(group[1])):
         label, brief, how = _NEEDS[key]
         how = (hints or {}).get(key) or how
         if key == "route" and access_route:
             brief, how = brief + _ACCESS_ROUTE[0], [*how, _ACCESS_ROUTE[1]]
-        if not full:
-            how = how[:1] if key == "browser" else [brief]
+        if not full:  # one row: the findings, then what to provide in a few words
+            text = printable(how[0] if key == "browser" else brief)
+            muted = False
+            for i, piece in enumerate(_wrap_whole(f"{', '.join(ids)} → {text}", room)):
+                left, arrow, right = ("", "", piece) if muted else piece.partition("→")
+                muted = muted or bool(arrow)
+                lines.append((f"  {st(f'{label:<{label_width}}', 'warn')}  " if i == 0 else " " * indent)
+                             + left + (st(arrow + right, "muted") if arrow + right else ""))
+            continue
         how = [printable(text) for text in how]
         wrapped = _wrap_whole(", ".join(ids), room) or [""]
         lines.append(f"  {st(f'{label:<{label_width}}', 'warn')}  {len(ids):>2}  {wrapped[0]}")
@@ -1564,8 +1582,10 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     return lines
 
 
-def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, contact, agent_info,
-                     notes=(), floor=None) -> list[str]:
+def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, agent_info,
+                     notes=(), floor=None, guided=False) -> list[str]:
+    """The settings before the confirmation (VER-002). The guided run has shown the logo, the assessment and its
+    findings already, so they are not repeated there."""
     dyn = sum(1 for p in sel if p.status == "dynamic")
     from .agent import SUBSCRIPTION_PROFILES
 
@@ -1573,25 +1593,28 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
             else f"≤ ${limits.cost_limit_usd:.2f}")
     seconds = int(limits.max_duration_s)
     rate = f"{limits.rate_rps:g} requests/s" if limits.rate_rps else "no rate limit"
+    selection = _count(dyn, "finding") + (f", severity {floor} and above" if floor else "")
+    if guided and floor:
+        selection += " (--min-severity to change)"
+    elif not guided and len(sel) > dyn:
+        selection += f" (another {len(sel) - dyn} selected cannot be tested at runtime)"
     rows = [
-        ("Assessment", str(assessment)),
-        ("Target", f"{target} ({'will contact' if contact else 'not contacted yet'})"),
-        ("Scope", f"{', '.join(scope.get('hosts', []) or [target])} (owner: {(scope.get('owner') or {}).get('name')})"
-         if "owner" in scope else f"no scope file: only {target}'s host and port"),
-        ("Selection", " · ".join([_count(len(sel), "finding") + (f", severity {floor} and above" if floor else ""),
-                                  f"{dyn} candidates for runtime testing",
-                                  *([f"{len(sel) - dyn} unsupported or incomplete"] if len(sel) > dyn else [])])),
+        *([] if guided else [("Assessment", str(assessment))]),
+        ("Selection", selection),
+        ("Target", f"{target} (scope: {', '.join(scope.get('hosts', []) or [target])}, owner: "
+                   f"{(scope.get('owner') or {}).get('name')})" if "owner" in scope
+         else f"{target} (no scope file: only this host and port)"),
+        ("Mode", "safe: only GET, HEAD and OPTIONS" if safe else
+         f"intrusive · {'read-only' if read_only else 'state-changing'}", "ok" if safe else "warn"),
         # The profile's own check is not repeated: the pre-flight model test shows whether the model answers.
         ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth")) if v)),
         ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} requests · ≤ "
                    + (f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds} s") + f" · {rate}"),
-        ("Mode", "safe: only GET, HEAD and OPTIONS" if safe else
-         f"intrusive · {'read-only' if read_only else 'state-changing'}", "ok" if safe else "warn"),
     ]
     for key, note in notes:
         if note:
             rows.append((key, note, "warn" if note.startswith(("unavailable", "replaces")) else None))
-    return [*_title(st, "verify"), *_facts(st, rows)]
+    return [*([] if guided else _title(st, "verify")), *_facts(st, rows)]
 
 
 # Seen from the finding: green when the run confirmed it, red when it could not reproduce it or a control

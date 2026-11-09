@@ -265,7 +265,7 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     out = capsys.readouterr().out
     assert rc == cli.EXIT_OK and asked == ["T-1"]
     assert out.index("Test plan     1 of 3 findings will be tested") < out.index("Preflight")   # before contact
-    assert "  T-1  critical  injection       GET /rest/products/search · sqli in search" in out
+    assert "  T-1  critical  injection  sqli in search · GET /rest/products/search\n" in out
     assert "Not testable  2 findings need what this run does not have (--test-all tries anyway)" in out
     assert "test identity" in out and "→ test accounts: --account, or --identities FILE" in " ".join(out.split())
     # T-2's contract declares a JSON field of the login POST: no read request carries it, so no mode helps.
@@ -318,6 +318,19 @@ def test_the_test_plan_gives_lines_to_copy_and_the_browser_s_actual_cause(monkey
     assert "→ Playwright is not installed\n" in brief and "appsec-verifier preflight" in brief
 
 
+def test_on_a_terminal_verify_cuts_a_test_plan_line_to_fit_and_preflight_shows_it_whole(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
+    plan = _plan("access-control", GET_LOGIN, Endpoint("GET", "/a/very/long/path/to/a/record/:id", True))
+    plan.title = "Missing ownership check on records"
+    sgr = __import__("re").compile(r"\x1b\[[0-9;]*m")
+    line = sgr.sub("", cli._test_cases(cli.Style(True), [plan], {}, full=False)[-1])
+    assert line.startswith("  T-1  high  access-control  Missing ownership check on records · GET /a, GET")
+    assert line.endswith("…") and len(line) == 79 and "(login)" not in line
+    whole = cli._test_cases(cli.Style(True), [plan], {}, full=True)[-1]
+    assert sgr.sub("", whole).endswith("· GET /a, GET /a/very/long/path/to/a/record/:id")
+    assert cli._test_cases(cli.Style(False), [plan], {}, full=False)[-1].endswith("/record/:id")   # not a terminal
+
+
 def test_the_request_hint_names_a_scope_entry_only_where_one_can_name_the_request(monkeypatch):
     """--source helps only when the finding's file declares its route; a test_resources entry names the request
     of an access-control finding, and no scope entry does that for SSRF and the other classes."""
@@ -347,7 +360,7 @@ def test_the_identity_hint_names_the_login_the_assessment_lists_and_an_example()
 def test_the_settings_name_the_report_and_only_overwrite_replaces_it(tmp_path, monkeypatch, capsys):
     _verify(tmp_path, monkeypatch)
     out = capsys.readouterr().out
-    assert f"Report     : {tmp_path / 'out' / 'verification.md'} (Markdown, and verification.yaml for tools)" in out
+    assert f"Report     : {tmp_path / 'out' / 'verification.md'}\n" in out
     assert f"Report     : {tmp_path / 'out' / 'verification.md'} (Markdown)\n" in out          # in Done
     before = (tmp_path / "out" / "verification.md").read_text()
     for removed in (None, "verification.yaml"):                 # the Markdown report alone counts too

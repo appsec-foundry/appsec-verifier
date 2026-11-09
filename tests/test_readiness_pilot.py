@@ -35,7 +35,7 @@ def test_preparation_changes_readiness_and_is_shown_before_execution():
     assert _blocker(plan, identities=IDENTITIES[:2], safe=False) is None
     assert _blocker(plan, identities=IDENTITIES[:2], safe=True)[0] == "intrusive"
     assert _blocker(plan, identities=IDENTITIES[:1], safe=False)[0] == "resource"
-    assert "Preparation: POST /api/Notes" in "\n".join(_test_cases(Style(False), [plan], {}))
+    assert "POST /api/Notes (prepares)" in "\n".join(_test_cases(Style(False), [plan], {}))
 
 
 @pytest.mark.parametrize("kind", ["other-file", "no-source", "duplicate", "other-record-route", "variant"])

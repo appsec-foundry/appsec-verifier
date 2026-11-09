@@ -244,4 +244,4 @@ def test_verify_confirms_ssrf_through_the_automatic_listener_without_a_scope_fil
                    "--output", str(tmp_path / "out"), "--yes", "--rate", "0"])
     result = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())["results"][0]
     assert rc == 0 and result["verdict"] == "confirmed", result["rationale"]
-    assert "automatic for a local target" in capsys.readouterr().out
+    assert "(the target must reach this machine's loopback, not via docker -p)" in capsys.readouterr().out

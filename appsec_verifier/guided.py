@@ -139,7 +139,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
     environ = os.environ if environ is None else environ
     cwd = Path.cwd()
     assessment = Path(args.assessment)
-    _, plans, errors = cli._load_assessment(assessment)
+    doc, plans, errors = cli._load_assessment(assessment)
     if errors:
         _err(f"the assessment {assessment} cannot be used:\n" + "\n".join(f"  - {clean(e)}" for e in errors))
         return cli.EXIT_BLOCKED
@@ -156,7 +156,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
         return cli.EXIT_BLOCKED
 
     d = Dialog(ask or input, out, ask_secret, ask_block)
-    out(overview(assessment, plans))
+    out(overview(assessment, plans, doc))
     if not any(p.status == "dynamic" for p in plans):
         _err("\nno finding in this assessment can be verified dynamically; nothing to do.")
         return cli.EXIT_BLOCKED
@@ -188,22 +188,21 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
 
 
 
-def overview(assessment: Path, plans) -> str:
+def overview(assessment: Path, plans, doc: dict | None = None) -> str:
+    """The first screen of the guided run: the assessment, how many of its findings can be tested at
+    runtime and their severities. The run settings that follow do not repeat it."""
     dyn = [p for p in plans if p.status == "dynamic"]
-    static = sum(1 for p in plans if p.status in ("static-only", "unsupported"))
     incomplete = sum(1 for p in plans if p.status == "input-incomplete")
-    by_class = Counter(p.cls for p in dyn)
     by_sev = Counter(clean(p.severity).lower() or "unknown" for p in dyn)
     order = [*SEVERITY_FLOORS, *sorted(set(by_sev) - set(SEVERITY_FLOORS))]
     st = Style.for_stream(sys.stdout)
-    counts = [f"{len(plans)} total", f"{len(dyn)} candidates for runtime testing",
-              *([f"{static} unsupported"] if static else []),
-              *([f"{incomplete} without a code location"] if incomplete else [])]
+    counts = [(cli._count(len(dyn), "runtime candidate") + f" of {len(plans)}", "bold"),
+              *((f"{s} {by_sev[s]}", cli._severity_role(s)) for s in order if by_sev[s]),
+              *([(f"{incomplete} without a code location", "muted")] if incomplete else [])]
+    summary = cli._assessment_summary(doc or {})
     return "\n".join([*cli._title(st, "assessment"), *cli._facts(st, [
-        ("Assessment", str(assessment)),
-        ("Findings", " · ".join(counts)),
-        ("By class", " · ".join(f"{c} {n}" for c, n in sorted(by_class.items())) or "—"),
-        ("By severity", [(f"{s} {by_sev[s]}", cli._severity_role(s)) for s in order if by_sev[s]] or "—"),
+        ("Assessment", f"{assessment} · {summary}" if summary else str(assessment)),
+        ("Findings", counts),
     ])])
 
 
@@ -212,7 +211,7 @@ def _selection(d: Dialog, args, plans) -> bool:
     otherwise, and every class present is tested unless --category or --class
     narrows them. When the default floor leaves nothing to verify, the run offers
     the next lower severity that has findings. False when there is none or the
-    operator declines."""
+    operator declines. The selection is shown with the run settings."""
     def dynamic() -> int:
         return sum(1 for p in cli._select(args, plans) if p.status == "dynamic")
 
@@ -231,9 +230,6 @@ def _selection(d: Dialog, args, plans) -> bool:
                          f"Verify the {n} of severity {lower}?", default=True):
                 _err("nothing to verify; nothing was contacted.")
                 return False
-    dyn = dynamic()
-    floor = f", severity {args.min_severity} and above (--min-severity to change)" if args.min_severity else ""
-    d.out(f"  → {dyn} finding{'' if dyn == 1 else 's'} to verify{floor}")
     return True
 
 

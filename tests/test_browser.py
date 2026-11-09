@@ -330,7 +330,7 @@ def test_browser_is_prepared_only_for_xss_and_reports_when_unavailable(monkeypat
     assert browser is None and "cannot be confirmed" in note
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
     browser, note, _ = _proof_browser(args, None, _sel("xss"))
-    assert isinstance(browser, ProofBrowser) and "first use" in note and "screenshots: xss" in note
+    assert isinstance(browser, ProofBrowser) and note == "Google Chrome, screenshots of xss"
     assert browser.screenshots == {"xss"}
 
 
@@ -345,15 +345,15 @@ def test_screenshots_need_the_browser_only_for_the_classes_they_are_on_for(monke
     monkeypatch.setattr(ProofBrowser, "check_available", staticmethod(lambda: None))
     for cls in ("access-control", "injection", "open-redirect", "path-traversal", "ssrf"):
         browser, note, _ = _proof_browser(on, None, _sel(cls))
-        assert browser.screenshots == set(SCREENSHOT_CLASSES) and "screenshots: all classes" in note
+        assert browser.screenshots == set(SCREENSHOT_CLASSES) and note.endswith("screenshots of all classes")
     some = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="xss,ssrf")
     assert _proof_browser(some, None, _sel("injection")) == (None, None, None)
     browser, note, _ = _proof_browser(some, None, _sel("ssrf"))
-    assert browser.screenshots == {"xss", "ssrf"} and "screenshots: xss, ssrf" in note
+    assert browser.screenshots == {"xss", "ssrf"} and note.endswith("screenshots of xss, ssrf")
     off = SimpleNamespace(output=str(tmp_path), headful=False, screenshots="none")
     assert _proof_browser(off, None, _sel("access-control")) == (None, None, None)
     browser, note, _ = _proof_browser(off, None, _sel("xss"))      # XSS still needs the browser for its proof
-    assert browser.screenshots == frozenset() and "screenshots: none" in note
+    assert browser.screenshots == frozenset() and note.endswith("no screenshots")
 
 
 @pytest.mark.parametrize(
