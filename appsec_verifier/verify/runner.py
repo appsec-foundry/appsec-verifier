@@ -1,5 +1,5 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
-VER-020, VER-037). Pure, injectable logic: the probe registry, HTTP client, budget, and
+VER-020, VER-037, VER-046). Pure, injectable logic: the probe registry, HTTP client, budget, and
 clock are all passed in, so the whole flow is tested offline. An optional
 `progress` (progress.RunProgress) shows each finding with a probe, its
 steps, its proof and, once its last variant is done, a changed rating
@@ -93,6 +93,7 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
         "poc": res.poc,
         "planning": res.planning,
         "evidence_review": res.evidence_review,
+        "technical_review": res.technical_review,
         "selection_reason": plan.selection_reason,
         "target_location": res.target_location
         or ({"source_file": plan.instance.rsplit(":", 1)[0], "source_line": None} if plan.instance else None),
@@ -168,6 +169,7 @@ def run_verification(
         browser.redact = sessions.redact if sessions is not None else lambda value: value
 
     contexts = {}
+    technical_review_budgets = {}
 
     def ctx_factory(plan: FindingPlan) -> ProbeContext:
         related = set(plan.context.get("dependencies", []))
@@ -190,6 +192,7 @@ def run_verification(
             log=log,
             evidence_dir=evidence_dir,
             progress=progress,
+            technical_review_budget=technical_review_budgets.setdefault(plan.id, {}),
             prior_results=[
                 {
                     "finding": r["finding_ref"]["id"],

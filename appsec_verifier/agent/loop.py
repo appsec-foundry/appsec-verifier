@@ -1,4 +1,4 @@
-"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019, VER-036).
+"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019, VER-036, VER-046).
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import Protocol
 
@@ -65,7 +66,7 @@ def _result_from_verdict(v: dict) -> ProbeResult:
     )
 
 
-def _log(ctx, step: int, **record) -> None:
+def _log(ctx, step: int | None, **record) -> None:
     if ctx.log is not None:
         ctx.log({"finding": ctx.plan.id, "step": step, **record})
     if ctx.progress is not None:
@@ -95,24 +96,49 @@ class AgentProbe:
     def run(self, ctx: ProbeContext) -> ProbeResult:
         controller = Controller(ctx)
         result = self._run(ctx, controller)
+        result.technical_review = getattr(ctx, "technical_review_result", None)
+        if result.technical_review and result.technical_review["status"] != "not-reviewed":
+            _log(ctx, None, tool="technical_review", note="Technical QA: " + result.technical_review["status"],
+                 result=result.technical_review)
         # Every preparation route the owner used outside the finding's own is a recorded deviation (VER-008).
         result.observations = [*result.observations, *(
             f"Deviation: the owner created its own test resource with {route}, a route the assessment names for "
             "this resource outside this finding (VER-043)." for route in controller.deviations)]
+        for request in ctx.derived_requests:
+            result.observations.append(
+                f"Derived request: {request['method']} {request['path']}, supported by recorded step "
+                f"{request['evidence_step']}. Reason: {request['reason']}"
+            )
         return result
 
     def _run(self, ctx: ProbeContext, controller: Controller) -> ProbeResult:
+        from .technical_review import TechnicalReview
+
         planner = self._planner_factory()
+        qa = TechnicalReview(ctx, self._planner_factory, planner)
+        ctx.technical_review_result = qa.state
         ctx.evidence_test_planner = planner
         ctx.evidence_reviewer_factory = self._planner_factory
         tools = AgentTools(ctx)
         history: list[dict] = []
+        ctx.agent_history = history
         sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
         ctx.created, ctx.owned = set(), set()
         last_rejected = None
         last_cited = None
         repairs = 0
+        qa_candidate = None
+
+        def attach_stopped(stopped):
+            # A follow-up cannot erase an already checked observation when its budget ends.
+            cited = None
+            if qa_candidate is not None:
+                prior, cited = qa_candidate
+                stopped = replace(prior, limits_hit=stopped.limits_hit, observations=[
+                    *prior.observations, "Technical QA follow-up stopped before a revised conclusion."])
+                qa.state["reason"] = "Technical objections remain; the follow-up stopped within the existing limits."
+            return poc.attach(ctx, history, sent, stopped, cited)
 
         def keep(step: int, name: str) -> None:
             response = tools.take_response()
@@ -139,7 +165,7 @@ class AgentProbe:
                 controller.before_model()
                 proposal = controller.run(lambda: planner.next_step(ctx, history))
             except LimitExceeded as exc:
-                return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
+                return attach_stopped(_stopped(ctx, step, exc))
             action = check_action(proposal)  # VER-019: no unchecked arguments
             if "refused" in action:
                 # VER-017: refused and logged, nothing runs; counted like a failed action (VER-036)
@@ -176,10 +202,18 @@ class AgentProbe:
                 if last_rejected is not None and verdict.get("verdict") == "inconclusive":
                     result = last_rejected
                     verdict = {**verdict, "proof_steps": last_cited}
+                feedback = qa.consider(history, result, tools, controller, self._max_steps - decision)
+                if feedback is not None:
+                    if (result.proof or {}).get("checked") is True:
+                        qa_candidate = (result, verdict.get("proof_steps"))
+                    _log(ctx, step, tool="qa_feedback", note="Technical QA requests a follow-up", result=feedback)
+                    history.append({"tool": "qa_feedback", "args": {}, "result": feedback})
+                    continue
                 from ..verify.browser_evidence import attach_explanation, capture_application, recapture
 
-                capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
-                                    verdict.get("proof_steps"))
+                if result.limits_hit is None:
+                    capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
+                                        verdict.get("proof_steps"))
                 result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
                 attach_explanation(ctx, result, verdict.get("image_explanation"))
                 # An evidence review may ask for another page for an unclear screenshot (VER-042).
@@ -190,7 +224,7 @@ class AgentProbe:
                 try:
                     requests = controller.run(lambda args=args: tools.experiment_requests(**args))
                 except LimitExceeded as exc:
-                    return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
+                    return attach_stopped(_stopped(ctx, step, exc))
                 except ToolError as exc:
                     result = {"error": str(exc)}
                     controller.observe(name, args, result)
@@ -210,7 +244,7 @@ class AgentProbe:
                         result = {"error": str(exc)}
                     except LimitExceeded as exc:
                         keep(step, "http_request")
-                        return poc.attach(ctx, history, sent, _stopped(ctx, step, exc), None)
+                        return attach_stopped(_stopped(ctx, step, exc))
                     keep(step, "http_request")
                     controller.observe("http_request", request, result)
                     if ctx.sessions is not None:
@@ -239,7 +273,7 @@ class AgentProbe:
                 result = {"error": str(exc)}
             except LimitExceeded as exc:
                 keep(step, name)
-                return poc.attach(ctx, history, sent, _stopped(ctx, step, exc, **call), None)
+                return attach_stopped(_stopped(ctx, step, exc, **call))
             keep(step, name)
             controller.observe(name, args, result)
             if ctx.sessions is not None:
@@ -249,13 +283,9 @@ class AgentProbe:
         return _finish(
             ctx,
             self._max_steps,
-            poc.attach(
-                ctx,
-                history,
-                sent,
+            attach_stopped(
                 ProbeResult(
                     verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"
                 ),
-                None,
             ),
         )

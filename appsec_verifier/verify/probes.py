@@ -5,6 +5,8 @@ target (VER-008) and returns a ProbeResult. No probe is implemented yet, so
 `default_registry()` is empty and dynamically verifiable findings are reported
 `not-attempted` (VER-024). Probes run through the injected, scope-confined HTTP
 client and must honour `ProbeContext.safe` (VER-030) and `read_only` (VER-014).
+Technical QA state is separate from proof, with correction allowances shared
+across a finding's variants (VER-046).
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ class ProbeResult:
     poc: dict | None = None            # proof of concept recorded by the code (VER-034, verify/poc.py)
     planning: list[dict] = field(default_factory=list)
     evidence_review: dict | None = None  # presentation quality, never a technical verdict (VER-042)
+    technical_review: dict | None = None  # independent technical objections, never proof (VER-046)
 
 
 @dataclass
@@ -55,6 +58,9 @@ class ProbeContext:
     evidence_dir: object | None = None  # Path of evidence/ for proof records (VER-022), or None offline
     progress: object | None = None     # RunProgress that shows each step on the console, or None
     responses: dict = field(default_factory=dict)  # bounded redacted responses, private to this finding
+    agent_history: list[dict] = field(default_factory=list)  # recorded steps, never supplied by a model
+    derived_requests: list[dict] = field(default_factory=list)  # checked provenance for related requests
+    technical_review_budget: dict = field(default_factory=dict)  # shared by all variants (VER-046)
     created: set = field(default_factory=set)  # identifiers the owner's creating answers returned (VER-010)
     owned: set = field(default_factory=set)    # of those, the ones the owner's read showed with its marker
     prior_results: list[dict] = field(default_factory=list)

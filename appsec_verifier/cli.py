@@ -1441,7 +1441,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         reads = any(m in ("GET", "PAGE", "ALL") for m, _ in named)
         creates = any(record_segment(p) is None for p in writes)
         changes = any(record_segment(p) is not None for p in writes)
-        if named and "resource" not in methods and not (
+        if named and not source and "resource" not in methods and not (
                 ("reference" in methods and reads) or ("owner" in methods and creates and (reads or changes))):
             if "owner" in methods and not creates:
                 return "access", "no write request that creates a record, one without an identifier in its path"
@@ -1458,7 +1458,8 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         return "callback", "no callback in the scope"
     variants = getattr(plan, "verification_context", {}).get("variants", [])
     missing = [missing_capabilities(v, safe=safe, browser=browser is not None) for v in variants]
-    if missing and all(missing):
+    diagnostic_read = any(v["request"]["method"] in ("GET", "HEAD", "OPTIONS") for v in variants)
+    if missing and all(missing) and not (source or diagnostic_read):
         needs = sorted({need for row in missing for need in row})
         if needs == ["state-change"]:
             return "intrusive", "safe mode; every declared variant needs a state change"
@@ -1473,7 +1474,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         if methods and all(m in WRITE_METHODS for m in methods) and safe:
             return "intrusive", ("safe mode; every request the finding names writes, and the proof sends each "
                                  "control twice")
-        if not methods and not contracts:
+        if not methods and not contracts and not source:
             return "contract", "no read request to run controls on, and no injection_inputs entry"
     requests = [e for e in plan.endpoints if e.method != "PAGE"]
     # An injection finding that gets here has a read request, and its proof never writes.

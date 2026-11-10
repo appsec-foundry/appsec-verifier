@@ -223,6 +223,18 @@ def test_plan_binding_refuses_other_known_route_and_input(tmp_path):
         c.before("http_request", {"path": "/search?q=undeclared&q=plain"})
 
 
+def test_operator_pinned_resource_stays_bound_when_other_routes_are_known(tmp_path):
+    ctx = context(tmp_path)
+    ctx.plan.endpoints += (Endpoint("GET", "/other", None),)
+    ctx.scope = {**ctx.scope, "test_resources": [{"finding_id": ctx.plan.id, "id": "owned",
+                 "path": "/search", "allowed_roles": ["customer-a"], "denied_roles": ["customer-b"]}]}
+    c = Controller(ctx)
+    c.plan = {"kind": "access-control", "resource": "owned", "path": "/search"}
+    c.before("http_request", {"path": "/search", "role": "customer-b"})
+    with pytest.raises(ToolError, match="accepted test plan"):
+        c.before("http_request", {"path": "/other", "role": "customer-b"})
+
+
 def test_query_encoding_or_empty_defaults_do_not_buy_more_repetitions(tmp_path):
     c = Controller(context(tmp_path))
     c.before("http_request", {"path": "/search?q=a"})

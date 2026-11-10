@@ -16,6 +16,7 @@ from jsonschema import Draft202012Validator
 from test_runner import _plan, _run
 
 from appsec_verifier.agent.hosts import HostPlanner, HostReply
+from appsec_verifier.agent.technical_review import QA_SCHEMA
 from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.progress import RunProgress
 from appsec_verifier.scope import ScopeGuard
@@ -321,7 +322,8 @@ def test_runner_groups_variants_and_report_matches_schema():
             agents.append(Planner(host))
             actual.evidence_test_planner = agents[-1]
             actual.evidence_reviewer_factory = ctx.evidence_reviewer_factory
-            return pair([])[1]
+            # A confirmation retires later variants (VER-039); unresolved variants still group for review.
+            return replace(pair([])[1], verdict="inconclusive", proof=None)
 
     a = _plan("T-1", "xss")
     b = replace(a, variant_digest="ab")
@@ -358,7 +360,9 @@ def test_rendered_panel_escapes_explanation_and_retains_quote_label():
     assert "<img" not in page and "&lt;img" in page and "recorded excerpt" in page
 
 
-def test_all_five_hosts_forward_review_schema_without_enabling_tools():
+@pytest.mark.parametrize("schema,reply", [(REVIEW_SCHEMA, CLEAR), (QA_SCHEMA, {"action": "review",
+                         "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0})])
+def test_all_five_hosts_forward_review_schema_without_enabling_tools(schema, reply):
     from test_host_anthropic import _host, _msg
     from test_hosts import (
         CLAUDE_INIT,
@@ -375,34 +379,34 @@ def test_all_five_hosts_forward_review_schema_without_enabling_tools():
     from appsec_verifier.agent.host_openai import OpenAIHost
 
     budget = RunBudget(Limits())
-    anthropic, client = _host([_msg(CLEAR)])
-    assert anthropic.call("s", "p", 10, budget, schema=REVIEW_SCHEMA).step == CLEAR
-    assert client.calls[0]["output_config"]["format"]["schema"] == REVIEW_SCHEMA
+    anthropic, client = _host([_msg(reply)])
+    assert anthropic.call("s", "p", 10, budget, schema=schema).step == reply
+    assert client.calls[0]["output_config"]["format"]["schema"] == schema
     assert "tools" not in client.calls[0]
-    claude, run = _claude([_lines(CLAUDE_INIT, _claude_result(CLEAR))])
-    assert claude.call("s", "p", 10, budget, schema=REVIEW_SCHEMA).step == CLEAR
+    claude, run = _claude([_lines(CLAUDE_INIT, _claude_result(reply))])
+    assert claude.call("s", "p", 10, budget, schema=schema).step == reply
     argv = run.calls[0]["argv"]
-    assert json.loads(argv[argv.index("--json-schema") + 1]) == REVIEW_SCHEMA
+    assert json.loads(argv[argv.index("--json-schema") + 1]) == schema
     seen = []
 
     def inspect(argv, cwd):
         seen.append(json.loads(Path(argv[argv.index("--output-schema") + 1]).read_text()))
 
-    codex, _ = _codex([_codex_events({"type": "agent_message", "text": json.dumps(CLEAR)})], inspect)
-    assert codex.call("s", "p", 10, budget, schema=REVIEW_SCHEMA).step == CLEAR
-    assert seen == [REVIEW_SCHEMA]
-    copilot, run = _copilot([json.dumps(CLEAR)])
-    assert copilot.call("s", "p", 10, budget, schema=REVIEW_SCHEMA).step == CLEAR
-    assert json.dumps(REVIEW_SCHEMA) in run.calls[0]["input"]
+    codex, _ = _codex([_codex_events({"type": "agent_message", "text": json.dumps(reply)})], inspect)
+    assert codex.call("s", "p", 10, budget, schema=schema).step == reply
+    assert seen == [schema]
+    copilot, run = _copilot([json.dumps(reply)])
+    assert copilot.call("s", "p", 10, budget, schema=schema).step == reply
+    assert json.dumps(schema) in run.calls[0]["input"]
     sent = []
 
     def post(url, headers, body, timeout):
         sent.append(body)
-        return 200, _openai_response(CLEAR)
+        return 200, _openai_response(reply)
 
     openai = OpenAIHost.resolve(model=None, environ=ENV, post=post)
-    assert openai.call("s", "p", 10, budget, schema=REVIEW_SCHEMA).step == CLEAR
-    assert sent[0]["text"]["format"]["schema"] == REVIEW_SCHEMA and "tools" not in sent[0]
+    assert openai.call("s", "p", 10, budget, schema=schema).step == reply
+    assert sent[0]["text"]["format"]["schema"] == schema and "tools" not in sent[0]
     assert sent[0]["store"] is False
 
 

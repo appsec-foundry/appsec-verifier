@@ -368,6 +368,11 @@ properties:
             - type: "null"
             - $ref: "#/$defs/evidence_review"
 
+        technical_review:
+          anyOf:
+            - type: "null"
+            - $ref: "#/$defs/technical_review"
+
         timing:
           type: object
           additionalProperties: true
@@ -380,6 +385,39 @@ properties:
           description: Original report time retained on merge; fallback for older results without a test timestamp.
 
 $defs:
+  technical_review:
+    type: object
+    additionalProperties: false
+    required: [status, rounds, reviews, inspected_steps, reason, issues]
+    properties:
+      status:
+        enum: [clear, needs-attention, stopped, not-reviewed]
+      rounds:
+        type: integer
+        minimum: 0
+        maximum: 2
+      reviews:
+        type: integer
+        minimum: 0
+        maximum: 3
+      inspected_steps:
+        type: array
+        uniqueItems: true
+        maxItems: 4
+        items: {type: integer, minimum: 1}
+      reason: {type: string}
+      issues:
+        type: array
+        maxItems: 4
+        items:
+          type: object
+          additionalProperties: false
+          required: [code, detail, question]
+          properties:
+            code:
+              enum: [coverage, prerequisite, counterexample, interpretation, proof]
+            detail: {type: string, minLength: 1, maxLength: 600}
+            question: {type: string, minLength: 1, maxLength: 600}
   evidence_review:
     type: object
     additionalProperties: false

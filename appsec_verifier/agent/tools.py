@@ -3,7 +3,8 @@
 request to the target as one of the configured identities (scope-guarded),
 read the evidenced source (repository-confined), and, for XSS findings, load a
 page in the proof browser whose requests go through the same guard (VER-009,
-VER-018). Nothing else.
+VER-018). Request derivation checks recorded evidence without contacting the
+target (VER-008, VER-043).
 
 An identity's credentials go only to the origin it is bound to (its
 `target_origin`, by default the target base URL), never to another host in the
@@ -177,6 +178,15 @@ class AgentTools:
         response, self._last_response = self._last_response, None
         return response
 
+    def derive_request(self, **args):
+        """Record a supported request derived from this finding's evidence (VER-008, VER-043)."""
+        from .derivation import derive
+
+        try:
+            return derive(self.ctx, **args)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+
     def plan_test(self, **plan) -> dict:
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
@@ -212,7 +222,7 @@ class AgentTools:
             plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge")
         ):
             # VER-011: an operator-declared injection_inputs entry pins the input for this finding; without one,
-            # the agent chooses it from a read request the finding names.
+            # the agent chooses it from an assessed or independently derived request.
             pinned = [r for r in self.ctx.scope.get("injection_inputs", [])
                       if r["finding_id"] == self.ctx.plan.id]
             if pinned and not any(
@@ -272,17 +282,21 @@ class AgentTools:
 
             validate_path_input(plan["path"], plan.get("input_name") or "")
         if plan.get("variant"):
+            from .derivation import covers
+
             variant = next((v for v in variants if v["id"] == plan["variant"]), None)
             if variant is None:
                 raise ToolError("unknown finding variant")
-            if variant["request"]["method"] != plan.get("method", "GET"):
+            derived = covers(self.ctx, plan)
+            if not derived and variant["request"]["method"] != plan.get("method", "GET"):
                 raise ToolError("the method does not match the finding variant")
-            if not route_matches(variant["request"]["path"], plan["path"]):
+            if not derived and not route_matches(variant["request"]["path"], plan["path"]):
                 raise ToolError("the path does not match the finding variant")
             inputs = variant["request"].get("inputs", [])
             location = {"params": "query"}.get(plan.get("input_location"), plan.get("input_location"))
             if (
                 plan.get("kind") in ("boolean", "timing")
+                and not derived
                 and inputs
                 and not any(i["location"] == location and i["name"] == plan["input_name"] for i in inputs)
             ):
@@ -290,7 +304,7 @@ class AgentTools:
             missing = missing_capabilities(
                 variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None
             )
-            if missing:
+            if missing and not derived:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
         marker = None
         if plan["kind"] == "access-control" and not plan.get("resource"):
@@ -448,6 +462,7 @@ class AgentTools:
 
     def call(self, name: str, args: dict) -> dict:
         tool = {
+            "derive_request": self.derive_request,
             "archive_probe": self.archive_probe,
             "http_request": self.http_request,
             "read_source": self.read_source,

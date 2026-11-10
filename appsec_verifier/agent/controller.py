@@ -1,9 +1,9 @@
 """Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036,
 VER-043).
 
-ScopeGuard remains the connection authority. Assessment routes only narrow
-that scope; neither model plans nor target responses can add routes here.
-An accepted plan narrows requests to its route and method; under an
+ScopeGuard remains the connection authority. Assessment routes and independently
+checked request derivations narrow that scope; model plans alone add nothing.
+An injection experiment narrows requests to its route and method; under an
 own-resource access-control plan its owner may also write to the finding's
 routes, and to the POST collection route the assessment names for one of its
 record routes, to create the resource it then reads back; the latter is
@@ -86,12 +86,16 @@ class Controller:
             variants = [v for v in variants if v["id"] == p.variant_id]
         if variants or p.variant_id:
             routes = [v["request"] for v in variants]
+            routes += [{"method": e.method, "path": e.path} for e in p.endpoints
+                       if not any(r["method"] == e.method and self._matches(r["path"], e.path) for r in routes)]
         else:
             routes = [{"method": e.method, "path": e.path} for e in p.endpoints]
-            for key in ("test_resources", "injection_inputs", "session_checks"):
-                routes.extend({"method": r.get("method", "GET"), "path": r["path"]}
-                              for r in self.ctx.scope.get(key, []) if r["finding_id"] == p.id)
-            routes += self.source_routes
+        for key in ("test_resources", "injection_inputs", "session_checks"):
+            routes.extend({"method": r.get("method", "GET"), "path": r["path"]}
+                          for r in self.ctx.scope.get(key, []) if r["finding_id"] == p.id)
+        routes += [r for r in self.source_routes if not any(
+            v["method"] == r["method"] and self._matches(v["path"], r["path"]) for v in routes)]
+        routes += getattr(self.ctx, "derived_requests", [])
         if (self.plan or {}).get("kind") == "access-control" and self.plan.get("owner"):
             routes += [{"method": e.method, "path": e.path, "preparation": True}
                        for e in getattr(p, "preparation", ())]
@@ -153,9 +157,11 @@ class Controller:
         # Under an own-resource plan the owner, and only the owner, may also write to the finding's routes (VER-010).
         owner_write = (name == "http_request" and self.plan and self.plan.get("owner") and method not in SAFE_METHODS
                        and args.get("role") == self.plan["owner"])
-        if name != "plan_test" and self.plan and not owner_write and not change_write and (
+        if (name != "plan_test" and self.plan
+                and (self.plan.get("kind") in ("boolean", "timing", "access-control") or self.plan.get("resource"))
+                and not owner_write and not change_write and (
             not self._matches(self.plan["path"], route_path) or method != self.plan.get("method", "GET")
-        ):
+        )):
             raise ToolError("request does not match the accepted test plan")
         if name == "http_request" and self.plan:
             plan = self.plan

@@ -554,24 +554,24 @@ def test_the_test_plan_follows_the_accounts_and_the_mode():
 
 
 def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
-    """Without a test resource the proof reads with a GET request of the finding, and an own resource is created
-    with one of its writes; a DELETE is never sent (VER-014)."""
+    """Without source, missing preparation blocks testing. Source permits diagnosis, not DELETE (VER-014)."""
     put, delete, get = (Endpoint(m, "/api/Items/:id", True) for m in ("PUT", "DELETE", "GET"))
     two, admin = ROLES[:2], ROLES[2:]
     for endpoints in ((put,), (delete,), (put, delete)):
         plan = _plan("access-control", *endpoints)
-        assert _blocker(plan, identities=two + admin, safe=False)[0] == "access"
-        assert _blocker(plan, identities=two, safe=False, scope={"test_resources": [RESOURCE]}) is None
+        assert _blocker(plan, identities=two + admin, safe=False, source=False)[0] == "access"
+        assert _blocker(plan, identities=two + admin, safe=False, source=True) is None
+        assert _blocker(plan, identities=two, safe=False, source=False, scope={"test_resources": [RESOURCE]}) is None
     post = Endpoint("POST", "/api/Items", True)
-    assert _blocker(_plan("access-control", post, get), identities=two, safe=False) is None
+    assert _blocker(_plan("access-control", post, get), identities=two, safe=False, source=False) is None
     # a write that names an existing record never creates one (VER-014); the comparison still can read
-    assert _blocker(_plan("access-control", put, get), identities=two, safe=False)[0] == "access"
-    assert _blocker(_plan("access-control", put, get), identities=two + admin, safe=False) is None
-    assert _blocker(_plan("access-control", get), identities=two, safe=False)[0] == "access"  # nothing creates it
+    assert _blocker(_plan("access-control", put, get), identities=two, safe=False, source=False)[0] == "access"
+    assert _blocker(_plan("access-control", put, get), identities=two + admin, safe=False, source=False) is None
+    assert _blocker(_plan("access-control", get), identities=two, safe=False, source=False)[0] == "access"
     # a write proof creates, changes by identifier and reads the changed path (VER-010)
-    assert _blocker(_plan("access-control", post, put), identities=two, safe=False) is None
-    assert _blocker(_plan("access-control", post), identities=two, safe=False)[1].startswith("no GET request")
-    assert _blocker(_plan("access-control", get), identities=two[:1] + admin, safe=False) is None
+    assert _blocker(_plan("access-control", post, put), identities=two, safe=False, source=False) is None
+    assert _blocker(_plan("access-control", post), identities=two, safe=False, source=False)[1].startswith("no GET")
+    assert _blocker(_plan("access-control", get), identities=two[:1] + admin, safe=False, source=False) is None
     assert _blocker(_plan("access-control"), identities=two + admin, safe=False) is None  # the route rule decides
 
 

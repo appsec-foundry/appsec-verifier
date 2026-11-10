@@ -31,7 +31,8 @@ def document(collection="/api/Notes", file="routes/notes.ts"):
 def test_preparation_changes_readiness_and_is_shown_before_execution():
     plan = plans_from(document())[0]
     assert [(e.method, e.path) for e in plan.preparation] == [("POST", "/api/Notes")]
-    assert _blocker(replace(plan, preparation=()), identities=IDENTITIES[:2], safe=False)[0] == "access"
+    assert _blocker(replace(plan, preparation=()), identities=IDENTITIES[:2], safe=False, source=False)[0] == "access"
+    assert _blocker(replace(plan, preparation=()), identities=IDENTITIES[:2], safe=False, source=True) is None
     assert _blocker(plan, identities=IDENTITIES[:2], safe=False) is None
     assert _blocker(plan, identities=IDENTITIES[:2], safe=True)[0] == "intrusive"
     assert _blocker(plan, identities=IDENTITIES[:1], safe=False)[0] == "resource"

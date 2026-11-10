@@ -181,13 +181,13 @@ def test_forms_obey_guard_mode_and_marker_steering(tmp_path):
 
 
 @pytest.mark.parametrize("missing", ["header", "browser-interaction"])
-def test_missing_capability_is_reported_before_an_attempt(tmp_path, missing):
+def test_missing_variant_capability_still_allows_diagnosis_but_not_an_unsupported_plan(tmp_path, missing):
     ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request allowed"))
     v = verification_context()
     v["variants"][0]["required_capabilities"] = [missing]
     ctx.plan = replace(ctx.plan, cls="injection", verification_context=v)
     reason = _blocker(ctx.plan, identities=[], browser=None, listener=None, scope=ctx.scope, safe=True)
-    assert reason[0] == "capability" and missing in reason[1]
+    assert reason is None  # The known GET can supply evidence for a supported alternative (VER-043).
     from test_experiments import plan
 
     declaration = plan()["args"] | {"variant": v["variants"][0]["id"]}

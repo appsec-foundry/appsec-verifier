@@ -223,9 +223,10 @@ def test_an_injection_finding_with_a_read_request_is_tested_without_a_scope_cont
     assert _blocker(written)[0] == "intrusive"
     assert _blocker(written, safe=False) is None
     assert _blocker(_plan("injection", POST, get)) is None                                # a read can carry it
-    # A finding naming no request at all, and no contract, still cannot run controls.
-    assert _blocker(_plan("injection")) == ("contract", "no read request to run controls on, and no "
-                                                        "injection_inputs entry")
+    # Without a request or contract, source can supply evidence for a route, never an invented request.
+    assert _blocker(_plan("injection"), source=True) is None
+    assert _blocker(_plan("injection"), source=False) == (
+        "contract", "no read request to run controls on, and no injection_inputs entry")
 
 
 def test_a_contract_declares_how_the_proof_reaches_the_input():

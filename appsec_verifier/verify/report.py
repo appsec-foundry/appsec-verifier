@@ -14,7 +14,7 @@ from the cited steps, never from the model's words) or why it is not
 confirmed, its requests and its proof of concept (VER-034): the decisive steps
 as HTTP excerpts in code fences that target content cannot close, and its
 screenshots (VER-035). A collapsed appendix holds the test plan, the test
-agent's own text and the evidence review (VER-042). Recorded responses and
+agent's own text, technical QA (VER-046) and evidence review (VER-042). Recorded responses and
 screenshots can show target data; the report says so and the export never
 references them (VER-022).
 
@@ -584,6 +584,9 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
                           if v)
     head = ["Result", "Severity", "Weakness"]
     cells = [result, _rating_text(rating, unchanged=True) if rating else "–", weakness or "–"]
+    if review := r.get("technical_review"):
+        head.append("Technical QA")
+        cells.append(_inline(review["status"], 40, cell=True))
     if tested := (r.get("timing") or {}).get("finished"):
         head.append("Tested")
         cells.append(_when(tested))
@@ -663,7 +666,7 @@ def _step_table(r: dict) -> list[str]:
 
 def _details(r: dict) -> list[str]:
     """The appendix part of a tested finding (VER-020): the test plan, the test agent's own explanation and
-    observations, and the evidence review (VER-042). Model text, so it stays in code fences."""
+    observations, technical QA (VER-046) and evidence review (VER-042). Model text stays in code fences."""
     out = []
     if r.get("planning"):
         plan = yaml.safe_dump(r["planning"], sort_keys=False, allow_unicode=True, width=110).rstrip()
@@ -685,15 +688,16 @@ def _fenced(text: str, info: str = "http") -> str:
 
 
 def _review_markdown(r: dict, level: int) -> list[str]:
+    technical = _technical_review_markdown(r, level)
     review = r.get("evidence_review")
     if not review:
-        return []
+        return technical
     shown = review.get("images_reviewed") or []
     seen = ("Screenshots a model reviewed: " + ", ".join(f"`{p}`" for p in shown) + "." if shown
             else "No screenshot was shown to a model.")
     status = (f"{_inline(review['status'], 40)} after {_inline(review['rounds'], 4)} of 2 correction rounds and "
               f"{_inline(review['reviews'], 4)} reviews")
-    out = ["", f"{'#' * level} Evidence review", "",
+    out = technical + ["", f"{'#' * level} Evidence review", "",
            f"{status[:1].upper() + status[1:]}. The review judges how the evidence is presented, not the verdict. "
            f"{seen}"]
     # The reviewer's words, first sentence each: model text, so it stays in a fence.
@@ -705,6 +709,23 @@ def _review_markdown(r: dict, level: int) -> list[str]:
     if text:
         out += ["", _fenced("\n".join(text), "text")]
     return out
+
+
+def _technical_review_markdown(r: dict, level: int) -> list[str]:
+    """Technical questions stay visible beside, and separate from, checked proof (VER-046)."""
+    review = r.get("technical_review")
+    if not review:
+        return []
+    out = ["", f"{'#' * level} Technical QA", "",
+           f"{_inline(review['status'], 40)}. {review['reviews']} technical reviews and "
+           f"{review['rounds']} correction rounds for this variant; the finding shares at most two rounds. "
+           "QA does not assign the technical verdict."]
+    text = [review.get("reason", "")]
+    if review.get("inspected_steps"):
+        text.append("Additional recorded responses inspected: " + ", ".join(map(str, review["inspected_steps"])))
+    for issue in review.get("issues", []):
+        text += ["", issue["detail"], "Follow-up question: " + issue["question"]]
+    return out + ["", _fenced("\n".join(text), "text")]
 
 
 def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: bool = True) -> list[str]:

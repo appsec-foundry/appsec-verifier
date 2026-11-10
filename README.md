@@ -53,14 +53,14 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 ## What it verifies
 
-Explicit finding requests and resolved route references take precedence over shared handler or registration locations when choosing test requests. A finding counts as `confirmed` only with the proof in the last column. The CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml); the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013).
+The agent can derive missing test details and related requests from relevant source and observed application forms or links, within the finding and authorised scope ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). A finding counts as `confirmed` only with the proof in the last column. The CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml); the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013).
 
 | Class | CWEs | Needs | Confirmed when |
 | --- | --- | --- | --- |
 | Cross-site scripting | 79 | the proof browser | a marker script runs in the browser; reflected text does not count |
 | Access control | 639, 862, 863, 306, 200 | a test resource in the scope (`test_resources`) with its accounts; for 639, 862 and 863 alternatively two accounts and `--allow-intrusive`, or an `--account` and an `--admin-account` | the declared resource reaches an account that must not get it. Without one (confidence `medium`): another account reads a record the first one created with a random marker, or a normal account gets the admin's answer while a request without login is refused |
-| SQL, NoSQL and LDAP injection | 89, 943, 90 | a query, body or single path input declared as literal data in the scope (`injection_inputs`); NoSQL operators require JSON | a JSON field in the response follows true and false conditions the Verifier generates, repeated with fresh controls; a delay alone never counts |
-| Command, template and XPath injection | 78, 1336, 643 | `injection_inputs` | the target computes fresh harmless arithmetic to the expected results |
+| SQL, NoSQL and LDAP injection | 89, 943, 90 | an evidenced literal query, body or single path input; an `injection_inputs` entry pins it; NoSQL operators require JSON | a JSON field in the response follows true and false conditions the Verifier generates, repeated with fresh controls; a delay alone never counts |
+| Command, template and XPath injection | 78, 1336, 643 | an evidenced literal input; an `injection_inputs` entry pins it | the target computes fresh harmless arithmetic to the expected results |
 | Path traversal | 22 | a declared marker file, or a disposable archive test location (`archive_checks`) with intrusive mode | the marker file is read, or a freshly uploaded ZIP marker is read outside the declared extraction directory |
 | Open redirect | 601 | nothing | the target redirects to a random host under `.invalid`; the redirect is not followed |
 | SSRF | 918 | a listener the target can reach: started by the Verifier for a `localhost` target, otherwise named in the scope (`callback`) | the target calls the listener |
@@ -82,7 +82,7 @@ Each finding ends with one of these verdicts. A negative verdict covers only the
 
 - Only the hosts, ports, paths and schemes in the scope are contacted, and only within its time window. Private and loopback addresses must be listed in the scope (`networks`), unless the scope names the host as `localhost` or as an IP address. Cloud metadata addresses are never contacted.
 - The Verifier shows the plan and asks before the first request. In CI, `--yes` gives this confirmation.
-- By default it sends only GET, HEAD and OPTIONS, with one harmless payload per test. Write requests (POST, PUT, PATCH), needed for stored XSS and some access-control tests, require `--allow-intrusive`, and a scope can forbid them with `allow_state_change: false`. Use them only against a test instance you can reset; records the Verifier creates stay on the target. DELETE is never sent.
+- By default it sends only GET, HEAD and OPTIONS, with bounded, hypothesis-driven harmless attempts. Write requests (POST, PUT, PATCH), needed for stored XSS and some access-control tests, require `--allow-intrusive`, and a scope can forbid them with `allow_state_change: false`. Use them only against a test instance you can reset; records the Verifier creates stay on the target. DELETE is never sent.
 - Requests, request rate, model calls, model cost and run time are capped; the defaults are in [`data/limits.yaml`](data/limits.yaml). A limit that is reached stops the finding or the run it applies to. Ctrl-C stops the run and still writes the report.
 - Passwords and tokens come from environment variables or hidden input and are not stored. They are kept out of the model's input, the logs and the report; the model knows the accounts by role name only. An `--admin-account` sends only GET, HEAD and OPTIONS.
 - The model sees the target's responses and, for the evidence review, application screenshots. Both can contain target data such as account names.
@@ -128,7 +128,7 @@ Before it contacts the target, `verify` shows the test plan: the findings it wil
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots; an image is omitted with a reason if masking cannot preserve the decisive observation or its text cannot be checked.
 
-After testing a finding, a second model call reviews whether the evidence is clear and can send it back to the test agent for correction. The review does not change verdicts and uses at most five extra model calls per finding, within the run's limits ([details](docs/cli.md#evidence-presentation-review)).
+Independent technical QA can question the test approach and request bounded follow-ups; a separate review checks evidence clarity, with at most five additional model calls per review type and finding inside the run limits ([technical QA](docs/cli.md#technical-qa-ver-046), [presentation review](docs/cli.md#evidence-presentation-review)).
 
 `--resume` continues a run that did not finish: findings with a verdict keep it, the others are tested. A report already in `--output` is replaced only with `--overwrite`. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding; the originals stay unchanged.
 

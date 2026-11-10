@@ -16,6 +16,7 @@ from appsec_verifier.agent import AgentProbe, HostPlanner, HostUnavailable, agen
 from appsec_verifier.agent.host_anthropic import AnthropicHost
 from appsec_verifier.agent.prompts import _tool_defs
 from appsec_verifier.agent.steps import STEP_SCHEMA
+from appsec_verifier.agent.technical_review import QA_SCHEMA
 from appsec_verifier.auth import SessionManager
 from appsec_verifier.cli import ProfileError, _build_planner_factory
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
@@ -93,6 +94,7 @@ def test_tool_defs_expose_only_the_confined_tools():
         "submit_verdict",
         "read_context",
         "read_response",
+        "derive_request",        # evidence-backed planning only; no target contact (VER-008, VER-043)
         "plan_test",
         "run_experiment",
         "login_fields",          # asked once before the run (VER-041), never offered during a finding
@@ -324,6 +326,7 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
                     proof_steps=[2, 3],
                 )
             ),
+            _msg({"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0}),
         ]
     )
     ctx = _full_ctx(tmp_path, transport)
@@ -344,5 +347,7 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=8).run(ctx)
     assert res.verdict == "confirmed" and res.identities_used == ["customer-a", "customer-b"]
     assert calls == ["Bearer AAAA", "Bearer BBBB"]
-    assert ctx.budget.calls == 4 and ctx.budget.cost == pytest.approx(4 * 0.008)
+    assert ctx.budget.calls == 5 and ctx.budget.cost == pytest.approx(5 * 0.008)
+    assert res.technical_review["status"] == "clear" and res.proof["checked"]
+    assert client.calls[4]["output_config"]["format"]["schema"] == QA_SCHEMA
     assert '"status": 200' in client.calls[2]["messages"][0]["content"]  # results reach the model as data
