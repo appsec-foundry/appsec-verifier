@@ -74,7 +74,7 @@ A run has five steps:
 4. Test each selected finding, bounded and inside the scope (VER-008, VER-015, VER-017).
 5. Write the report with its evidence and, with `--annotate`, the annotated copies (VER-020, VER-022, VER-027, VER-038).
 
-Before the confirmation, `Test plan` lists the findings the run will test, one line each with severity, class, title and the requests the assessment names for it (for example `GET /rest/basket/:id`), with `(login)` for requests that need an identity and `(prepares)` for the setup of a test resource. `page /#/search` is a browser route. On a terminal `verify` cuts a line to the terminal's width; `preflight` shows it whole. The agent gets these requests and the finding's scenario and attack steps; it reads source code only with `--source`.
+Before the confirmation, `Test plan` lists the findings the run will test, one line each with severity, class, title and the requests the assessment names for it (for example `GET /rest/basket/:id`), with `(login)` for requests that need an identity and `(prepares)` for the setup of a test resource. `page /#/search` is a browser route. A finding with declared variants shows the count at the end of its line and adds an indented row per variant naming its own request, in the order the runner tries them; the first confirmed variant retires the rest. On a terminal `verify` cuts a line to the terminal's width; `preflight` shows it whole. The agent gets these requests and the finding's scenario and attack steps; it reads source code only with `--source`.
 
 `Not testable` groups the findings this run cannot confirm by what they need, with how to provide it:
 

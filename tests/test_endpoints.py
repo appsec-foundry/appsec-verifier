@@ -382,6 +382,32 @@ def test_on_a_terminal_verify_cuts_a_test_plan_line_to_fit_and_preflight_shows_i
     assert cli._test_cases(cli.Style(False), [plan], {}, full=False)[-1].endswith("/record/:id")   # not a terminal
 
 
+def test_a_finding_with_declared_variants_groups_them_under_one_header(monkeypatch):
+    """Varianten erscheinen nicht als Duplikate; die Finding-Zeile nennt deren Anzahl, darunter steht je
+    eine eingerueckte Zeile mit `variant_id  METHOD path` in Ausfuehrungsreihenfolge."""
+    from dataclasses import replace
+    monkeypatch.setenv("COLUMNS", "200")
+    base = _plan("xss", Endpoint("POST", "/api/Feedbacks", True))
+    base.title = "Angular sanitizer bypass"
+    variants = [
+        {"id": "v-html", "request": {"method": "POST", "path": "/api/Feedbacks"}},
+        {"id": "v-svg",  "request": {"method": "POST", "path": "/api/Feedbacks"}},
+        {"id": "v-page", "request": {"method": "GET",  "path": "/#/about"}},
+    ]
+    plans = [replace(base, variant_id=v["id"], variant_digest="d" * (i + 1),
+                     verification_context={"version": 1, "variants": [v]}) for i, v in enumerate(variants)]
+    out = cli._test_cases(cli.Style(False), plans, {})
+    text = "\n".join(out)
+    assert sum(1 for line in out if line.lstrip().startswith("T-1 ")) == 1     # eine Kopfzeile, keine drei
+    assert "3 variants" in text
+    assert "v-html  POST /api/Feedbacks" in text
+    assert "v-svg  POST /api/Feedbacks" in text
+    assert "v-page  GET /#/about" in text
+    # Ohne Varianten bleibt alles beim Alten.
+    one = cli._test_cases(cli.Style(False), [base], {})
+    assert "variants" not in "\n".join(one) and sum(1 for line in one if line.lstrip().startswith("T-1 ")) == 1
+
+
 def test_the_request_hint_names_a_scope_entry_only_where_one_can_name_the_request(monkeypatch):
     """--source helps only when the finding's file declares its route; a test_resources entry names the request
     of an access-control finding, and no scope entry does that for SSRF and the other classes."""

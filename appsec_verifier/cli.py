@@ -1497,8 +1497,10 @@ def _wrap_whole(text: str, width: int) -> list[str]:
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,
                 full: bool = True) -> list[str]:
     """The test plan before the confirmation: one line per finding the run tests, with its title and
-    the requests the assessment names, those that prepare a test resource marked `(prepares)`; then
-    those it cannot test, grouped by what they need and how to provide it.
+    the requests the assessment names, those that prepare a test resource marked `(prepares)`. Findings
+    with declared variants add one indented line per variant, naming its own request; the runner tries
+    them in that order and stops at the first confirmed variant. Then the findings the run cannot test,
+    grouped by what they need and how to provide it.
     `hints` replaces a need's how-to with what is actually missing (the browser's cause). Without
     `full` (in `verify`) a line is cut to fit a terminal, and each need gets one row with a few words
     and a pointer to `preflight`, which shows the how-tos."""
@@ -1507,6 +1509,12 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     from .planning import evidence_id
 
     tested = [p for p in plans if evidence_id(p) not in blocked]
+    groups: dict[str, list] = {}
+    order: list[str] = []
+    for p in tested:
+        if p.id not in groups:
+            order.append(p.id)
+        groups.setdefault(p.id, []).append(p)
     head = (
         f"{len(tested)} of {_count(len(plans), 'finding')} will be tested"
         if tested
@@ -1521,16 +1529,38 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     def request(endpoint) -> str:      # whether it needs a login is settled: without an account it is not tested
         return printable(str(endpoint)).removesuffix(" (login)")
 
-    for p in tested:
+    def variant_request(p) -> str:
+        variants = (getattr(p, "verification_context", None) or {}).get("variants") or []
+        if not variants:
+            return ""
+        req = (variants[0] or {}).get("request") or {}
+        method = printable(req.get("method") or "")
+        path = printable(req.get("path") or "")
+        return f"{method} {path}".strip()
+
+    for fid in order:
+        group = groups[fid]
+        p = group[0]
         title = printable(p.title or p.cwe or "")
         requests = ", ".join([*map(request, p.endpoints[:2]),
                               *(request(e) + " (prepares)" for e in getattr(p, "preparation", ()))])
-        text = " · ".join(x for x in (title, requests) if x)
+        tail_parts = [requests, f"{len(group)} variants"] if len(group) > 1 else [requests]
+        tail = " · ".join(x for x in tail_parts if x)
+        text = title + ((" · " + tail) if tail else "")
         if st.enabled and not full:
             text = _fit(text, max(columns() - 1 - (2 + id_w + 2 + sev_w + 2 + cls_w + 2), 20))
         rest = text[len(title):]
         lines.append(f"  {printable(p.id):<{id_w}}  {st(f'{printable(p.severity).lower():<{sev_w}}', 'muted')}  "
                      f"{printable(p.cls or ''):<{cls_w}}  {text[:len(title)]}" + (st(rest, "muted") if rest else ""))
+        if len(group) > 1:
+            indent = " " * (2 + id_w + 2 + sev_w + 2 + cls_w + 2)
+            for n, vp in enumerate(group, start=1):
+                vid = printable(getattr(vp, "variant_id", None) or f"v{n}")
+                req_text = variant_request(vp) or "no request declared"
+                body = f"{vid}  {req_text}"
+                if st.enabled and not full:
+                    body = _fit(body, max(columns() - 1 - len(indent), 20))
+                lines.append(f"{indent}{st(body, 'muted')}")
         if p.selection_reason:
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
