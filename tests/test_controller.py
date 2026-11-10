@@ -494,6 +494,55 @@ def test_a_plan_names_its_variant_problem(tmp_path):
         AgentTools(ctx).plan_test(**xss_plan()["args"])
 
 
+def test_variant_mismatch_errors_name_the_valid_variants(tmp_path):
+    """Fehlertexte, die Varianten betreffen, listen die zulassigen Optionen, damit der Agent in einem Step
+    korrigieren kann statt in die Stagnation zu laufen."""
+    ctx = xss_context(tmp_path)
+    tools = AgentTools(ctx)
+    # select-variant lists the catalog
+    try:
+        tools.plan_test(**xss_plan(variant=None)["args"])
+    except ToolError as exc:
+        assert "v-search" in str(exc) and "GET /#/search" in str(exc)
+    # unknown variant names what the user sent and the available ids
+    with pytest.raises(ToolError, match=r"unknown finding variant 'v-missing'.*v-search"):
+        tools.plan_test(**xss_plan(variant="v-missing")["args"])
+    # unknown variant in read_context too
+    with pytest.raises(ToolError, match=r"unknown finding variant 'v-missing'.*v-search"):
+        tools.read_context(variant="v-missing")
+    # unavailable context field names the fields that exist
+    ctx.plan = replace(ctx.plan, context={"affected_parameter": "q", "evidence_summary": "s"})
+    with pytest.raises(ToolError, match=r"unavailable.*affected_parameter"):
+        tools.read_context(field="variants")
+
+
+def test_method_and_path_mismatches_name_the_expected_request(tmp_path):
+    ctx = xss_context(tmp_path)
+    tools = AgentTools(ctx)
+    bad_method = {**xss_plan()["args"], "method": "POST"}
+    with pytest.raises(ToolError, match=r"method does not match.*v-search.*GET /#/search"):
+        tools.plan_test(**bad_method)
+    bad_path = {**xss_plan()["args"], "path": "/api/other"}
+    with pytest.raises(ToolError, match=r"(path does not match|no matching route).*v-search.*GET /#/search"):
+        tools.plan_test(**bad_path)
+
+
+def test_plan_test_accepts_the_query_alias_for_params(tmp_path):
+    """Die Variante nennt den URL-Query als `query`, das Plan-Schema als `params`. Beides wird akzeptiert
+    und auf `params` normalisiert, damit der eine Vokabular-Delta nicht ganze Varianten-Tests kippt."""
+    ctx = context(tmp_path)
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89",
+                       endpoints=(Endpoint("GET", "/search", None),),
+                       verification_context={"variants": [{"id": "v-q",
+                           "request": {"method": "GET", "path": "/search",
+                                       "inputs": [{"location": "query", "name": "q"}]}}]})
+    args = {"kind": "boolean", "hypothesis": "q is spliced into SQL", "path": "/search", "method": "GET",
+            "strategy": STRATEGY, "variant": "v-q", "input_location": "query", "input_name": "q",
+            "baseline": "a", "pointer": "/result", "sql_template": "a' AND {{predicate}} -- "}
+    accepted = AgentTools(ctx).plan_test(**args)
+    assert accepted["experiment"]["input_location"] == "params"
+
+
 def test_an_experiment_on_a_write_needs_intrusive_mode(tmp_path):
     """VER-011 + VER-030: writes repeat only in --allow-intrusive; the agent sends each control itself."""
     from test_agent_tools import _ctx

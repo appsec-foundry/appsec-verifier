@@ -178,7 +178,11 @@ class Controller:
                             if k in plan]
                 if (set(selected) != {plan["input_name"]} or any(supplied.values())
                         or token(selected.get(plan["input_name"])) not in {token(v) for v in controls}):
-                    raise ToolError("request must use the accepted experiment's input and control values")
+                    values = ", ".join(repr(str(v)[:60]) for v in controls)
+                    raise ToolError(
+                        "request must use the accepted experiment's input and control values; "
+                        f"send {plan['input_name']!r} in {plan['input_location']} with one of {values}"
+                    )
             if plan.get("kind") == "access-control" and plan.get("resource"):
                 resource = next((r for r in self.ctx.scope.get("test_resources", [])
                                  if r["finding_id"] == self.ctx.plan.id and r["id"] == plan.get("resource")), None)
@@ -189,6 +193,7 @@ class Controller:
                 if (args.get("role") or "anonymous") not in resource["allowed_roles"] + resource["denied_roles"]:
                     raise ToolError("request role is not declared for the accepted resource")
         # Variant input declarations constrain query/body names, not payload values.
+        declared: list[str] = []
         for r in matching:
             if "inputs" not in r:
                 return
@@ -196,13 +201,19 @@ class Controller:
             for i in r["inputs"]:
                 if i["location"] in names:
                     names[i["location"]].add(i["name"])
+                    declared.append(f"{i['location']}:{i['name']}")
             query = {k for k, _ in parse_qsl(urlsplit(path).query)} | set(args.get("params") or {})
             if name == "browser_check":
                 query |= {k for k, _ in parse_qsl(urlsplit(urlsplit(path).fragment).query)}
             if (query <= names["query"] and all(set(args.get(k) or {}) <= names[k] for k in ("json", "form"))
                     and set(args.get("path_inputs") or {}) <= names["path"]):
                 return
-        raise ToolError("request inputs do not match the finding variant")
+        seen = []
+        for d in declared:
+            if d not in seen:
+                seen.append(d)
+        allowed = ", ".join(seen[:8]) if seen else "no inputs declared"
+        raise ToolError(f"request inputs do not match the finding variant; declared: {allowed}")
 
     def _created(self, change, path, which="created") -> bool:
         """Whether every record `path` names is one the owner's write created in this finding (VER-010):

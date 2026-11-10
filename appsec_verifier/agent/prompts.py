@@ -49,7 +49,8 @@ def _tool_defs() -> list[dict]:
             "description": "Execute the accepted mechanism-specific challenge plan: "
             "ten read-only requests (five controls repeated twice). Each request is independently guarded, "
             "budgeted and numbered in history. Cite those http_request step numbers. No automatic writes.",
-            "input_schema": {"type": "object", "properties": {"role": {"type": "string"}}},
+            "input_schema": {"type": "object",
+                             "properties": {"role": {"type": ["string", "null"]}}},
         },
         {
             "name": "plan_test",
@@ -107,7 +108,8 @@ def _tool_defs() -> list[dict]:
             "Uses a bounded marker archive, absence baseline and escaped-marker readback; records cleanup outcome. "
             "Never retries a write. Cite this action for archive traversal proof.",
             "input_schema": {"type": "object", "required": ["check_id"], "properties": {
-                "check_id": {"type": "string", "maxLength": 80}, "role": {"type": "string", "maxLength": 80}
+                "check_id": {"type": "string", "maxLength": 80},
+                "role": {"type": ["string", "null"], "maxLength": 80},
             }},
         },
         {
@@ -120,7 +122,8 @@ def _tool_defs() -> list[dict]:
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "role": {"type": "string", "description": "identity role label, or omit for unauthenticated"},
+                    "role": {"type": ["string", "null"],
+                             "description": "identity role label, or omit/null for unauthenticated"},
                     "method": {"type": "string", "default": "GET"},
                     "path": {"type": "string"},
                     "path_inputs": {
@@ -161,7 +164,8 @@ def _tool_defs() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "role": {"type": "string", "description": "identity role label, or omit for unauthenticated"},
+                    "role": {"type": ["string", "null"],
+                             "description": "identity role label, or omit/null for unauthenticated"},
                     "wait_ms": {"type": "integer", "minimum": 0, "maximum": 5000},
                 },
                 "required": ["path"],

@@ -182,7 +182,8 @@ class SessionManager:
         renewed before a known expiry (VER-028)."""
         ident = self._by_role.get(role)
         if ident is None:
-            raise AuthError(f"unknown identity role {role!r}")
+            available = ", ".join(sorted(self._by_role)) or "no identities configured"
+            raise AuthError(f"unknown identity role {role!r}; available: {available}")
         cached = self._cache.get(role)
         if cached is not None:
             now = self._clock()

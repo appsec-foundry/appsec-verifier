@@ -385,8 +385,9 @@ def test_other_classes_are_not_steered(tmp_path):
 def test_unknown_role_and_missing_secret_are_tool_errors(tmp_path):
     sent = []
     tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp(), env={"OTHER": "x"}))
-    with pytest.raises(ToolError, match="unknown identity role"):
+    with pytest.raises(ToolError, match=r"unknown identity role 'admin'.*available: customer-a") as unknown:
         tools.http_request(role="admin", path="/x")
+    assert "customer-a" in str(unknown.value)
     with pytest.raises(ToolError, match="TA") as exc:
         tools.http_request(role="customer-a", path="/x")
     assert "x" not in str(exc.value).split("TA")[-1]   # names the variable, no value

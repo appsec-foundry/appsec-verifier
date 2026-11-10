@@ -66,6 +66,29 @@ _CALLBACK_WAIT_S = 1.0
 _DRIVE = re.compile(r"^[A-Za-z]:")
 
 
+def _variant_line(v: dict) -> str:
+    """Compact single-line rendering of a variant for a tool error, so the model can pick the right one.
+    Keeps the variant's id, method, path and declared inputs; omits the hypothesis and larger context."""
+    req = v.get("request") or {}
+    parts = [f"{v.get('id', '?')}", f"{req.get('method', 'GET')} {req.get('path', '')}".strip()]
+    inputs = req.get("inputs") or []
+    if inputs:
+        parts.append("inputs " + ", ".join(f"{i.get('location', '?')}:{i.get('name', '?')}" for i in inputs[:6]))
+    return " · ".join(p for p in parts if p)
+
+
+def _variant_catalog(variants: list[dict], cap: int = 6) -> str:
+    """At most `cap` variants, joined with '; ': enough for the model to recognise the one it means."""
+    seen = []
+    for v in variants:
+        line = _variant_line(v)
+        if line not in seen:
+            seen.append(line)
+        if len(seen) == cap:
+            break
+    return "; ".join(seen)
+
+
 class ToolError(Exception):
     """A tool call was rejected or malformed. Surfaced to the agent as an error
     result, never raised past the loop."""
@@ -188,6 +211,12 @@ class AgentTools:
             raise ToolError(str(exc)) from exc
 
     def plan_test(self, **plan) -> dict:
+        # The variant schema (verification-context) and the derivation code both say "query" for a URL query
+        # parameter; the plan schema (and the scope's injection_inputs) say "params". Accept the model's "query"
+        # at this boundary and normalise to "params" so the one vocabulary mismatch between schemas does not
+        # kill a run.
+        if plan.get("input_location") == "query":
+            plan = {**plan, "input_location": "params"}
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
         # An observed prerequisite needs recorded responses of this finding; one without them counts as assumed,
@@ -205,7 +234,8 @@ class AgentTools:
         problems = []
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
         if variants and not plan.get("variant"):
-            problems.append("select an evidenced finding variant for this plan")
+            problems.append("select an evidenced finding variant for this plan; variants: "
+                            + _variant_catalog(variants))
         if plan.get("variant") and not variants:
             problems.append("this finding has no variants; omit variant")
         if plan["kind"] in ("boolean", "timing"):
@@ -256,7 +286,9 @@ class AgentTools:
             if (self.ctx.plan.cwe not in ("CWE-78", "CWE-94", "CWE-95", "CWE-1336", "CWE-643")
                     or plan["kind"] != "boolean"):
                 raise ToolError("expression challenges need a command, code-evaluation, template or XPath "
-                                "injection finding")
+                                f"injection finding declared as kind \"boolean\"; this finding is "
+                                f"{getattr(self.ctx.plan, 'cwe', None) or '(no CWE)'} and the plan's kind is "
+                                f"{plan.get('kind')!r}")
             try:
                 plan = expression_controls(plan)
             except ValueError as exc:
@@ -286,13 +318,17 @@ class AgentTools:
 
             variant = next((v for v in variants if v["id"] == plan["variant"]), None)
             if variant is None:
-                raise ToolError("unknown finding variant")
+                raise ToolError(f"unknown finding variant {plan['variant']!r}; variants: "
+                                + _variant_catalog(variants))
             derived = covers(self.ctx, plan)
-            if not derived and variant["request"]["method"] != plan.get("method", "GET"):
-                raise ToolError("the method does not match the finding variant")
-            if not derived and not route_matches(variant["request"]["path"], plan["path"]):
-                raise ToolError("the path does not match the finding variant")
-            inputs = variant["request"].get("inputs", [])
+            vreq = variant["request"]
+            if not derived and vreq["method"] != plan.get("method", "GET"):
+                raise ToolError(f"the method does not match the finding variant; variant {variant['id']!r} uses "
+                                f"{vreq['method']} {vreq.get('path', '')}")
+            if not derived and not route_matches(vreq["path"], plan["path"]):
+                raise ToolError(f"the path does not match the finding variant; variant {variant['id']!r} uses "
+                                f"{vreq['method']} {vreq.get('path', '')}")
+            inputs = vreq.get("inputs", [])
             location = {"params": "query"}.get(plan.get("input_location"), plan.get("input_location"))
             if (
                 plan.get("kind") in ("boolean", "timing")
@@ -300,7 +336,8 @@ class AgentTools:
                 and inputs
                 and not any(i["location"] == location and i["name"] == plan["input_name"] for i in inputs)
             ):
-                raise ToolError("the input does not match the finding variant")
+                raise ToolError(f"the input does not match the finding variant; variant {variant['id']!r} declares "
+                                + ", ".join(f"{i['location']}:{i['name']}" for i in inputs[:6]))
             missing = missing_capabilities(
                 variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None
             )
@@ -370,7 +407,8 @@ class AgentTools:
         ):
             raise ToolError("run_experiment needs an accepted SQL challenge plan")
         if plan.get("method", "GET") not in SAFE_METHODS:
-            raise ToolError("automatic repetitions are read-only; writes are never automatically repeated")
+            raise ToolError("automatic repetitions are read-only; writes are never automatically repeated. "
+                            "Send each control value as its own http_request step, twice per control.")
 
         location = "path_inputs" if plan.get("input_location") == "path" else plan["input_location"]
         return [
@@ -386,22 +424,18 @@ class AgentTools:
         ]
 
     def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:
+        variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
         if variant:
-            value = next(
-                (
-                    v
-                    for v in getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
-                    if v["id"] == variant
-                ),
-                None,
-            )
+            value = next((v for v in variants if v["id"] == variant), None)
             if value is None:
-                raise ToolError("unknown finding variant")
+                raise ToolError(f"unknown finding variant {variant!r}; variants: "
+                                + (_variant_catalog(variants) or "none declared"))
         else:
             value = {**getattr(self.ctx.plan, "context", {}), "prior_results": getattr(self.ctx, "prior_results", [])}
         if field:
             if field not in value:
-                raise ToolError("that context field is unavailable")
+                available = ", ".join(sorted(value.keys())) or "no fields in this context"
+                raise ToolError(f"that context field is unavailable; available: {available}")
             value = {field: value[field]}
         return {"context": value, "trust": "analysis data; assumptions need runtime checks"}
 
