@@ -108,3 +108,57 @@ def test_find_stays_in_the_repository(tmp_path):
 def test_find_rejects_an_empty_query(tmp_path):
     with pytest.raises(SourceAccessError):
         _find_repo(tmp_path).find("")
+
+
+def _search_repo(tmp_path):
+    (tmp_path / "routes").mkdir()
+    (tmp_path / "routes" / "payment.ts").write_text("export function getPaymentMethods () {\n  return 1\n}\n")
+    (tmp_path / "server.ts").write_text("import * as payment from './routes/payment'\n"
+                                        "app.get('/api/Cards', utils.asyncHandler(payment.getPaymentMethods()))\n")
+    (tmp_path / ".env").write_text("GETPAYMENTMETHODS_KEY=s3cr3t\n")
+    (tmp_path / "id_rsa").write_text("getPaymentMethods private key\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("getPaymentMethods\n")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "dep.js").write_text("getPaymentMethods\n")
+    (tmp_path / "blob.bin").write_bytes(b"getPaymentMethods\x00\x01")
+    return SourceReader(tmp_path)
+
+
+def test_search_finds_a_symbol_inside_another_file(tmp_path):
+    """VER-050: the registration of a handler in another file, with path, line and the line itself."""
+    out = _search_repo(tmp_path).search("getPaymentMethods")
+    found = {(m["path"], m["line"]) for m in out["matches"]}
+    assert found == {("routes/payment.ts", 1), ("server.ts", 2)} and out["truncated"] is False
+    line = next(m["text"] for m in out["matches"] if m["path"] == "server.ts")
+    assert line.startswith("app.get('/api/Cards'")
+
+
+def test_search_excludes_secrets_vcs_vendor_and_binary_files(tmp_path):
+    """Refused case: credential files, keys, .git, vendor trees and binary files never answer a search."""
+    paths = {m["path"] for m in _search_repo(tmp_path).search("getpaymentmethods")["matches"]}
+    assert paths == {"routes/payment.ts", "server.ts"}
+    assert _search_repo_matches(tmp_path / "again", "s3cr3t") == []
+
+
+def _search_repo_matches(path, text):
+    path.mkdir()
+    return _search_repo(path).search(text)["matches"]
+
+
+def test_search_stays_in_the_repository_and_bounds_its_answer(tmp_path):
+    outside = tmp_path.parent / "outside_search.ts"
+    outside.write_text("getPaymentMethods outside\n")
+    r = _search_repo(tmp_path)
+    (tmp_path / "link.ts").symlink_to(outside)           # a symlinked file resolves outside the repository
+    assert all(m["path"] != "link.ts" for m in r.search("outside")["matches"])
+    (tmp_path / "many.ts").write_text("\n".join("needle " + "x" * 400 for _ in range(60)))
+    out = r.search("needle")
+    assert len(out["matches"]) == 40 and out["truncated"] is True
+    assert all(len(m["text"]) <= 200 for m in out["matches"])
+
+
+@pytest.mark.parametrize("text", ["", "ab", "  a ", "x" * 201, "a\x00bc"])
+def test_search_rejects_a_query_out_of_bounds(tmp_path, text):
+    with pytest.raises(SourceAccessError):
+        _search_repo(tmp_path).search(text)

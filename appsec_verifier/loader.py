@@ -189,14 +189,18 @@ def select(
 ) -> list[FindingPlan]:
     """Apply the VER-026 selectors (AND-combined). `ids` overrides the rest.
     `categories` matches a finding's class OR its finer technique (e.g. "idor"),
-    so a category can be selected without naming a CWE."""
+    so a category can be selected without naming a CWE; `quick` matches the
+    findings the Verifier can confirm cheaply (planning.quick)."""
     if ids:
         return [p for p in plans if p.id in ids]
+    from .planning import quick
+
     cats = {c.lower() for c in (categories or set())}
     floor = _SEVERITY_RANK.get((min_severity or "").lower(), 0)
     out = []
     for p in plans:
-        if cats and (p.cls or "").lower() not in cats and (p.technique or "").lower() not in cats:
+        if cats and (p.cls or "").lower() not in cats and (p.technique or "").lower() not in cats and not (
+                "quick" in cats and quick(p)):
             continue
         if classes and p.cls not in classes:
             continue

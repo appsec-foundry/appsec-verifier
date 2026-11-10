@@ -60,7 +60,7 @@ def _csv(value: str | None) -> set[str] | None:
 
 def _select(args: argparse.Namespace, plans):
     """Apply the selection options of `args` (VER-026)."""
-    from .planning import dependency_order, severity_order, supplement
+    from .planning import add_quick, dependency_order, severity_order, supplement
 
     filters = dict(
         categories=_csv(args.category),
@@ -71,9 +71,13 @@ def _select(args: argparse.Namespace, plans):
         ids=_csv(args.only),
     )
     selected = select(plans, **filters)
+    strict = getattr(args, "strict_severity", False)
     if args.min_severity and not args.only and not args.severity:
         eligible = select(plans, **{**filters, "min_severity": None})
-        selected = supplement(selected, eligible, enabled=not getattr(args, "strict_severity", False))
+        selected = supplement(selected, eligible, enabled=not strict)
+    if (args.min_severity or args.severity) and not args.only and not strict:
+        # The `quick` findings below a severity selection are tested too, within the other selectors.
+        selected = add_quick(selected, select(plans, **{**filters, "min_severity": None, "severities": None}))
     return dependency_order(severity_order(selected))
 
 
@@ -1131,9 +1135,12 @@ def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | 
     lines = _test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing))
     if not probed:
         return None, lines
+    # `probed` holds one entry per variant; the check counts findings, one tested when any variant can be.
+    findings = {p.id for p in probed}
+    testable = {p.id for p in probed if evidence_id(p) not in blocked}
     if not blocked:
-        return Check("Test plan", "ok", f"{_count(len(probed), 'finding')} can be tested"), lines
-    if len(blocked) == len(probed):
+        return Check("Test plan", "ok", f"{_count(len(findings), 'finding')} can be tested"), lines
+    if not testable:
         return Check(
             "Test plan",
             "warn",
@@ -1143,7 +1150,7 @@ def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | 
     return Check(
         "Test plan",
         "warn",
-        f"{len(probed) - len(blocked)} of {_count(len(probed), 'finding')} can be "
+        f"{len(testable)} of {_count(len(findings), 'finding')} can be "
         "tested; the others need what this run does not have (see below)",
     ), lines
 
@@ -1523,11 +1530,14 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         if p.id not in groups:
             order.append(p.id)
         groups.setdefault(p.id, []).append(p)
+    # `plans` holds one entry per variant; the head counts findings, and the runs their variants add.
+    findings = len({p.id for p in plans})
+    runs = f" ({len(tested)} runs with their variants)" if len(tested) > len(groups) else ""
     head = (
-        f"{len(tested)} of {_count(len(plans), 'finding')} will be tested"
+        f"{len(groups)} of {_count(findings, 'finding')} will be tested{runs}"
         if tested
         else "this run can test none of them"
-        if len(plans) > 1
+        if findings > 1
         else "this run cannot test it"
     )
     lines = ["", f"{st('Test plan', 'bold')}     {head}"]
@@ -1575,14 +1585,18 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         return lines
     groups: dict[str, list[str]] = {}
     access_route = False
+    blocked_ids = set()
     for p in plans:
         if evidence_id(p) in blocked:
-            groups.setdefault(blocked[evidence_id(p)][0], []).append(printable(p.id))
+            ids = groups.setdefault(blocked[evidence_id(p)][0], [])
+            if printable(p.id) not in ids:          # one entry per finding, not per variant
+                ids.append(printable(p.id))
+            blocked_ids.add(p.id)
             access_route |= blocked[evidence_id(p)][0] == "route" and p.cls == "access-control"
     lines += [
         "",
-        f"{st('Not testable', 'bold')}  {_count(len(blocked), 'finding')} "
-        f"{'needs' if len(blocked) == 1 else 'need'} what this run does not have (--test-all tries anyway)",
+        f"{st('Not testable', 'bold')}  {_count(len(blocked_ids), 'finding')} "
+        f"{'needs' if len(blocked_ids) == 1 else 'need'} what this run does not have (--test-all tries anyway)",
     ]
     widths = [len(_NEEDS[key][0]) for key in groups]
     # a row of its own per need without `full`: a longer label moves only its own row, not every row's column
@@ -1623,18 +1637,25 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
                      notes=(), floor=None, guided=False) -> list[str]:
     """The settings before the confirmation (VER-002). The guided run has shown the logo, the assessment and its
     findings already, so they are not repeated there."""
-    dyn = sum(1 for p in sel if p.status == "dynamic")
+    # `sel` may hold one entry per variant; the settings count findings.
+    dyn = len({p.id for p in sel if p.status == "dynamic"})
+    selected = len({p.id for p in sel})
     from .agent import SUBSCRIPTION_PROFILES
 
     cost = ("cost not reported (subscription)" if agent_info["profile"] in SUBSCRIPTION_PROFILES
             else f"≤ ${limits.cost_limit_usd:.2f}")
     seconds = int(limits.max_duration_s)
     rate = f"{limits.rate_rps:g} requests/s" if limits.rate_rps else "no rate limit"
+    from .planning import QUICK_REASON
+
+    quick_added = len({p.id for p in sel if p.selection_reason == QUICK_REASON})
     selection = _count(dyn, "finding") + (f", severity {floor} and above" if floor else "")
+    if quick_added:
+        selection += f", with {quick_added} quick below it"
     if guided and floor:
         selection += " (--min-severity to change)"
-    elif not guided and len(sel) > dyn:
-        selection += f" (another {len(sel) - dyn} selected cannot be tested at runtime)"
+    elif not guided and selected > dyn:
+        selection += f" (another {selected - dyn} selected cannot be tested at runtime)"
     rows = [
         *([] if guided else [("Assessment", str(assessment))]),
         ("Selection", selection),
@@ -1994,7 +2015,9 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         if guided
         else "Without these, every finding that can be tested dynamically.",
     )
-    sel.add_argument("--category", metavar="LIST", help="classes or techniques, comma-separated, e.g. xss,idor,sqli")
+    sel.add_argument("--category", metavar="LIST",
+                     help="classes or techniques, comma-separated, e.g. xss,idor,sqli; quick for XSS and SQL or "
+                          "NoSQL injection a read can reach")
     sel.add_argument("--severity", metavar="LIST", help="exact severities, comma-separated, e.g. critical,high")
     sel.add_argument(
         "--min-severity",
@@ -2005,7 +2028,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     sel.add_argument(
         "--strict-severity",
         action="store_true",
-        help="do not add lower-severity management findings or declared prerequisites",
+        help="do not add lower-severity quick or management findings or declared prerequisites",
     )
     sel.add_argument(
         "--only", metavar="IDS", help="finding ids, comma-separated, e.g. T-003,T-009; overrides the other selectors"

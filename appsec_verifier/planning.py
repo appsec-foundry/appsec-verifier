@@ -149,11 +149,48 @@ def _finding_number(fid: str) -> int:
     return int(match.group(1)) if match else 1 << 30
 
 
+_READ_METHODS = ("GET", "HEAD", "OPTIONS", "PAGE", "ALL")
+
+
+def _ease(plan) -> int:
+    """Within one severity, what a finding needs to be reached (VER-026): 0 when the assessment names a request
+    a read can send, 1 when every request it names writes, 2 when it names none. Taken from the finding's named
+    requests, which its variants share, so the variants of one finding stay together."""
+    methods = [str(e.method).upper() for e in getattr(plan, "endpoints", ()) or ()]
+    if not methods:
+        return 2
+    return 0 if any(m in _READ_METHODS for m in methods) else 1
+
+
+_QUICK_CWES = ("CWE-89", "CWE-943")   # SQL and NoSQL injection
+QUICK_REASON = "quick finding, added below the severity selection"
+
+
+def quick(plan) -> bool:
+    """The category `quick` (VER-026): a finding the Verifier can confirm cheaply, XSS or SQL or NoSQL injection
+    whose request the assessment names and a read can send."""
+    if plan.status != "dynamic":
+        return False
+    if not (plan.cls == "xss" or (plan.cls == "injection" and (plan.cwe or "").upper() in _QUICK_CWES)):
+        return False
+    return _ease(plan) == 0
+
+
+def add_quick(selected, eligible):
+    """A severity selection also tests the `quick` findings below it (VER-026), marked as added; `eligible` is
+    the selection without its severity, so the other selectors still apply."""
+    chosen = {p.id for p in selected}
+    return [*selected, *(replace(p, selection_reason=QUICK_REASON)
+                         for p in eligible if p.id not in chosen and quick(p))]
+
+
 def severity_order(plans):
-    """Most severe first, finding number as a stable tiebreaker (VER-026). Ordering only, never selection:
-    under a limit the budget is spent on the highest-severity findings. `dependency_order` runs after this
-    and only hoists prerequisites, so a lower-severity prerequisite still precedes what depends on it."""
-    return sorted(plans, key=lambda p: (-_SEVERITY_RANK.get((p.severity or "").lower(), 0),
+    """Most severe first; within one severity, findings with a named read request before those whose named
+    requests all write, and those before findings without a named request; finding number as a stable
+    tiebreaker (VER-026). Ordering only, never selection: under a limit the budget is spent on the
+    highest-severity findings it can reach. `dependency_order` runs after this and only hoists prerequisites,
+    so a lower-severity prerequisite still precedes what depends on it."""
+    return sorted(plans, key=lambda p: (-_SEVERITY_RANK.get((p.severity or "").lower(), 0), _ease(p),
                                         _finding_number(p.id), p.id or ""))
 
 

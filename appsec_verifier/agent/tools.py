@@ -259,6 +259,15 @@ class AgentTools:
             plan = {**plan, "input_location": "params"}
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
+        # VER-011: up to three candidate templates; the first is checked and run now, the others only when its
+        # controls meet a server error (next_candidate). A write runs only the first: no write is ever sent for
+        # a template the agent has not looked at in the result of its own controls.
+        candidates = []
+        for key in ("sql_template", "expression_template"):
+            if isinstance(plan.get(key), list):
+                candidates += [(key, template) for template in plan[key][1:]]
+                plan = {**plan, key: plan[key][0]}
+        declared = plan
         # A strategy is optional (VER-043). When one is given, an observed prerequisite needs recorded responses
         # of this finding; one without them counts as assumed, which grants nothing (only a missing one matters,
         # proof.py), so the plan need not be declared again.
@@ -466,6 +475,10 @@ class AgentTools:
                 raise ToolError("the plan needs a matching operator-supplied test resource")
         self._experiment = plan
         notes = []
+        if candidates and plan.get("method", "GET") not in SAFE_METHODS:
+            notes.append("send_controls uses the first template; revise the plan to try another")
+            candidates = []
+        self._candidates = [(key, template, declared) for key, template in candidates]
         if assumed:
             notes.append(f"prerequisite {', '.join(assumed)} counts as assumed: observed needs http_request steps "
                          "of this finding with a recorded response")
@@ -480,28 +493,60 @@ class AgentTools:
             **({"note": "; ".join(notes)} if notes else {}),
         }
 
-    def experiment_requests(self, *, role=None):
+    def next_candidate(self):
+        """The next candidate template of the accepted plan, declared and checked like the first (VER-011), as
+        (the declaration, the plan_test result); None when there is none left. A candidate the checks refuse is
+        skipped."""
+        while getattr(self, "_candidates", None):
+            key, template, declared = self._candidates.pop(0)
+            remaining = self._candidates
+            args = {**declared, key: template}
+            try:
+                result = self.plan_test(**args)
+            except ToolError:
+                self._candidates = remaining
+                continue
+            self._candidates = remaining
+            return args, result
+        return None
+
+    def experiment_requests(self, *, role=None, write=False):
+        """The accepted challenge's generated controls as requests (VER-011). A read plan's controls run when the
+        plan is accepted (`write` False); a write plan's only when the agent asks with send_controls in intrusive
+        mode (`write` True), and only once per plan. Each control is sent twice, an auth-artifact control once,
+        because that proof needs no repetition (VER-049)."""
         plan = getattr(self, "_experiment", {})
         if plan.get("kind") != "boolean" or not (
             plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
         ):
-            raise ToolError("the accepted plan is not a read-only challenge whose controls run automatically")
-        if plan.get("method", "GET") not in SAFE_METHODS:
-            raise ToolError("automatic repetitions are read-only; writes are never automatically repeated. "
-                            "Send each control value as its own http_request step, twice per control.")
-
+            raise ToolError("the accepted plan is not a challenge whose controls the Verifier generates and sends")
+        is_write = plan.get("method", "GET") not in SAFE_METHODS
+        if is_write and not write:
+            raise ToolError("a write plan's controls are sent only when you call send_controls")
+        if write and not is_write:
+            raise ToolError("a read plan's controls already ran when the plan was accepted")
+        if write and (self.ctx.safe or self.ctx.read_only):
+            raise ToolError("controls on a write need --allow-intrusive and a scope that permits state change "
+                            "(VER-030)")
+        if not hasattr(self, "_controls_sent"):
+            self._controls_sent = set()
+        if write and token(plan) in self._controls_sent:
+            raise ToolError("this plan's controls were already sent; revise the plan for another experiment")
         location = "path_inputs" if plan.get("input_location") == "path" else plan["input_location"]
-        return [
+        requests = [
             {
                 "path": plan["path"],
                 "method": plan.get("method", "GET"),
                 **({"role": role} if role else {}),
                 location: {plan["input_name"]: str(plan[group]) if location == "path_inputs" else plan[group]},
             }
-            for _ in range(2)
+            for _ in range(1 if plan.get("auth_artifact") else 2)
             for group in ("baseline", "positive", "negative", "positive_other", "negative_other")
             if group in plan
         ]
+        if write:
+            self._controls_sent.add(token(plan))
+        return requests
 
     def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
@@ -585,6 +630,7 @@ class AgentTools:
             "http_request": self.http_request,
             "read_source": self.read_source,
             "find_source": self.find_source,
+            "search_source": self.search_source,
             "browser_check": self.browser_check,
             "plan_test": self.plan_test,
             "read_context": self.read_context,
@@ -947,6 +993,20 @@ class AgentTools:
         if self.ctx.source is None:
             raise ToolError("no source checkout is available for this run")
         try:
-            return self.ctx.source.find(query)
+            out = self.ctx.source.find(query)
+        except SourceAccessError as exc:
+            raise ToolError(str(exc)) from exc
+        if not out.get("matches"):
+            # A symbol or route string never matches a file name; say so instead of an empty answer (VER-050).
+            out["note"] = ("find_source matches file names and paths only, not file contents; use search_source to "
+                           "find a symbol, route or string inside files")
+        return out
+
+    def search_source(self, *, text: str) -> dict:
+        """VER-050: literal content search inside the source checkout, under the same confinement as read_source."""
+        if self.ctx.source is None:
+            raise ToolError("no source checkout is available for this run")
+        try:
+            return self.ctx.source.search(text)
         except SourceAccessError as exc:
             raise ToolError(str(exc)) from exc

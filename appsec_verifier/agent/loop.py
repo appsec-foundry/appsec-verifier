@@ -1,5 +1,9 @@
-"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019, VER-036, VER-046,
-VER-047).
+"""The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
+VER-043, VER-046, VER-047).
+
+An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
+when a control meets a server error; a write plan's controls run only when the agent asks with send_controls.
+Each model call's cost and token counts go on the next action-log record.
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
@@ -43,6 +47,19 @@ _LOGGED_RESULT = ("status", "length", "executed", "blocked", "error", "path", "s
 _PROPOSAL_CAP = 500
 
 
+def _control_failed(tools, result: dict) -> bool:
+    """Whether a generated control's answer stops the experiment (VER-011): a transport error or a server error
+    always; for the response-field form any non-2xx answer, since its proof needs comparable successful
+    responses. An auth-artifact control (VER-049) expects 401 or 403 from its false controls, so only an error
+    or a 5xx stops it."""
+    status = result.get("status", 0)
+    if result.get("error") or not isinstance(status, int) or status >= 500:
+        return True
+    if (getattr(tools, "_experiment", None) or {}).get("auth_artifact"):
+        return False
+    return not 200 <= status < 300
+
+
 def _request_attempts(history: list[dict]) -> int:
     """Requests that count against the per-finding attempt cap (an experiment's tagged controls are excluded)."""
     return sum(h.get("tool") in ("http_request", "browser_check") and not h.get("experiment") for h in history)
@@ -72,9 +89,20 @@ def _result_from_verdict(v: dict) -> ProbeResult:
     )
 
 
+def take_model_calls(ctx) -> list[dict]:
+    """The model calls made since the last action-log record (agent/hosts.py), cleared: what each cost and, where
+    the host reports them, its token counts. Numbers only, never content (VER-017)."""
+    calls = getattr(ctx, "model_calls", None)
+    if not isinstance(calls, list) or not calls:
+        return []
+    ctx.model_calls = []
+    return calls
+
+
 def _log(ctx, step: int | None, **record) -> None:
     if ctx.log is not None:
-        ctx.log({"finding": ctx.plan.id, "step": step, **record})
+        calls = take_model_calls(ctx)
+        ctx.log({"finding": ctx.plan.id, "step": step, **record, **({"model": calls} if calls else {})})
     if ctx.progress is not None:
         ctx.progress.step({"step": step, **record})
 
@@ -158,17 +186,22 @@ class AgentProbe:
             if entries:
                 sent.append({"step": step, "tool": name, "entries": entries})
 
-        def send_experiment_controls(role):
-            """Send the accepted plan's bounded, read-only controls as their own numbered steps, in one action
-            and without a model call (VER-011). Returns (the steps it sent, a ProbeResult to end the probe on a
-            limit, or None). When the accepted plan is not a read-only challenge (a write, out-of-band or other
-            flow), experiment_requests refuses it and nothing is sent, so the agent drives those itself."""
+        def send_experiment_controls(role, *, write=False):
+            """Send the accepted plan's bounded controls as their own numbered steps, in one action and without
+            a model call (VER-011). `write` sends a write plan's controls, which the agent asks for explicitly;
+            otherwise a read plan's, which run on acceptance. Returns (the steps it sent, a ProbeResult to end
+            the probe on a limit, or None). When experiment_requests refuses the plan nothing is sent."""
             sent_steps: list[int] = []
             try:
-                requests = controller.run(lambda: tools.experiment_requests(role=role))
+                requests = controller.run(lambda: tools.experiment_requests(role=role, write=write))
             except LimitExceeded as exc:
                 return sent_steps, attach_stopped(_stopped(ctx, len(history) + 1, exc))
-            except ToolError:
+            except ToolError as exc:
+                if write:   # the agent asked; tell it why nothing was sent
+                    result = {"error": str(exc)}
+                    step_n = len(history) + 1
+                    _log(ctx, step_n, tool="send_controls", result=result)
+                    history.append({"tool": "send_controls", "args": {}, "result": result})
                 return sent_steps, None
             for request in requests:
                 step_n = len(history) + 1
@@ -192,9 +225,42 @@ class AgentProbe:
                 _log(ctx, step_n, tool="http_request", args=request,
                      result={k: result[k] for k in _LOGGED_RESULT if k in result})
                 sent_steps.append(step_n)
-                if result.get("error") or not 200 <= result.get("status", 0) < 300:
+                if _control_failed(tools, result):
                     break
             return sent_steps, None
+
+        def report_experiment(sent_steps):
+            """Append the experiment's own feedback step and return it (VER-011, VER-043)."""
+            from .experiments import injection_ready
+
+            feedback = injection_ready(ctx, history, sent_steps)
+            _log(ctx, len(history) + 1, tool="experiment", result=feedback)
+            history.append({"tool": "experiment", "args": {}, "result": feedback})
+            return feedback
+
+        def run_read_experiment(role):
+            """Run an accepted read plan's controls, and, if a control met a server error, the plan's next
+            template candidate in turn, until the proof holds or the candidates run out (VER-011)."""
+            sent_steps, stop = send_experiment_controls(role)
+            if stop is not None or not sent_steps:
+                return stop
+            feedback = report_experiment(sent_steps)
+            while feedback.get("proof") != "holds" and history[-2]["result"].get("status", 0) >= 500:
+                candidate = tools.next_candidate()
+                if candidate is None:
+                    break
+                args, result = candidate
+                controller.observe("plan_test", args, result)
+                _log(ctx, len(history) + 1, tool="plan_test", args=args,
+                     result={k: result[k] for k in _LOGGED_RESULT if k in result})
+                history.append({"tool": "plan_test", "args": args, "result": result})
+                sent_steps, stop = send_experiment_controls(role)
+                if stop is not None:
+                    return stop
+                if not sent_steps:
+                    break
+                feedback = report_experiment(sent_steps)
+            return None
 
         for decision in range(1, self._max_steps + 1):
             step = len(history) + 1
@@ -275,6 +341,15 @@ class AgentProbe:
                 ctx.recapture = partial(recapture, ctx, tools, history, sent, result, verdict.get("proof_steps"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
+            if name == "send_controls":
+                # The agent asks the Verifier to send an accepted write plan's controls, in one action and
+                # without a model call per request (VER-011). A read plan's controls already ran on acceptance.
+                sent_steps, stop = send_experiment_controls(args.get("role"), write=True)
+                if stop is not None:
+                    return _finish(ctx, len(history), stop)
+                if sent_steps:
+                    report_experiment(sent_steps)
+                continue
             call = {"tool": name, "args": args, **({"note": action["note"]} if action.get("note") else {})}
             if ctx.progress is not None:
                 ctx.progress.activity(decision, self._max_steps, name, args)
@@ -304,19 +379,14 @@ class AgentProbe:
                 if ready:
                     result["proof_ready"] = {"steps": ready,
                                              "next": "submit_verdict confirmed and cite these steps in proof_steps"}
-            # An accepted read-only injection plan runs its own generated controls at once and reports whether
-            # the proof already holds, so the agent submits the verdict instead of a separate step (VER-011,
-            # VER-043). A write, out-of-band or other flow sends nothing here; the agent drives it itself.
+            # An accepted read injection plan runs its generated controls at once and reports whether the proof
+            # already holds, so the agent submits the verdict instead of a separate step (VER-011, VER-043). A
+            # write plan sends nothing here; the agent calls send_controls. An out-of-band or other flow is the
+            # agent's own.
             if name == "plan_test" and result.get("accepted"):
-                sent_steps, stop = send_experiment_controls(args.get("role"))
+                stop = run_read_experiment(args.get("role"))
                 if stop is not None:
                     return _finish(ctx, len(history), stop)
-                if sent_steps:
-                    from .experiments import injection_ready
-
-                    feedback = injection_ready(ctx, history, sent_steps)
-                    _log(ctx, len(history) + 1, tool="experiment", result=feedback)
-                    history.append({"tool": "experiment", "args": {}, "result": feedback})
         return _finish(
             ctx,
             self._max_steps,

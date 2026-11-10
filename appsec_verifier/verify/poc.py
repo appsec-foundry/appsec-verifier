@@ -592,6 +592,7 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
                           True))
     elif cls == "injection":
         path = e["request"]["url"].split("?")[0]
+        status_differs = False
         for _, o in shown:
             if o is e or o["request"]["url"].split("?")[0] != path:
                 continue
@@ -600,15 +601,19 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
             b_body = (o["request"].get("postData") or {}).get("text") or ""
             token = (_diff_token(a_url, b_url, "line") if a_url != b_url
                      else _diff_token(a_body, b_body, "body"))
-            if token:
+            # The sink value this step carries is the same whatever partner it is diffed against, so the input
+            # mark and its decoding belong to the step once, not once per partner (VER-035).
+            if token and ("input", token) not in req_marks:
                 req_marks.append(("input", token))
                 decoded = (unquote_plus if token[0] == "line" else unquote)(token[2])   # a query's + is a space
                 if decoded != token[2]:
                     facts.append((f"input, decoded: {decoded}", True))
             token = _diff_token(_text(e), _text(o), "body")
-            res_marks += [("answer differs", token)] if token else []
-            if e["response"]["status"] != o["response"]["status"]:
-                res_lines.append(("status differs", "HTTP/1.1 "))
+            if token and ("answer differs", token) not in res_marks:
+                res_marks.append(("answer differs", token))
+            status_differs = status_differs or e["response"]["status"] != o["response"]["status"]
+        if status_differs:
+            res_lines.append(("status differs", "HTTP/1.1 "))
     elif cls == "access-control":
         own_marker = "".join(marker)
         if own_marker and own_marker in _text(e):
@@ -888,8 +893,9 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     # The plan as accepted: plan_test may have counted an unsupported observed prerequisite as assumed.
     accepted = [(n, h["result"].get("experiment") or h["args"]) for n, h in enumerate(history, 1)
                 if h.get("tool") == "plan_test" and h.get("result", {}).get("accepted") is True]
+    # A strategy is optional (VER-043); a plan without one shows no empty strategy field in the report.
     result.planning = [{"step": n, "path": p.get("path"), "hypothesis": p.get("hypothesis"),
-                        "strategy": p.get("strategy")} for n, p in accepted]
+                        **({"strategy": p["strategy"]} if p.get("strategy") else {})} for n, p in accepted]
     if ctx.sessions is not None:
         result.planning = ctx.sessions.redact(result.planning)
     """Write the finding's proof of concept and add it to `result` (VER-034, VER-035)."""

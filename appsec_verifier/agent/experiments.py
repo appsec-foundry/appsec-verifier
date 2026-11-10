@@ -10,6 +10,13 @@ from ..planning import STRATEGY_SCHEMA
 from ..verification_context import planned_route, record_segments, route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
+
+
+def _candidates(template: dict) -> dict:
+    return {"anyOf": [template, {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": True,
+                                 "items": template}]}
+
+
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -43,11 +50,12 @@ PLAN_SCHEMA = {
         },
         "reference": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
-        "expression_template": {"type": "string", "minLength": 5, "maxLength": 3000},
+        # One template, or up to three candidates the Verifier tries in turn on a server error (VER-011).
+        "expression_template": _candidates({"type": "string", "minLength": 5, "maxLength": 3000}),
         "operator_challenge": {"enum": ["nosql"]},
         "predicate_template": {"type": "string", "minLength": 15, "maxLength": 3000},
         "predicate_attribute": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"},
-        "sql_template": {"type": "string", "minLength": 15, "maxLength": 3000},
+        "sql_template": _candidates({"type": "string", "minLength": 15, "maxLength": 3000}),
         # VER-048: a blind-injection out-of-band proof carries the callback URL instead of observing a field.
         "oob_template": {"type": "string", "minLength": 5, "maxLength": 3000},
         # VER-049: the observation is the presence of an authenticated artifact at `pointer`, not a field's value.
@@ -265,10 +273,16 @@ def injection_check(ctx, history, cited):
         return error
     if plan.get("kind") not in ("boolean", "timing"):
         return "declare a boolean or timing experiment for injection"
-    if any(len(group) < 2 for group in groups.values()):
-        return "repeat every declared input at least twice using distinct requests"
+    short = [f"{name} {len(group)} of 2" for name, group in groups.items() if len(group) < 2]
+    if short:
+        return ("repeat every declared control at least twice using distinct requests; so far " + ", ".join(short))
     statuses = {r["status"] for group in groups.values() for _, r in group}
     if len(statuses) != 1 or not all(200 <= s < 300 for s in statuses):
+        # A login-bypass injection flips 401 to 200; that is proven with the auth-artifact form, not here.
+        if plan.get("sql_template") and {s for s in statuses if s in (401, 403)} and any(
+                200 <= s < 300 for s in statuses):
+            return ("the controls flip the response status (e.g. 401 to 200); that is a login-bypass proof: "
+                    "declare the plan with auth_artifact true and pointer at the token field, not a response field")
         return "error/status changes alone do not prove injection; obtain comparable successful responses"
     if plan["kind"] == "timing":
         fast, slow = groups["baseline"], groups["positive"]
@@ -329,16 +343,34 @@ def injection_check(ctx, history, cited):
     return None
 
 
+def injection_proof(ctx, history, cited):
+    """The injection check that fits the latest accepted plan: the auth-artifact form (VER-049) for a declared
+    login bypass, otherwise the response-field or timing form (VER-011). The out-of-band form (VER-048) is checked
+    in proof.py, since it needs the listener's record."""
+    _, plan = latest_plan(history)
+    if plan.get("auth_artifact"):
+        return auth_artifact_check(ctx, history, cited)
+    return injection_check(ctx, history, cited)
+
+
 def injection_ready(ctx, history, steps):
     """Whether the controls the Verifier just ran already meet the injection proof (VER-011), reported to the
     agent so its next step is the verdict. Pure: it sets no verdict and writes no evidence; proof.py still
-    re-checks the cited steps before a confirmed verdict stands."""
-    problem = injection_check(ctx, history, steps)
+    re-checks the cited steps before a confirmed verdict stands. When a control met a server error the feedback
+    names it, so the agent can see the template is wrong without reading the step itself."""
+    problem = injection_proof(ctx, history, steps)
     if problem is None:
         return {"proof": "holds", "steps": sorted(steps),
                 "next": "submit_verdict confirmed and cite these steps in proof_steps"}
-    return {"proof": "missing", "reason": problem, "steps": sorted(steps),
-            "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"}
+    feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
+                "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"}
+    failed = next((n for n in reversed(steps) if (history[n - 1].get("result") or {}).get("status", 0) >= 500
+                   or (history[n - 1].get("result") or {}).get("error")), None)
+    if failed is not None:
+        result = history[failed - 1].get("result") or {}
+        excerpt = (result.get("error") or result.get("body_excerpt") or "")[:300]
+        feedback["failed_control"] = {"step": failed, "status": result.get("status"), "excerpt": excerpt}
+    return feedback
 
 
 def callback_injection_check(ctx, history, cited):

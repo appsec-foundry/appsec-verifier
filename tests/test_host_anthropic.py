@@ -89,13 +89,15 @@ def test_tool_defs_expose_only_the_confined_tools():
         "http_request",
         "archive_probe",         # bounded operator-declared archive check (VER-045)
         "read_source",
-        "find_source",           # read-only, repo-confined file search before a read (VER-050)
+        "find_source",           # read-only, repo-confined file-name search before a read (VER-050)
+        "search_source",         # read-only, repo-confined content search (VER-050)
         "browser_check",
         "submit_verdict",
         "read_context",
         "read_response",
         "derive_request",        # evidence-backed planning only; no target contact (VER-008, VER-043)
         "plan_test",
+        "send_controls",         # sends an accepted write experiment's controls in one action (VER-011)
         "login_fields",          # asked once before the run (VER-041), never offered during a finding
     }
     verdict = next(t for t in _tool_defs() if t["name"] == "submit_verdict")

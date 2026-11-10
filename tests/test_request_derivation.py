@@ -254,3 +254,55 @@ def test_derivation_is_bounded_and_its_action_schema_is_strict(tmp_path):
     out = parse_step({"action": "derive_request", "args_json": json.dumps({"evidence_step": 1, "method": "DELETE",
                      "path": "/go", "inputs": [], "reason": "delete everything"}), "note": "try"})
     assert out.get("refused") == "derive_request"
+
+
+def _registration_repo(tmp_path, import_path="./routes/payment"):
+    (tmp_path / "routes" / "payment.ts").write_text(
+        "export function getPaymentMethodById () {\n"
+        "  return async (req, res) => res.json(await CardModel.findOne({ where: { id: req.params.id } }))\n"
+        "}\n")
+    (tmp_path / "server.ts").write_text(
+        f"import * as payment from '{import_path}'\n"
+        "app.get('/api/Cards/:id', security.appendUserId(), utils.asyncHandler(payment.getPaymentMethodById()))\n")
+
+
+def _registration_ctx(tmp_path, sent):
+    def target(method, url, headers, **kwargs):
+        sent.append((method, url))
+        return Resp(200, '{"id": 2}')
+
+    ctx = _ctx(tmp_path, target)
+    ctx.plan = replace(ctx.plan, instance="routes/payment.ts:2", endpoints=())
+    return ctx
+
+
+def _registration_steps():
+    return [
+        {"tool": "read_source", "args": {"path": "routes/payment.ts", "around_line": 2}},
+        {"tool": "search_source", "args": {"text": "getPaymentMethodById"}},
+        {"tool": "read_source", "args": {"path": "server.ts", "around_line": 2}},
+        {"tool": "derive_request", "args": {"evidence_step": 3, "method": "GET", "path": "/api/Cards/2",
+                                            "inputs": [], "reason": "server.ts registers the finding's handler"}},
+        {"tool": "http_request", "args": {"path": "/api/Cards/2", "role": "customer-a"}},
+    ]
+
+
+def test_a_route_another_file_registers_for_the_findings_handler_supplies_its_request(tmp_path):
+    """VER-008: a finding without an assessed route (T-010) gets its request from the file that registers its
+    handler, found by a content search; the request is sent and its provenance is recorded."""
+    sent = []
+    ctx = _registration_ctx(tmp_path, sent)
+    _registration_repo(tmp_path)
+    AgentProbe("access-control", lambda: ScriptedPlanner(_registration_steps())).run(ctx)
+    assert sent == [("GET", "https://app.example.com/api/Cards/2")]
+    derived = ctx.derived_requests[0]
+    assert derived["source_file"] == "server.ts" and derived["source_line"] == 2
+
+
+def test_a_registration_of_another_files_handler_supplies_no_request(tmp_path):
+    """Refused case: the registering file imports another module, so its route is not the finding's."""
+    sent = []
+    ctx = _registration_ctx(tmp_path, sent)
+    _registration_repo(tmp_path, import_path="./routes/other")
+    AgentProbe("access-control", lambda: ScriptedPlanner(_registration_steps())).run(ctx)
+    assert sent == [] and not ctx.derived_requests

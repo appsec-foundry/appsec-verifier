@@ -44,6 +44,7 @@ import re
 import sys
 import threading
 import time
+from collections import Counter
 
 from .preflight import printable
 from .term_style import Style, columns
@@ -254,11 +255,18 @@ class RunProgress:
         self._shown = False
         self._frame = 0
         self.total = self.done = self.number = 0
+        self._variants: Counter = Counter()     # variants per finding of the grid; findings, not variants, count
+        self._finished: Counter = Counter()     # variants of each finding that have finished
+        self._numbered = None                   # the finding the current number belongs to
         self._id = ""
         self._id_width = 0
         self._steps, self._noted = 0, False
         self._explained = False         # a proof entry said why the finding has no proof
         self._reviewing = False         # an evidence reviewer started and has not finished
+        self._planned = False           # a plan of the current finding was already accepted
+        self._review_from = None        # (clock, spend) when the current evidence review started
+        self._review_time = 0.0         # time and spend of the finding's evidence review, kept off its done line
+        self._review_cost = 0.0
         self._activity, self._activity_at = "", 0.0
         self._asked: tuple[int, float] | None = None     # (step, when the model call for it began)
         self._took: tuple[int, float] | None = None      # (step, how long the model took to propose it)
@@ -267,8 +275,13 @@ class RunProgress:
     # ── events ────────────────────────────────────────────────────────────────
 
     def begin(self, plans: list) -> None:
-        """Start the grid for the findings with a probe; without any, nothing is shown."""
-        self.total = total = len(plans)
+        """Start the grid for the findings with a probe; without any, nothing is shown. `plans` holds one entry
+        per variant; the grid counts findings, so the variants of one finding share its number and the finding
+        counts as done once its last variant is."""
+        self._variants = Counter(plan.id for plan in plans)
+        self._finished = Counter()
+        self._numbered = None
+        self.total = total = len(self._variants)
         if not total:
             return
         self.started = self.last = self._clock()
@@ -290,9 +303,13 @@ class RunProgress:
         with self._lock:
             if self.number:
                 self._write("")         # sets the finding apart from the one before
-            self.number += 1
+            if plan.id != self._numbered:   # another variant of the same finding keeps its number
+                self.number += 1
+                self._numbered = plan.id
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted, self._explained = 0, "", False, False
+            self._planned = False
+            self._review_from, self._review_time, self._review_cost = None, 0.0, 0.0
             self._asked = self._took = None
             self._finding_at = self._clock()
             self._spent_at = self._step_spent_at = self._spent() if self._spent is not None else 0.0
@@ -350,10 +367,12 @@ class RunProgress:
                 # there is one.
                 result = record.get("result") if isinstance(record.get("result"), dict) else {}
                 if record["tool"] == "plan_test" and result.get("accepted"):
-                    # One row: the request and, for a revision, its reason. The report keeps the whole plan
-                    # (Test planning, verify/report.py).
-                    reason = args.get("strategy", {}).get("revision_reason")
-                    self._record("plan", _line("plan revised" if reason else "test plan", _clip(args.get("path", "")),
+                    # One row: the request and, for a revision, the plan's own note. The report keeps the whole
+                    # plan (Test planning, verify/report.py).
+                    reason = (args.get("strategy") or {}).get("revision_reason") or args.get("note") or ""
+                    label = "plan revised" if self._planned else "test plan"
+                    self._planned = True
+                    self._record("plan", _line(label, _clip(args.get("path", "")),
                                                _clip(reason, 180) if reason else ""))
                     return
                 tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
@@ -376,10 +395,21 @@ class RunProgress:
             cost = (self._step_cost(), "accent")
             if stage == "review" and round_ == 0:       # the reviewer's first call: it starts
                 self._reviewing = True
+                self._review_from = (self._clock(), self._spent() if self._spent is not None else 0.0)
                 self._record("agent", _line(("▶ evidence reviewer started", "agent", "bold"), text, cost))
             elif stage == "quality" and self._reviewing:
                 self._reviewing = False
-                self._record("agent", _line(("■ evidence reviewer finished", "agent", "bold"), text, cost))
+                # The review's own time and spend, shown here and left out of the variant's done line.
+                took, spent = 0.0, 0.0
+                if self._review_from is not None:
+                    took = self._clock() - self._review_from[0]
+                    spent = (self._spent() - self._review_from[1]) if self._spent is not None else 0.0
+                    self._review_time += took
+                    self._review_cost += spent
+                    self._review_from = None
+                # The review's total replaces the step cost here; _step_cost above has already moved its mark.
+                total = [duration(took), *([(f"${spent:.2f}", "accent")] if self._spent is not None else [])]
+                self._record("agent", _line(("■ evidence reviewer finished", "agent", "bold"), text, *total))
             else:
                 self._record(stage, _line(label, text, cost))
             self._id = old_id
@@ -419,13 +449,18 @@ class RunProgress:
         mark = _VERDICT_MARKS.get(verdict)
         parts = [(f"{mark} {label}" if mark else label, *([role] if role else []), "bold")]
         with self._lock:
-            parts.append(duration(self._clock() - self._finding_at))
+            # An evidence review of the finding has its own row with its time and spend (evidence_review).
+            parts.append(duration(max(0.0, self._clock() - self._finding_at - self._review_time)))
             if self._spent is not None:
-                parts += [(f"${self._spent() - self._spent_at:.2f}", "accent"), [("run" + _NBSP,), *self._spend()]]
+                own = max(0.0, self._spent() - self._spent_at - self._review_cost)
+                parts += [(f"${own:.2f}", "accent"), [("run" + _NBSP,), *self._spend()]]
             # Why, unless a refused step, a limit or the proof entry above already said so.
             why = (_clip(self._text(result.rationale), 160)
                    if result.rationale and not self._noted and not self._explained else "")
-            self.done += 1
+            # A finding is done once its last variant is; a plan begin() did not see counts on its own.
+            self._finished[plan.id] += 1
+            if self._finished[plan.id] >= self._variants.get(plan.id, 1):
+                self.done += 1
             self._activity = ""
             self._record("done", _line(*parts), *([_line(why)] if why else []), role=role)
             if rating and rating.get("changed"):

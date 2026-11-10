@@ -124,6 +124,27 @@ def test_feedback_returns_to_original_planner_then_independent_reviewer():
     assert res.proof == {"checked": True, "executed": True}
 
 
+def test_an_issue_in_the_verifiers_own_rendering_starts_no_correction_round():
+    """VER-042: a readability issue concerns what the Verifier renders; the test agent cannot change it, so it is
+    reported and no correction call is made."""
+    ctx, res, host, original, _ = pair([issue(code="readability", detail="The input line repeats eight times.")])
+    review_finding([(ctx, res)])
+    assert len(host.calls) == 1 and not original.requests
+    assert res.evidence_review["status"] == "needs-attention" and res.evidence_review["rounds"] == 0
+    assert "renders itself" in res.evidence_review["reason"]
+    assert res.evidence_review["issues"][0]["code"] == "readability"
+
+
+def test_only_the_issues_the_agent_can_change_are_returned_to_it():
+    both = {"status": "needs-attention", "issues": [
+        {"variant": "T-1", "code": "readability", "detail": "The panel repeats a line."},
+        {"variant": "T-1", "code": "comparison", "detail": "Explain the contrast between the two roles."}]}
+    ctx, res, host, original, _ = pair([both, revision(), CLEAR])
+    review_finding([(ctx, res)])
+    assert len(original.requests) == 1
+    assert [i["code"] for i in original.requests[0][1]["feedback"]] == ["comparison"]
+
+
 def test_two_rounds_and_five_calls_are_shared_by_all_variants():
     ctx, res, host, first, reviewers = pair(
         [

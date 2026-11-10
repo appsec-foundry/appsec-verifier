@@ -1,4 +1,4 @@
-"""Read-only, repository-confined source access for the agent (VER-016, VER-017).
+"""Read-only, repository-confined source access for the agent (VER-016, VER-017, VER-050).
 
 The agent may read the evidenced code to work out the concrete request, but
 only inside the target checkout: a path that resolves outside the repository
@@ -24,6 +24,9 @@ _ENV_TEMPLATES = (".example", ".sample", ".template", ".dist")
 _PRUNE_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "bower_components", "vendor", ".venv", "venv",
                          "dist", "build", ".next", ".nuxt", "__pycache__", ".tox", ".cache", ".idea", "target"})
 _FIND_SCAN_CAP = 200_000  # bounded traversal, so a pathological tree cannot stall a finding (VER-036)
+_SEARCH_READ_CAP = 64 * 1_048_576  # total bytes one content search reads (VER-036)
+_SEARCH_LINE_CAP = 200  # characters of a matching line returned to the model
+_SEARCH_TEXT = (3, 200)  # length bounds of a content-search string
 
 
 class SourceAccessError(Exception):
@@ -89,6 +92,47 @@ class SourceReader:
                         return {"query": query, "matches": sorted(matches), "truncated": True}
         matches.sort(key=lambda r: (needle not in Path(r).name.lower(), r))   # name matches before path-only matches
         return {"query": query, "matches": matches, "truncated": False}
+
+    def search(self, text: str, *, limit: int = 40) -> dict:
+        """Repo-confined content search (VER-050): the lines that contain `text` as a literal, case-insensitive
+        string, as path, line number and the line cut to a fixed length. The same exclusions as `find` apply
+        (credential, key and VCS files, heavy vendor directories, symlinks that leave the repository); files
+        above the read limit and binary files are skipped, and the traversal and the bytes read are bounded.
+        Read-only; the model supplies no pattern, only a string."""
+        if not isinstance(text, str) or "\x00" in text or not _SEARCH_TEXT[0] <= len(text.strip()) <= _SEARCH_TEXT[1]:
+            raise SourceAccessError(f"a content search needs {_SEARCH_TEXT[0]} to {_SEARCH_TEXT[1]} characters")
+        needle = text.lower()
+        matches, scanned, read = [], 0, 0
+
+        def done(truncated):
+            return {"text": text, "matches": matches, "truncated": truncated}
+
+        for dirpath, dirnames, filenames in os.walk(self.root):   # followlinks=False: a symlinked dir is not entered
+            dirnames[:] = sorted(d for d in dirnames if d.lower() not in _PRUNE_DIRS)
+            for name in sorted(filenames):
+                scanned += 1
+                if scanned > _FIND_SCAN_CAP:
+                    return done(True)
+                try:
+                    resolved = (Path(dirpath) / name).resolve()
+                    rel = resolved.relative_to(self.root)
+                    if _holds_secrets(rel) or not resolved.is_file() or resolved.stat().st_size > MAX_SOURCE_BYTES:
+                        continue
+                    if read + resolved.stat().st_size > _SEARCH_READ_CAP:
+                        return done(True)
+                    with resolved.open("rb") as stream:
+                        data = stream.read(MAX_SOURCE_BYTES + 1)
+                except (OSError, ValueError):
+                    continue
+                read += len(data)
+                if len(data) > MAX_SOURCE_BYTES or b"\x00" in data[:8192]:   # grown since stat, or binary
+                    continue
+                for number, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+                    if needle in line.lower():
+                        matches.append({"path": str(rel), "line": number, "text": line.strip()[:_SEARCH_LINE_CAP]})
+                        if len(matches) >= limit:
+                            return done(True)
+        return done(False)
 
     def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
         p = self._resolve(relpath)

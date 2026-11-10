@@ -577,6 +577,45 @@ def test_a_re_declared_plan_need_not_explain_itself(tmp_path):
     assert result.verdict == "confirmed" and result.limits_hit is None
 
 
+PROFILE_VARIANT = {"id": "v-profile", "hypothesis": "name is rendered as HTML in the profile", "request": {
+    "method": "GET", "path": "/#/profile", "inputs": [{"location": "query", "name": "name"}]}}
+
+
+def _pinned_xss(tmp_path):
+    from appsec_verifier.planning import expand_variants
+
+    ctx = xss_context(tmp_path)
+    ctx.plan = expand_variants([replace(ctx.plan, verification_context={
+        "variants": [SEARCH_VARIANT, PROFILE_VARIANT]})])[0]       # this probe tests v-search only
+    return ctx
+
+
+def test_xss_confirms_without_a_plan_on_the_pinned_variant(tmp_path):
+    """VER-043: no plan_test; the executed marker on the pinned variant's route confirms, and proof_ready said so."""
+    ctx = _pinned_xss(tmp_path)
+    script = Script([
+        {"tool": "browser_check", "args": {"path": "/#/search?q=<svg/onload=alert('m1'.concat('m2'))>"}},
+        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [1]}},
+    ])
+    result = AgentProbe("xss", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    assert script.calls == 2
+
+
+def test_xss_on_another_variants_route_is_neither_ready_nor_confirmed(tmp_path):
+    """Refused case: an execution on the other variant's route gets no proof_ready and is downgraded."""
+    ctx = _pinned_xss(tmp_path)
+    logs = []
+    ctx.log = logs.append
+    script = Script([
+        {"tool": "browser_check", "args": {"path": "/#/profile?name=<svg/onload=alert('m1'.concat('m2'))>"}},
+        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [1]}},
+    ])
+    result = AgentProbe("xss", lambda: script).run(ctx)
+    assert result.verdict == "inconclusive"
+    assert not any("proof_ready" in (h.get("result") or {}) for h in ctx.agent_history)
+
+
 @pytest.mark.parametrize("plan_path", ["/#/search", "/#/search?q=<test>", "/#/search?q=<test>&lang=en"])
 def test_xss_proof_takes_the_planned_route_with_or_without_a_query_template(tmp_path, plan_path):
     """The controller and the proof check compare the planned route alike; a query is not part of it (VER-009)."""

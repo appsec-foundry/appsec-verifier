@@ -44,11 +44,44 @@ def _strict(schema: dict) -> dict:
 _ARG_VALIDATORS = {t["name"]: Draft202012Validator(_strict(t["input_schema"])) for t in _tool_defs()}
 
 
+def offered(ctx, name: str) -> bool:
+    """Whether the finding's prompt offers an action. Only what its class can use is offered, so a prompt
+    carries no other class's actions; validation stays global (_ARG_VALIDATORS), so an action that is not
+    offered is still checked and answered with an error, never run unchecked."""
+    plan = getattr(ctx, "plan", None)
+    cls = getattr(plan, "cls", None)
+    intrusive = not (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True))
+    if name == FIELDS_ACTION:
+        return False
+    if name in ("read_source", "find_source", "search_source"):
+        return getattr(ctx, "source", None) is not None
+    if name == "browser_check":
+        return cls == "xss"
+    if name == "plan_test":
+        return cls in ("injection", "access-control", "session")
+    if name == "send_controls":
+        return cls == "injection" and intrusive
+    if name == "archive_probe":
+        return cls == "path-traversal" and any(
+            r.get("finding_id") == getattr(plan, "id", None)
+            for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", []))
+    return True
+
+
+def _offered_schema(tool: dict) -> dict:
+    """The schema shown to the model. A plan's optional strategy (VER-043) is accepted but not offered, so the
+    model is not prompted to write one."""
+    schema = tool["input_schema"]
+    if tool["name"] == "plan_test" and "strategy" in schema.get("properties", {}):
+        schema = {**schema, "properties": {k: v for k, v in schema["properties"].items() if k != "strategy"}}
+    return schema
+
+
 def system_prompt(ctx) -> str:
     """Without a source checkout read_source is not offered: a call would only return an error."""
     source = getattr(ctx, "source", None) is not None
-    actions = [{k: t[k] for k in ("name", "description", "input_schema")} for t in _tool_defs()
-               if (source or t["name"] not in ("read_source", "find_source")) and t["name"] != FIELDS_ACTION]
+    actions = [{"name": t["name"], "description": t["description"], "input_schema": _offered_schema(t)}
+               for t in _tool_defs() if offered(ctx, t["name"])]
     return (
         _system(ctx)
         + ("" if source else "\nThere is no source checkout in this run; work from the finding's description.")

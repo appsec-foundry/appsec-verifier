@@ -160,3 +160,31 @@ def test_a_failing_probe_ends_only_its_finding_inconclusive():
     first, second = doc["results"]
     assert first["verdict"] == "inconclusive" and first["rationale"] == "probe failed: RuntimeError"
     assert second["verdict"] == "not-reproducible"   # the run went on
+
+
+def test_a_variant_with_another_input_on_the_same_route_is_still_tested():
+    """VER-039: only an identical request (method, path, inputs) is skipped; another input is its own test."""
+    seen = []
+
+    class RecordXss:
+        cls = "xss"
+
+        def run(self, ctx: ProbeContext) -> ProbeResult:
+            seen.append(ctx.plan.variant_id)
+            return ProbeResult(verdict="inconclusive", rationale="no proof")
+
+    from appsec_verifier.planning import expand_variants
+
+    reg = ProbeRegistry()
+    reg.register(RecordXss())
+    base = FindingPlan(id="T-1", cwe="CWE-79", severity="High", title="t", match_key="f.ts|CWE-79",
+                       instance="f.ts:10", status="dynamic", cls="xss", reason="r",
+                       endpoints=(Endpoint("GET", "/x", None),))
+    base.verification_context = {"variants": [
+        {"id": "v1", "request": {"method": "GET", "path": "/x", "inputs": [{"location": "query", "name": "q"}]}},
+        {"id": "v2", "request": {"method": "GET", "path": "/x", "inputs": [{"location": "query", "name": "q"}]}},
+        {"id": "v3", "request": {"method": "GET", "path": "/x", "inputs": [{"location": "query", "name": "sort"}]}},
+    ]}
+    doc = _run(expand_variants([base]), registry=reg)
+    assert seen == ["v1", "v3"]
+    assert [r["verdict"] for r in doc["results"]] == ["inconclusive", "not-attempted", "inconclusive"]

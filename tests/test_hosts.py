@@ -185,11 +185,50 @@ def test_the_seed_does_not_pin_a_finding_without_a_selected_variant():
     assert "verifies only variant" not in prompt(_ctx(), [])
 
 
+def _injection_ctx(*, safe=True):
+    ctx = _ctx()
+    ctx.plan = SimpleNamespace(id="T-1", cwe="CWE-89", cls="injection", title="sqli", instance="routes/s.ts:1",
+                               reason="scenario")
+    ctx.safe = ctx.read_only = safe
+    return ctx
+
+
 def test_the_system_prompt_steers_read_injection_to_the_automatic_controls():
-    """A read injection's controls run automatically on plan acceptance, not through a separate action."""
-    text = system_prompt(_ctx())
+    """A read injection's controls run automatically on plan acceptance; a write plan uses send_controls."""
+    text = system_prompt(_injection_ctx(safe=False))
     assert "run_experiment" not in text
-    assert "the Verifier runs its read-only controls at once" in text
+    assert "the Verifier runs its controls at once" in text
+    assert "call send_controls" in text and '"name": "send_controls"' in text
+    # The auth-artifact form for a login bypass is named, so a 401-to-200 flip is not mistaken for no proof.
+    assert "auth_artifact" in text and "401-to-200" in text
+
+
+def test_the_system_prompt_requires_no_plan_and_no_strategy():
+    """VER-043: no plan precondition; the strategy is accepted but neither asked for nor offered."""
+    for ctx in (_ctx(), _injection_ctx()):
+        text = system_prompt(ctx)
+        assert "No test plan is required" in text
+        assert "record strategy" not in text and "revision_reason" not in text
+        assert '"strategy"' not in text
+
+
+def test_a_finding_prompt_carries_only_its_own_class():
+    """WP12: an access-control finding gets no injection, session or XSS rules or actions, and the other way
+    round; send_controls is offered only to an injection finding in intrusive mode."""
+    access = system_prompt(_ctx())
+    assert "SQL confirmation needs sql_template" not in access and "session_checks resource" not in access
+    assert '"name": "browser_check"' not in access and '"name": "send_controls"' not in access
+    assert '"name": "plan_test"' in access
+    injection = system_prompt(_injection_ctx())
+    assert "For access-control, follow" not in injection and '"name": "browser_check"' not in injection
+    assert '"name": "send_controls"' not in injection          # safe mode: no write controls offered
+    xss = _ctx()
+    xss.plan = SimpleNamespace(id="T-1", cwe="CWE-79", cls="xss", title="xss", instance="a.ts:1", reason="s")
+    text = system_prompt(xss)
+    assert '"name": "browser_check"' in text and '"name": "plan_test"' not in text and "sql_template" not in text
+    assert "SQL confirmation needs sql_template" in injection
+    # Fixed bounds, so the prompts cannot silently grow back (characters, not tokens).
+    assert len(text) < 16_000 and len(injection) < 21_000
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():
@@ -303,6 +342,27 @@ def test_claude_step_and_cost():
     ctx = _ctx()
     assert HostPlanner(host).next_step(ctx, [])["tool"] == "http_request"
     assert ctx.budget.cost == pytest.approx(0.02)
+
+
+def test_a_model_calls_cost_and_token_counts_reach_the_action_log_as_numbers_only():
+    """WP6: the CLI's usage numbers ride on the next action-log record of the finding; no content, no other
+    field, nothing that is not a non-negative integer."""
+    from appsec_verifier.agent.loop import _log
+
+    usage = {"input_tokens": 12, "cache_creation_input_tokens": 3400, "cache_read_input_tokens": 9000,
+             "output_tokens": 410, "service_tier": "standard", "server_tool_use": {"web_search": 1},
+             "secret_text": "never logged", "negative": -1}
+    host, _ = _claude([_lines(CLAUDE_INIT, _claude_result(_wire("http_request", path="/x"), cost=0.11,
+                                                          usage=usage))])
+    ctx = _ctx()
+    ctx.log, ctx.progress, records = None, None, []
+    ctx.log = records.append
+    HostPlanner(host).next_step(ctx, [])
+    _log(ctx, 1, tool="http_request", args={"path": "/x"}, result={"status": 200})
+    _log(ctx, 2, tool="http_request", args={"path": "/x"}, result={"status": 200})
+    assert records[0]["model"] == [{"usd": 0.11, "input_tokens": 12, "cache_creation_input_tokens": 3400,
+                                    "cache_read_input_tokens": 9000, "output_tokens": 410}]
+    assert "model" not in records[1]                     # each call is logged once, on the record after it
 
 
 @pytest.mark.parametrize("init, result", [

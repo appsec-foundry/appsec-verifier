@@ -116,7 +116,7 @@ The console shows model costs only with API billing: `codex`, `anthropic-api`, a
 | `export` | Converts a `verification.yaml` into a file meant for AppSec Analyzer. The Analyzer does not read it yet. |
 | `update` | Updates a pipx installation after you confirm. |
 
-Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
+Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also tests the `quick` findings of other severities, XSS and SQL or NoSQL injection a read can reach ([details](docs/cli.md#select-what-to-verify-ver-026)); `--strict-severity` leaves them out. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
 
 ## Output
 

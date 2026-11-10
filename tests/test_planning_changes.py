@@ -165,6 +165,30 @@ def test_severity_order_is_most_severe_first_but_keeps_prerequisites_ahead():
     assert [p.id for p in dependency_order(severity_order(dep_plans))] == ["T-9", "T-1", "T-2"]
 
 
+def test_within_one_severity_findings_a_read_can_reach_come_first():
+    """VER-026: within one severity a named read request first, then named writes only, then no request; a
+    critical finding without a request still precedes a high one with a read; variants stay together."""
+    from appsec_verifier.endpoints import Endpoint
+
+    doc = {"threats": [
+        {"id": "T-1", "cwe": "CWE-639", "severity": "critical", "evidence": {"file": "a", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-89", "severity": "critical", "evidence": {"file": "b", "line": 1}},
+        {"id": "T-3", "cwe": "CWE-89", "severity": "critical", "evidence": {"file": "c", "line": 1}},
+        {"id": "T-4", "cwe": "CWE-79", "severity": "high", "evidence": {"file": "d", "line": 1}},
+    ]}
+    by_id = {p.id: p for p in plans_from(doc)}
+    plans = [by_id["T-1"],                                                            # no named request
+             replace(by_id["T-2"], endpoints=(Endpoint("POST", "/rest/user/login", None),)),   # write only
+             replace(by_id["T-3"], endpoints=(Endpoint("GET", "/rest/products/search", None),)),  # read
+             replace(by_id["T-4"], endpoints=(Endpoint("GET", "/#/search", None),))]
+    assert [p.id for p in severity_order(plans)] == ["T-3", "T-2", "T-1", "T-4"]
+    p = replace(by_id["T-3"], endpoints=(Endpoint("GET", "/rest/products/search", None),))
+    p.verification_context = {"variants": [{"id": "a", "request": {"method": "GET", "path": "/x"}},
+                                           {"id": "b", "request": {"method": "POST", "path": "/y"}}]}
+    ordered = severity_order([by_id["T-1"], *expand_variants([p])])
+    assert [q.id for q in ordered] == ["T-3", "T-3", "T-1"]           # the variants are not split up
+
+
 @pytest.mark.parametrize("frame_kind", ["main", "child", "foreign", "old-page", "isolated"])
 def test_browser_execution_attribution(frame_kind):
     main = SimpleNamespace(url="https://app.example.com/page")
@@ -475,3 +499,57 @@ def test_command_controls_reject_side_effects(tmp_path):
     }
     with pytest.raises(ToolError, match="harmless printf arithmetic"):
         AgentTools(ctx).plan_test(**(plan()["args"] | {"expression_template": "rm file; {{expression}}"}))
+
+
+def _quick_plans():
+    from appsec_verifier.endpoints import Endpoint
+
+    doc = {"threats": [
+        {"id": "T-1", "cwe": "CWE-89", "severity": "critical", "evidence": {"file": "a", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-79", "severity": "medium", "evidence": {"file": "b", "line": 1}},
+        {"id": "T-3", "cwe": "CWE-89", "severity": "medium", "evidence": {"file": "c", "line": 1}},
+        {"id": "T-4", "cwe": "CWE-79", "severity": "medium", "evidence": {"file": "d", "line": 1}},
+        {"id": "T-5", "cwe": "CWE-639", "severity": "medium", "evidence": {"file": "e", "line": 1}},
+    ]}
+    by_id = {p.id: p for p in plans_from(doc)}
+    get, post = Endpoint("GET", "/search", None), Endpoint("POST", "/login", None)
+    return [replace(by_id["T-1"], endpoints=(get,)),
+            replace(by_id["T-2"], endpoints=(get,)),            # quick: XSS a read can reach
+            replace(by_id["T-3"], endpoints=(post,)),           # not quick: only a write
+            by_id["T-4"],                                       # not quick: names no request
+            replace(by_id["T-5"], endpoints=(get,))]            # not quick: access control
+
+
+def _selected(plans, **kw):
+    import argparse
+
+    from appsec_verifier import cli
+
+    args = dict(category=None, cls=None, severity=None, min_severity=None, cwe=None, only=None, strict_severity=False)
+    return cli._select(argparse.Namespace(**{**args, **kw}), plans)
+
+
+def test_quick_findings_are_cheap_xss_and_sql_injection_a_read_can_reach():
+    from appsec_verifier.planning import quick
+
+    assert [p.id for p in _quick_plans() if quick(p)] == ["T-1", "T-2"]
+    assert [p.id for p in _selected(_quick_plans(), category="quick")] == ["T-1", "T-2"]
+
+
+@pytest.mark.parametrize("selector", [{"severity": "critical,high"}, {"min_severity": "high"}])
+def test_a_severity_selection_adds_the_quick_findings_of_other_severities(selector):
+    """VER-026: critical and high, plus every quick finding below, marked as added; nothing else below."""
+    from appsec_verifier.planning import QUICK_REASON
+
+    selected = _selected(_quick_plans(), **selector)
+    assert [p.id for p in selected] == ["T-1", "T-2"]
+    assert selected[0].selection_reason is None and selected[1].selection_reason == QUICK_REASON
+
+
+@pytest.mark.parametrize("selector", [{"severity": "critical", "strict_severity": True},
+                                      {"min_severity": "critical", "strict_severity": True},
+                                      {"severity": "critical", "only": "T-1"},
+                                      {"severity": "critical", "category": "idor"}])
+def test_strict_severity_only_and_other_filters_keep_quick_findings_out(selector):
+    """Refused cases: --strict-severity and --only add nothing; the other selectors still apply to additions."""
+    assert "T-2" not in [p.id for p in _selected(_quick_plans(), **selector)]

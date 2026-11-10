@@ -28,6 +28,34 @@ def test_proof_ready_reports_code_checked_signals_only():
     assert proof_ready(_ctx("injection"), [hit]) is None
 
 
+def test_proof_ready_for_xss_keeps_the_route_and_echo_rules_of_the_proof_check():
+    """WP3: proof_ready never points at a step _xss would then reject: another variant's route, or a request
+    that already carried the joined marker."""
+    ctx = _ctx("xss", marker=("m1", "m2"))
+    ctx.plan.verification_context = {"variants": [{"id": "v-search", "request": {"method": "GET",
+                                                                                 "path": "/#/search"}}]}
+    executed = {"executed": True, "context_verified": True}
+    on_route = {"tool": "browser_check", "args": {"path": "/#/search?q=<svg>"}, "result": executed}
+    other_route = {"tool": "browser_check", "args": {"path": "/#/profile?name=<svg>"}, "result": executed}
+    echoed = {"tool": "browser_check", "args": {"path": "/#/search?q=m1m2"}, "result": executed}
+    assert proof_ready(ctx, [other_route]) is None
+    assert proof_ready(ctx, [echoed]) is None
+    assert proof_ready(ctx, [other_route, on_route]) == [2]
+
+
+def test_proof_ready_for_open_redirect_and_never_for_access_control():
+    ctx = _ctx("open-redirect", marker=("m1", "m2"), target_base="https://app.example.com")
+    to_marker = {"tool": "http_request", "args": {"path": "/redirect"},
+                 "result": {"status": 302, "location": "https://m1m2.invalid/"}}
+    elsewhere = {"tool": "http_request", "args": {"path": "/redirect"},
+                 "result": {"status": 302, "location": "https://example.org/"}}
+    assert proof_ready(ctx, [elsewhere]) is None
+    assert proof_ready(ctx, [elsewhere, to_marker]) == [2]
+    contrast = {"tool": "http_request", "args": {"path": "/rest/basket/2", "role": "b"},
+                "result": {"status": 200, "length": 20}}
+    assert proof_ready(_ctx("access-control"), [contrast, contrast]) is None
+
+
 def _ctx(cls, **kw):
     return SimpleNamespace(**{"plan": SimpleNamespace(id="T-1", cls=cls), "sessions": None, "evidence_dir": None,
                               **kw})

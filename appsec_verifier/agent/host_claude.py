@@ -30,6 +30,7 @@ from .hosts import (
     host_env,
     png_base64,
     run_process,
+    usage_counts,
 )
 from .steps import STEP_SCHEMA
 
@@ -124,18 +125,19 @@ class ClaudeHost:
             return HostReply(error="output is not JSON lines")
         cost = (final or {}).get("total_cost_usd")
         usd = float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else None
+        usage = usage_counts((final or {}).get("usage"))
         breach = _breach(init, final)
         if breach:
-            return HostReply(usd=usd, breach=breach)
+            return HostReply(usd=usd, breach=breach, usage=usage)
         if code != 0 or final is None or final.get("is_error"):
             subtype = (final or {}).get("subtype")
             detail = " ".join(str(x) for x in (subtype, (final or {}).get("result"), err) if x)
             # The CLI's own error kind (e.g. error_max_turns) says why; a fixed token, never provider prose.
             kind = f"{subtype}, " if isinstance(subtype, str) and _SUBTYPE.fullmatch(subtype) else ""
-            return HostReply(usd=usd, error=f"{classify(detail)} ({kind}exit {code})")
+            return HostReply(usd=usd, error=f"{classify(detail)} ({kind}exit {code})", usage=usage)
         if init is None:
-            return HostReply(usd=usd, error="session did not report its tool set")
-        return HostReply(step=final.get("structured_output"), usd=usd)
+            return HostReply(usd=usd, error="session did not report its tool set", usage=usage)
+        return HostReply(step=final.get("structured_output"), usd=usd, usage=usage)
 
 
 def _events(stdout: str) -> tuple[dict | None, dict | None]:

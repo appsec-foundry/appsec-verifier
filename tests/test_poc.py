@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import stat
 from types import SimpleNamespace
 
@@ -365,6 +366,19 @@ def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
     assert page.count("<span class=tag>answer differs ▸</span><mark>") == 2
     assert "<b>input, decoded: x&#x27; OR 1=1--</b>" in page
     assert "answered in" not in page                                           # no time: not a timing proof
+
+
+def test_each_steps_input_is_marked_and_decoded_once_whatever_its_partners(tmp_path):
+    """WP4: a step compared with several others names its input once, not once per comparison partner."""
+    def transport(m, u, h, **k):
+        return Resp(200, '{"items":[1,2,3]}' if "=1" in str(k.get("params")) else '{"items":[]}')
+
+    queries = ["x' OR 1=1--", "x' OR 1=2--", "x' OR 2=1--", "x' OR 2=2--"]
+    _, shot = _shot(tmp_path, "injection", transport,
+                    [*(_get(None, "/search", q=q) for q in queries),
+                     {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2, 3, 4]}}])
+    lines = re.findall(r"<b>input, decoded: [^<]*</b>", shot["html"])
+    assert lines and len(lines) == len(set(lines))          # each shown step's input once, none repeated
 
 
 def test_exchange_image_marks_the_times_of_a_timing_proof(tmp_path):

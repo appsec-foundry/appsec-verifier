@@ -21,7 +21,7 @@ from __future__ import annotations
 import yaml
 
 from ..version_info import resource_root
-from .hosts import HostReply, HostUnavailable, check_model_name, png_base64
+from .hosts import HostReply, HostUnavailable, check_model_name, png_base64, usage_counts
 from .steps import STEP_SCHEMA, strict_json
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -127,9 +127,10 @@ class AnthropicHost:
             usd = self._cost(resp.usage)
         except (AttributeError, KeyError, TypeError, ValueError):
             return HostReply(error="invalid_response")
+        usage = usage_counts(resp.usage)
         if resp.stop_reason != "end_turn":
             reason = {"refusal": "refused", "max_tokens": "output_truncated"}.get(resp.stop_reason, "invalid_response")
-            return HostReply(usd=usd, error=reason)
+            return HostReply(usd=usd, error=reason, usage=usage)
         try:
             blocks = list(resp.content)
             texts = [b.text for b in blocks if b.type == "text"]
@@ -137,5 +138,5 @@ class AnthropicHost:
                 raise ValueError("no single text answer")
             step = strict_json(texts[0])
         except (AttributeError, TypeError, ValueError):
-            return HostReply(usd=usd, error="invalid_response")
-        return HostReply(step=step, usd=usd)
+            return HostReply(usd=usd, error="invalid_response", usage=usage)
+        return HostReply(step=step, usd=usd, usage=usage)

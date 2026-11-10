@@ -520,3 +520,27 @@ def test_transport_failure_is_a_tool_error(tmp_path, error):
 
     with pytest.raises(ToolError, match="request failed"):
         AgentTools(_ctx(tmp_path, transport)).http_request(path="/x")
+
+
+def test_an_empty_file_name_search_says_it_matches_names_only(tmp_path):
+    """VER-050: a symbol never matches a file name; the empty answer points to the content search."""
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+    assert "note" not in tools.find_source(query="basket")
+    out = tools.find_source(query="getPaymentMethods")
+    assert out["matches"] == [] and "search_source" in out["note"]
+
+
+def test_a_plan_takes_at_most_three_template_candidates(tmp_path):
+    """VER-011: one template or up to three candidates; a fourth is refused by the declaration's schema."""
+    from jsonschema import Draft202012Validator
+
+    from appsec_verifier.agent.experiments import PLAN_SCHEMA
+
+    base = {"kind": "boolean", "hypothesis": "The term is concatenated", "path": "/s", "input_location": "params",
+            "input_name": "q", "baseline": "zzz", "pointer": "/data"}
+    validator = Draft202012Validator(PLAN_SCHEMA)
+    template = "zzz' OR {{predicate}} -- "
+    assert validator.is_valid({**base, "sql_template": template})
+    assert validator.is_valid({**base, "sql_template": [template, template + " ", template + "  "]})
+    assert not validator.is_valid({**base, "sql_template": [template + " " * n for n in range(4)]})
+    assert not validator.is_valid({**base, "sql_template": []})

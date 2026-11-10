@@ -5,7 +5,9 @@ that only proposes the next step; it never acts itself (VER-017). HostPlanner
 holds what all hosts share. It refuses a call once the run's call or cost bound
 is reached or a confinement check has failed, bounds each call by the remaining
 run time, charges the reported cost (VER-015), and validates the step
-(steps.py, VER-019). A failed call ends only its finding, but after
+(steps.py, VER-019). Each call's cost and the token counts a host reports are
+kept as numbers for the action log (VER-017), never any prompt or answer text.
+A failed call ends only its finding, but after
 MAX_FAILED_CALLS failed calls in a row (an exhausted quota, a rejected login, a
 provider that is down) the host makes no further call in the run. A host only
 sends the request and returns a HostReply. For an evidence review a host that
@@ -48,6 +50,23 @@ class HostReply:
     usd: float | None = None     # what the call cost, when the host reports it
     error: str | None = None     # the call failed; the finding ends inconclusive
     breach: str | None = None    # the host was not confined; no further call in this run
+    usage: dict | None = None    # token counts the host reports, numbers only (usage_counts)
+
+
+USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def usage_counts(usage) -> dict | None:
+    """The token counts of one model call for the action log (VER-017): only the known count fields, only
+    non-negative integers, never any content. A mapping or an SDK object; None when nothing usable is there."""
+    if usage is None:
+        return None
+    out = {}
+    for field in USAGE_FIELDS:
+        value = usage.get(field) if isinstance(usage, dict) else getattr(usage, field, None)
+        if type(value) is int and value >= 0:
+            out[field] = value
+    return out or None
 
 
 def host_env(environ, names: tuple[str, ...]) -> dict:
@@ -219,6 +238,18 @@ class HostPlanner:
             host.broken = reply.breach
         if reply.usd is not None:
             ctx.budget.note_cost(reply.usd)
+        # What this call cost and, where the host reports them, its token counts; the next action-log record of
+        # the finding carries them (agent/loop.py), so cost per call can be told apart from cost per finding.
+        record = {**({"usd": round(reply.usd, 6)} if reply.usd is not None else {}), **(reply.usage or {})}
+        if record:
+            pending = getattr(ctx, "model_calls", None)
+            if not isinstance(pending, list):
+                pending = []
+            pending.append(record)
+            try:
+                ctx.model_calls = pending
+            except AttributeError:   # a context that takes no new attributes logs no usage
+                pass
         if reply.breach:
             raise HostCallError(f"{host.label} confinement check failed: {reply.breach}")
         if reply.error and images:

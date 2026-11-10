@@ -460,3 +460,39 @@ def test_resume_and_overwrite_together_are_a_usage_error(tmp_path, monkeypatch, 
         cli.main(["verify", "--assessment", "a.yaml", "--url", "http://x", "--resume", "--overwrite"])
     assert stop.value.code == cli.EXIT_BLOCKED
     assert "argument --overwrite: not allowed with argument --resume" in capsys.readouterr().err
+
+
+def test_the_test_plan_counts_findings_not_their_variants(monkeypatch):
+    """The head names how many findings this run verifies, with the runs their variants add; Not testable
+    counts each blocked finding once, however many variants it has."""
+    from dataclasses import replace
+
+    from appsec_verifier.planning import evidence_id
+
+    monkeypatch.setenv("COLUMNS", "200")
+    get = Endpoint("GET", "/x", None)
+    tested = [replace(_plan("injection", get), variant_id=v, variant_digest=d) for v, d in (("a", "aa"), ("b", "bb"))]
+    blocked_plans = [replace(_plan("ssrf", get), id="T-2", variant_id=v, variant_digest=d)
+                     for v, d in (("c", "cc"), ("d", "dd"))]
+    blocked = {evidence_id(p): ("callback", "no callback in the scope") for p in blocked_plans}
+    text = "\n".join(cli._test_cases(cli.Style(False), [*tested, *blocked_plans], blocked))
+    assert "Test plan     1 of 2 findings will be tested (2 runs with their variants)" in text
+    assert "Not testable  1 finding needs what this run does not have" in text
+    assert text.count("T-2") == 1
+
+
+def test_the_settings_count_findings_and_name_the_quick_ones_added():
+    """The selection line counts findings, not variants, and says how many quick ones were added below."""
+    from dataclasses import replace
+
+    from appsec_verifier.limits import Limits
+    from appsec_verifier.planning import QUICK_REASON
+
+    get = Endpoint("GET", "/x", None)
+    high = [replace(_plan("injection", get), severity="high", variant_id=v, variant_digest=v) for v in ("a", "b")]
+    added = replace(_plan("xss", get), id="T-2", severity="medium", selection_reason=QUICK_REASON)
+    info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none"}
+    rows = cli._verify_settings(cli.Style(False), "a.yaml", "http://t", {}, [*high, added], Limits(), True, True,
+                                info, floor="high")
+    line = next(row for row in rows if "Selection" in row)
+    assert "2 findings, severity high and above, with 1 quick below it" in line

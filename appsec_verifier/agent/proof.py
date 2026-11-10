@@ -68,10 +68,9 @@ from ..verification_context import planned_route
 from ..verify.probes import ProbeResult
 from .experiments import (
     access_check,
-    auth_artifact_check,
     callback_injection_check,
     experiment_groups,
-    injection_check,
+    injection_proof,
     latest_plan,
     observation,
     token,
@@ -86,19 +85,64 @@ def redirect_host(marker) -> str | None:
     return "".join(marker) + ".invalid" if marker and all(marker) else None
 
 
+def _holding_experiment_steps(history: list[dict]):
+    """The steps of the latest experiment the Verifier ran that reported the injection proof holds (VER-011), or
+    None. Those are read controls the code generated and sent itself, so the verdict can rest on them even when
+    the model cited nothing or the wrong steps."""
+    for h in reversed(history):
+        if h.get("tool") == "experiment" and isinstance(h.get("result"), dict):
+            result = h["result"]
+            if result.get("proof") == "holds" and isinstance(result.get("steps"), list):
+                return [n for n in result["steps"] if isinstance(n, int)]
+    return None
+
+
+def _xss_routes(ctx, history: list[dict]) -> list[str]:
+    """The routes an XSS browser_check must sit on to count: the finding's variant routes and any request the
+    code derived for it, narrowed to a declared plan path when the agent gave one (VER-043)."""
+    variants = getattr(ctx.plan, "verification_context", {}).get("variants", [])
+    routes = [v["request"]["path"] for v in variants if (v.get("request") or {}).get("path")]
+    routes += [r["path"] for r in getattr(ctx, "derived_requests", [])]
+    _, plan = latest_plan(history)
+    if plan.get("path"):
+        routes = [plan["path"]]
+    return routes
+
+
+def _xss_steps(ctx, history: list[dict]) -> list[int]:
+    """The browser_check steps that executed the marker in a verified context, on one of the finding's routes,
+    whose own request did not already carry the joined marker (the echo guard). The same selection the _xss
+    proof check applies, so proof_ready never points at a step the check would then reject."""
+    routes = _xss_routes(ctx, history)
+    joined = "".join(getattr(ctx, "marker", None) or ())
+    steps = []
+    for n, h in enumerate(history, 1):
+        result = h.get("result")
+        if (h.get("tool") == "browser_check" and isinstance(result, dict)
+                and result.get("executed") is True and result.get("context_verified") is True
+                and (not routes or any(planned_route(rp, h.get("args", {}).get("path") or "") for rp in routes))
+                and not (joined and joined in _decoded(h.get("args", {}).get("path") or ""))):
+            steps.append(n)
+    return steps
+
+
 def proof_ready(ctx, history: list[dict]):
     """The recorded steps that already meet this finding's class proof through a signal the code sets itself —
-    an executed XSS marker, an SSRF callback hit, a path-traversal marker read — for the agent's next step, or
-    None. Pure: it selects nothing the model merely asserts, and proof.py re-checks every cited step before a
-    confirmed verdict stands (VER-009 to VER-013). Injection readiness is reported by the experiment feedback."""
+    an executed XSS marker on the finding's route, an SSRF callback hit, an open redirect to the marker host, a
+    path-traversal marker read — for the agent's next step, or None. Pure: it selects nothing the model merely
+    asserts, and proof.py re-checks every cited step before a confirmed verdict stands (VER-009 to VER-013).
+    Injection readiness is reported by the experiment feedback."""
     cls = getattr(ctx.plan, "cls", None)
     if cls == "xss":
-        steps = [n for n, h in enumerate(history, 1)
-                 if h.get("tool") == "browser_check" and isinstance(h.get("result"), dict)
-                 and h["result"].get("executed") is True and h["result"].get("context_verified") is True]
+        steps = _xss_steps(ctx, history)
     elif cls == "ssrf":
         steps = [n for n, h in enumerate(history, 1)
                  if h.get("tool") == "http_request" and (h.get("result") or {}).get("callback_hit") is True]
+    elif cls == "open-redirect":
+        host = redirect_host(getattr(ctx, "marker", None))
+        steps = [n for n, h in enumerate(history, 1)
+                 if h.get("tool") == "http_request" and (h.get("result") or {}).get("status") in _REDIRECTS
+                 and host is not None and _location_host(ctx, (h.get("result") or {}).get("location")) == host]
     elif cls == "path-traversal" and not any(
             r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", [])):
         steps = [n for n, h in enumerate(history, 1)
@@ -157,28 +201,34 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
             return _downgrade(result, problem)
         result.evidence = _write_record(ctx, "exchanges", exchanges)
         return _checked(result, history, cited, ctx)
-    if cls == "injection" and latest_plan(history)[1].get("auth_artifact"):
-        exchanges, problem = _cited_exchanges(ctx, history, cited, 2)
+    if cls == "injection":
+        # The auth-artifact form for a login bypass (VER-049), otherwise the response-field or timing form
+        # (VER-011). Steps chosen by code (VER-043): when the cited steps do not carry the proof but the latest
+        # experiment the Verifier ran reported it holds, check and record those steps instead. XSS and SSRF
+        # already work this way; the code never confirms on steps it has not re-checked here.
+        effective = cited if isinstance(cited, list) else []
+        if injection_proof(ctx, history, effective):
+            holding = _holding_experiment_steps(history)
+            if holding and injection_proof(ctx, history, holding) is None:
+                effective = holding
+        exchanges, problem = _cited_exchanges(ctx, history, effective, 2)
         if problem is None:
-            problem = auth_artifact_check(ctx, history, cited)
+            problem = injection_proof(ctx, history, effective)
         if problem is not None:
             return _downgrade(result, problem)
         result.evidence = _write_record(ctx, "exchanges", exchanges)
-        return _checked(result, history, cited, ctx)
+        return _checked(result, history, effective, ctx)
     check, minimum = {
         "access-control": (None, 2),
-        "injection": (None, 2),
         "open-redirect": (_redirect, 1),
         "path-traversal": (_traversal, 1),
     }.get(cls, (None, 0))
-    if check is None and cls not in ("access-control", "injection"):
+    if check is None and cls != "access-control":
         return _downgrade(result, f"there is no proof check for class {cls!r}")
     exchanges, problem = _cited_exchanges(ctx, history, cited, minimum)
     if problem is None:
         if cls == "access-control":
             problem = access_check(ctx, history, cited)
-        elif cls == "injection":
-            problem = injection_check(ctx, history, cited)
         else:
             problem = check(ctx, exchanges)
     if problem is not None:
@@ -356,13 +406,8 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
     # No execution plan is required (VER-043). The probe is pinned to one variant (planning.expand_variants);
     # that variant's request route, and any request the code derived for this finding, decide which
     # browser_check counts, so the per-variant discipline the old plan provided is kept without the plan. If
-    # the agent did declare a plan with a path, it narrows to that path.
-    variants = getattr(ctx.plan, "verification_context", {}).get("variants", [])
-    routes = [v["request"]["path"] for v in variants if (v.get("request") or {}).get("path")]
-    routes += [r["path"] for r in getattr(ctx, "derived_requests", [])]
-    _, plan = latest_plan(history)
-    if plan.get("path"):
-        routes = [plan["path"]]
+    # the agent did declare a plan with a path, it narrows to that path (_xss_routes, shared with proof_ready).
+    routes = _xss_routes(ctx, history)
     proof_steps = [
         h
         for h in history

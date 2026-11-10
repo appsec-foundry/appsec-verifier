@@ -357,7 +357,8 @@ def test_the_evidence_reviewer_has_agent_entries_for_its_start_and_end():
     assert [row.split()[3] for row in rows] == ["agent", "revise", "review", "agent", "quality"]
     assert rows[0].endswith("▶ evidence reviewer started · Checking evidence text, layout and 1 screenshot.")
     assert rows[1].endswith("correction 1/2 · Original test agent: unclear quote")
-    assert rows[3].endswith("■ evidence reviewer finished · clear: Evidence text and layout checks passed.")
+    # The reviewer's own row carries its time, which the finding's done line then leaves out.
+    assert rows[3].endswith("■ evidence reviewer finished · clear: Evidence text and layout checks passed. · 0s")
     assert rows[4].endswith("correction 0/2 · not-reviewed: Review not started: interrupted.")
 
 
@@ -392,6 +393,23 @@ def test_with_costs_shown_the_done_line_gives_the_finding_cost_and_the_run_spend
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="no answer"))
     assert _rows(out)[-1].endswith(f"inconclusive · 0s · $0.42 · {spend} · no answer")
+
+
+def test_the_evidence_review_shows_its_own_cost_and_time_off_the_variants_done_line():
+    """WP4: the review of a finding runs before its last variant's done line; its spend and time go on the
+    reviewer's own row, so a retired variant does not show what the review cost."""
+    out, spent, clock = io.StringIO(), [1.00], Clock()
+    progress = RunProgress(out, clock=clock, env={}, spent=lambda: spent[0], cost_limit=10.0)
+    progress.begin([_plan()])
+    progress.finding(_plan(), agent=False)                    # a variant retired by a confirmed sibling
+    progress.evidence_review("T-1", "review", 0, "Checking evidence text and layout metadata.")
+    spent[0], clock.now = 1.63, clock.now + 126
+    progress.evidence_review("T-1", "quality", 0, "clear: Evidence text and layout checks passed.")
+    finished = _rows(out)[-1]
+    assert finished.endswith("■ evidence reviewer finished · clear: Evidence text and layout checks passed. · "
+                             "2m06s · $0.63")
+    progress.finished(_plan(), ProbeResult(verdict="not-attempted", rationale="another variant confirmed it"))
+    assert " · 0s · $0.00 · run $1.63 of $10.00" in _rows(out)[-1]
 
 
 def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_spend(monkeypatch):
@@ -742,3 +760,26 @@ def test_a_subscription_run_shows_costs_only_with_show_costs(tmp_path, monkeypat
     else:
         assert "$" not in "\n".join(rows)
     assert run in out
+
+
+def test_the_grid_counts_findings_and_the_variants_of_one_share_its_number():
+    """The grid shows the findings this run verifies: a finding's variants share its number, and it counts as
+    done once its last variant is."""
+    from dataclasses import replace
+
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    first = replace(_plan("T-1"), variant_id="v1")
+    second = replace(_plan("T-1"), variant_id="v2")
+    other = _plan("T-2")
+    progress.begin([first, second, other])
+    assert progress.total == 2
+    progress.finding(first)
+    progress.finished(first, ProbeResult(verdict="inconclusive", rationale="no proof"))
+    assert progress.done == 0                                   # its other variant is still to come
+    progress.finding(second, agent=False)
+    progress.finished(second, ProbeResult(verdict="not-attempted", rationale="same request"))
+    progress.finding(other)
+    rows = [row for row in _rows(out) if " start " in row]
+    assert [row.split()[1] for row in rows] == ["1/2", "1/2", "2/2"]
+    assert progress.done == 1

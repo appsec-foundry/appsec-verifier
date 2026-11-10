@@ -2,8 +2,11 @@
 
 Source declarations and recorded links/forms supply candidates, never authority. A
 candidate must stay on the target origin and the original resource's route family;
-derived routes cannot become anchors for exploring another resource. Unknown
-framework syntax or relationships stay unresolved. No request is sent here.
+derived routes cannot become anchors for exploring another resource. When the
+assessment names no route, a route another file registers for a handler of the
+finding's file can anchor one (`registration_routes`), but only through a literal
+import of that file and a handler name the agent read in it. Unknown framework
+syntax or relationships stay unresolved. No request is sent here.
 """
 
 from __future__ import annotations
@@ -26,6 +29,13 @@ _ROUTE = re.compile(
 _MAPPING = re.compile(r"@(Get|Post|Put|Patch)Mapping\(\s*(?:value\s*=\s*)?['\"](/[^'\"\s]{0,500})['\"]")
 _IMPORT = re.compile(r"(?:from\s*|require\(\s*|import\s*)['\"](\.[^'\"\s]{1,200})['\"]")
 _INPUT = re.compile(r"(?:req|request)\.(query|body|params)(?:\.([A-Za-z_]\w*)|\[['\"]([^'\"]+)['\"]\])")
+# An alias bound to a module import, e.g. `import * as payment from './routes/payment'` or
+# `const payment = require('./routes/payment')`, so a handler reference alias.handler can be resolved to a file.
+_ALIAS_IMPORT = re.compile(
+    r"""(?:import\s*\*\s*as\s+([A-Za-z_]\w*)\s+from|import\s+([A-Za-z_]\w*)\s+from|"""
+    r"""(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*require\()\s*['"](\.[^'"\s]{1,200})['"]"""
+)
+_HANDLER_REF = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b")
 
 
 def resolve(ctx, path):
@@ -111,13 +121,70 @@ def _source_roots(ctx, history):
     return paths
 
 
+def _imports_finding_file(reg_file, text, finding_file):
+    """The aliases in `reg_file` that import `finding_file`, so `alias.handler` can be tied to the finding's
+    file (VER-008). Resolution is literal and repository-relative; an import that escapes the repo is ignored."""
+    parent = PurePosixPath(reg_file).parent
+    stem = PurePosixPath(finding_file).with_suffix("")
+    aliases = set()
+    for m in _ALIAS_IMPORT.finditer(text):
+        alias = m.group(1) or m.group(2) or m.group(3)
+        target = posixpath.normpath(str(parent / m.group(4)))
+        if target == ".." or target.startswith(("../", "/")):
+            continue
+        if PurePosixPath(target) == stem or target == finding_file:
+            aliases.add(alias)
+    return aliases
+
+
+def registration_routes(ctx, history):
+    """Routes another file registers for a handler defined in the finding's file, when the assessment names
+    none (VER-008). A route counts only when the registering line names `alias.handler`, `alias` imports the
+    finding's file in that file, and `handler` appears in the finding's file as the agent read it. The route's
+    provenance is recorded so the plan can show where it came from."""
+    finding_file = (ctx.plan.instance or "").rsplit(":", 1)[0]
+    if not finding_file:
+        return []
+    finding_text = "".join(h.get("result", {}).get("text", "") for h in history
+                           if h.get("tool") == "read_source" and h.get("args", {}).get("path") == finding_file)
+    if not finding_text:
+        return []
+    routes, seen = [], set()
+    for h in history:
+        if h.get("tool") != "read_source":
+            continue
+        reg_file = h.get("args", {}).get("path")
+        result = h.get("result", {})
+        text = result.get("text", "")
+        if not reg_file or reg_file == finding_file:
+            continue
+        aliases = _imports_finding_file(reg_file, text, finding_file)
+        if not aliases:
+            continue
+        for m in list(_ROUTE.finditer(text))[:64]:
+            following = _ROUTE.search(text, m.end())
+            body = text[m.start():following.start() if following else len(text)]
+            if not any(a in aliases and handler in finding_text
+                       for a, handler in (ref.groups() for ref in _HANDLER_REF.finditer(body))):
+                continue
+            key = (m[1].upper(), m[2])
+            if key in seen:
+                continue
+            seen.add(key)
+            line = result.get("start_line", 1) + text[:m.start()].count("\n")
+            routes.append({"method": m[1].upper(), "path": m[2], "inputs": [],
+                           "source_file": reg_file, "source_line": line})
+    return routes
+
+
 def _source_candidates(ctx, history, h):
     path = h.get("args", {}).get("path")
-    if path not in _source_roots(ctx, history):
+    registrations = [r for r in registration_routes(ctx, history) if r["source_file"] == path]
+    if path not in _source_roots(ctx, history) and not registrations:
         raise ValueError("the source is not the finding's evidence or a recorded local import from it")
     result = h.get("result", {})
     text = result.get("text", "")
-    candidates = []
+    candidates = list(registrations)
     for pattern in (_ROUTE, _MAPPING):
         for m in list(pattern.finditer(text))[:32]:
             line = result.get("start_line", 1) + text[:m.start()].count("\n")
@@ -169,6 +236,10 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         near = [r for r in candidates if r.get("source_file") == file and line.isdigit()
                 and 0 <= int(line) - r["source_line"] <= 80]
         roots = near[-1:]
+        # Or a route another file registers for a handler of the finding's file (VER-008).
+        if not roots:
+            roots = [r for r in registration_routes(ctx, history)
+                     if r["method"] == method and planned_route(resolve(ctx, r["path"]), url)]
     matching = [r for r in candidates if r["method"] == method
                 and planned_route(resolve(ctx, r["path"]), url)
                 and all(i in r.get("inputs", []) for i in inputs)]

@@ -314,12 +314,13 @@ class Controller:
             self._target(name, args)
         key = self._key(name, args)
         if experiment:
-            # The accepted plan's bounded, read-only controls keep their own repetition namespace, scoped to
-            # that plan, so the agent's earlier diagnostic probes of the same values do not consume the proof's
+            # The accepted plan's generated controls keep their own repetition namespace, scoped to that plan's
+            # token, so the agent's earlier diagnostic probes of the same values do not consume the proof's
             # budget, and a revised plan gets a fresh namespace rather than inheriting the aborted one's spent
-            # budget. Re-running the same plan's controls is still bounded: it re-sends them into the same
-            # namespace and reaches the allowance. The number of distinct experiments one finding may run is
-            # itself capped, so a sequence of revisions cannot send controls without end (VER-010, VER-036).
+            # budget. Sending the same accepted plan's controls again reaches the allowance. Declaring the plan
+            # anew generates fresh control values, so it is a new experiment with a new token; what bounds that
+            # is the cap on distinct experiments per finding below, so revisions cannot send controls without
+            # end (VER-010, VER-036).
             plan_key = token(self.plan)
             if plan_key not in self._experiment_runs:
                 if len(self._experiment_runs) >= 3:
