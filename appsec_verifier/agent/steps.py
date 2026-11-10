@@ -48,7 +48,7 @@ def system_prompt(ctx) -> str:
     """Without a source checkout read_source is not offered: a call would only return an error."""
     source = getattr(ctx, "source", None) is not None
     actions = [{k: t[k] for k in ("name", "description", "input_schema")} for t in _tool_defs()
-               if (source or t["name"] != "read_source") and t["name"] != FIELDS_ACTION]
+               if (source or t["name"] not in ("read_source", "find_source")) and t["name"] != FIELDS_ACTION]
     return (
         _system(ctx)
         + ("" if source else "\nThere is no source checkout in this run; work from the finding's description.")

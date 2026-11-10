@@ -243,6 +243,7 @@ def run_verification(
         else:
             if shown and progress is not None:
                 progress.finding(plan)
+            budget.begin_finding()  # VER-051: this finding's per-finding spend cap starts here
             try:
                 res = _verify_one(plan, registry, ctx_factory, log)
             except KeyboardInterrupt:

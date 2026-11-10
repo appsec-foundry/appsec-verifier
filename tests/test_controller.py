@@ -180,6 +180,39 @@ def test_accepted_experiment_pins_non_sink_fields_across_probes(tmp_path):
                                   "json": {"email": "vrf0-unrelated", "password": "p"}})
 
 
+def test_accepted_write_experiment_may_send_each_control_twice(tmp_path):
+    """VER-011 + VER-030: ein akzeptiertes boolean/timing-Experiment auf einem Write muss jede deklarierte
+    Kontrolle zweimal senden koennen, weil experiments.injection_check >= 2 pro Gruppe verlangt. Der dritte
+    identische Send bleibt beschraenkt."""
+    ctx = context(tmp_path)
+    ctx.marker = ("vrf0",)
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89",
+                       endpoints=(Endpoint("POST", "/login", None),))
+    c = Controller(ctx)
+    plan = {"kind": "boolean", "path": "/login", "method": "POST", "input_location": "json",
+            "input_name": "email", "baseline": "vrf0@x", "positive": "vrf0@x' OR '1'='1",
+            "negative": "vrf0@x' OR '1'='2"}
+    c.observe("plan_test", plan, {"accepted": True, "experiment": plan})
+    probe = {"method": "POST", "path": "/login", "json": {"email": "vrf0@x", "password": "p"}}
+    c.before("http_request", probe)   # first send of the baseline control
+    c.before("http_request", probe)   # the proof needs the same control value twice
+    with pytest.raises(LimitExceeded, match="allowance"):
+        c.before("http_request", probe)   # a third identical send stays bounded
+
+
+def test_write_outside_an_experiment_keeps_the_single_send_cap(tmp_path):
+    """VER-014: ohne akzeptiertes boolean/timing-Experiment bleibt ein Write bei genau einem Send, damit er
+    keine Zustandsaenderung wiederholt."""
+    ctx = context(tmp_path)
+    ctx.marker = ("vrf0",)
+    ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),))
+    c = Controller(ctx)
+    write = {"method": "POST", "path": "/api/Feedbacks", "json": {"comment": "vrf0"}}
+    c.before("http_request", write)
+    with pytest.raises(LimitExceeded, match="allowance"):
+        c.before("http_request", write)
+
+
 def test_revised_plan_text_alone_is_not_progress(tmp_path):
     c = Controller(context(tmp_path))
     for i in range(2):

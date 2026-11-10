@@ -4,8 +4,8 @@
 # work rather than pressing on; the run stays cancellable. These bounds protect
 # the target from accidental load, cap the cost of a run, and keep it from
 # drifting beyond the finding under test. Every value must be greater than 0;
-# only rate_rps may be 0, which turns the rate limit off. A key the Verifier
-# does not enforce is an error, not ignored.
+# rate_rps, finding_cost_fraction and min_finding_cost_usd may be 0, which turns
+# that bound off. A key the Verifier does not enforce is an error, not ignored.
 #
 # Retries: a failed request is never retried. The only resend is one new login
 # and one repeat of the request after the target answers 401 (VER-028).
@@ -34,3 +34,11 @@ limits:
   # Maximum request rate to the target and its login endpoints, requests per
   # second; requests, the proof browser's included, are spaced 1/rate_rps apart.
   rate_rps: 5
+
+  # Per-finding model-spend cap (VER-051): a single finding may spend at most
+  # this share of cost_limit_usd, never less than min_finding_cost_usd, so one
+  # finding cannot drain the run before later findings are reached. Reaching it
+  # stops that finding (limits_hit: finding-cost); the run continues. 0 turns it
+  # off. The cap is also off when the run has no cost ceiling.
+  finding_cost_fraction: 0.25
+  min_finding_cost_usd: 0.50

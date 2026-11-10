@@ -70,3 +70,41 @@ def test_env_templates_and_ordinary_sources_stay_readable(tmp_path, relpath):
     (tmp_path / relpath).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / relpath).write_text("API_URL=https://app.example.com\n")
     assert "API_URL" in r.read_window(relpath)["text"]
+
+
+# ── find: locate files without guessing (VER-050) ─────────────────────────────
+
+def _find_repo(tmp_path):
+    for rel in ("routes/feedback.ts", "routes/login.ts", "frontend/feedback.component.ts",
+                "feedback/helper.ts", "node_modules/pkg/feedback.ts", "certs/feedback.pem", ".git/feedback-head"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x")
+    (tmp_path / ".env").write_text("DB_PASSWORD=hunter2-real\n")
+    return SourceReader(tmp_path)
+
+
+def test_find_locates_files_by_substring_and_ranks_name_matches_first(tmp_path):
+    r = _find_repo(tmp_path)
+    assert r.find("feedback.ts")["matches"] == ["routes/feedback.ts"]   # not the vendor copy, not the component
+    names = r.find("feedback")["matches"]
+    assert {"routes/feedback.ts", "frontend/feedback.component.ts", "feedback/helper.ts"} <= set(names)
+    assert names[-1] == "feedback/helper.ts"   # "feedback" only in the path, not the name: ranked last
+
+
+def test_find_excludes_secrets_vendor_and_vcs(tmp_path):
+    matches = _find_repo(tmp_path).find("feedback")["matches"]
+    assert not any("node_modules" in m or m.endswith(".pem") or ".git" in m for m in matches)
+
+
+def test_find_stays_in_the_repository(tmp_path):
+    outside = tmp_path.parent / "outside_secret.ts"
+    outside.write_text("x")
+    r = _find_repo(tmp_path)
+    (tmp_path / "link.ts").symlink_to(outside)        # a symlinked file resolves outside the repository
+    assert "link.ts" not in r.find("link")["matches"]
+    assert r.find("outside_secret")["matches"] == []
+
+
+def test_find_rejects_an_empty_query(tmp_path):
+    with pytest.raises(SourceAccessError):
+        _find_repo(tmp_path).find("")

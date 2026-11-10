@@ -10,8 +10,7 @@ file system cannot use, or a file it cannot read, is a SourceAccessError, which
 the agent sees as a tool error. This tool never writes.
 """
 
-from __future__ import annotations
-
+import os
 from pathlib import Path
 
 # Matched case-insensitively against every part of the resolved path below the repository root.
@@ -21,6 +20,10 @@ _SECRET_NAMES = frozenset({".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd"
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 MAX_SOURCE_BYTES = 1_048_576  # total read cap, before decoding or splitting (VER-036)
 _ENV_TEMPLATES = (".example", ".sample", ".template", ".dist")
+# Walked over but never descended: VCS internals and heavy vendor trees that hold no finding's own source.
+_PRUNE_DIRS = frozenset({".git", ".hg", ".svn", "node_modules", "bower_components", "vendor", ".venv", "venv",
+                         "dist", "build", ".next", ".nuxt", "__pycache__", ".tox", ".cache", ".idea", "target"})
+_FIND_SCAN_CAP = 200_000  # bounded traversal, so a pathological tree cannot stall a finding (VER-036)
 
 
 class SourceAccessError(Exception):
@@ -59,6 +62,33 @@ class SourceReader:
         if not is_file:
             raise SourceAccessError(f"not a readable file: {relpath!r}")
         return p
+
+    def find(self, query: str, *, limit: int = 40) -> dict:
+        """Repo-confined file search (VER-016, VER-017): relative paths whose name or path contains `query`,
+        case-insensitive, excluding credential, key and VCS files and heavy vendor directories, bounded in
+        traversal and count. Read-only; returns names only, never any file content."""
+        if not query or "\x00" in query:
+            raise SourceAccessError(f"not a search query: {query!r}")
+        needle = query.lower().replace("\\", "/")
+        matches, scanned = [], 0
+        for dirpath, dirnames, filenames in os.walk(self.root):   # followlinks=False: a symlinked dir is not entered
+            dirnames[:] = [d for d in dirnames if d.lower() not in _PRUNE_DIRS]
+            for name in filenames:
+                scanned += 1
+                if scanned > _FIND_SCAN_CAP:
+                    return {"query": query, "matches": sorted(matches), "truncated": True}
+                try:
+                    rel = (Path(dirpath) / name).resolve().relative_to(self.root)
+                except (OSError, ValueError):
+                    continue
+                if _holds_secrets(rel):
+                    continue
+                if needle in str(rel).replace("\\", "/").lower():
+                    matches.append(str(rel))
+                    if len(matches) >= limit:
+                        return {"query": query, "matches": sorted(matches), "truncated": True}
+        matches.sort(key=lambda r: (needle not in Path(r).name.lower(), r))   # name matches before path-only matches
+        return {"query": query, "matches": matches, "truncated": False}
 
     def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
         p = self._resolve(relpath)

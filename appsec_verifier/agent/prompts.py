@@ -161,6 +161,16 @@ def _tool_defs() -> list[dict]:
             },
         },
         {
+            "name": "find_source",
+            "description": "Locate files in the target's source by a name or path substring before read_source, "
+            "so paths are not guessed. Returns matching repository paths, never file content.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+        {
             "name": "browser_check",
             "description": "XSS findings only: load one target page (GET, path relative to the target base URL, "
             "payload in the path or query) in the headless proof browser, optionally as an "

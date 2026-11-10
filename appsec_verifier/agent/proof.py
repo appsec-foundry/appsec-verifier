@@ -66,7 +66,16 @@ from urllib.parse import urljoin, urlsplit
 from ..planning import evidence_id
 from ..verification_context import planned_route
 from ..verify.probes import ProbeResult
-from .experiments import access_check, experiment_groups, injection_check, latest_plan, observation, token
+from .experiments import (
+    access_check,
+    auth_artifact_check,
+    callback_injection_check,
+    experiment_groups,
+    injection_check,
+    latest_plan,
+    observation,
+    token,
+)
 from .tools import _decoded
 
 _REDIRECTS = (301, 302, 303, 307, 308)
@@ -118,6 +127,22 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         result = _checked(result, history, selected, ctx)
         result.proof["archive"] = proof
         return result
+    if cls == "injection" and latest_plan(history)[1].get("oob_template"):
+        exchanges, problem = _cited_exchanges(ctx, history, cited, 2)
+        if problem is None:
+            problem = callback_injection_check(ctx, history, cited)
+        if problem is not None:
+            return _downgrade(result, problem)
+        result.evidence = _write_record(ctx, "exchanges", exchanges)
+        return _checked(result, history, cited, ctx)
+    if cls == "injection" and latest_plan(history)[1].get("auth_artifact"):
+        exchanges, problem = _cited_exchanges(ctx, history, cited, 2)
+        if problem is None:
+            problem = auth_artifact_check(ctx, history, cited)
+        if problem is not None:
+            return _downgrade(result, problem)
+        result.evidence = _write_record(ctx, "exchanges", exchanges)
+        return _checked(result, history, cited, ctx)
     check, minimum = {
         "access-control": (None, 2),
         "injection": (None, 2),

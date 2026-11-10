@@ -312,7 +312,15 @@ class Controller:
         if name in ("http_request", "browser_check", "plan_test"):
             self._target(name, args)
         key = self._key(name, args)
-        allowance = 1 if name == "http_request" and args.get("method", "GET").upper() not in SAFE_METHODS else 2
+        is_write = name == "http_request" and args.get("method", "GET").upper() not in SAFE_METHODS
+        # A write is capped at a single send so it cannot repeat a state change (VER-014). The one exception is
+        # the probe of an accepted boolean/timing experiment: the proof needs each declared control at least
+        # twice (tools.experiment_requests emits two, experiments.injection_check requires >= 2 per group), and
+        # _target has already pinned this write to the plan's route, method and a declared sink value, so the
+        # repeat reaches no new state. Without it a write injection (e.g. a login SQLi) can never be proven
+        # (VER-011, VER-030).
+        experiment_write = is_write and (self.plan or {}).get("kind") in ("boolean", "timing")
+        allowance = 1 if is_write and not experiment_write else 2
         if self.repetitions[key] >= allowance:
             raise LimitExceeded("stagnation", "action repetition allowance exhausted; no further execution")
         self.repetitions[key] += 1

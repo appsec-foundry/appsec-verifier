@@ -164,6 +164,7 @@ class AgentProbe:
             }
             try:
                 ctx.budget.check_time()
+                ctx.budget.check_finding_cost()  # VER-051: stop this finding, not the run, at its spend cap
                 ctx.guard.check_window()  # no model call once the authorisation window has closed
                 if ctx.progress is not None:
                     ctx.progress.activity(decision, self._max_steps)

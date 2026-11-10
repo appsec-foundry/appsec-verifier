@@ -26,6 +26,36 @@ def test_cost_ceiling_stops():
     assert e.value.kind == "cost"
 
 
+def test_per_finding_cap_stops_the_finding_and_resets_between_findings():
+    """VER-051: a single finding is bounded to its share of the run ceiling, and the next finding starts fresh."""
+    b = RunBudget(Limits(cost_limit_usd=10.0))        # cap = max(0.50, 10 * 0.25) = 2.50
+    assert b.finding_cost_cap() == 2.50
+    b.begin_finding()
+    b.note_cost(2.0)
+    b.check_finding_cost()                            # under the per-finding cap: fine
+    b.note_cost(0.6)                                  # 2.6 spent on this finding, over 2.50
+    with pytest.raises(LimitExceeded) as e:
+        b.check_finding_cost()
+    assert e.value.kind == "finding-cost"
+    from appsec_verifier.verify.report import RUN_LIMITS
+    assert "finding-cost" not in RUN_LIMITS           # finding-local: the run continues with the next finding
+    b.begin_finding()                                 # the next finding starts fresh despite the run's prior spend
+    b.check_finding_cost()
+
+
+def test_per_finding_floor_applies_on_a_small_run_budget():
+    b = RunBudget(Limits(cost_limit_usd=1.0))         # 1 * 0.25 = 0.25, below the 0.50 floor -> cap 0.50
+    assert b.finding_cost_cap() == 0.50
+
+
+def test_per_finding_cap_is_off_when_the_share_is_zero():
+    b = RunBudget(Limits(finding_cost_fraction=0))
+    assert b.finding_cost_cap() is None
+    b.begin_finding()
+    b.note_cost(5.0)
+    b.check_finding_cost()                            # off: never raises
+
+
 def test_time_budget_stops():
     ticks = iter([0, 0, 100])  # start, ok-check, over-budget check
     b = RunBudget(Limits(max_duration_s=50), clock=lambda: next(ticks))
@@ -116,6 +146,7 @@ def test_max_attempts_bounds_the_agent_steps_per_finding(tmp_path, monkeypatch):
     ("rate_rps", -1), ("max_requests", 0), ("max_requests", -5), ("max_attempts", 0), ("max_calls", 0),
     ("max_duration_s", 0), ("max_duration_s", -1.0), ("cost_limit_usd", 0), ("cost_limit_usd", float("inf")),
     ("rate_rps", float("nan")), ("max_requests", 2.5), ("max_requests", True), ("rate_rps", "5"),
+    ("finding_cost_fraction", -1), ("min_finding_cost_usd", -0.5),
 ])
 def test_invalid_limits_are_refused(field, value):
     """No bound is switched off by a sign, a zero cap or a wrong type (VER-015)."""

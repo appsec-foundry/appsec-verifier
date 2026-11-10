@@ -63,6 +63,9 @@ from .source_reader import SourceAccessError
 _BODY_EXCERPT = 600
 _LOCATION_CAP = 2000
 _HIDDEN = "[marker-file]"
+# VER-049: an auth-artifact probe's body may hold a fresh session token; only its presence (computed in code) is
+# kept, and this stands in for the body everywhere the model or the log could read it.
+_AUTH_ARTIFACT_NOTICE = "[auth-artifact probe: body withheld; the token value never reaches the model or logs]"
 _CALLBACK_WAIT_S = 1.0
 _DRIVE = re.compile(r"^[A-Za-z]:")
 
@@ -124,6 +127,19 @@ def _body_text(resp) -> str:
         content = getattr(resp, "content", b"") or b""
         text = content.decode("utf-8", "replace") if isinstance(content, bytes) else str(content)
     return text
+
+
+def _auth_artifact_present(body: str, pointer: str | None) -> bool:
+    """VER-049: whether an authenticated artifact (a token, a non-empty identity) sits at `pointer` in the body.
+    Only this boolean is kept; the value is read here and discarded, never surfaced."""
+    if not pointer:
+        return False
+    from .experiments import pointer_value
+    try:
+        value = pointer_value(body, pointer)
+    except (ValueError, KeyError, IndexError, TypeError):
+        return False
+    return value not in (None, "", [], {}, False, 0)
 
 
 def _elapsed_ms(resp) -> int | None:
@@ -270,7 +286,7 @@ class AgentTools:
                 problems.append("an experiment sends every control twice; a write needs --allow-intrusive")
         if problems:
             raise ToolError("; ".join(problems))
-        from .experiments import expression_controls, ldap_controls, operator_controls, sql_controls
+        from .experiments import callback_controls, expression_controls, ldap_controls, operator_controls, sql_controls
 
         if any(
             plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge")
@@ -324,6 +340,26 @@ class AgentTools:
                 plan = sql_controls(plan)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
+        if plan.get("oob_template"):
+            # VER-048: an out-of-band proof is the standard-run form only for blind code-evaluation and template
+            # injection, where no response-side proof exists. SQL, NoSQL and XPath keep their cheaper response-side
+            # forms, and command execution as the carrier stays out of scope, so none of those are accepted here.
+            if getattr(self.ctx.plan, "cwe", "") not in ("CWE-94", "CWE-95", "CWE-1336") or plan["kind"] != "boolean":
+                raise ToolError("out-of-band proofs need a code-evaluation or template injection finding "
+                                "declared as kind \"boolean\"")
+            if self.ctx.listener is None:
+                raise ToolError("this run has no callback listener for an out-of-band proof")
+            if plan.get("method", "GET") not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only):
+                raise ToolError("an out-of-band proof on a write needs --allow-intrusive")
+            try:
+                plan = callback_controls(plan, self.ctx.listener, self.ctx.marker)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+        if plan.get("auth_artifact") and not (plan.get("sql_template") or plan.get("operator_challenge")):
+            # VER-049: a login-bypass proof rides on the generated SQL/NoSQL controls but observes the presence
+            # of an authenticated artifact at the (schema-required) pointer instead of a response field.
+            raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
+                            "(sql_template for CWE-89 or operator_challenge for CWE-943)")
         groups = [plan[k] for k in ("baseline", "positive", "negative") if k in plan]
         if plan["kind"] == "boolean" and not all(k in plan for k in ("positive", "negative")):
             raise ToolError("boolean experiments need sql_template or explicit positive and negative controls")
@@ -548,6 +584,7 @@ class AgentTools:
             "archive_probe": self.archive_probe,
             "http_request": self.http_request,
             "read_source": self.read_source,
+            "find_source": self.find_source,
             "browser_check": self.browser_check,
             "plan_test": self.plan_test,
             "read_context": self.read_context,
@@ -596,6 +633,18 @@ class AgentTools:
                         + (f" ({base}/…)" if base else "; this run has none")
                         + " (VER-012)"
                     )
+        elif cls == "injection" and getattr(self, "_experiment", {}).get("oob_template"):
+            # The sink is a payload that embeds a URL, not a bare URL: check each embedded URL points at the
+            # listener, so an injection proof cannot be steered at another host (VER-012, VER-048).
+            base = self.ctx.listener.base_url if self.ctx.listener is not None else None
+            for value in values:
+                for url in re.findall(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s\"'<>)\\]+", _decoded(value)):
+                    if not (base and same_origin(url, base)):
+                        raise ToolError(
+                            "an out-of-band injection probe may carry a URL only to the callback listener"
+                            + (f" ({base}/…)" if base else "; this run has none")
+                            + " (VER-012)"
+                        )
 
     def browser_check(self, *, path: str, role: str | None = None, wait_ms: int = 1500) -> dict:
         from ..tools.browser import BrowserError
@@ -736,7 +785,9 @@ class AgentTools:
         self._check_steering(params, json)
         self._check_steering(None, form)
         attempt_marker = None
-        if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:
+        callback_cls = self.ctx.plan.cls == "ssrf" or (
+            self.ctx.plan.cls == "injection" and (getattr(self, "_experiment", None) or {}).get("oob_template"))
+        if callback_cls and self.ctx.listener is not None:
             from ..tools.browser import new_marker
 
             marker = "".join(self.ctx.marker)
@@ -791,6 +842,13 @@ class AgentTools:
         text = _body_text(resp)
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
         redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
+        experiment = getattr(self, "_experiment", None) or {}
+        auth_artifact_probe = self.ctx.plan.cls == "injection" and experiment.get("auth_artifact")
+        auth_present = _auth_artifact_present(text, experiment.get("pointer")) if auth_artifact_probe else None
+        if auth_artifact_probe:
+            # The presence is kept; the body itself stands down everywhere it could be read: the recorded body
+            # (read_response), the excerpt the model sees, and the hash (VER-049, VER-016).
+            text = redacted = _AUTH_ARTIFACT_NOTICE
         identity_key = tuple(sorted(headers.items()))
         identity = self._identities.setdefault(identity_key, len(self._identities))
         cap = min(64000, max(0, 256000 - self._response_chars))
@@ -817,6 +875,8 @@ class AgentTools:
             out["location"] = _hide(location, self._marker_content)[:_LOCATION_CAP]
         if self.ctx.plan.cls == "session":
             out["session_cookies"] = session_cookies
+        if auth_artifact_probe:
+            out["auth_artifact"] = bool(auth_present)   # the code's observation; the token value is withheld
         plan = getattr(self, "_experiment", None) or {}
         if plan.get("change") and role == plan.get("owner") and isinstance(status, int) and 200 <= status < 300:
             # A change may name only a record the owner's write created (its answer's id) and the owner's read
@@ -835,7 +895,7 @@ class AgentTools:
             out["elapsed_ms"] = elapsed  # transport time, without the rate limit's wait (VER-011)
         if self.ctx.plan.cls == "path-traversal" and self._marker_content:
             out["marker_read"] = self._marker_content in text  # the raw body, checked in code
-        if self.ctx.plan.cls == "ssrf" and self.ctx.listener is not None:
+        if callback_cls and self.ctx.listener is not None:
             out["callback_hit"] = bool(attempt_marker and self.ctx.listener.wait_for(attempt_marker, _CALLBACK_WAIT_S))
             if attempt_marker:
                 out["callback_attempt"] = attempt_marker
@@ -880,5 +940,13 @@ class AgentTools:
             raise ToolError("no source checkout is available for this run")
         try:
             return self.ctx.source.read_window(path, around_line=around_line)
+        except SourceAccessError as exc:
+            raise ToolError(str(exc)) from exc
+
+    def find_source(self, *, query: str) -> dict:
+        if self.ctx.source is None:
+            raise ToolError("no source checkout is available for this run")
+        try:
+            return self.ctx.source.find(query)
         except SourceAccessError as exc:
             raise ToolError(str(exc)) from exc

@@ -90,6 +90,7 @@ def test_tool_defs_expose_only_the_confined_tools():
         "http_request",
         "archive_probe",         # bounded operator-declared archive check (VER-045)
         "read_source",
+        "find_source",           # read-only, repo-confined file search before a read (VER-050)
         "browser_check",
         "submit_verdict",
         "read_context",

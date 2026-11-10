@@ -43,11 +43,19 @@ PLAN_SCHEMA = {
         "predicate_template": {"type": "string", "minLength": 15, "maxLength": 3000},
         "predicate_attribute": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"},
         "sql_template": {"type": "string", "minLength": 15, "maxLength": 3000},
+        # VER-048: a blind-injection out-of-band proof carries the callback URL instead of observing a field.
+        "oob_template": {"type": "string", "minLength": 5, "maxLength": 3000},
+        # VER-049: the observation is the presence of an authenticated artifact at `pointer`, not a field's value.
+        "auth_artifact": {"type": "boolean"},
     },
     "allOf": [
         {
-            "if": {"properties": {"kind": {"const": "boolean"}}},
+            "if": {"properties": {"kind": {"const": "boolean"}}, "not": {"required": ["oob_template"]}},
             "then": {"required": ["input_location", "input_name", "baseline", "pointer"]},
+        },
+        {
+            "if": {"required": ["oob_template"]},
+            "then": {"required": ["input_location", "input_name"]},
         },
         {
             "if": {"properties": {"kind": {"const": "timing"}}},
@@ -148,6 +156,25 @@ def expression_controls(plan):
         **plan,
         **{k: template.replace("{{expression}}", v[0]) for k, v in expressions.items()},
         "expected_values": {k: v[1] for k, v in expressions.items()},
+    }
+
+
+def callback_controls(plan, listener, marker):
+    """VER-048: an out-of-band proof for injection that surfaces no response difference. The positive control
+    carries the listener URL inside the declared injection template, so a reachable sink makes the target fetch
+    it; the negative carries the same URL as bare data, which an ordinary URL-fetching feature would retrieve
+    too, so a callback there refutes the proof. Both carry the finding marker; http_request swaps it for a fresh
+    per-attempt nonce (agent/tools.py), and the listener correlates the hit. No application data is read."""
+    template = plan.get("oob_template", "")
+    if template.count("{{callback}}") != 1:
+        raise ValueError("an out-of-band proof needs a template containing exactly one {{callback}} placeholder")
+    url = listener.url_for("".join(marker or ()))
+    if "{{callback}}" in url:
+        raise ValueError("the callback URL is unavailable")
+    return {
+        **plan,
+        "positive": template.replace("{{callback}}", url),
+        "negative": url,
     }
 
 
@@ -294,6 +321,50 @@ def injection_check(ctx, history, cited):
         observed["negative"]
     ):
         return "complementary SQL predicates did not reproduce the same true and false observations"
+    return None
+
+
+def callback_injection_check(ctx, history, cited):
+    """VER-048: a blind injection is confirmed when the injecting control reaches the loopback listener and the
+    inert-URL control does not. The listener, not the model, observed each hit; the controls buy nothing beyond
+    the callback correlation, and no application data is read."""
+    plan, groups, error = experiment_groups(history, cited)
+    if error:
+        return error
+    if not plan.get("oob_template"):
+        return "declare an out-of-band template for a callback injection proof"
+    positive, negative = groups.get("positive", []), groups.get("negative", [])
+    if len(positive) < 2:
+        return "repeat the injecting control at least twice so each attempt carries its own callback nonce"
+    if not negative:
+        return "cite the inert-URL control, whose missing callback rules out an ordinary URL fetch"
+    if not all(r.get("callback_hit") is True for _, r in positive):
+        return "every injecting request must produce a correlated callback hit"
+    if any(r.get("callback_hit") for _, r in negative):
+        return "the inert-URL control reached the listener, so a callback does not prove injection here"
+    return None
+
+
+def auth_artifact_check(ctx, history, cited):
+    """VER-049: a login-bypass injection is confirmed when the true-predicate controls yield an authenticated
+    artifact and the false-predicate controls and the baseline do not. The artifact's presence (not its value,
+    which is withheld in code, agent/tools.py) is computed by the code, so the uniform-status rule does not apply:
+    a 401-to-200 auth flip is the point. The complementary true/false pair rules out a coincidence, so no
+    repetition is needed."""
+    plan, groups, error = experiment_groups(history, cited)
+    if error:
+        return error
+    if not plan.get("auth_artifact"):
+        return "declare an auth-artifact experiment for a login-bypass proof"
+    present_groups = [k for k in ("positive", "positive_other") if k in groups]
+    absent_groups = [k for k in ("baseline", "negative", "negative_other") if k in groups]
+    if not present_groups or "negative" not in absent_groups:
+        return "cite the generated true and false predicate controls so the auth flip can be compared"
+    if any(not group or not all(r.get("auth_artifact") is True for _, r in group)
+           for group in (groups[k] for k in present_groups)):
+        return "every true-predicate control must yield the authenticated artifact"
+    if any(r.get("auth_artifact") for k in absent_groups for _, r in groups[k]):
+        return "a false-predicate control or the baseline also authenticated, so the injection is not shown"
     return None
 
 

@@ -141,6 +141,18 @@ def _clip(text, limit: int = _CLIP) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _variant_detail(plan) -> str | None:
+    """For a variant, its key and its own request, so sibling variants of one finding do not read alike."""
+    variant = getattr(plan, "variant_id", None)
+    variants = (getattr(plan, "verification_context", {}) or {}).get("variants") or []
+    if not variant or not variants:
+        return None
+    request = variants[0].get("request") or {}
+    path = request.get("path")
+    route = f"{request.get('method', 'GET')} {path}" if path else None
+    return f"{variant} · {route}" if route else variant
+
+
 def _action(tool: str, args: dict) -> str:
     """What a tool call does, in a few words: ``GET /rest/basket/2 as alice``, with the query and the
     body the agent chose, where an injection's payload sits."""
@@ -286,7 +298,9 @@ class RunProgress:
             self._spent_at = self._step_spent_at = self._spent() if self._spent is not None else 0.0
             title = _clip(self._text(plan.title or plan.cwe or "")) or "-"
             severity = _clip(self._text(plan.severity or ""), 10).lower()
-            requests = ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])   # what the assessment names
+            # A variant names its own request and key, so its line differs from its siblings'; otherwise the
+            # finding's named requests.
+            requests = _variant_detail(plan) or ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])
             self._record("start", [(title, "bold")],
                          _line((severity, severity if severity in _SEVERITIES else "muted"),
                                _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)))

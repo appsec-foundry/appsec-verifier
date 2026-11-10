@@ -380,6 +380,104 @@ def test_other_classes_are_not_steered(tmp_path):
     assert len(sent) == 1
 
 
+# ── out-of-band injection is steered to the listener and correlated (VER-048) ─
+
+_OOB_PAYLOAD = "#{http.get('http://localhost:4444/vrf0a1b2c3d4e5f6a7b')}"
+
+
+def _oob_tools(tmp_path, transport, *, listener, cwe="CWE-1336"):
+    ctx = _probe_ctx(tmp_path, "injection", transport, listener=listener)
+    ctx.plan.cwe = cwe
+    tools = AgentTools(ctx)
+    tools._experiment = {"oob_template": "#{http.get('{{callback}}')}", "kind": "boolean",
+                         "input_location": "params", "input_name": "q", "path": "/eval",
+                         "positive": _OOB_PAYLOAD, "negative": "http://localhost:4444/vrf0a1b2c3d4e5f6a7b"}
+    return tools
+
+
+def test_oob_injection_payload_at_the_listener_is_sent_and_correlated(tmp_path):
+    sent = []
+    tools = _oob_tools(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp(), listener=FakeListener(hit=True))
+    out = tools.http_request(path="/eval", params={"q": _OOB_PAYLOAD})
+    assert len(sent) == 1 and out["callback_hit"] is True
+    assert tools.ctx.listener.waited == [out["callback_attempt"]]
+    assert out["callback_attempt"] != "vrf0a1b2c3d4e5f6a7b"
+
+
+@pytest.mark.parametrize("value", [
+    "#{http.get('http://10.0.0.1/x')}", "#{http.get('http://169.254.169.254/')}",
+    "#{http.get('file:///etc/passwd')}",
+])
+def test_oob_injection_payload_elsewhere_is_refused(tmp_path, value):
+    sent = []
+    tools = _oob_tools(tmp_path, lambda m, u, h, **k: sent.append(u) or Resp(), listener=FakeListener())
+    with pytest.raises(ToolError, match="callback listener"):
+        tools.http_request(path="/eval", params={"q": value})
+    assert sent == []
+
+
+def test_oob_plan_needs_a_listener_and_an_accepted_injection_class(tmp_path):
+    from test_experiments import STRATEGY
+
+    base = {"kind": "boolean", "hypothesis": "payload reaches a template sink", "path": "/eval",
+            "method": "GET", "input_location": "params", "input_name": "q", "strategy": STRATEGY,
+            "oob_template": "#{http.get('{{callback}}')}"}
+    ctx = _probe_ctx(tmp_path, "injection", lambda *a, **k: Resp(), listener=None)
+    ctx.plan.cwe = "CWE-1336"
+    with pytest.raises(ToolError, match="no callback listener"):
+        AgentTools(ctx).plan_test(**base)
+    ctx.listener = FakeListener()
+    for refused in ("CWE-78", "CWE-89", "CWE-943", "CWE-643"):   # command, SQL, NoSQL and XPath keep other forms
+        ctx.plan.cwe = refused
+        with pytest.raises(ToolError, match="out-of-band proofs need"):
+            AgentTools(ctx).plan_test(**base)
+    ctx.plan.cwe = "CWE-1336"
+    accepted = AgentTools(ctx).plan_test(**base)
+    assert accepted["accepted"] is True and accepted["experiment"]["negative"].endswith("vrf0a1b2c3d4e5f6a7b")
+
+
+# ── auth-artifact login-bypass proof reports presence, never the token (VER-049) ─
+
+def _auth_tools(tmp_path, status, body):
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(status, body), safe=False, read_only=False)
+    ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
+    tools = AgentTools(ctx)
+    tools._experiment = {"auth_artifact": True, "pointer": "/authentication/token", "kind": "boolean",
+                         "input_location": "json", "input_name": "email", "path": "/rest/user/login",
+                         "positive": "x' OR (1=1) -- "}
+    return tools
+
+
+def test_auth_artifact_presence_is_reported_without_leaking_the_token(tmp_path):
+    token = "SECRET-TOKEN-should-never-leak-xyz"
+    tools = _auth_tools(tmp_path, 200, '{"authentication":{"token":"' + token + '"}}')
+    out = tools.http_request(path="/rest/user/login", method="POST",
+                             json={"email": "x' OR (1=1) -- ", "password": "p"})
+    assert out["auth_artifact"] is True
+    assert token not in str(out)                               # not in the model-visible result
+    assert token not in str(tools._last_response)              # not in the recorded body read_response would serve
+
+
+def test_auth_artifact_reports_absence_when_the_artifact_is_missing(tmp_path):
+    tools = _auth_tools(tmp_path, 401, '{"error":"Invalid email or password."}')
+    out = tools.http_request(path="/rest/user/login", method="POST",
+                             json={"email": "x' OR (1=2) -- ", "password": "p"})
+    assert out["auth_artifact"] is False
+
+
+def test_auth_artifact_plan_needs_a_sql_or_nosql_challenge(tmp_path):
+    from test_experiments import STRATEGY
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False)
+    ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
+    base = {"kind": "boolean", "hypothesis": "email is spliced into the login SQL query",
+            "path": "/rest/user/login", "method": "POST", "input_location": "json", "input_name": "email",
+            "baseline": "nobody@x", "pointer": "/authentication/token", "strategy": STRATEGY, "auth_artifact": True}
+    with pytest.raises(ToolError, match="SQL or NoSQL challenge"):
+        AgentTools(ctx).plan_test(**base)
+    accepted = AgentTools(ctx).plan_test(**{**base, "sql_template": "x' OR {{predicate}} -- "})
+    assert accepted["accepted"] is True and accepted["experiment"]["auth_artifact"] is True
+
+
 # ── failures become tool errors, never exceptions past the loop ──────────────
 
 def test_unknown_role_and_missing_secret_are_tool_errors(tmp_path):

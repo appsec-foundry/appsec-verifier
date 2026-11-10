@@ -109,12 +109,33 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
     assert st("▶ test agent started", "agent", "bold") in agent
     assert facts.startswith(" " * len(SGR.sub("", title).split("Basket")[0])) and st("high", "high") in facts
     assert st("1/1 T-1", "bold") in title and st("1/1 T-1", "accent", "bold") not in out.getvalue()
+
+
     for verdict, label, role in (("confirmed", "✔ confirmed", "ok"),
                                  ("not-reproducible", "✘ not reproducible", "critical"),
                                  ("blocked-by-control", "✘ blocked by control", "critical"),
                                  ("inconclusive", "? inconclusive", "warn")):
         progress.finished(plan, ProbeResult(verdict=verdict))
         assert st(label, role, "bold") in _rows(out)[-1], verdict
+
+
+def test_a_variant_line_names_its_own_key_and_request_so_siblings_differ():
+    from dataclasses import replace
+
+    from appsec_verifier.endpoints import Endpoint
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), live=False)
+    finding = _plan(cls="xss", title="Sanitizer bypass")
+    finding.endpoints = (Endpoint("GET", "/api/Feedbacks", None),)
+    plans = [replace(finding, variant_id=f"variant-00{i}",
+                     verification_context={"variants": [{"id": f"variant-00{i}", "request": {"method": m, "path": p}}]})
+             for i, (m, p) in enumerate((("GET", "/api/Feedbacks"), ("POST", "/api/Feedbacks")), start=1)]
+    progress.begin(plans)
+    for plan in plans:
+        progress.finding(plan)
+    facts = [SGR.sub("", r).rstrip() for r in _rows(out) if "variant-00" in r]
+    assert facts[0].endswith("variant-001 · GET /api/Feedbacks")
+    assert facts[1].endswith("variant-002 · POST /api/Feedbacks")      # a sibling reads differently
 
 
 @pytest.mark.parametrize("model, short", [("claude-sonnet-5-5", "Sonnet 5.5"), ("claude-opus-4-1-20250805", "Opus 4.1"),

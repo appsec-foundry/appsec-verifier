@@ -307,6 +307,93 @@ def test_ssrf_without_a_hit_is_downgraded(listener, marker, reason):
     assert res.verdict == "inconclusive" and reason in res.rationale
 
 
+# ── out-of-band injection (VER-048) ───────────────────────────────────────────
+
+_OOB_URL = "http://127.0.0.1:9/vrf0a1b2c3d4e5f6a7b"
+_OOB_POS = "#{http.get('" + _OOB_URL + "')}"
+
+
+def _oob_plan():
+    return {"tool": "plan_test",
+            "args": {"kind": "boolean", "hypothesis": "username reaches a template evaluation sink",
+                     "path": "/profile", "method": "POST", "input_location": "json", "input_name": "username",
+                     "oob_template": "#{http.get('{{callback}}')}", "positive": _OOB_POS, "negative": _OOB_URL},
+            "result": {"accepted": True}}
+
+
+def _oob_req(value, hit):
+    return {"tool": "http_request",
+            "args": {"path": "/profile", "method": "POST", "json": {"username": value}},
+            "result": {"status": 200, "callback_hit": hit, "callback_attempt": "a", "role": None}}
+
+
+def test_oob_injection_confirms_on_a_positive_hit_and_a_quiet_inert_control(tmp_path):
+    history = [_oob_plan(), _oob_req(_OOB_POS, True), _oob_req(_OOB_POS, True), _oob_req(_OOB_URL, False)]
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence"),
+                      history, ProbeResult(verdict="confirmed"), [2, 3, 4])
+    assert res.verdict == "confirmed" and res.confidence == "medium"
+
+
+@pytest.mark.parametrize("history, cited, reason", [
+    ([_oob_plan(), _oob_req(_OOB_POS, True), _oob_req(_OOB_POS, True), _oob_req(_OOB_URL, True)], [2, 3, 4],
+     "inert-URL control reached the listener"),
+    ([_oob_plan(), _oob_req(_OOB_POS, True), _oob_req(_OOB_POS, False), _oob_req(_OOB_URL, False)], [2, 3, 4],
+     "correlated callback hit"),
+    ([_oob_plan(), _oob_req(_OOB_POS, True), _oob_req(_OOB_URL, False)], [2, 3],
+     "at least twice"),
+    ([_oob_plan(), _oob_req(_OOB_POS, True), _oob_req(_OOB_POS, True)], [2, 3],
+     "inert-URL control, whose missing callback"),
+])
+def test_oob_injection_downgrades(history, cited, reason):
+    res = _check("injection", history, cited)
+    assert res.verdict == "inconclusive" and reason in res.rationale
+
+
+# ── auth-artifact injection (VER-049) ─────────────────────────────────────────
+
+def _auth_plan():
+    return {"tool": "plan_test",
+            "args": {"kind": "boolean", "hypothesis": "email is spliced into the login SQL query",
+                     "path": "/rest/user/login", "method": "POST", "input_location": "json", "input_name": "email",
+                     "pointer": "/authentication/token", "auth_artifact": True, "baseline": "nobody@x",
+                     "sql_template": "x' OR {{predicate}} -- ", "positive": "x' OR (1=1) -- ",
+                     "negative": "x' OR (1=2) -- ", "positive_other": "x' OR (2<>1) -- ",
+                     "negative_other": "x' OR (2<>2) -- "},
+            "result": {"accepted": True}}
+
+
+def _auth_req(value, authenticated):
+    return {"tool": "http_request",
+            "args": {"path": "/rest/user/login", "method": "POST", "json": {"email": value, "password": "p"}},
+            "result": {"status": 200 if authenticated else 401, "auth_artifact": authenticated, "role": None}}
+
+
+_AUTH_HISTORY = [
+    _auth_plan(),
+    _auth_req("x' OR (1=1) -- ", True), _auth_req("x' OR (2<>1) -- ", True),      # true predicates authenticate
+    _auth_req("nobody@x", False), _auth_req("x' OR (1=2) -- ", False), _auth_req("x' OR (2<>2) -- ", False),
+]
+
+
+def test_auth_artifact_injection_confirms_on_the_true_false_auth_flip(tmp_path):
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence"),
+                      _AUTH_HISTORY, ProbeResult(verdict="confirmed"), [2, 3, 4, 5, 6])
+    assert res.verdict == "confirmed" and res.confidence == "medium"
+
+
+@pytest.mark.parametrize("flip, reason", [
+    ({4: True}, "also authenticated"),              # the baseline authenticates too
+    ({5: True}, "also authenticated"),              # a false predicate authenticates
+    ({2: False}, "every true-predicate control"),   # a true predicate does not authenticate
+])
+def test_auth_artifact_injection_downgrades(flip, reason):
+    history = copy.deepcopy(_AUTH_HISTORY)
+    for step, value in flip.items():
+        history[step - 1]["result"]["auth_artifact"] = value
+    res = _check("injection", history, [2, 3, 4, 5, 6])
+    assert res.verdict == "inconclusive" and reason in res.rationale
+
+
 # ── unknown classes ───────────────────────────────────────────────────────────
 
 
