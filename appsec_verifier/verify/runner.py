@@ -216,12 +216,20 @@ def run_verification(
     results = []
     groups = {}
     last_variant = {p.id: i for i, p in enumerate(plans, start=1)}
+    confirmed_ids: set[str] = set()  # VER-039: one confirmed variant retires the finding's other variants
     stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
         started = _iso(datetime.now(timezone.utc))
         if evidence_id(plan) in skipped:
             res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[evidence_id(plan)]}")
+        elif shown and plan.id in confirmed_ids:
+            res = ProbeResult(
+                verdict="not-attempted",
+                rationale="not tested: another variant of this finding already confirmed it",
+            )
+            if progress is not None:
+                progress.finding(plan, agent=False)
         elif shown and interrupted:
             res = ProbeResult(verdict="not-attempted", rationale="not tested: the run was interrupted")
         elif shown and stopped:
@@ -248,6 +256,8 @@ def run_verification(
                 progress.agent_finished(plan, res)
             if res.limits_hit in _RUN_LIMITS:
                 stopped = res.limits_hit
+            if res.verdict == "confirmed":
+                confirmed_ids.add(plan.id)
         results.append(_result_entry(i, plan, res))
         if res.verdict != "not-attempted":
             results[-1]["timing"] = {"started": started, "finished": _iso(datetime.now(timezone.utc))}

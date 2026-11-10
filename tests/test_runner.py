@@ -88,6 +88,31 @@ def test_registered_probe_runs_and_sees_safe_flag():
     assert seen == {"safe": True, "read_only": True}
 
 
+def test_confirmed_variant_retires_remaining_variants_of_the_same_finding():
+    """VER-039: one confirmed variant is enough; the finding's other variants end as not-attempted."""
+    seen = []
+
+    class OnceXss:
+        cls = "xss"
+
+        def run(self, ctx: ProbeContext) -> ProbeResult:
+            seen.append(ctx.plan.variant_id)
+            return ProbeResult(verdict="confirmed", confidence="high", rationale="marker executed",
+                               proof={"executed": True}, identities_used=["a"])
+
+    reg = ProbeRegistry()
+    reg.register(OnceXss())
+    v1 = FindingPlan(id="T-1", cwe="CWE-79", severity="High", title="t", match_key="f.ts|CWE-79",
+                     instance="f.ts:10", status="dynamic", cls="xss", reason="r", variant_id="variant-001")
+    v2 = FindingPlan(id="T-1", cwe="CWE-79", severity="High", title="t", match_key="f.ts|CWE-79",
+                     instance="f.ts:10", status="dynamic", cls="xss", reason="r", variant_id="variant-002")
+    doc = _run([v1, v2], registry=reg)
+    assert seen == ["variant-001"]  # the second variant never ran
+    assert doc["results"][0]["verdict"] == "confirmed"
+    assert doc["results"][1]["verdict"] == "not-attempted"
+    assert "another variant of this finding already confirmed it" in doc["results"][1]["rationale"]
+
+
 def test_identities_expose_role_only_no_secrets():
     doc = _run([_plan("T-1", "xss")])
     ids = doc["meta"]["identities"]
