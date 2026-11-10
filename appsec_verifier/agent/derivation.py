@@ -5,7 +5,9 @@ candidate must stay on the target origin and the original resource's route famil
 derived routes cannot become anchors for exploring another resource. When the
 assessment names no route, a route another file registers for a handler of the
 finding's file can anchor one (`registration_routes`), but only through a literal
-import of that file and a handler name the agent read in it. Unknown framework
+import of that file and a handler name the agent read in it. With a source
+checkout the Verifier resolves such routes itself before the agent starts, by the
+same rule applied to whole files (`source_registrations`). Unknown framework
 syntax or relationships stay unresolved. No request is sent here.
 """
 
@@ -36,6 +38,18 @@ _ALIAS_IMPORT = re.compile(
     r"""(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*require\()\s*['"](\.[^'"\s]{1,200})['"]"""
 )
 _HANDLER_REF = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b")
+# Handlers bound by name, e.g. `import { getUserProfile } from './routes/userProfile'` or
+# `const { a, b: c } = require('./routes/x')`.
+_NAMED_IMPORT = re.compile(
+    r"""(?:import\s*\{([^}]{1,2000})\}\s*from|(?:const|let|var)\s*\{([^}]{1,2000})\}\s*=\s*require\()"""
+    r"""\s*['"](\.[^'"\s]{1,200})['"]"""
+)
+_IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
+# Where a registration's handler list ends: the next call on app, router or blueprint, of any method, including
+# those never derived (delete, use), so a route is not credited with the next registration's handler.
+_NEXT_CALL = re.compile(r"(?im)^\s*@?(?:app|router|blueprint)\.\w+\(")
+MAX_REGISTERED = 4   # routes resolved from the source before the agent starts, within MAX_DERIVED
+_ROUTES_PER_TEXT = 1000   # registrations examined per text; a whole file is at most 1 MiB (source_reader)
 
 
 def resolve(ctx, path):
@@ -137,6 +151,26 @@ def _imports_finding_file(reg_file, text, finding_file):
     return aliases
 
 
+def _named_handlers(reg_file, text, finding_file, finding_text):
+    """The local names `reg_file` binds by a named import of `finding_file` to a name that appears in the
+    finding's file (VER-008). Resolution is literal and repository-relative, as for _imports_finding_file."""
+    parent = PurePosixPath(reg_file).parent
+    stem = PurePosixPath(finding_file).with_suffix("")
+    names = set()
+    for m in _NAMED_IMPORT.finditer(text):
+        target = posixpath.normpath(str(parent / m.group(3)))
+        if target == ".." or target.startswith(("../", "/")) or (PurePosixPath(target) != stem
+                                                                  and target != finding_file):
+            continue
+        for entry in (m.group(1) or m.group(2)).split(","):
+            parts = re.split(r"\s+as\s+|\s*:\s*", entry.strip(), maxsplit=1)   # `a as b` or `a: b`
+            original, local = parts[0], parts[-1]
+            if (_IDENT.fullmatch(original) and _IDENT.fullmatch(local)
+                    and re.search(rf"\b{re.escape(original)}\b", finding_text)):
+                names.add(local)
+    return names
+
+
 def registration_routes(ctx, history):
     """Routes another file registers for a handler defined in the finding's file, when the assessment names
     none (VER-008). A route counts only when the registering line names `alias.handler`, `alias` imports the
@@ -155,26 +189,71 @@ def registration_routes(ctx, history):
             continue
         reg_file = h.get("args", {}).get("path")
         result = h.get("result", {})
-        text = result.get("text", "")
         if not reg_file or reg_file == finding_file:
             continue
-        aliases = _imports_finding_file(reg_file, text, finding_file)
-        if not aliases:
-            continue
-        for m in list(_ROUTE.finditer(text))[:64]:
-            following = _ROUTE.search(text, m.end())
-            body = text[m.start():following.start() if following else len(text)]
-            if not any(a in aliases and handler in finding_text
-                       for a, handler in (ref.groups() for ref in _HANDLER_REF.finditer(body))):
-                continue
-            key = (m[1].upper(), m[2])
-            if key in seen:
-                continue
-            seen.add(key)
-            line = result.get("start_line", 1) + text[:m.start()].count("\n")
-            routes.append({"method": m[1].upper(), "path": m[2], "inputs": [],
-                           "source_file": reg_file, "source_line": line})
+        for route in _registered(reg_file, result.get("text", ""), result.get("start_line", 1), finding_file,
+                                 finding_text):
+            if (route["method"], route["path"]) not in seen:
+                seen.add((route["method"], route["path"]))
+                routes.append(route)
     return routes
+
+
+def _registered(reg_file, text, start_line, finding_file, finding_text):
+    """The routes `text` of `reg_file` registers for a handler of the finding's file (VER-008): the registering
+    call names `alias.handler`, `alias` imports the finding's file in this text, and `handler` appears in the
+    finding's file; or it names a handler this text imports by name from the finding's file. The route's own
+    path string is not searched for names."""
+    aliases = _imports_finding_file(reg_file, text, finding_file)
+    named = _named_handlers(reg_file, text, finding_file, finding_text)
+    if not aliases and not named:
+        return []
+    routes = []
+    for m in list(_ROUTE.finditer(text))[:_ROUTES_PER_TEXT]:
+        ends = [n.start() for n in (_ROUTE.search(text, m.end()), _NEXT_CALL.search(text, m.end())) if n]
+        body = text[m.start():min(ends, default=len(text))]
+        handlers = text[m.end():min(ends, default=len(text))]
+        if any(a in aliases and handler in finding_text
+               for a, handler in (ref.groups() for ref in _HANDLER_REF.finditer(body))) or any(
+                name in named for name in _IDENT.findall(handlers)):
+            routes.append({"method": m[1].upper(), "path": m[2], "inputs": [], "source_file": reg_file,
+                           "source_line": start_line + text[:m.start()].count("\n")})
+    return routes
+
+
+def source_registrations(ctx) -> list[dict]:
+    """With a source checkout and no route in the assessment, the routes other files register for a handler of
+    the finding's file, resolved in code before the agent starts (VER-008): the rule of registration_routes
+    applied to whole files, so an import far above its registration counts. Candidate files are those whose lines
+    end an import of the finding's module name (`/payment'`); reading stays under the source reader's confinement,
+    and only the routes reach the model."""
+    reader = getattr(ctx, "source", None)
+    finding_file = (ctx.plan.instance or "").rsplit(":", 1)[0]
+    if reader is None or not finding_file or original_routes(ctx):
+        return []
+    from .source_reader import SourceAccessError
+
+    stem = PurePosixPath(finding_file).stem
+    try:
+        finding_text = reader.read_all(finding_file)
+        hits = [h for quote in ("'", '"') for h in reader.search(f"/{stem}{quote}", limit=40)["matches"]]
+    except SourceAccessError:
+        return []
+    routes, seen = [], set()
+    for reg_file in dict.fromkeys(h["path"].replace("\\", "/") for h in hits):
+        if reg_file == finding_file:
+            continue
+        try:
+            text = reader.read_all(reg_file)
+        except SourceAccessError:
+            continue
+        for route in _registered(reg_file, text, 1, finding_file, finding_text):
+            if (route["method"], route["path"]) not in seen:
+                seen.add((route["method"], route["path"]))
+                routes.append({**route, "evidence_step": None,
+                               "reason": f"{reg_file}:{route['source_line']} registers it for a handler of "
+                                         f"{finding_file}"})
+    return routes[:MAX_REGISTERED]
 
 
 def _source_candidates(ctx, history, h):

@@ -306,3 +306,84 @@ def test_a_registration_of_another_files_handler_supplies_no_request(tmp_path):
     _registration_repo(tmp_path, import_path="./routes/other")
     AgentProbe("access-control", lambda: ScriptedPlanner(_registration_steps())).run(ctx)
     assert sent == [] and not ctx.derived_requests
+
+
+# ── routes resolved from the source before the agent starts (VER-008) ─────────
+
+PAYMENT = ("export function getPaymentMethods () { return async (req, res) => res.json([]) }\n"
+           "export function getPaymentMethodById () { return async (req, res) => res.json({}) }\n"
+           "export function delPaymentMethodById () { return async (req, res) => res.json({}) }\n")
+FILLER = "".join(f"// line {n}\n" for n in range(450))   # import and registration far apart, as in server.ts
+
+
+def _far_repo(tmp_path, import_line="import * as payment from './routes/payment'\n", server="server.ts"):
+    (tmp_path / "routes" / "payment.ts").write_text(PAYMENT)
+    (tmp_path / server).write_text(
+        import_line + FILLER
+        + "app.post('/api/Cards', security.appendUserId())\n"
+        "app.get('/api/Cards', security.appendUserId(), utils.asyncHandler(payment.getPaymentMethods()))\n"
+        "app.put('/api/Cards/:id', security.denyAll())\n"
+        "app.delete('/api/Cards/:id', security.appendUserId(), utils.asyncHandler(payment.delPaymentMethodById()))\n"
+        "app.get('/api/Cards/:id', security.appendUserId(), utils.asyncHandler(payment.getPaymentMethodById()))\n")
+
+
+def _resolved(ctx):
+    from appsec_verifier.agent.derivation import source_registrations
+
+    return [(r["method"], r["path"], r["source_file"], r["source_line"]) for r in source_registrations(ctx)]
+
+
+def test_the_verifier_resolves_a_registration_far_below_its_import(tmp_path):
+    """T-010: the import is at the top of server.ts and the registrations hundreds of lines below. A PUT whose own
+    handler list names none of the finding's handlers is not credited with the next line's DELETE handler, and
+    DELETE and a POST without the finding's handler are never resolved."""
+    ctx = _registration_ctx(tmp_path, [])
+    _far_repo(tmp_path)
+    assert _resolved(ctx) == [("GET", "/api/Cards", "server.ts", 453), ("GET", "/api/Cards/:id", "server.ts", 456)]
+
+
+def test_a_named_import_binds_the_handler_but_not_a_word_of_the_route(tmp_path):
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp())
+    ctx.plan = replace(ctx.plan, instance="routes/search.ts:1", endpoints=())
+    (tmp_path / "routes" / "search.ts").write_text("export function search () { return (req, res) => res.json([]) }\n")
+    (tmp_path / "server.ts").write_text(
+        "import { search as find } from './routes/search'\n" + FILLER
+        + "app.get('/api/search', utils.asyncHandler(other()))\n"      # a word of the path, not the handler
+        "app.get('/rest/products/search', utils.asyncHandler(find()))\n")
+    assert _resolved(ctx) == [("GET", "/rest/products/search", "server.ts", 453)]
+
+
+@pytest.mark.parametrize("change", ["other-module", "named-route", "secret-file", "no-source"])
+def test_no_route_is_resolved_without_a_literal_tie_to_the_findings_file(tmp_path, change):
+    """Refused cases: an import of another module with the same name, a finding whose assessment names a route,
+    a registering file that holds credentials (never read), and a run without a source checkout."""
+    ctx = _registration_ctx(tmp_path, [])
+    if change == "other-module":
+        (tmp_path / "other").mkdir()
+        _far_repo(tmp_path, import_line="import * as payment from './other/payment'\n")
+    elif change == "named-route":
+        _far_repo(tmp_path)
+        ctx.plan = replace(ctx.plan, endpoints=(Endpoint("GET", "/api/Users", None),))
+    elif change == "secret-file":
+        _far_repo(tmp_path, server=".env.ts")
+    else:
+        _far_repo(tmp_path)
+        ctx.source = None
+    assert _resolved(ctx) == []
+
+
+def test_a_resolved_route_is_testable_from_the_first_step_and_nothing_else_is(tmp_path):
+    """The agent sends the resolved request without reading or deriving anything; another route stays refused, and
+    the report names where the route came from."""
+    from appsec_verifier.agent.prompts import _seed
+
+    sent = []
+    ctx = _registration_ctx(tmp_path, sent)
+    _far_repo(tmp_path)
+    steps = [{"tool": "http_request", "args": {"path": "/api/Users/2", "role": "customer-a"}},
+             {"tool": "http_request", "args": {"path": "/api/Cards/2", "role": "customer-a"}}]
+    result = AgentProbe("access-control", lambda: ScriptedPlanner(steps)).run(ctx)
+    assert sent == [("GET", "https://app.example.com/api/Cards/2")]
+    assert "GET /api/Cards/:id (server.ts:456)" in _seed(ctx)
+    assert any("resolved from the source before the test" in o and "server.ts:456" in o
+               for o in result.observations)

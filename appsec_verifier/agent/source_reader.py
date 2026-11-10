@@ -134,16 +134,21 @@ class SourceReader:
                             return done(True)
         return done(False)
 
-    def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
+    def read_all(self, relpath: str) -> str:
+        """A whole file under the same confinement and 1 MiB limit as read_window, for checks in code (VER-008);
+        the caller sends none of it to the model."""
         p = self._resolve(relpath)
         try:
             with p.open("rb") as stream:
                 data = stream.read(MAX_SOURCE_BYTES + 1)
-            if len(data) > MAX_SOURCE_BYTES:
-                raise SourceAccessError("source exceeds the 1 MiB read limit")
-            lines = data.decode("utf-8", errors="replace").splitlines()
         except OSError as exc:
             raise SourceAccessError(f"cannot read {relpath!r}: {type(exc).__name__}") from exc
+        if len(data) > MAX_SOURCE_BYTES:
+            raise SourceAccessError("source exceeds the 1 MiB read limit")
+        return data.decode("utf-8", errors="replace")
+
+    def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
+        lines = self.read_all(relpath).splitlines()
         ctx = self.context_lines if context is None else context
         if around_line:
             lo = max(0, around_line - 1 - ctx)

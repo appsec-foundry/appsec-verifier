@@ -143,9 +143,10 @@ class AgentProbe:
             f"Prerequisite read: {route}, a request this finding's test needed but the assessment does not name "
             "(VER-047)." for route in controller.prerequisites)]
         for request in ctx.derived_requests:
+            origin = (f"supported by recorded step {request['evidence_step']}" if request.get("evidence_step")
+                      else "resolved from the source before the test")
             result.observations.append(
-                f"Derived request: {request['method']} {request['path']}, supported by recorded step "
-                f"{request['evidence_step']}. Reason: {request['reason']}"
+                f"Derived request: {request['method']} {request['path']}, {origin}. Reason: {request['reason']}"
             )
         return result
 
@@ -163,6 +164,14 @@ class AgentProbe:
         sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
         ctx.created, ctx.owned = set(), set()
+        # VER-008: when the assessment names no route, routes the source registers for the finding's handlers are
+        # resolved in code before the first model call, and anchor the agent's derivations as derive() would.
+        from .derivation import source_registrations
+
+        registered = source_registrations(ctx)
+        if registered:
+            ctx.derived_requests = [*ctx.derived_requests, *registered]
+            ctx.inferred_route_roots = [{"method": r["method"], "path": r["path"]} for r in registered]
         last_rejected = None
         last_cited = None
         repairs = 0
