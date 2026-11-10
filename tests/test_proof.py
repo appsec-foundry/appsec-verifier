@@ -394,6 +394,52 @@ def test_auth_artifact_injection_downgrades(flip, reason):
     assert res.verdict == "inconclusive" and reason in res.rationale
 
 
+def _sql_plan():
+    return {"tool": "plan_test",
+            "args": {"kind": "boolean", "hypothesis": "q is spliced into the product search SQL",
+                     "path": "/rest/products/search", "method": "GET", "input_location": "params",
+                     "input_name": "q", "pointer": "/data", "baseline": "x",
+                     "sql_template": "x%' AND {{predicate}})) -- ",
+                     "positive": "x%' AND (397515=397515))) -- ", "negative": "x%' AND (397515=402298))) -- ",
+                     "positive_other": "x%' AND (402298<>397515))) -- ",
+                     "negative_other": "x%' AND (402298<>402298))) -- "},
+            "result": {"accepted": True}}
+
+
+_TRUE_SET = '{"status":"success","data":[{"id":1,"name":"Apple Juice"}]}'
+_EMPTY_SET = '{"status":"success","data":[]}'
+# The uninjected baseline matches on name and description, so it is a larger set than the true injection.
+_BASELINE_SET = '{"status":"success","data":[{"id":1,"name":"A"},{"id":2,"name":"B"},{"id":3,"name":"C"}]}'
+
+
+def _sql_fixture(positive_other=_TRUE_SET):
+    plan = _sql_plan()
+    args = plan["args"]
+    order = [("baseline", _BASELINE_SET), ("positive", _TRUE_SET), ("negative", _EMPTY_SET),
+             ("positive_other", positive_other), ("negative_other", _EMPTY_SET)] * 2
+    history, responses = [plan], {}
+    for key, body in order:
+        history.append(_req(path="/rest/products/search", method="GET", params={"q": args[key]}))
+        responses[len(history)] = {"body": body, "complete": True}
+    return history, list(range(2, len(history) + 1)), responses
+
+
+def test_a_collection_emptiness_flip_confirms_without_matching_the_baseline(tmp_path):
+    history, cited, responses = _sql_fixture()
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence", responses=responses),
+                      history, ProbeResult(verdict="confirmed"), cited)
+    assert res.verdict == "confirmed" and res.confidence == "medium"
+
+
+def test_input_variation_not_decided_by_truth_value_is_downgraded(tmp_path):
+    # A true predicate's complement observes a different result, so the signal tracks the literal
+    # text rather than the predicate's truth value; that is ordinary input dependence, not injection.
+    history, cited, responses = _sql_fixture(positive_other='{"status":"success","data":[{"id":9,"name":"Other"}]}')
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence", responses=responses),
+                      history, ProbeResult(verdict="confirmed"), cited)
+    assert res.verdict == "inconclusive" and "complementary true predicates" in res.rationale
+
+
 # ── unknown classes ───────────────────────────────────────────────────────────
 
 

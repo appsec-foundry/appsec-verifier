@@ -121,9 +121,14 @@ optional hardening.
   it; the report names the input the proof treated as literal data. Injection
   carried only by a write request is proven only in intrusive mode (VER-030);
   the agent sends each control itself, since a write never repeats
-  automatically. Repeat baseline and
-  true/false controls; compare a stable non-reflected field, not arbitrary
-  response differences. Timing needs alternating independent controls with
+  automatically. The agent selects the observation that fits the finding — a
+  response field, the presence or emptiness of a result set, a count, or another
+  recorded signal — and the method to reach it; the engine fixes what counts as
+  proof, not how. A confirmation requires the fresh complementary controls to
+  partition the repeated, recorded responses into two stable classes driven only
+  by the declared input and not merely reflecting it. A result that only varies
+  with the input, without the true/false controls deciding the class, is not such
+  a contrast, and the true class need not reproduce an uninjected baseline. Timing needs alternating independent controls with
   identical responses and repeated separations of 2–5 seconds, but timing alone
   remains inconclusive because ordinary computation can cause the same effect.
   SQL confirmation requires fresh complementary predicate controls. Command,

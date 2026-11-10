@@ -313,14 +313,14 @@ def injection_check(ctx, history, cited):
             observed[name] = values[0]
     except (ValueError, KeyError, IndexError, TypeError, RecursionError):
         return "the declared JSON observation is missing or incomplete"
-    if observed["baseline"] in (None, "", [], {}) or token(observed["baseline"]) != token(observed["positive"]):
-        return "the true condition must reproduce the nonempty baseline observation"
-    if token(observed["negative"]) == token(observed["positive"]):
-        return "the false condition did not change the selected observation"
-    if token(observed["positive_other"]) != token(observed["baseline"]) or token(observed["negative_other"]) != token(
-        observed["negative"]
-    ):
-        return "complementary SQL predicates did not reproduce the same true and false observations"
+    if observed["positive"] in (None, "", [], {}):
+        return "the true predicates produced an empty observation; choose a signal present when the condition holds"
+    if token(observed["positive"]) != token(observed["positive_other"]):
+        return "the complementary true predicates did not produce the same observation"
+    if token(observed["negative"]) != token(observed["negative_other"]):
+        return "the complementary false predicates did not produce the same observation"
+    if token(observed["positive"]) == token(observed["negative"]):
+        return "the true and false predicates did not separate the observation into two classes"
     return None
 
 
