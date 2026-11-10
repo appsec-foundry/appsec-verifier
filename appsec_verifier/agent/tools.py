@@ -89,6 +89,29 @@ def _variant_catalog(variants: list[dict], cap: int = 6) -> str:
     return "; ".join(seen)
 
 
+def _resolve_variant(variants: list[dict], supplied: str) -> tuple[dict | None, str]:
+    """Match `supplied` to a declared variant id, forgivingly.
+
+    Exact id wins. Otherwise accept the one declared id that is a token-boundary prefix of `supplied`
+    (declared followed by '-' or '_') — this is the case a model that pads a known id with extra
+    descriptive words: 'variant-002' is accepted when the model sent 'variant-002-related-search'.
+    Must be unique across variants; an ambiguous or missing match returns (None, '').
+    The other direction (declared longer than supplied) stays a rejection because it is not uniquely
+    recoverable: the model might have meant either of several specific variants.
+    """
+    for v in variants:
+        if v.get("id") == supplied:
+            return v, ""
+    candidates = []
+    for v in variants:
+        did = v.get("id") or ""
+        if did and (supplied.startswith(did + "-") or supplied.startswith(did + "_")):
+            candidates.append(v)
+    if len(candidates) == 1:
+        return candidates[0], f"variant {supplied!r} accepted as {candidates[0]['id']!r}"
+    return None, ""
+
+
 class ToolError(Exception):
     """A tool call was rejected or malformed. Surfaced to the agent as an error
     result, never raised past the loop."""
@@ -313,13 +336,17 @@ class AgentTools:
             from .path_inputs import validate_path_input
 
             validate_path_input(plan["path"], plan.get("input_name") or "")
+        variant_note = ""
         if plan.get("variant"):
             from .derivation import covers
 
-            variant = next((v for v in variants if v["id"] == plan["variant"]), None)
+            variant, variant_note = _resolve_variant(variants, plan["variant"])
             if variant is None:
                 raise ToolError(f"unknown finding variant {plan['variant']!r}; variants: "
                                 + _variant_catalog(variants))
+            # The canonical id goes into the stored experiment, so later checks and the next_action
+            # context use it unambiguously.
+            plan = {**plan, "variant": variant["id"]}
             derived = covers(self.ctx, plan)
             vreq = variant["request"]
             if not derived and vreq["method"] != plan.get("method", "GET"):
@@ -389,14 +416,19 @@ class AgentTools:
         if getattr(self, "_experiment", None) and not plan["strategy"].get("revision_reason"):
             raise ToolError("a revised plan must explain the new observation and the next change")
         self._experiment = plan
+        notes = []
+        if assumed:
+            notes.append(f"prerequisite {', '.join(assumed)} counts as assumed: observed needs http_request steps "
+                         "of this finding with a recorded response")
+        if variant_note:
+            notes.append(variant_note)
         return {
             "accepted": True,
             "kind": plan["kind"],
             "experiment": plan,
             **({"marker": marker} if marker else {}),
             **({"second_marker": plan["second_marker"]} if plan.get("second_marker") else {}),
-            **({"note": f"prerequisite {', '.join(assumed)} counts as assumed: observed needs http_request steps "
-                        "of this finding with a recorded response"} if assumed else {}),
+            **({"note": "; ".join(notes)} if notes else {}),
             "next": "collect observations; run_experiment repeats read-only injection controls within the budget",
         }
 
@@ -425,8 +457,9 @@ class AgentTools:
 
     def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
+        note = ""
         if variant:
-            value = next((v for v in variants if v["id"] == variant), None)
+            value, note = _resolve_variant(variants, variant)
             if value is None:
                 raise ToolError(f"unknown finding variant {variant!r}; variants: "
                                 + (_variant_catalog(variants) or "none declared"))
@@ -437,7 +470,10 @@ class AgentTools:
                 available = ", ".join(sorted(value.keys())) or "no fields in this context"
                 raise ToolError(f"that context field is unavailable; available: {available}")
             value = {field: value[field]}
-        return {"context": value, "trust": "analysis data; assumptions need runtime checks"}
+        out = {"context": value, "trust": "analysis data; assumptions need runtime checks"}
+        if note:
+            out["note"] = note
+        return out
 
     def read_response(self, *, steps: list[int], pointer: str | None = None, offset: int = 0) -> dict:
         out = []

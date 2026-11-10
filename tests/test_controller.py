@@ -516,6 +516,31 @@ def test_variant_mismatch_errors_name_the_valid_variants(tmp_path):
         tools.read_context(field="variants")
 
 
+def test_a_variant_id_padded_with_extra_descriptors_resolves_to_the_declared_one(tmp_path):
+    """Modelle hangen gern 'erklaerende' Suffixe an deklarierte Varianten-IDs an. Solange genau eine
+    deklarierte ID ein Praefix (bis zum Trenner `-` oder `_`) der genannten ist, nimmt plan_test die
+    und vermerkt die Korrektur im note; andernfalls bleibt die Zurueckweisung bestehen."""
+    accepted = AgentTools(xss_context(tmp_path)).plan_test(**xss_plan(variant="v-search-extra-description")["args"])
+    assert accepted["experiment"]["variant"] == "v-search"
+    assert "accepted as 'v-search'" in accepted["note"]
+    # Exact still wins over fuzzy.
+    accepted2 = AgentTools(xss_context(tmp_path)).plan_test(**xss_plan(variant="v-search")["args"])
+    assert accepted2["experiment"]["variant"] == "v-search" and "note" not in accepted2
+    # Mehrdeutig: deklariert sind sowohl "v" als auch "v-a"; "v-a-extra" trifft beide als Prefix.
+    ctx = xss_context(tmp_path)
+    ctx.plan = replace(ctx.plan, verification_context={"variants": [
+        {"id": "v", "request": {"method": "GET", "path": "/#/search", "inputs": SEARCH_VARIANT["request"]["inputs"]}},
+        {"id": "v-a", "request": {"method": "GET", "path": "/#/search",
+                                   "inputs": SEARCH_VARIANT["request"]["inputs"]}},
+    ]})
+    with pytest.raises(ToolError, match=r"unknown finding variant 'v-a-extra'"):
+        AgentTools(ctx).plan_test(**xss_plan(variant="v-a-extra")["args"])
+    # read_context profitiert vom gleichen Mapping.
+    ctx2 = xss_context(tmp_path)
+    out = AgentTools(ctx2).read_context(variant="v-search-with-extra")
+    assert out["context"]["id"] == "v-search" and "accepted as 'v-search'" in out["note"]
+
+
 def test_method_and_path_mismatches_name_the_expected_request(tmp_path):
     ctx = xss_context(tmp_path)
     tools = AgentTools(ctx)
