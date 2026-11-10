@@ -478,6 +478,26 @@ def test_auth_artifact_plan_needs_a_sql_or_nosql_challenge(tmp_path):
     assert accepted["accepted"] is True and accepted["experiment"]["auth_artifact"] is True
 
 
+def test_plan_test_accepts_the_query_alias_and_a_revision_note(tmp_path):
+    # The variant schema says "query" for a URL query parameter and the model documents a revision; neither
+    # should cost a refused step. The accepted plan normalises the input location to "params".
+    from test_experiments import STRATEGY
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False)
+    ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
+    base = {"kind": "boolean", "hypothesis": "q is spliced into the product search SQL",
+            "path": "/rest/products/search", "method": "GET", "input_location": "query", "input_name": "q",
+            "baseline": "x", "pointer": "/data", "strategy": STRATEGY,
+            "sql_template": "x%' AND {{predicate}})) -- ", "note": "balanced the two leading parens from the source"}
+    # The bug sat in the step contract: plan_test's arguments are validated against PLAN_SCHEMA before the
+    # tool runs, so the schema itself must accept the alias and the note (the tool then normalises "query").
+    from jsonschema import Draft202012Validator
+
+    from appsec_verifier.agent.experiments import PLAN_SCHEMA
+    assert Draft202012Validator(PLAN_SCHEMA).is_valid(base)
+    accepted = AgentTools(ctx).plan_test(**base)
+    assert accepted["accepted"] is True and accepted["experiment"]["input_location"] == "params"
+
+
 # ── failures become tool errors, never exceptions past the loop ──────────────
 
 def test_unknown_role_and_missing_secret_are_tool_errors(tmp_path):

@@ -18,9 +18,12 @@ PLAN_SCHEMA = {
         "kind": {"enum": ["boolean", "timing", "access-control", "control", "execution", "session"]},
         "hypothesis": {"type": "string", "minLength": 10, "maxLength": 1000},
         "variant": {"type": "string", "maxLength": 80},
+        # Optional free-text rationale (e.g. for a revised template); ignored by every check, it lets a
+        # resubmitted plan carry its reason without tripping additionalProperties.
+        "note": {"type": "string", "maxLength": 2000},
         "path": {"type": "string", "minLength": 1, "maxLength": 2000},
         "method": {"enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH"]},
-        "input_location": {"enum": ["params", "json", "form", "path"]},
+        "input_location": {"enum": ["params", "query", "json", "form", "path"]},
         "input_name": {"type": "string", "minLength": 1, "maxLength": 128},
         "baseline": SCALAR,
         "positive": SCALAR,
