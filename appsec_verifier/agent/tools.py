@@ -342,8 +342,19 @@ class AgentTools:
 
             variant, variant_note = _resolve_variant(variants, plan["variant"])
             if variant is None:
-                raise ToolError(f"unknown finding variant {plan['variant']!r}; variants: "
-                                + _variant_catalog(variants))
+                # Second chance: the plan's method and path already carry the intent. If exactly one declared
+                # variant uses the same request, take it — the id was only an advisory label.
+                pm, pp = plan.get("method", "GET"), plan.get("path", "")
+                by_route = [v for v in variants
+                            if ((v.get("request") or {}).get("method") == pm
+                                and route_matches((v.get("request") or {}).get("path") or "", pp))]
+                if len(by_route) == 1:
+                    variant = by_route[0]
+                    variant_note = (f"variant {plan['variant']!r} accepted as {variant['id']!r} "
+                                     "by matching method and path")
+                else:
+                    raise ToolError(f"unknown finding variant {plan['variant']!r}; variants: "
+                                    + _variant_catalog(variants))
             # The canonical id goes into the stored experiment, so later checks and the next_action
             # context use it unambiguously.
             plan = {**plan, "variant": variant["id"]}

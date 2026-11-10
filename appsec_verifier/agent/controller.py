@@ -54,6 +54,10 @@ class Controller:
         self.deviations = []  # preparation routes the owner used outside the finding's own (VER-008, VER-043)
         self._counted = None  # the repetition key the last before() call charged
         self._preparing = None  # the preparation route of the action before() last allowed
+        # Non-sink inputs pinned on the first probe of an accepted boolean/timing experiment, so
+        # later probes carry the same accompanying fields and only the sink value differs. Reset on
+        # every freshly accepted plan.
+        self._experiment_shape = None
 
     def check(self):
         self.ctx.guard.check_window()
@@ -168,20 +172,37 @@ class Controller:
             if plan.get("kind") in ("boolean", "timing"):
                 supplied = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "path_inputs")}
                 pairs = parse_qsl(parsed.query, keep_blank_values=True)
-                names = [k for k, _ in pairs] + list(supplied["params"])
-                if len(names) != len(set(names)):
+                query_names = [k for k, _ in pairs] + list(supplied["params"])
+                if len(query_names) != len(set(query_names)):
                     raise ToolError("experiment requests cannot contain duplicate query inputs")
                 supplied["params"].update(pairs)
                 location = "path_inputs" if plan["input_location"] == "path" else plan["input_location"]
-                selected = supplied.pop(location, {})
+                selected = supplied[location]
                 controls = [plan[k] for k in ("baseline", "positive", "negative", "positive_other", "negative_other")
                             if k in plan]
-                if (set(selected) != {plan["input_name"]} or any(supplied.values())
-                        or token(selected.get(plan["input_name"])) not in {token(v) for v in controls}):
+                sink = selected.get(plan["input_name"])
+                if plan["input_name"] not in selected or token(sink) not in {token(v) for v in controls}:
                     values = ", ".join(repr(str(v)[:60]) for v in controls)
                     raise ToolError(
-                        "request must use the accepted experiment's input and control values; "
+                        "request must carry the accepted experiment's sink value; "
                         f"send {plan['input_name']!r} in {plan['input_location']} with one of {values}"
+                    )
+                # Everything except the sink is the request's "shape"; pin it on the first probe and
+                # require every subsequent probe to match. This lets the agent fulfil an endpoint's
+                # other required fields (a rating next to the vulnerable comment) without opening the
+                # door to varying them between baseline, positive and negative — which would make the
+                # proof compare answers that differ for the wrong reason (VER-011).
+                shape = {k: tuple(sorted((kk, str(vv)) for kk, vv in v.items())) for k, v in supplied.items()
+                         if k != location}
+                shape[location] = tuple(sorted((kk, str(vv)) for kk, vv in selected.items()
+                                                if kk != plan["input_name"]))
+                if self._experiment_shape is None:
+                    self._experiment_shape = shape
+                elif shape != self._experiment_shape:
+                    expected = {k: dict(v) for k, v in self._experiment_shape.items() if v}
+                    raise ToolError(
+                        "experiment requests must keep the non-sink fields identical across all probes "
+                        f"so the comparison rests on the sink alone; first probe used {expected}"
                     )
             if plan.get("kind") == "access-control" and plan.get("resource"):
                 resource = next((r for r in self.ctx.scope.get("test_resources", [])
@@ -192,7 +213,12 @@ class Controller:
                     raise ToolError("request must use the accepted access-control resource inputs")
                 if (args.get("role") or "anonymous") not in resource["allowed_roles"] + resource["denied_roles"]:
                     raise ToolError("request role is not declared for the accepted resource")
-        # Variant input declarations constrain query/body names, not payload values.
+        # Variant inputs are the sinks the finding claims.
+        # - plan_test only declares intent (its query lives in a fragment the tool does not send), so it may
+        #   not name inputs outside the declared sinks, but need not carry them: supplied ⊆ declared.
+        # - an actual request (http_request, browser_check) must exercise every declared sink; fulfilling an
+        #   endpoint's unrelated required fields (a rating next to the vulnerable comment, a CSRF token next
+        #   to the vulnerable url) is normal and allowed: declared ⊆ supplied, extras permitted.
         declared: list[str] = []
         for r in matching:
             if "inputs" not in r:
@@ -205,15 +231,20 @@ class Controller:
             query = {k for k, _ in parse_qsl(urlsplit(path).query)} | set(args.get("params") or {})
             if name == "browser_check":
                 query |= {k for k, _ in parse_qsl(urlsplit(urlsplit(path).fragment).query)}
-            if (query <= names["query"] and all(set(args.get(k) or {}) <= names[k] for k in ("json", "form"))
-                    and set(args.get("path_inputs") or {}) <= names["path"]):
+            supplied = {"query": query, "json": set(args.get("json") or {}), "form": set(args.get("form") or {}),
+                        "path": set(args.get("path_inputs") or {})}
+            if name == "plan_test":
+                if all(supplied[k] <= names[k] for k in ("query", "json", "form", "path")):
+                    return
+            elif all(names[k] <= supplied[k] for k in ("query", "json", "form", "path")):
                 return
         seen = []
         for d in declared:
             if d not in seen:
                 seen.append(d)
         allowed = ", ".join(seen[:8]) if seen else "no inputs declared"
-        raise ToolError(f"request inputs do not match the finding variant; declared: {allowed}")
+        verb = "may only use" if name == "plan_test" else "must carry"
+        raise ToolError(f"request {verb} the finding's declared variant inputs: {allowed}")
 
     def _created(self, change, path, which="created") -> bool:
         """Whether every record `path` names is one the owner's write created in this finding (VER-010):
@@ -302,6 +333,7 @@ class Controller:
         elif name == "plan_test":
             if result.get("accepted"):
                 self.plan = result.get("experiment") or args
+                self._experiment_shape = None   # a fresh plan pins its own shape on the next probe
         else:
             self.failures = 0
             # Only the nearest preceding literal route at the evidenced source location.

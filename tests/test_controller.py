@@ -97,8 +97,53 @@ def test_declared_variant_restricts_input_names(tmp_path):
         "method": "GET", "path": "/search", "inputs": [{"location": "query", "name": "q"}]}}]}
     c = Controller(ctx)
     c.before("http_request", {"path": "/search?q=benign"})
-    with pytest.raises(ToolError, match="inputs"):
+    with pytest.raises(ToolError, match="inputs"):     # declared sink q missing, only a foreign input
         c.before("http_request", {"path": "/search?other=value"})
+
+
+def test_a_request_may_add_endpoint_required_fields_beyond_the_declared_sink(tmp_path):
+    """Fix B: deklarierte Inputs sind die Sinks, die der Request treffen muss. Zusaetzliche vom Endpoint
+    verlangte Pflichtfelder (rating neben dem verwundbaren comment) sind erlaubt, solange der Sink da ist."""
+    ctx = context(tmp_path)
+    ctx.marker = ("vrf0",)
+    ctx.plan.verification_context = {"variants": [{"id": "v", "request": {
+        "method": "POST", "path": "/api/Feedbacks", "inputs": [{"location": "json", "name": "comment"}]}}]}
+    ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),))
+    c = Controller(ctx)
+    c.before("http_request", {"method": "POST", "path": "/api/Feedbacks",
+                              "json": {"comment": "<img src=x>vrf0", "rating": 5}})   # extra rating allowed
+    with pytest.raises(ToolError, match="declared variant inputs"):                   # sink comment missing
+        c.before("http_request", {"method": "POST", "path": "/api/Feedbacks",
+                                  "json": {"other": "vrf0val", "rating": 5}})
+
+
+def test_accepted_experiment_pins_non_sink_fields_across_probes(tmp_path):
+    """Fix B, zweite Haelfte: nach einem akzeptierten boolean-Experiment darf der Request die vom Endpoint
+    verlangten Begleitfelder tragen, aber sie muessen ueber alle Proben stabil bleiben, sonst vergleicht der
+    Proof auf dem falschen Unterschied (VER-011)."""
+    ctx = context(tmp_path)
+    ctx.marker = ("vrf0",)
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89",
+                       endpoints=(Endpoint("POST", "/login", None),))
+    c = Controller(ctx)
+    plan = {"kind": "boolean", "path": "/login", "method": "POST", "input_location": "json",
+            "input_name": "email", "baseline": "vrf0@x", "positive": "vrf0@x' OR '1'='1",
+            "negative": "vrf0@x' OR '1'='2"}
+    c.observe("plan_test", plan, {"accepted": True, "experiment": plan})
+    # First probe fixes the accompanying fields (a stable password).
+    c.before("http_request", {"method": "POST", "path": "/login",
+                              "json": {"email": "vrf0@x", "password": "p"}})
+    # Same accompanying fields, different sink value: allowed.
+    c.before("http_request", {"method": "POST", "path": "/login",
+                              "json": {"email": "vrf0@x' OR '1'='1", "password": "p"}})
+    # Changed accompanying field: rejected, because the comparison would no longer rest on the sink.
+    with pytest.raises(ToolError, match="non-sink fields identical"):
+        c.before("http_request", {"method": "POST", "path": "/login",
+                                  "json": {"email": "vrf0@x' OR '1'='2", "password": "different"}})
+    # A non-control sink value is still rejected (marker kept so the write rule is not what fires).
+    with pytest.raises(ToolError, match="sink value"):
+        c.before("http_request", {"method": "POST", "path": "/login",
+                                  "json": {"email": "vrf0-unrelated", "password": "p"}})
 
 
 def test_revised_plan_text_alone_is_not_progress(tmp_path):
@@ -504,9 +549,10 @@ def test_variant_mismatch_errors_name_the_valid_variants(tmp_path):
         tools.plan_test(**xss_plan(variant=None)["args"])
     except ToolError as exc:
         assert "v-search" in str(exc) and "GET /#/search" in str(exc)
-    # unknown variant names what the user sent and the available ids
+    # unknown variant names what the user sent and the available ids when method/path also do not
+    # identify a declared variant uniquely.
     with pytest.raises(ToolError, match=r"unknown finding variant 'v-missing'.*v-search"):
-        tools.plan_test(**xss_plan(variant="v-missing")["args"])
+        tools.plan_test(**{**xss_plan(variant="v-missing")["args"], "method": "POST", "path": "/#/elsewhere"})
     # unknown variant in read_context too
     with pytest.raises(ToolError, match=r"unknown finding variant 'v-missing'.*v-search"):
         tools.read_context(variant="v-missing")
@@ -539,6 +585,24 @@ def test_a_variant_id_padded_with_extra_descriptors_resolves_to_the_declared_one
     ctx2 = xss_context(tmp_path)
     out = AgentTools(ctx2).read_context(variant="v-search-with-extra")
     assert out["context"]["id"] == "v-search" and "accepted as 'v-search'" in out["note"]
+
+
+def test_an_invented_variant_id_resolves_by_matching_method_and_path(tmp_path):
+    """Fix A+: nennt das Modell eine ID, die es sich ausgedacht hat, aber Methode und Pfad treffen genau
+    eine deklarierte Variante, dann ist das die gemeinte; die ID war nur ein Label."""
+    accepted = AgentTools(xss_context(tmp_path)).plan_test(**xss_plan(variant="variant-search-q")["args"])
+    assert accepted["experiment"]["variant"] == "v-search"
+    assert "by matching method and path" in accepted["note"]
+    # Zwei Varianten auf derselben Methode+Pfad: nicht mehr eindeutig, also Zurueckweisung.
+    ctx = xss_context(tmp_path)
+    ctx.plan = replace(ctx.plan, verification_context={"variants": [
+        {"id": "a", "request": {"method": "GET", "path": "/#/search",
+                                 "inputs": SEARCH_VARIANT["request"]["inputs"]}},
+        {"id": "b", "request": {"method": "GET", "path": "/#/search",
+                                 "inputs": SEARCH_VARIANT["request"]["inputs"]}},
+    ]})
+    with pytest.raises(ToolError, match=r"unknown finding variant 'made-up'"):
+        AgentTools(ctx).plan_test(**xss_plan(variant="made-up")["args"])
 
 
 def test_method_and_path_mismatches_name_the_expected_request(tmp_path):
