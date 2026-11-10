@@ -147,6 +147,7 @@ def test_models_are_named_in_the_short_form_of_the_analyzer(model, short):
 
 def test_the_start_entry_names_the_agent_its_step_budget_and_what_it_may_use(monkeypatch):
     monkeypatch.setenv("COLUMNS", "400")
+    monkeypatch.setattr(RunProgress, "MAX_COLUMNS", 400)
     out, clock = Tty(), Clock()
     progress = RunProgress(out, model="claude-sonnet-4-5-20250929", runtime="Claude CLI", max_steps=12,
                            roles=["alice", "bob"], source=True, clock=clock, env={}, live=False)
@@ -306,6 +307,7 @@ def test_a_checked_proof_stands_out_with_what_it_showed(monkeypatch, cls, shown)
 
 def test_a_proof_the_check_sent_back_to_the_agent_says_why(monkeypatch):
     monkeypatch.setenv("COLUMNS", "400")
+    monkeypatch.setattr(RunProgress, "MAX_COLUMNS", 400)
     out, spent = Tty(), [0.10]
     redact = lambda v: yaml.safe_load(yaml.safe_dump(v).replace("s3cret", "[redacted]"))  # noqa: E731
     progress = RunProgress(out, clock=Clock(), env={}, live=False, redact=redact, spent=lambda: spent[0],
@@ -320,7 +322,7 @@ def test_a_proof_the_check_sent_back_to_the_agent_says_why(monkeypatch):
     row = _rows(out)[-1]
     assert SGR.sub("", row).split()[3] == "proof"
     assert SGR.sub("", row).endswith("step 3 · ✗ proof not accepted: step 1 precedes the plan in step 2 and must be "
-                                     "repeated [redacted]]0;pwned[2J · back to the agent · $0.03")
+                                     "repeated [redacted]]0;pwned[2J · back to the agent · run $0.13")
     assert st("✗ proof not accepted", "warn", "bold") in row and "s3cret" not in row
     assert "\x1b" not in SGR.sub("", row) and "\x07" not in row
 
@@ -362,6 +364,47 @@ def test_the_evidence_reviewer_has_agent_entries_for_its_start_and_end():
     assert rows[4].endswith("correction 0/2 · not-reviewed: Review not started: interrupted.")
 
 
+def test_reviewer_corrections_issues_and_the_rationale_show_their_first_sentence():
+    """The report keeps the reviewer's issues by variant; the console gives each one's first sentence only."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.evidence_review("T-1", "review", 0, "Checking evidence text and layout metadata.")
+    progress.evidence_review("T-1", "revise", 1, "Original test agent: Step 5 returned a 500. The rationale skips it.")
+    progress.evidence_review("T-1", "quality", 1, "needs-attention: Two correction rounds reached; unresolved issues "
+                                                  "remain.")
+    progress.evidence_review("T-1", "issue", 1, "T-1-930a49d43872218b: The comparison line lists only steps 8-17. "
+                                                "It never says which responses are empty.")
+    progress.finished(_plan(), ProbeResult(verdict="confirmed", rationale="q at routes/search.ts:23 is concatenated "
+                                                                          "into the SQL query. Steps 9 and 11 flip."))
+    revise, _, issue, done = _rows(out)[-4:]
+    assert revise.endswith("correction 1/2 · Original test agent: Step 5 returned a 500.")
+    assert issue.split()[3] == "issue"
+    assert issue.endswith("  The comparison line lists only steps 8-17.")     # no variant key, no round
+    assert done.endswith(" · q at routes/search.ts:23 is concatenated into the SQL query.")
+
+
+def test_on_a_wide_terminal_rows_wrap_at_the_analyzers_line_width(monkeypatch):
+    """A terminal wider than AppSec Analyzer's 140 columns still wraps there; the status line is cut there."""
+    monkeypatch.setenv("COLUMNS", "400")
+    out, clock = Tty(), Clock()
+    progress = RunProgress(out, clock=clock, env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "note": "word " * 60,
+                   "result": {"status": 200}})
+    rows = [SGR.sub("", row) for row in _rows(out)]
+    note = [row for row in rows if "word" in row]
+    assert len(note) > 1 and all(len(row) <= RunProgress.MAX_COLUMNS - 1 for row in rows)
+    progress.activity(2, 12, "http_request", {"path": "/" + "x" * 300})
+    progress.tick()
+    frame = SGR.sub("", out.getvalue().rsplit("\n", 1)[1])
+    status = re.sub(r"\x1b\[[?0-9;]*[a-zA-Z]|\r", "", frame)
+    assert status.endswith("…") and len(status) == RunProgress.MAX_COLUMNS - 1
+    progress.close()
+
+
 def test_a_changed_rating_follows_the_verdict_and_an_unchanged_one_is_not_shown(monkeypatch):
     monkeypatch.setenv("COLUMNS", "400")
     out = Tty()
@@ -384,7 +427,7 @@ def test_a_changed_rating_follows_the_verdict_and_an_unchanged_one_is_not_shown(
 
 @pytest.mark.parametrize("api_prices, spend", [(False, "run $1.62 of $10.00"),
                                                (True, "run $1.62 of $10.00 at API prices")])
-def test_with_costs_shown_the_done_line_gives_the_finding_cost_and_the_run_spend(api_prices, spend):
+def test_with_costs_shown_the_done_line_gives_the_run_spend_and_not_the_finding_cost(api_prices, spend):
     out, spent = io.StringIO(), [1.20]
     progress = RunProgress(out, clock=Clock(), env={}, spent=lambda: spent[0], cost_limit=10.0,
                            api_prices=api_prices)
@@ -392,12 +435,13 @@ def test_with_costs_shown_the_done_line_gives_the_finding_cost_and_the_run_spend
     progress.finding(_plan())
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="no answer"))
-    assert _rows(out)[-1].endswith(f"inconclusive · 0s · $0.42 · {spend} · no answer")
+    assert _rows(out)[-1].endswith(f"inconclusive · 0s · {spend} · no answer")
+    assert "$0.42" not in _rows(out)[-1]
 
 
-def test_the_evidence_review_shows_its_own_cost_and_time_off_the_variants_done_line():
-    """WP4: the review of a finding runs before its last variant's done line; its spend and time go on the
-    reviewer's own row, so a retired variant does not show what the review cost."""
+def test_the_evidence_review_shows_its_own_time_and_the_run_spend_off_the_variants_done_line():
+    """WP4: the review of a finding runs before its last variant's done line; its time goes on the
+    reviewer's own row, which also gives the run's spend so far."""
     out, spent, clock = io.StringIO(), [1.00], Clock()
     progress = RunProgress(out, clock=clock, env={}, spent=lambda: spent[0], cost_limit=10.0)
     progress.begin([_plan()])
@@ -407,13 +451,14 @@ def test_the_evidence_review_shows_its_own_cost_and_time_off_the_variants_done_l
     progress.evidence_review("T-1", "quality", 0, "clear: Evidence text and layout checks passed.")
     finished = _rows(out)[-1]
     assert finished.endswith("■ evidence reviewer finished · clear: Evidence text and layout checks passed. · "
-                             "2m06s · $0.63")
+                             "2m06s · run $1.63")
     progress.finished(_plan(), ProbeResult(verdict="not-attempted", rationale="another variant confirmed it"))
-    assert " · 0s · $0.00 · run $1.63 of $10.00" in _rows(out)[-1]
+    assert _rows(out)[-1].endswith(" · 0s · run $1.63 of $10.00 · another variant confirmed it")
 
 
-def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_spend(monkeypatch):
-    """As in AppSec Analyzer the cost runs along with the run, not only at a finding's end."""
+def test_with_costs_shown_entries_give_the_running_total_and_the_status_line_the_run_spend(monkeypatch):
+    """The cost runs along with the run, not only at a finding's end; each amount is the run's total so far,
+    not what one step cost."""
     monkeypatch.setenv("COLUMNS", "200")
     out, clock, spent = io.StringIO(), Clock(), [1.20]
     progress = RunProgress(out, model="m", clock=clock, env={}, spent=lambda: spent[0], cost_limit=10.0)
@@ -423,10 +468,10 @@ def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_s
     spent[0] = 1.25
     progress.activity(1, 12, "http_request", {"path": "/a"})
     progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "result": {"status": 200}})
-    assert _rows(out)[-1].endswith("step 1 · GET /a → 200 · model 0s · $0.05")
+    assert _rows(out)[-1].endswith("step 1 · GET /a → 200 · model 0s · run $1.25")
     spent[0] = 1.27
     progress.step({"step": 2, "refused": "unknown action 'x'"})
-    assert _rows(out)[-1].endswith("step 2 · refused: unknown action 'x' · $0.02")
+    assert _rows(out)[-1].endswith("step 2 · refused: unknown action 'x' · run $1.27")
     progress.step({"step": 3, "tool": "read_source", "args": {"path": "a.ts"}, "result": {}})
     assert _rows(out)[-1].endswith("step 3 · source a.ts → done")        # nothing spent, no amount
     progress.activity(4, 12)
@@ -446,8 +491,8 @@ def test_with_costs_shown_each_step_gives_its_cost_and_the_status_line_the_run_s
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive"))
     done = _rows(live)[-1]
-    assert progress.st("$0.35", "accent") in done and progress.st("$1.62", "accent") in done
-    assert SGR.sub("", done).endswith("inconclusive · 0s · $0.35 · run $1.62 of $10.00 at API prices")
+    assert progress.st("$1.62", "accent") in done
+    assert SGR.sub("", done).endswith("inconclusive · 0s · run $1.62 of $10.00 at API prices")
     progress.close()
 
 
@@ -475,7 +520,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(
     assert all(row.startswith(" " * hang) and not row[hang].isspace() for row in tested)   # under the note
     assert tested[0][hang:].startswith("GET /rest/products/search?q=x'))")
     assert all(len(row) <= 119 for row in rows)
-    assert tested[-1].endswith("→ 500 · 942 B · $0.04")
+    assert tested[-1].endswith("→ 500 · 942 B · run $0.04")
     assert _rows(out)[note + 1].strip() == st(tested[0].strip(), "agent")   # each piece of the request coloured
     assert st(tested[1][hang:].split(" → ")[0], "agent") in _rows(out)[note + 2]
     assert st("$0.04", "accent") in out.getvalue()
@@ -483,7 +528,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(
     assert " 2/2 T-2  start " in rows[blank + 1]
     entry = [row[column:] for row in rows[done:blank]]
     assert all(row[:column].isspace() for row in rows[done + 1:blank]) and entry[-1] == "the rows flipped"
-    assert " ".join(entry[:-1]) == "✔ confirmed (high) · 0s · $0.04 · run $0.04 of $10.00"
+    assert " ".join(entry[:-1]) == "✔ confirmed (high) · 0s · run $0.04 of $10.00"
     assert entry[-2].endswith("run $0.04 of $10.00")                        # the spend stays whole
 
 
@@ -737,7 +782,8 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
     done = next(row for row in rows if row.split()[3:4] == ["done"])
     assert done.split()[3:5] == ["done", "100%"] and "inconclusive" in done
-    assert done.endswith(" · $0.50 · run $0.50 of $10.00")                # API billing: costs shown
+    assert done.endswith(" · run $0.50 of $10.00")                        # API billing: costs shown
+    assert "$0.50 · run" not in done                                      # the running total only
     # The verdict cites no step: the image of its requests follows, named img, not proof (VER-035).
     assert rows[-1].split()[3] == "img" and "screenshot" in rows[-1]
     assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
@@ -745,7 +791,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
 
 @pytest.mark.parametrize("profile, show, done, run", [
     ("claude", False, None, "2 requests\n"),
-    ("claude", True, " · $0.50 · run $0.50 of $10.00 at API prices", "2 requests · $0.50 of $10.00 at API prices"),
+    ("claude", True, "s · run $0.50 of $10.00 at API prices", "2 requests · $0.50 of $10.00 at API prices"),
     ("codex-cli", False, None, "2 requests\n"),
     ("codex-cli", True, None, "2 requests · cost not reported (subscription)"),
 ])

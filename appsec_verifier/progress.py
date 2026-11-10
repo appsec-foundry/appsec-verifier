@@ -16,22 +16,24 @@ query and body, the result and how long the model took to propose the step; a re
 proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
 entry says so, then a ``proof`` entry says whether the proof was checked (VER-009 to VER-013) or why
 there is none. The evidence reviewer of VER-042 gets ``agent`` entries for its start and end as well.
-The ``done`` entry gives the verdict, marked and highlighted, and for a confirmed finding the agent's
+The ``done`` entry gives the verdict, marked and highlighted, and the first sentence of the agent's
 rationale; once a finding's last variant is done, a ``rating`` entry follows when the rating after
-verification differs from the Analyzer's (VER-039). When the run shows costs (API billing, or
-``--show-costs`` as in AppSec Analyzer), each step gives its model cost, the ``done`` entry the finding's
-cost and the run's spend against its cost limit, and the status line the run's spend as it grows; on a
-terminal the amounts are highlighted. Under the ``done`` entry a line names each screenshot the finding
-produced, with its path in the output directory: ``proof`` when the Verifier checked the verdict's proof,
-otherwise ``img``. PROGRESS counts finished findings, ELAPSED is the run's time. LEFT extrapolates the
-time the finished findings took, never beyond the run's time limit; until the first finding has finished
-it shows that limit (``≤29m``).
+verification differs from the Analyzer's (VER-039). The evidence reviewer's corrections and issues show
+their first sentence as well, as the report does. When the run shows costs (API billing, or
+``--show-costs`` as in AppSec Analyzer), an entry after model calls gives the run's spend so far
+(``run $0.42``), the ``done`` entry the run's spend against its cost limit, and the status line the run's
+spend as it grows; on a terminal the amounts are highlighted. Unlike AppSec Analyzer, which gives a step's
+own cost as well, the grid shows only the running total. Under the ``done`` entry a line names each
+screenshot the finding produced, with its path in the output directory: ``proof`` when the Verifier checked
+the verdict's proof, otherwise ``img``. PROGRESS counts finished findings, ELAPSED is the run's time.
+LEFT extrapolates the time the finished findings took, never beyond the run's time limit; until the first
+finding has finished it shows that limit (``≤29m``).
 
 On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
-long row wraps under its column; a status line under the grid is redrawn every ``TICK_SECONDS`` with a
-spinner, a progress bar, the run's spend, the running step (``Sonnet 4.5 plans`` while the model call
-runs, otherwise the request) and its age. Off a terminal (CI, logs) each
-entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
+long row wraps under its column, at most ``MAX_COLUMNS`` wide as in AppSec Analyzer; a status line under
+the grid is redrawn every ``TICK_SECONDS`` with a spinner, a progress bar, the run's spend, the running
+step (``Sonnet 4.5 plans`` while the model call runs, otherwise the request) and its age. Off a terminal
+(CI, logs) each entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
 assessment, the model or the target passes the run's redaction and `printable` before it is shown, so no
 credential value, line break or escape sequence from it reaches the console.
 """
@@ -48,7 +50,7 @@ from collections import Counter
 
 from .preflight import printable
 from .term_style import Style, columns
-from .verify.report import _VERDICT_LABEL
+from .verify.report import _VERDICT_LABEL, _first_sentence
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
@@ -222,6 +224,7 @@ class RunProgress:
     TICK_SECONDS = 0.2
     HEARTBEAT_SECONDS = 120
     BAR_WIDTH = 12
+    MAX_COLUMNS = 140       # AppSec Analyzer's DEFAULT_COLUMNS: longer lines are hard to read on a wide window
 
     def __init__(self, stream=None, *, model: str | None = None, runtime: str | None = None,
                  max_steps: int | None = None, roles=(), source: bool = False, redact=None, remaining_time=None,
@@ -247,7 +250,7 @@ class RunProgress:
                             "source code" if source else "")
         self._remaining_time = remaining_time
         self._spent, self._cost_limit, self._api_prices = spent, cost_limit, api_prices   # spent: None hides costs
-        self._spent_at = self._step_spent_at = 0.0     # the spend when the finding began and after its last step
+        self._step_spent_at = 0.0       # the spend when the finding began or an entry last showed it
         self._clock = clock
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -264,9 +267,8 @@ class RunProgress:
         self._explained = False         # a proof entry said why the finding has no proof
         self._reviewing = False         # an evidence reviewer started and has not finished
         self._planned = False           # a plan of the current finding was already accepted
-        self._review_from = None        # (clock, spend) when the current evidence review started
-        self._review_time = 0.0         # time and spend of the finding's evidence review, kept off its done line
-        self._review_cost = 0.0
+        self._review_from = None        # when the current evidence review started
+        self._review_time = 0.0         # time of the finding's evidence review, kept off its done line
         self._activity, self._activity_at = "", 0.0
         self._asked: tuple[int, float] | None = None     # (step, when the model call for it began)
         self._took: tuple[int, float] | None = None      # (step, how long the model took to propose it)
@@ -309,10 +311,10 @@ class RunProgress:
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted, self._explained = 0, "", False, False
             self._planned = False
-            self._review_from, self._review_time, self._review_cost = None, 0.0, 0.0
+            self._review_from, self._review_time = None, 0.0
             self._asked = self._took = None
             self._finding_at = self._clock()
-            self._spent_at = self._step_spent_at = self._spent() if self._spent is not None else 0.0
+            self._step_spent_at = self._spent() if self._spent is not None else 0.0
             title = _clip(self._text(plan.title or plan.cwe or "")) or "-"
             severity = _clip(self._text(plan.severity or ""), 10).lower()
             # A variant names its own request and key, so its line differs from its siblings'; otherwise the
@@ -348,7 +350,7 @@ class RunProgress:
             args = record.get("args") if isinstance(record.get("args"), dict) else {}
             action = _action(str(record["tool"]), args) if "tool" in record else ""
             took = f"model{_NBSP}{duration(self._took[1])}" if self._took and self._took[0] == number else ""
-            cost = self._step_cost() if record.get("stopped") or record.get("refused") or action else ""
+            cost = self._run_cost() if record.get("stopped") or record.get("refused") or action else []
             self._noted = self._noted or bool(record.get("stopped") or record.get("refused"))
             if record.get("tool") == "proof_feedback":
                 # The proof check refused a claimed confirmation and the agent gets another try (agent/loop.py).
@@ -356,12 +358,12 @@ class RunProgress:
                 missing = result.get("missing") if isinstance(result.get("missing"), list) else []
                 reason = _clip(missing[0], 200) if missing else "the class's proof is missing"
                 self._record("proof", _line(head, [("✗ proof not accepted", "warn", "bold"), (f": {reason}", "warn")],
-                                            "back to the agent", (cost, "accent")), role="warn")
+                                            "back to the agent", cost), role="warn")
             elif record.get("stopped"):
                 reason = f"stopped by limit: {_clip(record.get('reason', ''), 160)}"
-                self._record("⚠", _line(head, note, action, reason, (cost, "accent")))
+                self._record("⚠", _line(head, note, action, reason, cost))
             elif record.get("refused"):
-                self._record("↻", _line(head, f"refused: {_clip(record['refused'], 160)}", (cost, "accent")))
+                self._record("↻", _line(head, f"refused: {_clip(record['refused'], 160)}", cost))
             elif action:
                 # The request tested against the target in its own colour, on its own row under the note when
                 # there is one.
@@ -376,7 +378,7 @@ class RunProgress:
                                                _clip(reason, 180) if reason else ""))
                     return
                 tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
-                tested = _line([tested, (" → ",), *_outcome(result)], (took, "muted"), (cost, "accent"))
+                tested = _line([tested, (" → ",), *_outcome(result)], (took, "muted"), cost)
                 hang = len(head) + 3
                 if note:
                     self._record("·", _line(head, note), tested, hang=hang)
@@ -389,27 +391,30 @@ class RunProgress:
             old_id = self._id
             self._id = _clip(self._text(finding), 16)
             label = "initial" if stage == "review" and round_ == 0 else f"correction {round_}/2"
-            text = _clip(self._text(detail), 300)
+            text = self._text(detail)
+            if stage == "issue":        # without the variant key in front; the report names it
+                text = text.partition(": ")[2] or text
+            # The reviewer's words, first sentence each, as the report shows them.
+            text = _clip(_first_sentence(text), 160) if stage in ("revise", "issue") else _clip(text, 300)
             self._activity = f"{self._id} · evidence {stage} · {label}" if stage in ("review", "revise") else ""
             self._activity_at = self._clock()
-            cost = (self._step_cost(), "accent")
+            cost = self._run_cost()
             if stage == "review" and round_ == 0:       # the reviewer's first call: it starts
                 self._reviewing = True
-                self._review_from = (self._clock(), self._spent() if self._spent is not None else 0.0)
+                self._review_from = self._clock()
                 self._record("agent", _line(("▶ evidence reviewer started", "agent", "bold"), text, cost))
             elif stage == "quality" and self._reviewing:
                 self._reviewing = False
-                # The review's own time and spend, shown here and left out of the variant's done line.
-                took, spent = 0.0, 0.0
+                # The review's own time, shown here and left out of the variant's done line.
+                took = 0.0
                 if self._review_from is not None:
-                    took = self._clock() - self._review_from[0]
-                    spent = (self._spent() - self._review_from[1]) if self._spent is not None else 0.0
+                    took = self._clock() - self._review_from
                     self._review_time += took
-                    self._review_cost += spent
                     self._review_from = None
-                # The review's total replaces the step cost here; _step_cost above has already moved its mark.
-                total = [duration(took), *([(f"${spent:.2f}", "accent")] if self._spent is not None else [])]
-                self._record("agent", _line(("■ evidence reviewer finished", "agent", "bold"), text, *total))
+                self._record("agent", _line(("■ evidence reviewer finished", "agent", "bold"), text, duration(took),
+                                            cost))
+            elif stage == "issue":
+                self._record(stage, _line(text, cost))
             else:
                 self._record(stage, _line(label, text, cost))
             self._id = old_id
@@ -449,13 +454,12 @@ class RunProgress:
         mark = _VERDICT_MARKS.get(verdict)
         parts = [(f"{mark} {label}" if mark else label, *([role] if role else []), "bold")]
         with self._lock:
-            # An evidence review of the finding has its own row with its time and spend (evidence_review).
+            # An evidence review of the finding has its own row with its time (evidence_review).
             parts.append(duration(max(0.0, self._clock() - self._finding_at - self._review_time)))
             if self._spent is not None:
-                own = max(0.0, self._spent() - self._spent_at - self._review_cost)
-                parts += [(f"${own:.2f}", "accent"), [("run" + _NBSP,), *self._spend()]]
-            # Why, unless a refused step, a limit or the proof entry above already said so.
-            why = (_clip(self._text(result.rationale), 160)
+                parts.append([("run" + _NBSP,), *self._spend()])
+            # Why, in its first sentence, unless a refused step, a limit or the proof entry above already said so.
+            why = (_clip(_first_sentence(self._text(result.rationale)), 160)
                    if result.rationale and not self._noted and not self._explained else "")
             # A finding is done once its last variant is; a plan begin() did not see counts on its own.
             self._finished[plan.id] += 1
@@ -527,14 +531,14 @@ class RunProgress:
                                      api_prices=qualified and self._api_prices).partition(" ")
         return [(amount, "accent"), (_NBSP + rest.replace(" ", _NBSP),)]
 
-    def _step_cost(self) -> str:
-        """What the model calls since the finding's last step cost, ``$0.04``; "" when the run shows no costs
-        or nothing was spent."""
+    def _run_cost(self) -> list[tuple]:
+        """The run's spend so far, ``run $0.42`` with the amount highlighted, when model calls cost something
+        since the finding began or an entry last showed it; nothing when the run shows no costs."""
         if self._spent is None:
-            return ""
+            return []
         total = self._spent()
-        cost, self._step_spent_at = total - self._step_spent_at, total
-        return f"${cost:.2f}" if cost > 0 else ""
+        grew, self._step_spent_at = total > self._step_spent_at, total
+        return [("run" + _NBSP,), (f"${total:.2f}", "accent")] if grew else []
 
     def _run(self, now: float) -> tuple[str, str, str]:
         """PROGRESS, ELAPSED and LEFT for the whole run."""
@@ -568,7 +572,7 @@ class RunProgress:
         if event in ("↻", "⚠"):        # needs attention: all but the highlighted amounts in the warning colour
             lines = [[segment if len(segment) > 1 else (segment[0], "warn") for segment in line] for line in lines]
         rows: list[str] = []
-        width = columns() - 1 - indent
+        width = min(columns(), self.MAX_COLUMNS) - 1 - indent
         if (st.enabled or self.live) and not live:
             for line in lines:
                 text = "".join(segment[0] for segment in line)
@@ -607,8 +611,9 @@ class RunProgress:
             self._stream.flush()
 
     def _status(self, line: str) -> None:
-        """Overwrite the status line in place; a line too wide for the terminal is cut, not wrapped."""
-        width = columns() - 1
+        """Overwrite the status line in place; a line too wide for the terminal or ``MAX_COLUMNS`` is cut, not
+        wrapped."""
+        width = min(columns(), self.MAX_COLUMNS) - 1
         if len(_ANSI.sub("", line)) > width:
             line = _ANSI.sub("", line)[: max(width - 1, 0)] + "…"
         self._stream.write(_FRAME_OPEN + line + "\033[K" + _FRAME_CLOSE)
