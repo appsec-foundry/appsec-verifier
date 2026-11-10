@@ -515,6 +515,12 @@ def _run_lines(doc: dict, analyzer_report: str | None = None) -> list[str]:
         lines.append(f"- **Continues:** the report of {_when(meta['previous_generated'])}")
     if meta.get("interrupted"):
         lines.append("- **Interrupted:** the findings the run did not reach are listed as not tested.")
+    raises = [r for r in (meta.get("limits") or {}).get("cost_limit_raises") or []
+              if isinstance(r, dict) and all(isinstance(r.get(k), int | float) for k in ("from", "to"))]
+    if raises:          # VER-015: each raise the operator typed during the run
+        amounts = [raises[0]["from"], *(r["to"] for r in raises)]
+        lines.append("- **Cost limit:** raised during the run at the operator's request, "
+                     + " → ".join(f"${amount:.2f}" for amount in amounts))
     if any(r.get("poc") or r.get("evidence") for r in doc["results"]):
         lines.append(f"- **Evidence:** the proofs of concept and screenshots {TARGET_DATA_NOTE}.")
     return lines

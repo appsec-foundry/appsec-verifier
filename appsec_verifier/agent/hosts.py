@@ -212,9 +212,7 @@ class HostPlanner:
         host = self._host
         if host.broken:
             raise HostCallError(f"{host.label} stopped for this run: {host.broken}")
-        ctx.budget.note_cost(0.0)   # no new call once the cost ceiling is already exceeded
-        if ctx.budget.remaining_cost() == 0:
-            raise LimitExceeded("cost", "cost ceiling reached")
+        ctx.budget.check_cost()     # no new call once the cost ceiling is reached
         ctx.budget.note_call()
         timeout = CALL_TIMEOUT_S
         remaining = ctx.budget.remaining_time()

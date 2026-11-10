@@ -1,5 +1,5 @@
-"""The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-016,
-VER-017, VER-039, VER-042).
+"""The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-015,
+VER-016, VER-017, VER-039, VER-042).
 
 Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
@@ -32,7 +32,8 @@ finding has finished it shows that limit (``≤29m``).
 On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
 long row wraps under its column, at most ``MAX_COLUMNS`` wide as in AppSec Analyzer; a status line under
 the grid is redrawn every ``TICK_SECONDS`` with a spinner, a progress bar, the run's spend, the running
-step (``Sonnet 4.5 plans`` while the model call runs, otherwise the request) and its age. Off a terminal
+step (``Sonnet 4.5 plans`` while the model call runs, otherwise the request) and its age. While the
+question for a higher cost ceiling waits (budget_prompt.py), the status line is away. Off a terminal
 (CI, logs) each entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
 assessment, the model or the target passes the run's redaction and `printable` before it is shown, so no
 credential value, line break or escape sequence from it reaches the console.
@@ -47,6 +48,7 @@ import sys
 import threading
 import time
 from collections import Counter
+from contextlib import contextmanager
 
 from .preflight import printable
 from .term_style import Style, columns
@@ -256,6 +258,7 @@ class RunProgress:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._shown = False
+        self._paused = False        # a question waits for the operator: no status line, no heartbeat
         self._frame = 0
         self.total = self.done = self.number = 0
         self._variants: Counter = Counter()     # variants per finding of the grid; findings, not variants, count
@@ -476,6 +479,24 @@ class RunProgress:
                     path = os.path.join(self._out_dir, entry["path"]) if self._out_dir else entry["path"]
                     self._record(event, _line(f"screenshot {printable(path)}"))
 
+    @contextmanager
+    def paused(self):
+        """Remove the status line and keep it away while a question waits for the operator (VER-015)."""
+        with self._lock:
+            self._paused = True
+            self._clear()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._paused = False
+                self.last = self._clock()
+
+    def raise_cost_limit(self, limit: float) -> None:
+        """The higher cost ceiling the operator typed, for the run's spend shown from now on (VER-015)."""
+        with self._lock:
+            self._cost_limit = limit
+
     def close(self) -> None:
         """Stop the ticker and remove the status line; the run's last message follows on a clean line."""
         self._stop.set()
@@ -512,7 +533,7 @@ class RunProgress:
     def tick(self) -> None:
         """On a terminal redraw the status line; off it write a line after a quiet stretch."""
         with self._lock:
-            if not self._id or self._stop.is_set():
+            if not self._id or self._stop.is_set() or self._paused:
                 return
             now = self._clock()
             age = duration(now - self._activity_at) if self._activity else ""

@@ -52,7 +52,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
 | `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first finding (VER-032) |
-| `limits.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded` |
+| `limits.py`, `budget_prompt.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded`; in an interactive run the question for a higher cost ceiling (VER-015) |
 | `term_style.py` | console colour and logo, adapted from AppSec Analyzer; colour only after `printable` |
 | `progress.py` | `RunProgress`: the run's progress grid and live status line during `verify`, as in AppSec Analyzer |
 | `update.py`, `version_info.py` | `update`: pipx reinstall after a yes (VER-033); `--version` from the build stamp `build-info.json` (written by `setup.py`) or Git |
@@ -76,6 +76,7 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 | `agent/host_claude.py` | `scripts/runtime/analyst_host.py`; the Verifier is stricter and stays so |
 | `--profile` selection, cost limit and cost display in `cli.py` | `appsec_analyzer/cli.py` |
 | `term_style.py`, `progress.py` | `scripts/renderers/term_style.py`, `appsec_analyzer/assessment/console.py` |
+| `budget_prompt.py` | `scripts/runtime/interactive_budget.py` |
 | `export`, `schemas/analyzer-annotations.schema.yaml` (VER-021) | no reader yet |
 | `verify/report.py` `annotate_assessment`, `schemas/annotated-assessment.schema.yaml` (VER-027) | `threats[]` and the root of `schemas/threat-model.output.schema.yaml` must keep accepting additional fields; `threats[].verification` is the Analyzer's |
 | `verify/annotated_report.py` (VER-038) | one `<a id="t-…"></a>` line per finding from `scripts/renderers/compose_threat_model.py`, the `## Changelog` table from `templates/fragments/changelog-table.md.j2` |

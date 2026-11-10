@@ -369,6 +369,8 @@ def run_verification(
             "max_duration_s": limits.max_duration_s,
             "rate_rps": limits.rate_rps,
             "cost_limit_usd": limits.cost_limit_usd,
+            # VER-015: raises the operator typed when the run reached its cost ceiling.
+            **({"cost_limit_raises": list(budget.ceiling_raises)} if budget.ceiling_raises else {}),
         },
         "identities": [
             {"role": i.get("role"), "authenticated": (i.get("method") not in (None, "none"))} for i in identities

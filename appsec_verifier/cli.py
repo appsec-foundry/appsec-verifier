@@ -881,6 +881,10 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             api_prices=not agent_info.get("api_billing", False),
             out_dir=out_dir,
         )
+        from .budget_prompt import CeilingPrompt, can_prompt
+
+        if can_prompt(interactive):     # VER-015: a higher cost ceiling only from what the operator types
+            budget.ask_ceiling = CeilingPrompt(progress, api_prices=not agent_info.get("api_billing", False))
     try:
         if listener is not None and contact:
             try:

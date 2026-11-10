@@ -97,6 +97,17 @@ properties:
           max_calls: { type: [integer, "null"], minimum: 0 }
           max_duration_s: { type: [number, "null"], minimum: 0 }
           rate_rps: { type: [number, "null"], minimum: 0 }
+          cost_limit_raises:
+            type: array
+            description: |
+              Raises of the cost ceiling the operator typed when an interactive run
+              reached it; cost_limit_usd is the last one (VER-015).
+            items:
+              type: object
+              required: [from, to]
+              properties:
+                from: { type: number, minimum: 0 }
+                to: { type: number, minimum: 0 }
       identities:
         type: array
         description: |

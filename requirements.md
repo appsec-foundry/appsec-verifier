@@ -189,14 +189,7 @@ optional hardening.
 
 - **VER-030: Safe mode is the default.** Safe mode permits bounded, hypothesis-driven read-only diagnosis and follow-up attempts within VER-015 and VER-036. State-changing probes require the explicit intrusive-mode opt-out and follow VER-014; wordlist fuzzing, broad parameter sweeps and indiscriminate payload spraying are not performed in either mode. The opt-out is recorded in the report and permits state change only unless the scope explicitly forbids it. A single class can be verified on its own (VER-026), and safe mode applies the same way to that one class.
 
-- **VER-015: Bound every run.** Limits on total requests, per-finding attempts,
-  retries, request rate, wall-clock time, and model spend are enforced outside
-  the model. Each bound comes from the invocation or a documented default.
-  Reaching a limit stops the affected work rather than pressing on, and the run
-  is cancellable. These bounds protect the target from accidental load, cap the
-  cost of a run, and keep it from drifting beyond the finding under test. When a
-  run would exceed the cost ceiling, it stops; in interactive mode it may ask to
-  raise the ceiling, in non-interactive mode it stops with a distinct exit.
+- **VER-015: Bound every run.** Limits on total requests, per-finding attempts, retries, request rate, wall-clock time, and model spend are enforced outside the model. Each bound comes from the invocation or a documented default. Reaching a limit stops the affected work rather than pressing on, and the run is cancellable. These bounds protect the target from accidental load, cap the cost of a run, and keep it from drifting beyond the finding under test. When a run would exceed the cost ceiling, it stops with a distinct exit. In an interactive terminal it first asks for a higher total ceiling; it never raises the ceiling on its own, and Enter, an invalid or missing answer, or the end of the run time keeps it. Other limits are not raised this way. The report records each raise.
 
 - **VER-036: Stop unproductive verification.** Before each model call and tool action, the Verifier checks authorisation, remaining budgets and recorded progress outside the model. Tool actions must stay within the finding under test (VER-008). Repeated failed or redundant actions without new evidence stop after documented finite allowances; planned repetitions required for proof remain permitted. Running actions are bounded by the remaining execution time. A stopped finding retains its evidence and reports the reason without claiming a negative result (VER-024).
 

@@ -133,7 +133,7 @@ The selected findings are tested most severe first. Within one severity, finding
 
 | Flag | Meaning |
 | --- | --- |
-| `--cost-limit USD` | Model spend for the run. Reaching it stops the run (exit 3), and so does a model call that reports no usable cost. Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
+| `--cost-limit USD` | Model spend for the run. Reaching it stops the run (exit 3), in a terminal after the question below, and so does a model call that reports no usable cost. Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
 | `--max-requests N` | Total requests to the target. Refused requests are not counted. |
 | `--max-attempts N` | Agent steps per finding; each step is one model call that proposes a tool call or the verdict. Default 12. Reaching it ends unfinished testing with `limits_hit: attempts`; a previously checked result survives an unfinished QA follow-up, with its open objections. |
 | `--max-calls N` | Model calls for the run, for every profile. |
@@ -145,6 +145,8 @@ The defaults are in `data/limits.yaml`. Every limit must be greater than 0; only
 When the cost, request, call or time limit or the end of the scope window is reached, unfinished testing ends `inconclusive` or retains an already checked result with unresolved QA objections, the remaining findings are reported `not-attempted` with the limit in `limits_hit`, no further model call is made, and the run exits with 3. After three failed model calls in a row, for example an exhausted quota or a rejected key, the run makes no further model call and the remaining findings end `inconclusive` with the reason.
 
 A failed request is not retried. Only GET, HEAD and OPTIONS may be resent once after a 401 and a session renewal; POST, PUT and PATCH are never resent. Each answer is read for at most 30 seconds and up to 10 MiB after decompression; a slower or larger answer ends that request with an error the agent sees.
+
+In an interactive terminal, a run that reaches its cost limit first asks: `New total cost limit in USD (more than 10.40), or Enter to stop testing:`. Type the new total, not the amount to add, for example `20` to raise a limit of USD 10 to USD 20; the run then goes on with the finding it was testing, and the limit per finding (`finding_cost_fraction`) grows with it. Enter, the end of input, three invalid answers or the end of the run time keep the limit; the run then stops as above and does not ask again. Keys pressed before the question appears are discarded. A run asks at most 16 times, and the time spent waiting for your answer counts toward `--max-duration`. The request, call and time limits are never raised this way. There is no question with `--non-interactive`, `--json` or without a terminal. The report names each raise (`Cost limit` under the run facts, `meta.limits.cost_limit_raises` in `verification.yaml`); `--resume` uses the limit of its own command line.
 
 Ctrl-C stops the run: the finding under test ends `inconclusive`, the remaining ones are `not-attempted`, the report is written with the results so far and `meta.interrupted: true`, and the run exits with 130.
 
@@ -283,7 +285,7 @@ A POST can still change or remove data, so use intrusive mode only against a tes
 
 ### Interactive and non-interactive
 
-- Interactive (default, with a terminal): the run prints its settings and waits for one confirmation before the first request (VER-002). A credential variable that is not set is asked for hidden before that, and sign-ins in your browser (`oidc-authorization-code`, `oidc-device-code`) happen after it, before the first finding. The run never asks again later. The guided run (above) asks for the settings first.
+- Interactive (default, with a terminal): the run prints its settings and waits for one confirmation before the first request (VER-002). A credential variable that is not set is asked for hidden before that, and sign-ins in your browser (`oidc-authorization-code`, `oidc-device-code`) happen after it, before the first finding. Later the run asks only for a higher cost limit when it reaches it (see [Boundaries](#boundaries--cost-and-load-ver-015)). The guided run (above) asks for the settings first.
 - Non-interactive (`--non-interactive` / `--ci`, or no terminal): no prompts. Selection, profile and confirmation (`--yes`) come from the command line; a missing confirmation stops the run. Every credential variable must be set, and an identity that needs a person to sign in stops the run before anything is contacted; use a login program or client credentials there.
 
 ### Console output

@@ -10,6 +10,11 @@ data/limits.yaml, is a ValueError, so no bound is lost to a typo or a sign.
 `requests` counts the requests actually sent; a refused one is not counted. A
 cost that is not a finite number of at least 0 cannot be bounded, so it ends
 every further model call of the run as if the ceiling were reached.
+
+In an interactive run `RunBudget.ask_ceiling` asks the operator for a higher
+cost ceiling when the run reaches it (budget_prompt.py); only an amount the
+operator typed raises it, and each raise is kept in `ceiling_raises`. No other
+limit is raised this way.
 """
 
 from __future__ import annotations
@@ -131,6 +136,8 @@ class RunBudget:
         self._next_request_at: float | None = None
         self._cost_unknown = False
         self._finding_start_cost = 0.0  # run cost when the finding under test began (VER-051)
+        self.ask_ceiling = None         # interactive run: budget -> a higher ceiling the operator typed, or None
+        self.ceiling_raises: list[dict] = []    # {"from": USD, "to": USD} per raise the operator approved
 
     def begin_finding(self) -> None:
         """Start a new finding's per-finding cost accounting (VER-051). Call it before each tested finding."""
@@ -187,7 +194,22 @@ class RunBudget:
                                         "be bounded")
         self.cost += usd
         if self.limits.cost_limit_usd and self.cost > self.limits.cost_limit_usd:
-            raise LimitExceeded("cost", f"cost ceiling ${self.limits.cost_limit_usd:.2f} exceeded")
+            self._ceiling_reached(f"cost ceiling ${self.limits.cost_limit_usd:.2f} exceeded")
+
+    def check_cost(self) -> None:
+        """Before a model call: none once the cost ceiling is reached or a cost could not be bounded."""
+        self.note_cost(0.0)
+        if self.limits.cost_limit_usd and self.cost >= self.limits.cost_limit_usd:
+            self._ceiling_reached("cost ceiling reached")
+
+    def _ceiling_reached(self, detail: str) -> None:
+        """Stop at the cost ceiling, unless the operator, asked in an interactive run, typed a higher one."""
+        ceiling = self.limits.cost_limit_usd
+        higher = self.ask_ceiling(self) if self.ask_ceiling is not None else None
+        if higher is None or not higher > max(ceiling, self.cost):
+            raise LimitExceeded("cost", detail)
+        self.ceiling_raises.append({"from": ceiling, "to": higher})
+        self.limits.cost_limit_usd = higher
 
     def check_time(self) -> None:
         if self.limits.max_duration_s and (self._clock() - self.start) >= self.limits.max_duration_s:
