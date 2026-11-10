@@ -185,6 +185,13 @@ def test_the_seed_does_not_pin_a_finding_without_a_selected_variant():
     assert "verifies only variant" not in prompt(_ctx(), [])
 
 
+def test_the_system_prompt_steers_read_injection_to_run_experiment():
+    """A read injection's controls go through run_experiment in one action, not one by one (VER-011 budget)."""
+    text = system_prompt(_ctx())
+    assert "run the proof with run_experiment" in text
+    assert "one by one with http_request" in text
+
+
 def test_read_source_is_offered_only_with_a_source_checkout():
     without = system_prompt(_ctx())
     assert '"name": "read_source"' not in without and "no source checkout in this run" in without
