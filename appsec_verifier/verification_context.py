@@ -80,6 +80,16 @@ def route_matches(template: str, path: str) -> bool:
     )
 
 
+def path_values(template: str, path: str) -> dict[str, str]:
+    """The segments `path` gives the placeholders of its route `template`, by placeholder name; empty when it does
+    not request that route. A segment that is itself a placeholder gives no value."""
+    if not route_matches(template, path):
+        return {}
+    a, b = urlsplit(template).path.split("/"), urlsplit(path).path.split("/")
+    return {x.strip(":{}<>"): y for x, y in zip(a, b, strict=True)
+            if _PLACEHOLDER.fullmatch(x) and not _PLACEHOLDER.fullmatch(y)}
+
+
 def planned_route(template: str, path: str) -> bool:
     """`path` requests the route a test plan names: its path and any `#` route match as in route_matches. A query
     is not part of the route, so a plan may show one as a template (`/#/search?q=<test>`)."""
@@ -107,7 +117,10 @@ def record_segment(template: str, path: str | None = None) -> str | None:
     return next(iter(record_segments(template, path)), None)
 
 
-def missing_capabilities(variant: dict, *, safe: bool, browser: bool) -> list[str]:
+def missing_capabilities(variant: dict, *, safe: bool, browser: bool, identities: bool) -> list[str]:
+    """What a variant needs that this run lacks. With a test identity (`identities`), the "header" capability is
+    the authentication header its session sends, unless one of the variant's inputs is itself a header: the
+    Verifier does not send model-chosen headers."""
     request = variant["request"]
     required = set(variant.get("required_capabilities", []))
     required.update(i["location"] for i in request.get("inputs", []))
@@ -118,6 +131,8 @@ def missing_capabilities(variant: dict, *, safe: bool, browser: bool) -> list[st
         supported.add("state-change")
     if browser:
         supported.add("browser-navigation")
+    if identities and not any(i["location"] == "header" for i in request.get("inputs", [])):
+        supported.add("header")
     missing = required - supported
     if request["method"] == "DELETE":
         missing.add("DELETE")

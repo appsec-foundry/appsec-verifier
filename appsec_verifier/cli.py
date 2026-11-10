@@ -1476,7 +1476,8 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
     if plan.cls == "ssrf" and listener is None:
         return "callback", "no callback in the scope"
     variants = getattr(plan, "verification_context", {}).get("variants", [])
-    missing = [missing_capabilities(v, safe=safe, browser=browser is not None) for v in variants]
+    missing = [missing_capabilities(v, safe=safe, browser=browser is not None, identities=bool(identities))
+               for v in variants]
     diagnostic_read = any(v["request"]["method"] in ("GET", "HEAD", "OPTIONS") for v in variants)
     if missing and all(missing) and not (source or diagnostic_read):
         needs = sorted({need for row in missing for need in row})

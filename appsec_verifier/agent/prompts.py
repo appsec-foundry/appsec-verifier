@@ -538,7 +538,8 @@ def _seed(ctx) -> str:
             "request": v["request"],
             "hypothesis": v["hypothesis"],
             "required_capabilities": v.get("required_capabilities", []),
-            "unavailable": missing_capabilities(v, safe=safe, browser=getattr(ctx, "browser", None) is not None),
+            "unavailable": missing_capabilities(v, safe=safe, browser=getattr(ctx, "browser", None) is not None,
+                                                identities=bool(getattr(ctx, "identities", None))),
         }
         for v in getattr(p, "verification_context", {}).get("variants", [])
     ]

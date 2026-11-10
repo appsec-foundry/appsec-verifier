@@ -182,6 +182,7 @@ def test_forms_obey_guard_mode_and_marker_steering(tmp_path):
 @pytest.mark.parametrize("missing", ["header", "browser-interaction"])
 def test_missing_variant_capability_still_allows_diagnosis_but_not_an_unsupported_plan(tmp_path, missing):
     ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request allowed"))
+    ctx.identities = []     # without a test account no session sends the header a variant needs
     v = verification_context()
     v["variants"][0]["required_capabilities"] = [missing]
     ctx.plan = replace(ctx.plan, cls="injection", verification_context=v)

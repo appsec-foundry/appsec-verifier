@@ -25,7 +25,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
-from ..verification_context import planned_route, record_segment, record_segments
+from ..verification_context import path_values, planned_route, record_segment, record_segments
 from .experiments import normal_roles, token
 from .tools import ToolError, _strings
 
@@ -114,11 +114,11 @@ class Controller:
             r["method"] in (change.get("method"), "ALL") and self._matches(r["path"], change.get("path", ""))
             for r in routes)
 
-    def _matches(self, template, path):
-        def resolved(value):
-            return value if urlsplit(value).scheme else self.ctx.target_base.rstrip("/") + "/" + value.lstrip("/")
+    def _resolved(self, value):
+        return value if urlsplit(value).scheme else self.ctx.target_base.rstrip("/") + "/" + value.lstrip("/")
 
-        return planned_route(resolved(template), resolved(path))
+    def _matches(self, template, path):
+        return planned_route(self._resolved(template), self._resolved(path))
 
     def _target(self, name, args):
         path = args.get("path", "/")
@@ -246,8 +246,11 @@ class Controller:
             query = {k for k, _ in parse_qsl(urlsplit(path).query)} | set(args.get("params") or {})
             if name == "browser_check":
                 query |= {k for k, _ in parse_qsl(urlsplit(urlsplit(path).fragment).query)}
+            # A path input is supplied by path_inputs or, like a query input in the URL, by a concrete segment at
+            # its placeholder in the route.
             supplied = {"query": query, "json": set(args.get("json") or {}), "form": set(args.get("form") or {}),
-                        "path": set(args.get("path_inputs") or {})}
+                        "path": set(args.get("path_inputs") or {})
+                        | set(path_values(self._resolved(r["path"]), self._resolved(path)))}
             if name == "plan_test":
                 if all(supplied[k] <= names[k] for k in ("query", "json", "form", "path")):
                     return

@@ -320,9 +320,16 @@ def test_a_change_may_name_what_the_owner_created_and_then_read_with_its_marker(
     assert tools.ctx.owned == {"7"}
 
 
-def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record(tmp_path):
+EDIT_VARIANT = {"id": "edit", "hypothesis": "Any account changes any feedback",
+                "request": {"method": "PUT", "path": "/api/Feedbacks/:id",
+                            "inputs": [{"location": "path", "name": "id"}]}}
+
+
+@pytest.mark.parametrize("variant", [None, EDIT_VARIANT], ids=["no-variant", "variant-names-the-write"])
+def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record(tmp_path, variant):
     """The owner creates, another account changes the record by the identifier the creation returned, and the
-    owner's next read shows the second marker; the change of any other record never reaches the target."""
+    owner's next read shows the second marker; the change of any other record never reaches the target. A pinned
+    variant that names only the write is met by the plan's change (VER-010, VER-043)."""
     from urllib.parse import urlsplit
 
     from appsec_verifier.agent import AgentProbe
@@ -353,7 +360,8 @@ def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record
                 self.second = history[0]["result"]["second_marker"]
             steps = [
                 {"tool": "plan_test", "args": {**_plan_args(owner="account-1", change=CHANGE),
-                                               "path": "/api/Feedbacks/:id"}},
+                                               "path": "/api/Feedbacks/:id",
+                                               **({"variant": variant["id"]} if variant else {})}},
                 {"tool": "http_request", "args": {"role": "account-1", "method": "POST", "path": "/api/Feedbacks",
                                                   "json": {"comment": M}}},
                 {"tool": "http_request", "args": {"role": "account-1", "path": "/api/Feedbacks/7"}},
@@ -369,6 +377,9 @@ def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record
     ctx = _ctx(tmp_path, transport, safe=False, read_only=False, env=ENV, idents=IDENTITIES)
     ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),
                                             Endpoint("PUT", "/api/Feedbacks/:id", None)))
+    if variant:
+        ctx.plan = replace(ctx.plan, verification_context={"version": 1, "variants": [variant]},
+                           variant_id=variant["id"])
     ctx.marker = MARKER
     result = AgentProbe("access-control", Planner).run(ctx)
     assert result.verdict == "confirmed" and result.confidence == "medium", result.rationale
@@ -429,6 +440,107 @@ def test_an_owner_plan_returns_the_marker_in_intrusive_mode(tmp_path):
 def test_plan_test_refuses_an_access_plan_the_run_cannot_prove(tmp_path, kwargs, plan, reason):
     with pytest.raises(ToolError, match=reason):
         _tools(tmp_path, **kwargs).plan_test(**_plan_args(**plan))
+
+
+def _pinned(tools, variant=EDIT_VARIANT):
+    tools.ctx.plan = replace(tools.ctx.plan, verification_context={"version": 1, "variants": [variant]},
+                             variant_id=variant["id"])
+    return tools
+
+
+def test_a_variant_that_names_the_write_is_met_by_the_change(tmp_path):
+    args = {**_plan_args(owner="account-1", change=CHANGE, variant="edit"), "path": "/api/Feedbacks/:id"}
+    result = _pinned(_tools(tmp_path)).plan_test(**args)
+    assert result["accepted"] is True and result["experiment"]["variant"] == "edit"
+
+
+@pytest.mark.parametrize("kwargs, plan, reason", [
+    # Without the variant's write as change, the GET read alone does not test this variant.
+    ({}, {"owner": "account-1"}, "name this request as change"),
+    # Another write than the variant's.
+    ({}, {"owner": "account-1", "change": {"method": "PATCH", "path": "/api/Feedbacks/:id"}}, "does not match"),
+    ({}, {"owner": "account-1", "change": {"method": "PUT", "path": "/api/Reviews/:id"}}, "does not match"),
+    # The change is for a write proof only, which needs an owner and intrusive mode.
+    ({}, {"reference": "admin-1", "change": CHANGE}, "invalid experiment declaration"),
+    ({"intrusive": False}, {"owner": "account-1", "change": CHANGE}, "state-change|--allow-intrusive"),
+    # Another variant cannot be planned.
+    ({}, {"owner": "account-1", "change": CHANGE, "variant": "other"}, "unknown finding variant"),
+])
+def test_a_change_meets_only_the_variants_own_write(tmp_path, kwargs, plan, reason):
+    with pytest.raises(ToolError, match=reason):
+        _pinned(_tools(tmp_path, **kwargs)).plan_test(**_plan_args(**{"variant": "edit", **plan}))
+
+
+def test_an_injection_plan_stays_on_the_variants_request(tmp_path):
+    """Only an access-control write proof meets a variant through its change; an injection plan does not."""
+    tools = _pinned(_tools(tmp_path))
+    tools.ctx.plan = replace(tools.ctx.plan, cls="injection", cwe="CWE-89")
+    with pytest.raises(ToolError, match="does not match the finding variant"):
+        tools.plan_test(kind="boolean", hypothesis="The id selects rows by SQL", variant="edit",
+                        path="/api/Feedbacks/:id", method="GET",
+                        input_location="path", input_name="id", baseline="7", positive="7 OR 1=1",
+                        negative="7 AND 1=2", pointer="/data")
+
+
+READ_VARIANT = {"id": "read", "hypothesis": "Any account reads any basket",
+                "request": {"method": "GET", "path": "/rest/basket/{id}",
+                            "inputs": [{"location": "path", "name": "id"}]}}
+
+
+@pytest.mark.parametrize("path, allowed", [
+    ("/rest/basket/2", True),                                    # the id at the placeholder supplies path:id
+    ("https://app.example.com/rest/basket/2", True),
+    ("/rest/basket/:id", False),                                 # a placeholder supplies no value
+    ("/rest/basket/{id}", False),
+    ("/rest/basket/2/items", False),                             # another route
+    ("/rest/basket", False),
+])
+def test_a_path_input_is_supplied_by_the_segment_at_its_placeholder(tmp_path, path, allowed):
+    controller = _change_controller(tmp_path)
+    controller.ctx.plan = replace(controller.ctx.plan, endpoints=(),
+                                  verification_context={"version": 1, "variants": [READ_VARIANT]}, variant_id="read")
+    if allowed:
+        controller.before("http_request", {"role": "account-1", "path": path})
+    else:
+        with pytest.raises(ToolError, match="declared variant inputs|no matching route"):
+            controller.before("http_request", {"role": "account-1", "path": path})
+
+
+@pytest.mark.parametrize("template, path, values", [
+    ("/rest/basket/{id}/coupon/{coupon}", "/rest/basket/2/coupon/X1", {"id": "2", "coupon": "X1"}),
+    ("/api/Users/:id", "/api/Users/7?x=1", {"id": "7"}),
+    ("/api/Users/<id>", "/api/Users/:id", {}),
+    ("/api/Users/:id", "/api/Cards/7", {}),
+])
+def test_path_values_reads_only_concrete_segments_of_the_same_route(template, path, values):
+    from appsec_verifier.verification_context import path_values
+
+    assert path_values(template, path) == values
+
+
+@pytest.mark.parametrize("identities, inputs, missing", [
+    (True, [{"location": "path", "name": "id"}], []),
+    (False, [{"location": "path", "name": "id"}], ["header"]),
+    # A header the variant itself varies is not a session's: the Verifier sends no model-chosen header.
+    (True, [{"location": "header", "name": "X-User-Id"}], ["header"]),
+])
+def test_the_header_capability_is_a_test_accounts_session(identities, inputs, missing):
+    from appsec_verifier.verification_context import missing_capabilities
+
+    variant = {"required_capabilities": ["header"],
+               "request": {"method": "GET", "path": "/rest/basket/{id}", "inputs": inputs}}
+    assert missing_capabilities(variant, safe=True, browser=False, identities=identities) == missing
+
+
+def test_a_read_variant_that_needs_the_header_is_planned_with_test_accounts(tmp_path):
+    read = {"id": "read", "hypothesis": "Any account reads any basket", "required_capabilities": ["header"],
+            "request": {"method": "GET", "path": "/rest/basket/:id", "inputs": [{"location": "path", "name": "id"}]}}
+    result = _pinned(_tools(tmp_path), read).plan_test(**_plan_args(reference="admin-1", variant="read"))
+    assert result["accepted"] is True
+    tools = _pinned(_tools(tmp_path), read)
+    tools.ctx.identities = []
+    with pytest.raises(ToolError, match="unavailable capabilities: header"):
+        tools.plan_test(**_plan_args(reference="admin-1", variant="read"))
 
 
 def test_a_privileged_comparison_needs_no_writes(tmp_path):

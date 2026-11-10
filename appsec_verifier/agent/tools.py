@@ -409,12 +409,20 @@ class AgentTools:
             plan = {**plan, "variant": variant["id"]}
             derived = covers(self.ctx, plan)
             vreq = variant["request"]
-            if not derived and vreq["method"] != plan.get("method", "GET"):
+            # VER-010: an access-control write proof reads with GET and sends the variant's write as its change, so
+            # a variant that names the write is met by the change. The schema allows only POST, PUT and PATCH there,
+            # and the controller still checks it is a write this finding names and who may send it.
+            change = plan.get("change") if plan["kind"] == "access-control" else None
+            as_change = bool(change) and vreq["method"] == change["method"] and route_matches(vreq["path"],
+                                                                                              change["path"])
+            hint = ("; for an access-control write proof read with GET and name this request as change"
+                    if plan["kind"] == "access-control" and vreq["method"] not in SAFE_METHODS else "")
+            if not derived and not as_change and vreq["method"] != plan.get("method", "GET"):
                 raise ToolError(f"the method does not match the finding variant; variant {variant['id']!r} uses "
-                                f"{vreq['method']} {vreq.get('path', '')}")
-            if not derived and not route_matches(vreq["path"], plan["path"]):
+                                f"{vreq['method']} {vreq.get('path', '')}{hint}")
+            if not derived and not as_change and not route_matches(vreq["path"], plan["path"]):
                 raise ToolError(f"the path does not match the finding variant; variant {variant['id']!r} uses "
-                                f"{vreq['method']} {vreq.get('path', '')}")
+                                f"{vreq['method']} {vreq.get('path', '')}{hint}")
             inputs = vreq.get("inputs", [])
             location = {"params": "query"}.get(plan.get("input_location"), plan.get("input_location"))
             if (
@@ -426,7 +434,8 @@ class AgentTools:
                 raise ToolError(f"the input does not match the finding variant; variant {variant['id']!r} declares "
                                 + ", ".join(f"{i['location']}:{i['name']}" for i in inputs[:6]))
             missing = missing_capabilities(
-                variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None
+                variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None,
+                identities=bool(getattr(self.ctx, "identities", None)),
             )
             if missing and not derived:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
@@ -437,7 +446,8 @@ class AgentTools:
             if "resource" in methods:
                 raise ToolError("the operator-declared test resource takes precedence; plan with its resource id")
             if plan.get("method", "GET") != "GET":
-                raise ToolError("the resource or function is read with GET")
+                raise ToolError("the resource or function is read with GET; a write the finding names goes into "
+                                "change, sent by another account to what the owner created")
             if plan.get("owner"):
                 if "owner" not in methods:
                     raise ToolError("creating a resource needs two normal accounts and --allow-intrusive (VER-010)")
