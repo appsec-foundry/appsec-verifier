@@ -1,6 +1,6 @@
 # AppSec Verifier: command reference
 
-`appsec-verifier` reads a finished `security-assessment.yaml`, tests the selected findings one at a time against a running target inside an authorised scope, and writes a verification report. It does not re-run or re-score the static assessment. Installation and quick start: [README](../README.md). The requirement IDs (VER-…) refer to [`requirements.md`](../requirements.md).
+`appsec-verifier` reads a finished `security-assessment.yaml`, tests the selected findings one at a time against a running target inside an authorised scope, and writes a verification report. It does not re-run or re-score the static assessment. Installation and quick start: [README](../README.md). How the agent and the Verifier's code reach a verdict, with an XSS finding as example: [How verification works](how-verification-works.md). The requirement IDs (VER-…) refer to [`requirements.md`](../requirements.md).
 
 ## Commands
 

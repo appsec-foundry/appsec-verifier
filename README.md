@@ -53,7 +53,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 ## What it verifies
 
-The agent can derive missing test details and related requests from relevant source and observed application forms or links, within the finding and authorised scope ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). A finding counts as `confirmed` only with the proof in the last column. The CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml); the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013).
+The agent can derive missing test details and related requests from relevant source and observed application forms or links, within the finding and authorised scope ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). A finding counts as `confirmed` only with the proof in the last column. The CWEs are listed in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml); the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013). [How verification works](docs/how-verification-works.md) follows one XSS finding through the agent's steps, its prompt and the proof check.
 
 | Class | CWEs | Needs | Confirmed when |
 | --- | --- | --- | --- |
