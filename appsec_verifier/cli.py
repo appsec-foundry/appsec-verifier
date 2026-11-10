@@ -30,6 +30,7 @@ from .preflight import (
     Check,
     check_accounts,
     check_identities,
+    check_source,
     check_target,
     confirm_authorization,
     failed,
@@ -712,6 +713,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             ask_secret=_ask_secret if interactive else None, doc={"identities": pasted} if pasted else None)
     if id_errors:
         return _blocked("The identities cannot be used", id_errors, _identities_fix(id_errors))
+    if args.source and (bad := check_source(args.source)).status == "fail":
+        return _blocked("The source checkout cannot be read", [bad.message],
+                        "give --source a readable checkout of the application, or omit it")
     budget = RunBudget(limits)
     try:
         planner_factory, agent_info = _build_planner_factory(args)
@@ -1029,6 +1033,8 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             Check("Identities", "ok", f"{', '.join(i['role'] for i in identities)} · credentials available"))
         if not errors and (programs := _login_programs(identities)):
             add(Check("Programs", "info", programs))
+    if args.source:
+        add(check_source(args.source))
     plan: list[str] = []
     if not failed(checks):
         plan_check, plan = _preflight_plan(st, doc, plans, scope, identities, target)
@@ -1859,8 +1865,9 @@ def build_parser() -> argparse.ArgumentParser:
     pf = sub.add_parser(
         "preflight", help="check assessment, scope, target, logins and model; verifies nothing",
         usage="appsec-verifier preflight --assessment FILE (--scope FILE | --url URL) [options]",
-        description=_wrap("Checks the assessment, scope, proxy, identities, target, logins and model, and tests "
-                          "no finding. The target and the logins are contacted only after one confirmation."),
+        description=_wrap("Checks the assessment, scope, proxy, identities, source checkout, target, logins and "
+                          "model, and tests no finding. The target and the logins are contacted only after one "
+                          "confirmation."),
         epilog="Examples:\n"
                "  The files only; contacts nothing:\n"
                f"    appsec-verifier preflight {_FILES} \\\n"
@@ -1873,6 +1880,8 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--url", "--target", dest="target", metavar="URL",
                     help="URL to check (default: base_url of the scope); must lie inside the scope")
     pf.add_argument("--identities", metavar="FILE", help="test accounts by role; each login is tried once")
+    pf.add_argument("--source", metavar="DIR",
+                    help="checkout of the application's source code; checked for readability")
     _add_account_options(pf)
     pf.add_argument("--profile", choices=_PROFILE_CHOICES, metavar="PROFILE", help=f"model profile: {_PROFILE_HELP}")
     pf.add_argument("--model", help="model of the profile (default: the profile's model)")

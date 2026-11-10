@@ -3,8 +3,8 @@ VER-028, VER-029, VER-032).
 
 Before a run asks a model for a step it checks what the run depends on
 (VER-032). The offline checks (assessment, scope, proxy settings, identities
-file, model profile) run in cli.py; this module holds the gate and the checks
-that contact something:
+file, model profile) run in cli.py; this module holds the gate, one offline
+check for a source checkout, and the checks that contact something:
 
 - `confirm_authorization`: one explicit confirmation before the first request
   to the target. Silence, a timeout, or a non-interactive run without the CI
@@ -17,6 +17,9 @@ that contact something:
   before the first finding; a login program starts here (VER-040).
 - `check_accounts`: two roles whose tokens name the same account cannot show an
   access-control contrast, so the run stops (VER-010, VER-032).
+- `check_source`: only with `--source`, that the path is a readable directory.
+  Offline; its contents are never read here, and that the agent will find a
+  finding's code there is not proved (VER-032).
 - `generation_test`: only on request, one fixed prompt without target data,
   findings or credentials; the reply must pass the host's confinement checks
   and `parse_step` (VER-017, VER-019).
@@ -261,6 +264,27 @@ def _check_url(label, method, done, url, headers, origin, http, scope) -> Check:
     if status in (401, 403):
         return Check(label, "fail", f"{method}: {done}, but rejected at check_url (HTTP {status})")
     return Check(label, "warn", f"{method}: {done}; check_url answers HTTP {status}, so acceptance is unclear")
+
+
+# ── source (VER-032) ────────────────────────────────────────────────────────────
+
+def check_source(source_dir: str) -> Check:
+    """`--source` points to a readable directory. Offline: only the local path is
+    examined, never its contents, and that the agent will find a finding's code
+    there is not proved."""
+    import os
+    from pathlib import Path
+
+    try:
+        root = Path(source_dir).resolve()
+        is_dir = root.is_dir()
+    except OSError as exc:
+        return Check("Source", "fail", f"{source_dir}: cannot be used ({type(exc).__name__})")
+    if not is_dir:
+        return Check("Source", "fail", f"{source_dir}: not a directory")
+    if not os.access(root, os.R_OK | os.X_OK):
+        return Check("Source", "fail", f"{source_dir}: the directory cannot be read")
+    return Check("Source", "ok", f"{source_dir}: readable source checkout")
 
 
 # ── model (VER-017, VER-019, VER-023) ──────────────────────────────────────────

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `appsec-verifier ASSESSMENT` | Guided run: asks for the `verify` settings that have no usable default, then runs `verify` (VER-031). | target, model |
 | `verify` | Tests findings of an assessment against a running target. | target, model |
-| `preflight` | Checks assessment, scope, proxy, target, logins and model profile; tests no finding (VER-032). | target, model provider; nothing with `--offline` |
+| `preflight` | Checks assessment, scope, proxy, source checkout, target, logins and model profile; tests no finding (VER-032). | target, model provider; nothing with `--offline` |
 | `scope` | Resolves and validates a scope file and shows what is in and out of scope (VER-001). | nothing |
 | `export` | Converts the verdicts of a finished `verification.yaml` into a file meant for AppSec Analyzer, which does not read it yet; no re-verification (VER-021, VER-015). | nothing |
 | `update` | Reinstalls a pipx installation of the Verifier after you confirm (VER-033). | the install source, through pipx |
@@ -104,7 +104,7 @@ Before the confirmation, `Test plan` lists the findings the run will test, one l
 | `--account USER[=VAR]` | A test account by user name, instead of `--identities`; repeat it for a second account. The password comes from the variable `VAR`, or is asked hidden. See [Test accounts on the command line](#test-accounts-on-the-command-line-ver-041). | VER-041 |
 | `--admin-account USER[=VAR]` | A privileged test account. It sends only GET, HEAD and OPTIONS, also with `--allow-intrusive`. | VER-041 |
 | `--login-url URL` | Where `--account` and `--admin-account` sign in. Default: the login entry point the assessment names for the target. | VER-041 |
-| `--source DIR` | Checkout of the application's source code. The agent may read it, but not `.env` files, keys, credential stores or `.git/`. | — |
+| `--source DIR` | Checkout of the application's source code. The agent may read it, but not `.env` files, keys, credential stores or `.git/`. A path that is not a readable directory stops the run before anything is contacted (VER-032). | — |
 | `--proxy URL` | *Not implemented yet; set `proxy.url` in the scope file.* Route target and auth traffic through this HTTP(S) proxy, overriding the scope's `proxy.url`. Proxy credentials still come from the variables the scope names. | VER-029 |
 
 ### Select what to verify (VER-026)
@@ -318,7 +318,7 @@ On a terminal the output is in colour and starts with the logo. A confirmed find
 
 ```
 appsec-verifier preflight --assessment ./security-assessment.yaml --scope ./scope.yaml \
-  [--url URL] [--identities ./identities.yaml] [--profile P] [--model M] \
+  [--url URL] [--identities ./identities.yaml] [--source DIR] [--profile P] [--model M] \
   [--offline] [--json] [--yes] [--non-interactive] \
   [--test-model (--cost-limit USD | --max-calls 1) [--show-costs]]
 ```
@@ -332,6 +332,7 @@ Runs the checks `verify` runs before its first finding and tests no finding. Eac
 | Proxy | The proxy URL is http(s) without inline credentials, and `username_env` and `password_env` are both set. | nothing |
 | Identities | Schema, every `*_env` variable set (asked for hidden at a terminal, except with `--offline`), endpoints and `check_url` inside the scope, login programs found, and sign-ins that need a person only at a terminal. | nothing |
 | Programs | The login programs the identities start, as written. They run at the login check below, with your rights. | nothing |
+| Source | Only with `--source`: the path resolves to a readable directory. Offline; its contents are not read here, and whether the agent finds a finding's code there is not shown. | nothing |
 | Test plan | The test plan `verify` shows, for every finding and in safe mode: which findings a run tests, and which it cannot test, grouped by what they need, with how to add it and the lines to copy. Warns when a finding cannot be tested, never fails. Runs only when the checks above passed, and is printed after the checks, before the result. | nothing |
 | Model | The profile resolves (CLI present and logged in, or key set; model known and priced). For `codex` and `anthropic-api` one metadata request shows the key is accepted and the model offered; it generates nothing and proves no quota. | the provider (not with `--offline`) |
 | Target | One GET to the URL through the scope check and the declared proxy. A redirect is not followed. Any HTTP answer counts as reachable; 5xx warns. A failure names its cause: name resolution, refused connection, timeout, TLS certificate or handshake, proxy refusal or proxy authentication (407), or an address the scope refuses. | the target |

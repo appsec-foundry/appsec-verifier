@@ -8,6 +8,7 @@ or response body reaches the output (VER-002, VER-016, VER-028, VER-029)."""
 from __future__ import annotations
 
 import json
+import os
 import socket
 import ssl
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from appsec_verifier.preflight import (
     _TEST_PROMPT,
     _TEST_SYSTEM,
     check_identities,
+    check_source,
     check_target,
     generation_test,
     proxy_for,
@@ -193,6 +195,44 @@ def test_a_closed_window_stops_the_check():
     target = Target(default=_resp())
     check = check_target(_http(target, scope=closed), BASE, proxy=None)
     assert check.status == "fail" and "limit" in check.message and target.calls == []
+
+
+# ── source (VER-032) ──────────────────────────────────────────────────────────
+
+def test_a_readable_source_directory_passes(tmp_path):
+    check = check_source(str(tmp_path))
+    assert check.status == "ok" and check.label == "Source"
+
+
+def test_a_missing_source_directory_fails(tmp_path):
+    check = check_source(str(tmp_path / "nope"))
+    assert check.status == "fail" and "not a directory" in check.message
+
+
+def test_a_file_given_as_source_fails(tmp_path):
+    f = tmp_path / "file.py"
+    f.write_text("x = 1\n")
+    check = check_source(str(f))
+    assert check.status == "fail" and "not a directory" in check.message
+
+
+def test_an_unreadable_source_directory_fails(tmp_path):
+    d = tmp_path / "locked"
+    d.mkdir(mode=0o000)
+    try:
+        if os.access(d, os.R_OK | os.X_OK):     # root ignores the mode; skip there
+            pytest.skip("running as root; directory mode is not enforced")
+        check = check_source(str(d))
+        assert check.status == "fail" and "cannot be read" in check.message
+    finally:
+        d.chmod(0o700)
+
+
+def test_verify_blocks_before_contact_on_an_unreadable_source(tmp_path, monkeypatch, capsys):
+    target = Target(default=_resp())
+    rc, asked = _verify(tmp_path, monkeypatch, target, source=str(tmp_path / "missing"))
+    assert rc == cli.EXIT_BLOCKED and asked == [] and target.calls == []
+    assert "source checkout cannot be read" in capsys.readouterr().err
 
 
 # ── identities (VER-016, VER-028) ─────────────────────────────────────────────
@@ -459,6 +499,17 @@ def test_offline_contacts_neither_target_nor_provider(run, capsys):
     assert "not contacted (--offline)" in capsys.readouterr().out
 
 
+def test_preflight_checks_a_source_checkout_offline(run, tmp_path, capsys):
+    assert run.go("--offline", "--non-interactive", "--source", str(tmp_path)) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "✓ Source" in out and "readable source checkout" in out and run.target.calls == []
+
+
+def test_preflight_fails_on_an_unreadable_source(run, tmp_path, capsys):
+    assert run.go("--offline", "--non-interactive", "--source", str(tmp_path / "missing")) == cli.EXIT_BLOCKED
+    assert "✗ Source" in capsys.readouterr().out and run.target.calls == []
+
+
 def test_preflight_shows_the_test_plan_and_what_the_others_need(run, monkeypatch, capsys):
     _write(run.files["assessment"], {"threats": [THREAT, dict(THREAT, id="T-2", cwe="CWE-79"),
                                                  dict(THREAT, id="T-3", cwe="CWE-918")]})
@@ -538,7 +589,7 @@ def test_the_generation_test_runs_once_on_request(run, capsys):
 
 # ── verify runs the same checks before the first model call ───────────────────
 
-def _verify(tmp_path, monkeypatch, target, identities=None):
+def _verify(tmp_path, monkeypatch, target, identities=None, source=None):
     asked = []
 
     class Planner:
@@ -553,6 +604,8 @@ def _verify(tmp_path, monkeypatch, target, identities=None):
             "--output", str(tmp_path / "out")]
     if identities:
         argv += ["--identities", str(_write(tmp_path / "i.yaml", {"identities": identities}))]
+    if source:
+        argv += ["--source", source]
     return cli.main(argv), asked
 
 
