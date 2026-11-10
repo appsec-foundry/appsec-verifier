@@ -368,3 +368,91 @@ def test_every_generated_control_passes_the_verifiers_own_checks(tmp_path, name)
     assert requests
     for request in requests:
         controller.before("http_request", request, experiment=True)
+
+
+# ── a read plan's own controls (VER-011) ──────────────────────────────────────
+
+def _reviews_target(sent, *, vulnerable):
+    """GET /rest/products/:id/reviews: product 1 has a review. Converted with Number(), an injected id matches
+    nothing; evaluated as JavaScript, a true predicate matches every review and a false one none."""
+    from urllib.parse import unquote, urlsplit
+
+    def target(m, u, h, **kw):
+        value = unquote(urlsplit(u).path.split("/")[3])
+        sent.append((m, value))
+        if value.isdigit():
+            hit = value == "1"
+        elif vulnerable:
+            hit = "|| true" in value
+        else:
+            hit = False
+        return Resp(200, json.dumps({"status": "success", "data": [{"product": 1, "message": "ok"}] if hit else []}))
+
+    return target
+
+
+def _reviews_ctx(tmp_path, sent, *, vulnerable=False, method="GET"):
+    ctx = _ctx(tmp_path, _reviews_target(sent, vulnerable=vulnerable), safe=method == "GET",
+               read_only=method == "GET")
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-943", instance="routes/showProductReviews.ts:36",
+                       endpoints=(Endpoint(method, "/rest/products/:id/reviews", None),))
+    ctx.marker = (MARK, "bb")
+    return ctx
+
+
+def _reviews_plan(**extra):
+    return {"tool": "plan_test", "args": {
+        "kind": "boolean", "hypothesis": "The id is concatenated into a $where predicate",
+        "path": "/rest/products/:id/reviews", "method": "GET", "input_location": "path", "input_name": "id",
+        "baseline": "1", "positive": "1 || true", "negative": "1 && false", "pointer": "/data", **extra}}
+
+
+def _feedback(history):
+    return [h["result"] for h in history if h.get("tool") == "experiment"]
+
+
+def test_own_read_controls_run_at_once_and_say_they_support_only_a_negative_verdict(tmp_path):
+    """The run's T-033: the agent's own controls are sent on acceptance, each twice, without a model call per
+    request, and the feedback says no declaration confirms a NoSQL injection through a path input."""
+    sent = []
+    script = Script([_reviews_plan(), {"verdict": {"verdict": "inconclusive", "rationale": "Number() conversion"}}])
+    result = AgentProbe("injection", lambda: script).run(_reviews_ctx(tmp_path, sent))
+    assert result.verdict == "inconclusive" and script.calls == 2
+    assert sorted(v for _, v in sent) == ["1", "1", "1 && false", "1 && false", "1 || true", "1 || true"]
+    feedback = _feedback(script.history)
+    assert feedback and feedback[0]["proof"] == "negative-only"
+    assert "no declaration can confirm" in feedback[0]["next"] and len(feedback[0]["steps"]) == 6
+
+
+def test_own_read_controls_name_the_form_that_could_confirm(tmp_path):
+    sent = []
+    ctx = _reviews_ctx(tmp_path, sent)
+    ctx.plan = replace(ctx.plan, cwe="CWE-89")
+    script = Script([_reviews_plan()])
+    AgentProbe("injection", lambda: script).run(ctx)
+    assert "declare a plan with sql_template" in _feedback(script.history)[0]["next"]
+
+
+def test_own_controls_never_confirm_even_when_they_flip(tmp_path):
+    """Refused case: values the agent chose that flip the answer are still no proof (VER-011)."""
+    sent = []
+    script = Script([_reviews_plan(), lambda history: {"verdict": {
+        "verdict": "confirmed", "rationale": "the predicate flips the result",
+        "proof_steps": _feedback(history)[0]["steps"]}}])
+    result = AgentProbe("injection", lambda: script).run(_reviews_ctx(tmp_path, sent, vulnerable=True))
+    assert len(sent) == 6 and result.verdict != "confirmed"
+
+
+def test_own_controls_on_a_write_are_never_sent_by_the_verifier(tmp_path):
+    """Refused case: a write plan with the agent's own controls sends nothing on acceptance, and send_controls
+    refuses it; only generated controls are sent on request."""
+    sent = []
+    ctx = _reviews_ctx(tmp_path, sent, method="PATCH")
+    script = Script([_reviews_plan(method="PATCH", input_location="json", path="/rest/products/:id/reviews",
+                                   baseline=f"{MARK}1", positive=f"{MARK}1 || true", negative=f"{MARK}1 && false"),
+                     {"tool": "send_controls", "args": {}}])
+    AgentProbe("injection", lambda: script).run(ctx)
+    assert script.history[0]["result"].get("accepted") is True
+    assert sent == []
+    errors = [h["result"].get("error", "") for h in script.history if h.get("tool") == "send_controls"]
+    assert errors and "not a challenge" in errors[0]

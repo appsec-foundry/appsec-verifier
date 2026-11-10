@@ -101,6 +101,26 @@ def generates_controls(plan) -> bool:
         plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge"))
 
 
+def agent_controls(plan) -> bool:
+    """Whether an injection plan's controls are values the agent chose itself, which can support a negative
+    result but never a confirmation (VER-011)."""
+    return plan.get("kind") in ("boolean", "timing") and not any(
+        plan.get(k) for k in ("sql_template", "expression_template", "operator_challenge", "predicate_template",
+                              "oob_template"))
+
+
+def confirming_form(cwe, location) -> str | None:
+    """The declaration whose generated controls can confirm an injection of this CWE through this input, as
+    AgentTools.plan_test accepts it, or None."""
+    if cwe == "CWE-89":
+        return "sql_template"
+    if cwe == "CWE-943":
+        return "operator_challenge" if location == "json" else None
+    if cwe in ("CWE-78", "CWE-94", "CWE-95", "CWE-1336", "CWE-643"):
+        return "expression_template"
+    return "predicate_template" if cwe == "CWE-90" else None
+
+
 # Exposure and missing authentication are proven only with an operator-declared resource (verifiable-cwes.yaml).
 _RESOURCE_ONLY_CWES = ("CWE-200", "CWE-306")
 
@@ -377,12 +397,23 @@ def injection_ready(ctx, history, steps):
     agent so its next step is the verdict. Pure: it sets no verdict and writes no evidence; proof.py still
     re-checks the cited steps before a confirmed verdict stands. When a control met a server error the feedback
     names it, so the agent can see the template is wrong without reading the step itself."""
-    problem = injection_proof(ctx, history, steps)
-    if problem is None:
-        return {"proof": "holds", "steps": sorted(steps),
-                "next": "submit_verdict confirmed and cite these steps in proof_steps"}
-    feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
-                "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"}
+    _, plan = latest_plan(history)
+    if agent_controls(plan):
+        # Controls the agent chose itself ran as an experiment: they can carry a negative verdict, never a
+        # confirmation; name the declaration that could confirm, or that none can (VER-011).
+        form = confirming_form(getattr(ctx.plan, "cwe", None), plan.get("input_location"))
+        feedback = {"proof": "negative-only", "steps": sorted(steps),
+                    "reason": "controls you chose can support a negative verdict, never a confirmation",
+                    "next": (f"to confirm, declare a plan with {form}; " if form else
+                             "no declaration can confirm this finding's CWE through this input; ")
+                    + "otherwise submit the verdict these steps support, citing them"}
+    else:
+        problem = injection_proof(ctx, history, steps)
+        if problem is None:
+            return {"proof": "holds", "steps": sorted(steps),
+                    "next": "submit_verdict confirmed and cite these steps in proof_steps"}
+        feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
+                    "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"}
     failed = next((n for n in reversed(steps) if (history[n - 1].get("result") or {}).get("status", 0) >= 500
                    or (history[n - 1].get("result") or {}).get("error")), None)
     if failed is not None:

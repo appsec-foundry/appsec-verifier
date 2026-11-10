@@ -381,10 +381,10 @@ class AgentProbe:
                 if ready:
                     result["proof_ready"] = {"steps": ready,
                                              "next": "submit_verdict confirmed and cite these steps in proof_steps"}
-            # An accepted read injection plan runs its generated controls at once and reports whether the proof
-            # already holds, so the agent submits the verdict instead of a separate step (VER-011, VER-043). A
-            # write plan sends nothing here; the agent calls send_controls. An out-of-band or other flow is the
-            # agent's own.
+            # An accepted read injection plan runs its generated controls, or the agent's own, at once and reports
+            # whether the proof already holds, or that own controls support only a negative verdict, so the agent
+            # submits the verdict instead of a separate step (VER-011, VER-043). A write plan sends nothing here;
+            # the agent calls send_controls for generated controls. An out-of-band or other flow is the agent's own.
             if name == "plan_test" and result.get("accepted"):
                 stop = run_read_experiment(args.get("role"))
                 if stop is not None:

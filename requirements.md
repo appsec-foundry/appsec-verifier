@@ -118,7 +118,7 @@ optional hardening.
   exfiltrate real application data to prove a point. The agent names the input,
   the observation and a template for the injected value; the Verifier generates
   the controls from it, sends a read-only experiment at once and reports whether
-  the proof holds. The declaration may also fix values for the request's other
+  the proof holds. A read plan whose controls the agent chose itself runs the same way; such controls can support a negative result, never a confirmation, and the Verifier tells the agent so. The declaration may also fix values for the request's other
   inputs, such as the password next to a login's user name; every control carries
   the same values, and only the declared input differs. The declaration may carry up to three candidate templates; the
   Verifier uses the first whose controls the target answers without a server

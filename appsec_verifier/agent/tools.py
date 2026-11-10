@@ -60,6 +60,7 @@ from ..verify import poc
 from .experiments import (
     PLAN_SCHEMA,
     access_methods,
+    agent_controls,
     generates_controls,
     normal_roles,
     pointer_value,
@@ -554,12 +555,14 @@ class AgentTools:
         return None
 
     def experiment_requests(self, *, role=None, write=False):
-        """The accepted challenge's generated controls as requests (VER-011). A read plan's controls run when the
+        """The accepted challenge's generated controls as requests, or a read plan's own controls (VER-011). A read
+        plan's controls run when the
         plan is accepted (`write` False); a write plan's only when the agent asks with send_controls in intrusive
         mode (`write` True), and only once per plan. Each control is sent twice, an auth-artifact control once,
         because that proof needs no repetition (VER-049)."""
         plan = getattr(self, "_experiment", {})
-        if not generates_controls(plan):
+        # A read plan's own controls, values the agent chose, run the same way; never a write's (VER-011).
+        if not generates_controls(plan) and (write or not agent_controls(plan)):
             raise ToolError("the accepted plan is not a challenge whose controls the Verifier generates and sends")
         is_write = plan.get("method", "GET") not in SAFE_METHODS
         if is_write and not write:
