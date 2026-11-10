@@ -43,6 +43,11 @@ _LOGGED_RESULT = ("status", "length", "executed", "blocked", "error", "path", "s
 _PROPOSAL_CAP = 500
 
 
+def _request_attempts(history: list[dict]) -> int:
+    """Requests that count against the per-finding attempt cap (run_experiment's tagged controls are excluded)."""
+    return sum(h.get("tool") in ("http_request", "browser_check") and not h.get("experiment") for h in history)
+
+
 class Planner(Protocol):
     def next_step(self, ctx: ProbeContext, history: list[dict]) -> dict:
         """Return {"tool": name, "args": {...}} or {"verdict": {...}}."""
@@ -157,9 +162,7 @@ class AgentProbe:
             step = len(history) + 1
             ctx.controller_state = {
                 "remaining_decisions": self._max_steps - decision + 1,
-                "remaining_request_actions": self._max_steps - sum(
-                    h.get("tool") in ("http_request", "browser_check") for h in history
-                ),
+                "remaining_request_actions": self._max_steps - _request_attempts(history),
                 "remaining_run_requests": ctx.budget.limits.max_requests - ctx.budget.requests,
             }
             try:
@@ -242,9 +245,9 @@ class AgentProbe:
                     try:
                         ctx.budget.check_time()
                         ctx.guard.check_window()
-                        if sum(h.get("tool") in ("http_request", "browser_check") for h in history) >= self._max_steps:
+                        if _request_attempts(history) >= self._max_steps:
                             raise LimitExceeded("attempts", "per-finding request attempt limit reached")
-                        controller.before("http_request", request)
+                        controller.before("http_request", request, experiment=True)
                         result = controller.run(lambda request=request: tools.http_request(**request))
                     except ToolError as exc:
                         result = {"error": str(exc)}
@@ -255,7 +258,7 @@ class AgentProbe:
                     controller.observe("http_request", request, result)
                     if ctx.sessions is not None:
                         result = ctx.sessions.redact(result)
-                    history.append({"tool": "http_request", "args": request, "result": result})
+                    history.append({"tool": "http_request", "args": request, "result": result, "experiment": True})
                     _log(
                         ctx,
                         step,
@@ -270,8 +273,7 @@ class AgentProbe:
             if ctx.progress is not None:
                 ctx.progress.activity(decision, self._max_steps, name, args)
             try:
-                if name in ("http_request", "browser_check") and sum(
-                        h.get("tool") in ("http_request", "browser_check") for h in history) >= self._max_steps:
+                if name in ("http_request", "browser_check") and _request_attempts(history) >= self._max_steps:
                     raise LimitExceeded("attempts", "per-finding request attempt limit reached")
                 controller.before(name, args)
                 result = controller.run(lambda name=name, args=args: tools.call(name, args))

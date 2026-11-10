@@ -92,6 +92,18 @@ def test_prerequisite_read_allowance_is_bounded(tmp_path):
         c.before("http_request", {"method": "GET", "path": f"/api/p{i}", "prerequisite": True})
     with pytest.raises(ToolError, match="allowance"):
         c.before("http_request", {"method": "GET", "path": "/api/p9", "prerequisite": True})
+
+
+def test_run_experiment_controls_keep_a_budget_apart_from_hand_probes(tmp_path):
+    # A diagnostic hand-probe of a value must not use up the proof's budget for the same value, while a second
+    # full run_experiment is still bounded because it re-sends the same controls into this namespace.
+    c = Controller(context(tmp_path))
+    req = {"method": "GET", "path": "/search", "params": {"q": "x"}}
+    c.before("http_request", req)                       # a hand-probe, counted in the model namespace
+    c.before("http_request", req, experiment=True)      # run_experiment sends this control, 1 of 2
+    c.before("http_request", req, experiment=True)      # and 2 of 2 — the proof needs each control twice
+    with pytest.raises(LimitExceeded, match="allowance"):
+        c.before("http_request", req, experiment=True)  # a second run_experiment re-sends: still stopped
     c.before("http_request", {"path": "/search"})  # bounded diagnostics before a plan
     c.plan = {"path": "/search"}
     with pytest.raises(ToolError):

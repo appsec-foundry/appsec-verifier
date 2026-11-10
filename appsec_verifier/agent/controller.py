@@ -306,12 +306,18 @@ class Controller:
             args["query"] = sorted(query)
         return token([name, args])
 
-    def before(self, name, args):
+    def before(self, name, args, *, experiment=False):
         self._counted = self._preparing = None
         self.check()
         if name in ("http_request", "browser_check", "plan_test"):
             self._target(name, args)
         key = self._key(name, args)
+        if experiment:
+            # run_experiment re-sends the accepted plan's bounded, read-only controls. They keep their own
+            # repetition namespace so the agent's earlier diagnostic probes of the same values do not consume
+            # the proof's budget, while a second full run_experiment is still bounded: it re-sends the same
+            # controls and reaches this allowance (VER-010, VER-036).
+            key = token(["experiment-control", key])
         is_write = name == "http_request" and args.get("method", "GET").upper() not in SAFE_METHODS
         # A write is capped at a single send so it cannot repeat a state change (VER-014). The one exception is
         # the probe of an accepted boolean/timing experiment: the proof needs each declared control at least
