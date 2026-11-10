@@ -527,6 +527,27 @@ def test_method_and_path_mismatches_name_the_expected_request(tmp_path):
         tools.plan_test(**bad_path)
 
 
+def test_5xx_during_an_accepted_injection_experiment_is_an_observation_not_a_failure(tmp_path):
+    """Ein 500 auf eine Injection-Probe (z. B. SQLite-Fehler bei unbalancierter Klammer) ist das
+    eigentliche Observationssignal; die Stagnationsschranke darf das Experiment nicht abschiessen,
+    bevor der Agent es werten kann. proof.py entscheidet weiter, was ein 5xx tatsaechlich beweist.
+    Ausserhalb eines akzeptierten Experiments zaehlt 5xx weiter als Fehlschlag."""
+    c = Controller(context(tmp_path))
+    c.plan = {"kind": "boolean", "path": "/search", "method": "GET", "input_location": "params",
+              "input_name": "q", "baseline": "a", "positive": "b", "negative": "c"}
+    for _ in range(3):
+        c.observe("http_request", {"method": "GET", "path": "/search"}, {"status": 500, "length": 10})
+    c.check()                                        # no stagnation on three 500s under the experiment
+    assert c.failures == 0
+    # A new context without an accepted experiment: 5xx keeps counting.
+    c2 = Controller(context(tmp_path))
+    for _ in range(3):
+        c2.observe("http_request", {"method": "GET", "path": "/search"}, {"status": 500, "length": 10})
+    with pytest.raises(LimitExceeded, match="three consecutive actions failed") as exc:
+        c2.check()
+    assert exc.value.kind == "stagnation"
+
+
 def test_plan_test_accepts_the_query_alias_for_params(tmp_path):
     """Die Variante nennt den URL-Query als `query`, das Plan-Schema als `params`. Beides wird akzeptiert
     und auf `params` normalisiert, damit der eine Vokabular-Delta nicht ganze Varianten-Tests kippt."""

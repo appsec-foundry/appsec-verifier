@@ -282,7 +282,17 @@ class Controller:
         if self._preparing and type(result.get("status")) is int and self._preparing not in self.deviations:
             self.deviations.append(self._preparing)
         self._preparing = None
-        failed = bool(result.get("error")) or (type(result.get("status")) is int and result["status"] >= 500)
+        status = result.get("status")
+        server_error = type(status) is int and status >= 500
+        # An injection experiment's http_request is a hypothesis check: a 5xx can be the whole observation
+        # (stable server-side error contrasting with a working baseline, an SQL/driver error that evidences
+        # the sink). The verdict logic in proof.py still gates what a 5xx can actually prove; the controller
+        # must not retire the experiment before the agent can run those comparisons. Outside an accepted
+        # boolean/timing experiment, 5xx keeps counting as a failed action because a probe that crashes the
+        # server without plan context is usually not informative.
+        experiment_probe = (name == "http_request" and self.plan
+                            and self.plan.get("kind") in ("boolean", "timing"))
+        failed = bool(result.get("error")) or (server_error and not experiment_probe)
         if failed:
             self.failures += 1
             if name == "plan_test" and self._counted is not None:
