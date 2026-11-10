@@ -1,5 +1,5 @@
 """Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036,
-VER-043).
+VER-043, VER-047).
 
 ScopeGuard remains the connection authority. Assessment routes and independently
 checked request derivations narrow that scope; model plans alone add nothing.
@@ -52,6 +52,7 @@ class Controller:
         self.plan = None
         self.source_routes = []
         self.deviations = []  # preparation routes the owner used outside the finding's own (VER-008, VER-043)
+        self.prerequisites = []  # harmless reads the finding's request needs but the assessment never names (VER-047)
         self._counted = None  # the repetition key the last before() call charged
         self._preparing = None  # the preparation route of the action before() last allowed
         # Non-sink inputs pinned on the first probe of an accepted boolean/timing experiment, so
@@ -131,6 +132,19 @@ class Controller:
             raise ToolError(f"request refused — out of scope: {decision.reason}")
         if not same_origin(url, self.ctx.target_base):
             raise ToolError("the finding's requests must use its target origin")
+        # VER-047: a harmless read the finding's own request needs but the assessment never names (a CSRF
+        # token, a CAPTCHA id, a nonce). It is in scope and on the target origin (checked above), a GET only,
+        # and bounded per finding. It is recorded for the report but authorises no finding route, so the
+        # route, plan, write and proof checks below never see it.
+        if name == "http_request" and args.get("prerequisite"):
+            if method != "GET":
+                raise ToolError("a prerequisite read is a GET only (VER-047)")
+            key = f"{method} {path}"
+            if key not in self.prerequisites:
+                if len(self.prerequisites) >= 3:
+                    raise ToolError("the prerequisite-read allowance for this finding is exhausted (VER-047)")
+                self.prerequisites.append(key)
+            return
         route_path = path
         change = args.get("change") if name == "plan_test" else (self.plan or {}).get("change")
         if name == "plan_test" and change and not self._names_change(self._routes(), change):

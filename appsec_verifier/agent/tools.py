@@ -4,7 +4,8 @@ request to the target as one of the configured identities (scope-guarded),
 read the evidenced source (repository-confined), and, for XSS findings, load a
 page in the proof browser whose requests go through the same guard (VER-009,
 VER-018). Request derivation checks recorded evidence without contacting the
-target (VER-008, VER-043).
+target (VER-008, VER-043). A read the finding's own request needs but the
+assessment never names is sent as a bounded GET prerequisite (VER-047).
 
 An identity's credentials go only to the origin it is bound to (its
 `target_origin`, by default the target base URL), never to another host in the
@@ -671,7 +672,10 @@ class AgentTools:
         json: dict | None = None,
         form: dict | None = None,
         path_inputs: dict | None = None,
+        prerequisite: bool = False,
     ) -> dict:
+        # `prerequisite` (VER-047) is read by the controller to authorise a harmless read the finding's own
+        # request needs but the assessment never names; the request itself is sent and recorded normally.
         m = (method or "GET").upper()
         original_path = path
         if path_inputs is not None:

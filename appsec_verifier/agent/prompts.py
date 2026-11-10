@@ -1,4 +1,4 @@
-"""The action schemas and prompts every model host shares (VER-017, VER-019, VER-043, VER-046).
+"""The action schemas and prompts every model host shares (VER-017, VER-019, VER-043, VER-046, VER-047).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, browser_check) plus submit_verdict — and
@@ -140,6 +140,12 @@ def _tool_defs() -> list[dict]:
                         "type": "object",
                         "maxProperties": 30,
                         "additionalProperties": {"type": "string", "maxLength": 4000},
+                    },
+                    "prerequisite": {
+                        "type": "boolean",
+                        "description": "true marks a GET that fetches a value this finding's own request needs "
+                        "but the assessment does not name — a CSRF token, a CAPTCHA id, a nonce. Read-only, "
+                        "on the target origin, never a proof; then send the finding's request with the value.",
                     },
                 },
                 "required": ["path"],
@@ -289,6 +295,9 @@ def _system(ctx) -> str:
         "literal routes read from its evidenced source file, or independently checked derive_request evidence. "
         "Assessment variants guide investigation: use derive_request to evidence other related routes or inputs. "
         "Read relevant source and its local imports or inspect recorded links/forms to resolve missing details. "
+        "If the finding's own request needs a value the assessment does not name — a CSRF token, a CAPTCHA id, a "
+        "nonce — fetch it first with http_request prerequisite=true (a GET), then send the finding's request "
+        "carrying that value. "
         "Declaring a plan cannot grant a new route, except the "
         "GET of a write proof's change, for the record its owner created, and the evidenced preparation route on "
         "which the owner creates its own test resource. "

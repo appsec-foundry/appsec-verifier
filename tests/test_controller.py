@@ -58,6 +58,40 @@ def test_plan_cannot_authorize_other_route(tmp_path):
     c = Controller(context(tmp_path))
     with pytest.raises(ToolError, match="no matching route"):
         c.before("plan_test", {"path": "/unrelated"})
+
+
+def test_prerequisite_read_allows_an_unnamed_get(tmp_path):
+    """VER-047: a GET the finding does not name is allowed when marked as a prerequisite, and recorded."""
+    c = Controller(context(tmp_path))
+    c.before("http_request", {"method": "GET", "path": "/api/captcha", "prerequisite": True})
+    assert c.prerequisites == ["GET /api/captcha"]
+
+
+def test_unmarked_unnamed_get_is_still_refused(tmp_path):
+    c = Controller(context(tmp_path))
+    with pytest.raises(ToolError, match="no matching route"):
+        c.before("http_request", {"method": "GET", "path": "/api/captcha"})
+
+
+def test_prerequisite_read_is_get_only(tmp_path):
+    c = Controller(context(tmp_path))
+    with pytest.raises(ToolError, match="GET only"):
+        c.before("http_request", {"method": "POST", "path": "/api/captcha", "prerequisite": True})
+
+
+def test_prerequisite_read_stays_in_scope(tmp_path):
+    """The prerequisite flag never bypasses the scope guard (VER-001, VER-018)."""
+    c = Controller(context(tmp_path))
+    with pytest.raises(ToolError, match="out of scope|target origin"):
+        c.before("http_request", {"method": "GET", "path": "https://evil.example/x", "prerequisite": True})
+
+
+def test_prerequisite_read_allowance_is_bounded(tmp_path):
+    c = Controller(context(tmp_path))
+    for i in range(3):
+        c.before("http_request", {"method": "GET", "path": f"/api/p{i}", "prerequisite": True})
+    with pytest.raises(ToolError, match="allowance"):
+        c.before("http_request", {"method": "GET", "path": "/api/p9", "prerequisite": True})
     c.before("http_request", {"path": "/search"})  # bounded diagnostics before a plan
     c.plan = {"path": "/search"}
     with pytest.raises(ToolError):

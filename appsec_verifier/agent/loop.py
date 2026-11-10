@@ -1,4 +1,5 @@
-"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019, VER-036, VER-046).
+"""The agent loop that drives a probe (VER-001, VER-008, VER-013, VER-015, VER-017, VER-019, VER-036, VER-046,
+VER-047).
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
@@ -104,6 +105,10 @@ class AgentProbe:
         result.observations = [*result.observations, *(
             f"Deviation: the owner created its own test resource with {route}, a route the assessment names for "
             "this resource outside this finding (VER-043)." for route in controller.deviations)]
+        # A harmless read the finding's own request needed but the assessment never named (VER-047).
+        result.observations = [*result.observations, *(
+            f"Prerequisite read: {route}, a request this finding's test needed but the assessment does not name "
+            "(VER-047)." for route in controller.prerequisites)]
         for request in ctx.derived_requests:
             result.observations.append(
                 f"Derived request: {request['method']} {request['path']}, supported by recorded step "
