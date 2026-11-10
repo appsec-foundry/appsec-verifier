@@ -141,6 +141,22 @@ def supplement(selected, eligible, *, enabled=True, cap=8):
     return [replace(p, selection_reason=reasons.get(p.id)) for p in chosen.values()]
 
 
+_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+def _finding_number(fid: str) -> int:
+    match = re.search(r"(\d+)", fid or "")
+    return int(match.group(1)) if match else 1 << 30
+
+
+def severity_order(plans):
+    """Most severe first, finding number as a stable tiebreaker (VER-026). Ordering only, never selection:
+    under a limit the budget is spent on the highest-severity findings. `dependency_order` runs after this
+    and only hoists prerequisites, so a lower-severity prerequisite still precedes what depends on it."""
+    return sorted(plans, key=lambda p: (-_SEVERITY_RANK.get((p.severity or "").lower(), 0),
+                                        _finding_number(p.id), p.id or ""))
+
+
 def dependency_order(plans):
     """Stable prerequisite-first order; cyclic relationships stay explicit and unproven."""
     by_id = {p.id: p for p in plans}

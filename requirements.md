@@ -62,6 +62,7 @@ optional hardening.
   resulting count are shown for confirmation before any request; in
   non-interactive mode the selection comes entirely from the invocation. An empty
   selection is reported, not silently treated as "verify everything".
+  Findings are tested most severe first, with prerequisites before the findings that depend on them, so that a run stopped by a limit has spent its budget on the highest-severity findings it could reach.
 
 - **VER-006: Select only verifiable finding classes.** A finding is eligible for
   active verification only when its weakness can be probed against a running

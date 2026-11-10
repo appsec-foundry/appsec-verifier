@@ -16,7 +16,7 @@ from test_experiments import STRATEGY, plan
 from appsec_verifier.agent.loop import AgentProbe
 from appsec_verifier.agent.session_proof import cookie_observations
 from appsec_verifier.loader import plans_from
-from appsec_verifier.planning import dependency_order, expand_variants, supplement
+from appsec_verifier.planning import dependency_order, expand_variants, severity_order, supplement
 from appsec_verifier.tools.browser import execution_context
 from appsec_verifier.verify.report import merge_reports, remaining_variants
 
@@ -144,6 +144,30 @@ def test_related_architecture_and_supplement_are_bounded():
     assert [p.id for p in dependency_order(selected)] == ["T-2", "T-1"]
     assert selected[1].selection_reason
     assert supplement(plans[:1], plans, enabled=False) == plans[:1]
+
+
+def test_severity_order_is_most_severe_first_but_keeps_prerequisites_ahead():
+    """VER-026: most severe first with the finding number as a stable tiebreaker; a lower-severity
+    prerequisite still runs before the finding that depends on it once dependency_order runs."""
+    doc = {"threats": [
+        {"id": "T-10", "cwe": "CWE-79", "severity": "high", "evidence": {"file": "a", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-89", "severity": "critical", "evidence": {"file": "b", "line": 1}},
+        {"id": "T-3", "cwe": "CWE-200", "severity": "medium", "evidence": {"file": "c", "line": 1}},
+        {"id": "T-1", "cwe": "CWE-89", "severity": "critical", "evidence": {"file": "d", "line": 1}},
+    ]}
+    plans = plans_from(doc)
+    # critical before high before medium; T-1 before T-2 by number within critical
+    assert [p.id for p in severity_order(plans)] == ["T-1", "T-2", "T-10", "T-3"]
+    # a critical that depends on a medium prerequisite: dependency_order hoists the prerequisite,
+    # severity_order keeps the rest severity-ordered.
+    dep = {"threats": [
+        {"id": "T-1", "cwe": "CWE-89", "severity": "critical", "verification_dependencies": ["T-9"],
+         "evidence": {"file": "a", "line": 1}},
+        {"id": "T-9", "cwe": "CWE-200", "severity": "medium", "evidence": {"file": "b", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-79", "severity": "high", "evidence": {"file": "c", "line": 1}},
+    ]}
+    dep_plans = plans_from(dep)
+    assert [p.id for p in dependency_order(severity_order(dep_plans))] == ["T-9", "T-1", "T-2"]
 
 
 @pytest.mark.parametrize("frame_kind", ["main", "child", "foreign", "old-page", "isolated"])

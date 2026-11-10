@@ -123,7 +123,7 @@ All selectors read from the assessment and combine with AND. Without a selector 
 
 With `--min-severity` and without `--strict-severity`, up to eight findings below the floor are added within the other filters: declared prerequisites of selected findings, and access or exposure findings on `/actuator`, `/management`, `/admin`, `/metrics` or `/debug` routes. Health, readiness and liveness routes do not qualify on their own. The test plan names each addition and its reason before the confirmation. `--severity`, `--only`, category and CWE filters stay strict. An added finding that lacks an operator resource is still not tested.
 
-A finding can name prerequisites with `verification_dependencies: [T-002]` in the assessment; selected prerequisites run first. Only these explicit dependencies set an order, and cyclic dependencies establish none. A prior result covers only its own requests, so verified findings do not establish a complete attack chain.
+The selected findings are tested most severe first, with the finding number breaking ties, so that a run stopped by a limit has spent its budget on the highest-severity findings. A finding can name prerequisites with `verification_dependencies: [T-002]` in the assessment; selected prerequisites run before the findings that depend on them, ahead of the severity order. Only these explicit dependencies set an order, and cyclic dependencies establish none. A prior result covers only its own requests, so verified findings do not establish a complete attack chain.
 
 ### Boundaries — cost and load (VER-015)
 

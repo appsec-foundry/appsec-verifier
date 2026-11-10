@@ -59,7 +59,7 @@ def _csv(value: str | None) -> set[str] | None:
 
 def _select(args: argparse.Namespace, plans):
     """Apply the selection options of `args` (VER-026)."""
-    from .planning import dependency_order, supplement
+    from .planning import dependency_order, severity_order, supplement
 
     filters = dict(
         categories=_csv(args.category),
@@ -73,7 +73,7 @@ def _select(args: argparse.Namespace, plans):
     if args.min_severity and not args.only and not args.severity:
         eligible = select(plans, **{**filters, "min_severity": None})
         selected = supplement(selected, eligible, enabled=not getattr(args, "strict_severity", False))
-    return dependency_order(selected)
+    return dependency_order(severity_order(selected))
 
 
 # ── console layout, as in AppSec Analyzer ───────────────────────────────────
