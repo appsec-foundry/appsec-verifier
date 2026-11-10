@@ -170,6 +170,21 @@ def test_the_seed_shows_the_finding_s_injection_contract_and_no_other():
     assert '"injection_inputs": []' in prompt(_ctx(), [])                     # none declared, said so
 
 
+def test_the_seed_pins_a_single_variant_probe_to_its_variant():
+    """A variant-split probe tells the model to test only its own variant, not the finding's others."""
+    ctx = _ctx()
+    ctx.plan.variant_id = "variant-001"
+    ctx.plan.verification_context = {"variants": [
+        {"id": "variant-001", "request": {"method": "GET", "path": "/api/Feedbacks"}, "hypothesis": "h"}]}
+    text = prompt(ctx, [])
+    assert "verifies only variant variant-001 (GET /api/Feedbacks)" in text
+    assert "plan and test only this one" in text
+
+
+def test_the_seed_does_not_pin_a_finding_without_a_selected_variant():
+    assert "verifies only variant" not in prompt(_ctx(), [])
+
+
 def test_read_source_is_offered_only_with_a_source_checkout():
     without = system_prompt(_ctx())
     assert '"name": "read_source"' not in without and "no source checkout in this run" in without
