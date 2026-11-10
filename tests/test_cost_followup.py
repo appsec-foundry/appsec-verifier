@@ -226,3 +226,145 @@ def test_a_login_status_flip_without_the_auth_form_points_to_it(tmp_path):
                         "result": {"status": status}})
     reason = injection_check(None, history, list(range(2, len(history) + 1)))
     assert "auth_artifact" in reason
+
+
+# ── values for the request's other inputs (VER-011) ───────────────────────────
+
+LOGIN_VARIANT = {"id": "variant-001", "hypothesis": "The email is concatenated into the login query",
+                 "request": {"method": "POST", "path": "/rest/user/login",
+                             "inputs": [{"location": "json", "name": "email"},
+                                        {"location": "json", "name": "password"}]}}
+
+
+def _pin(ctx, variant):
+    ctx.plan = replace(ctx.plan, verification_context={"version": 1, "variants": [variant]}, variant_id=variant["id"])
+    return ctx
+
+
+def test_a_login_variant_with_two_inputs_confirms_with_a_fixed_password(tmp_path):
+    """The run's T-011: the variant declares email and password, so the generated controls carry a fixed password
+    and only the email differs."""
+    sent = []
+    ctx = _pin(_login_ctx(tmp_path, sent), LOGIN_VARIANT)
+    plan = _login_plan(variant="variant-001", fixed={"json": {"password": "not-a-secret"}})
+    script = Script([plan, {"tool": "send_controls", "args": {}}, _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and script.calls == 3, result.rationale
+    controls = [h["args"]["json"] for h in script.history if h.get("experiment")]
+    assert len(controls) == 5 and {c["password"] for c in controls} == {"not-a-secret"}
+    assert len({c["email"] for c in controls}) == 5
+
+
+def test_a_login_variant_without_the_password_is_refused_before_any_request(tmp_path):
+    """Refused case: the controls would lack a declared input, so the plan names it and nothing is sent."""
+    sent = []
+    ctx = _pin(_login_ctx(tmp_path, sent), LOGIN_VARIANT)
+    script = Script([_login_plan(variant="variant-001"), {"tool": "send_controls", "args": {}}])
+    AgentProbe("injection", lambda: script).run(ctx)
+    assert sent == []
+    error = script.history[0]["result"]["error"]
+    assert "json:password" in error and '"json": {"password"' in error
+
+
+@pytest.mark.parametrize("extra, reason", [
+    ({"fixed": {"json": {"email": "x"}}}, "must not set the injected input"),
+    ({"fixed": {"headers": {"X-A": "1"}}}, "invalid experiment declaration"),
+    ({"fixed": {"json": {}}}, "invalid experiment declaration"),
+    ({"fixed": {"json": {"password": {"$ne": 1}}}}, "invalid experiment declaration"),   # values are scalars
+    ({"fixed": {"json": {"password": "x"}}, "sql_template": None, "positive": "a", "negative": "b"},
+     "plan has none"),
+])
+def test_fixed_values_are_refused_where_they_do_not_fit(tmp_path, extra, reason):
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    ctx = _login_ctx(tmp_path, [])
+    args = {k: v for k, v in {**_login_plan()["args"], "auth_artifact": None, **extra}.items() if v is not None}
+    with pytest.raises(ToolError, match=reason):
+        AgentTools(ctx).plan_test(**args)
+
+
+def test_command_injection_probes_carry_no_fixed_values(tmp_path):
+    """Refused case: command probes send only the harmless arithmetic controls, so no other value rides along."""
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    ctx = _search_ctx(tmp_path, [])
+    ctx.plan = replace(ctx.plan, cwe="CWE-78")
+    baseline = "plain"
+    args = {k: v for k, v in _search_plan(["x' AND {{predicate}} -- "])["args"].items() if k != "sql_template"}
+    with pytest.raises(ToolError, match="fixed is not available"):
+        AgentTools(ctx).plan_test(**{**args, "baseline": baseline, "fixed": {"params": {"sort": "name"}},
+                                     "expression_template": baseline + "; printf '%s' \"$(({{expression}}))\""})
+
+
+def test_a_query_key_in_fixed_means_params(tmp_path):
+    from appsec_verifier.agent.tools import AgentTools
+
+    ctx = _search_ctx(tmp_path, [])
+    tools = AgentTools(ctx)
+    result = tools.plan_test(**{**_search_plan(["x' AND {{predicate}} -- "])["args"],
+                                "fixed": {"query": {"sort": "name"}}})
+    assert result["accepted"] is True
+    assert all(r["params"]["sort"] == "name" for r in tools.experiment_requests())
+
+
+def test_controls_refused_before_sending_leave_the_plan_unsent(tmp_path):
+    """A write control the controller refuses never reaches the target, so a second send_controls repeats the
+    refusal instead of claiming the controls ran."""
+    sent = []
+    ctx = _login_ctx(tmp_path, sent)
+    ctx.marker = ("vrfzz", "bb")       # the controls carry another marker, so every write is refused (VER-014)
+    script = Script([_login_plan(), {"tool": "send_controls", "args": {}}, {"tool": "send_controls", "args": {}}])
+    AgentProbe("injection", lambda: script).run(ctx)
+    assert sent == []
+    errors = [h["result"].get("error", "") for h in script.history if h.get("experiment")]
+    assert len(errors) == 2 and all("must carry vrfzz" in e for e in errors)
+    assert not any("already sent" in h["result"].get("error", "") for h in script.history)
+
+
+def _contract_case(name):
+    """A two-input variant per form whose controls the Verifier generates, with the plan that fixes the other."""
+    q = {"location": "query", "name": "q"}
+    cases = {
+        "sql-read": ("CWE-89", "GET", "/search", [q, {"location": "query", "name": "sort"}],
+                     {"input_location": "params", "input_name": "q", "baseline": "plain", "pointer": "/result",
+                      "sql_template": "plain' AND {{predicate}} -- "}, {"params": {"sort": "name"}}),
+        "sql-login": ("CWE-89", "POST", "/rest/user/login", LOGIN_VARIANT["request"]["inputs"],
+                      {"input_location": "json", "input_name": "email", "baseline": EMAIL,
+                       "pointer": "/authentication/token", "auth_artifact": True,
+                       "sql_template": f"{EMAIL}' OR {{{{predicate}}}} -- "}, {"json": {"password": "x"}}),
+        "nosql-operator": ("CWE-943", "GET", "/search", [{"location": "json", "name": "q"},
+                                                         {"location": "json", "name": "limit"}],
+                           {"input_location": "json", "input_name": "q", "baseline": "apple", "pointer": "/result",
+                            "operator_challenge": "nosql"}, {"json": {"limit": 5}}),
+        "expression": ("CWE-1336", "GET", "/search", [q, {"location": "query", "name": "lang"}],
+                       {"input_location": "params", "input_name": "q", "baseline": "plain", "pointer": "/result",
+                        "expression_template": "{{ {{expression}} }}"}, {"params": {"lang": "en"}}),
+    }
+    return cases[name]
+
+
+@pytest.mark.parametrize("name", ["sql-read", "sql-login", "nosql-operator", "expression"])
+def test_every_generated_control_passes_the_verifiers_own_checks(tmp_path, name):
+    """Contract: what the Verifier generates itself must satisfy what its controller demands of any request. Without
+    the other input in fixed the plan is refused, so no control is generated that the controller would refuse."""
+    from appsec_verifier.agent.controller import Controller
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    cwe, method, path, inputs, declaration, fixed = _contract_case(name)
+    ctx = _pin(_ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False),
+               {"id": "v", "hypothesis": "The input reaches the query",
+                "request": {"method": method, "path": path, "inputs": inputs}})
+    ctx.plan = replace(ctx.plan, cls="injection", cwe=cwe)
+    ctx.marker = (MARK, "bb")
+    plan = {"kind": "boolean", "hypothesis": "The input reaches the query unescaped", "variant": "v",
+            "path": path, "method": method, **declaration}
+    with pytest.raises(ToolError, match="a value in fixed"):
+        AgentTools(ctx).plan_test(**plan)
+    tools = AgentTools(ctx)
+    accepted = tools.plan_test(**plan, fixed=fixed)
+    controller = Controller(ctx)
+    controller.plan = accepted.get("experiment") or plan
+    requests = tools.experiment_requests(write=method != "GET")
+    assert requests
+    for request in requests:
+        controller.before("http_request", request, experiment=True)

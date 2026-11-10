@@ -60,6 +60,19 @@ PLAN_SCHEMA = {
         "oob_template": {"type": "string", "minLength": 5, "maxLength": 3000},
         # VER-049: the observation is the presence of an authenticated artifact at `pointer`, not a field's value.
         "auth_artifact": {"type": "boolean"},
+        # VER-011: values for the request's other inputs, such as the password next to a login's user name, that
+        # every generated control carries unchanged.
+        "fixed": {
+            "type": "object",
+            "additionalProperties": False,
+            "minProperties": 1,
+            "properties": {
+                location: {"type": "object", "minProperties": 1, "maxProperties": 8,
+                           "propertyNames": {"minLength": 1, "maxLength": 128},
+                           "additionalProperties": {"type": ["string", "number", "boolean"], "maxLength": 1000}}
+                for location in ("params", "json", "form")
+            },
+        },
     },
     "allOf": [
         {
@@ -81,6 +94,12 @@ PLAN_SCHEMA = {
         {"if": {"required": ["change"]}, "then": {"required": ["owner"]}},
     ],
 }
+
+def generates_controls(plan) -> bool:
+    """Whether the Verifier generates this accepted plan's controls itself (VER-011)."""
+    return plan.get("kind") == "boolean" and bool(
+        plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge"))
+
 
 # Exposure and missing authentication are proven only with an operator-declared resource (verifiable-cwes.yaml).
 _RESOURCE_ONLY_CWES = ("CWE-200", "CWE-306")

@@ -55,9 +55,17 @@ from jsonschema import Draft202012Validator
 from ..auth.sessions import AuthError
 from ..planning import evidence_name
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
-from ..verification_context import missing_capabilities, record_segments, route_matches
+from ..verification_context import missing_capabilities, path_values, record_segments, route_matches
 from ..verify import poc
-from .experiments import PLAN_SCHEMA, access_methods, normal_roles, pointer_value, privileged_roles, token
+from .experiments import (
+    PLAN_SCHEMA,
+    access_methods,
+    generates_controls,
+    normal_roles,
+    pointer_value,
+    privileged_roles,
+    token,
+)
 from .source_reader import SourceAccessError
 
 _BODY_EXCERPT = 600
@@ -257,6 +265,8 @@ class AgentTools:
         # kill a run.
         if plan.get("input_location") == "query":
             plan = {**plan, "input_location": "params"}
+        if isinstance(plan.get("fixed"), dict) and "query" in plan["fixed"] and "params" not in plan["fixed"]:
+            plan = {**plan, "fixed": {("params" if k == "query" else k): v for k, v in plan["fixed"].items()}}
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
         # VER-011: up to three candidate templates; the first is checked and run now, the others only when its
@@ -372,6 +382,14 @@ class AgentTools:
             # of an authenticated artifact at the (schema-required) pointer instead of a response field.
             raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
                             "(sql_template for CWE-89 or operator_challenge for CWE-943)")
+        if plan.get("fixed"):
+            if not generates_controls(plan):
+                raise ToolError("fixed gives values to the controls the Verifier generates; this plan has none")
+            if plan["input_name"] in (plan["fixed"].get(plan.get("input_location")) or {}):
+                raise ToolError("fixed must not set the injected input; the generated controls supply it")
+            if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
+                # Command probes send nothing but the harmless arithmetic controls (_check_steering).
+                raise ToolError("command injection probes carry no other values, so fixed is not available")
         groups = [plan[k] for k in ("baseline", "positive", "negative") if k in plan]
         if plan["kind"] == "boolean" and not all(k in plan for k in ("positive", "negative")):
             raise ToolError("boolean experiments need sql_template or explicit positive and negative controls")
@@ -439,6 +457,21 @@ class AgentTools:
             )
             if missing and not derived:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
+            # VER-011: the generated controls are sent as they are, so they must carry every input the variant
+            # declares; the request's other inputs come from fixed, a path input from the plan's path.
+            if generates_controls(plan) and not derived and inputs:
+                given = {("query" if loc == "params" else loc, name)
+                         for loc, values in (plan.get("fixed") or {}).items() for name in values}
+                given.add((location, plan["input_name"]))
+                given |= {("path", name) for name in path_values(vreq["path"], plan["path"])}
+                absent = [i for i in inputs if (i["location"], i["name"]) not in given]
+                if absent:
+                    first = absent[0]
+                    example = jsonlib.dumps({"params" if first["location"] == "query" else first["location"]:
+                                             {first["name"]: "..."}})
+                    raise ToolError("every generated control must carry the inputs the variant declares; give "
+                                    + ", ".join(f"{i['location']}:{i['name']}" for i in absent)
+                                    + f" a value in fixed, e.g. fixed: {example}")
         marker = None
         if plan["kind"] == "access-control" and not plan.get("resource"):
             methods = access_methods(self.ctx.plan.id, getattr(self.ctx.plan, "cwe", None), self.ctx.scope,
@@ -526,9 +559,7 @@ class AgentTools:
         mode (`write` True), and only once per plan. Each control is sent twice, an auth-artifact control once,
         because that proof needs no repetition (VER-049)."""
         plan = getattr(self, "_experiment", {})
-        if plan.get("kind") != "boolean" or not (
-            plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
-        ):
+        if not generates_controls(plan):
             raise ToolError("the accepted plan is not a challenge whose controls the Verifier generates and sends")
         is_write = plan.get("method", "GET") not in SAFE_METHODS
         if is_write and not write:
@@ -543,12 +574,17 @@ class AgentTools:
         if write and token(plan) in self._controls_sent:
             raise ToolError("this plan's controls were already sent; revise the plan for another experiment")
         location = "path_inputs" if plan.get("input_location") == "path" else plan["input_location"]
+        fixed = plan.get("fixed") or {}
+        # Every control carries the same fixed values for the request's other inputs; only the declared input
+        # differs (VER-011).
         requests = [
             {
                 "path": plan["path"],
                 "method": plan.get("method", "GET"),
                 **({"role": role} if role else {}),
-                location: {plan["input_name"]: str(plan[group]) if location == "path_inputs" else plan[group]},
+                **{k: dict(v) for k, v in fixed.items()},
+                location: {**fixed.get(location, {}),
+                           plan["input_name"]: str(plan[group]) if location == "path_inputs" else plan[group]},
             }
             for _ in range(1 if plan.get("auth_artifact") else 2)
             for group in ("baseline", "positive", "negative", "positive_other", "negative_other")
@@ -557,6 +593,11 @@ class AgentTools:
         if write:
             self._controls_sent.add(token(plan))
         return requests
+
+    def release_controls(self):
+        """A write plan none of whose controls reached the target, all refused before sending, counts as not sent,
+        so a second send_controls names the refusal instead of claiming the controls ran."""
+        getattr(self, "_controls_sent", set()).discard(token(getattr(self, "_experiment", {})))
 
     def read_context(self, *, variant: str | None = None, field: str | None = None) -> dict:
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])

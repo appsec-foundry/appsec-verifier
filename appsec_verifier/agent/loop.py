@@ -227,6 +227,8 @@ class AgentProbe:
                 sent_steps.append(step_n)
                 if _control_failed(tools, result):
                     break
+            if write and not any(type(history[n - 1]["result"].get("status")) is int for n in sent_steps):
+                tools.release_controls()
             return sent_steps, None
 
         def report_experiment(sent_steps):
