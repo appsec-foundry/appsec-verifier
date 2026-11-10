@@ -833,6 +833,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             print(render(list(items), st), flush=True)
 
         add(check_target(http, target, proxy=proxy_for(scope, target)))
+        if args.source:  # VER-032: show the source checkout the agent reads from (a fail already stopped above)
+            add(check_source(args.source))
         if not failed(checks) and login:
             add(*_sign_in_accounts(sessions, identities, login, planner_factory.host, budget, doc, args.source))
         if not failed(checks):

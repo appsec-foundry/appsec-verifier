@@ -183,7 +183,7 @@ def test_derived_input_drives_fresh_sql_controls_against_an_isolated_database(tm
     actions = [{"tool": "read_source", "args": {"path": "routes/basket.ts"}},
                {"tool": "derive_request", "args": {"evidence_step": 1, "method": "GET", "path": "/go",
                 "inputs": [{"location": "query", "name": "filter"}], "reason": "The handler reads the filter input"}},
-               {"tool": "plan_test", "args": declaration}, {"tool": "run_experiment", "args": {}},
+               {"tool": "plan_test", "args": declaration},
                {"verdict": {"verdict": "confirmed", "rationale": "Fresh controls change the selected result",
                             "proof_steps": list(range(4, 14))}}]
     try:

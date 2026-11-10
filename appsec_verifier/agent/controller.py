@@ -55,6 +55,7 @@ class Controller:
         self.prerequisites = []  # harmless reads the finding's request needs but the assessment never names (VER-047)
         self._counted = None  # the repetition key the last before() call charged
         self._preparing = None  # the preparation route of the action before() last allowed
+        self._experiment_runs = set()  # the accepted plans whose controls have run, bounded per finding (VER-036)
         # Non-sink inputs pinned on the first probe of an accepted boolean/timing experiment, so
         # later probes carry the same accompanying fields and only the sink value differs. Reset on
         # every freshly accepted plan.
@@ -313,11 +314,19 @@ class Controller:
             self._target(name, args)
         key = self._key(name, args)
         if experiment:
-            # run_experiment re-sends the accepted plan's bounded, read-only controls. They keep their own
-            # repetition namespace so the agent's earlier diagnostic probes of the same values do not consume
-            # the proof's budget, while a second full run_experiment is still bounded: it re-sends the same
-            # controls and reaches this allowance (VER-010, VER-036).
-            key = token(["experiment-control", key])
+            # The accepted plan's bounded, read-only controls keep their own repetition namespace, scoped to
+            # that plan, so the agent's earlier diagnostic probes of the same values do not consume the proof's
+            # budget, and a revised plan gets a fresh namespace rather than inheriting the aborted one's spent
+            # budget. Re-running the same plan's controls is still bounded: it re-sends them into the same
+            # namespace and reaches the allowance. The number of distinct experiments one finding may run is
+            # itself capped, so a sequence of revisions cannot send controls without end (VER-010, VER-036).
+            plan_key = token(self.plan)
+            if plan_key not in self._experiment_runs:
+                if len(self._experiment_runs) >= 3:
+                    raise LimitExceeded("stagnation",
+                                        "the finding's experiment allowance is exhausted (at most three)")
+                self._experiment_runs.add(plan_key)
+            key = token(["experiment-control", plan_key, key])
         is_write = name == "http_request" and args.get("method", "GET").upper() not in SAFE_METHODS
         # A write is capped at a single send so it cannot repeat a state change (VER-014). The one exception is
         # the probe of an accepted boolean/timing experiment: the proof needs each declared control at least

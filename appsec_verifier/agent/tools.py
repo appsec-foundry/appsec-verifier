@@ -259,17 +259,20 @@ class AgentTools:
             plan = {**plan, "input_location": "params"}
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
-        # An observed prerequisite needs recorded responses of this finding; one without them counts as assumed,
-        # which grants nothing (only a missing one matters, proof.py), so the plan need not be declared again.
+        # A strategy is optional (VER-043). When one is given, an observed prerequisite needs recorded responses
+        # of this finding; one without them counts as assumed, which grants nothing (only a missing one matters,
+        # proof.py), so the plan need not be declared again.
         responses = getattr(self.ctx, "responses", {})
-        prerequisites, assumed = [], []
-        for i, prerequisite in enumerate(plan["strategy"]["prerequisites"], 1):
-            steps = prerequisite.get("steps", [])
-            if prerequisite["status"] == "observed" and (not steps or any(n not in responses for n in steps)):
-                prerequisite = {**prerequisite, "status": "assumed"}
-                assumed.append(str(i))
-            prerequisites.append(prerequisite)
-        plan = {**plan, "strategy": {**plan["strategy"], "prerequisites": prerequisites}}
+        assumed = []
+        if plan.get("strategy"):
+            prerequisites = []
+            for i, prerequisite in enumerate(plan["strategy"]["prerequisites"], 1):
+                steps = prerequisite.get("steps", [])
+                if prerequisite["status"] == "observed" and (not steps or any(n not in responses for n in steps)):
+                    prerequisite = {**prerequisite, "status": "assumed"}
+                    assumed.append(str(i))
+                prerequisites.append(prerequisite)
+            plan = {**plan, "strategy": {**plan["strategy"], "prerequisites": prerequisites}}
         # Name every declaration problem at once, so one revision can fix them all.
         problems = []
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
@@ -461,8 +464,6 @@ class AgentTools:
                 or resource.get("method", "GET") != plan.get("method", "GET")
             ):
                 raise ToolError("the plan needs a matching operator-supplied test resource")
-        if getattr(self, "_experiment", None) and not plan["strategy"].get("revision_reason"):
-            raise ToolError("a revised plan must explain the new observation and the next change")
         self._experiment = plan
         notes = []
         if assumed:
@@ -477,7 +478,6 @@ class AgentTools:
             **({"marker": marker} if marker else {}),
             **({"second_marker": plan["second_marker"]} if plan.get("second_marker") else {}),
             **({"note": "; ".join(notes)} if notes else {}),
-            "next": "collect observations; run_experiment repeats read-only injection controls within the budget",
         }
 
     def experiment_requests(self, *, role=None):
@@ -485,7 +485,7 @@ class AgentTools:
         if plan.get("kind") != "boolean" or not (
             plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
         ):
-            raise ToolError("run_experiment needs an accepted SQL challenge plan")
+            raise ToolError("the accepted plan is not a read-only challenge whose controls run automatically")
         if plan.get("method", "GET") not in SAFE_METHODS:
             raise ToolError("automatic repetitions are read-only; writes are never automatically repeated. "
                             "Send each control value as its own http_request step, twice per control.")

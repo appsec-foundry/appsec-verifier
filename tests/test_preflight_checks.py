@@ -634,6 +634,16 @@ def test_verify_runs_after_passing_checks(tmp_path, monkeypatch, capsys):
     assert "none given; only anonymous requests are possible" in preflight[1]
 
 
+def test_verify_preflight_shows_the_source_checkout(tmp_path, monkeypatch, capsys):
+    (tmp_path / "src").mkdir()
+    rc, asked = _verify(tmp_path, monkeypatch, Target({("GET", BASE): _resp(200)}), source=str(tmp_path / "src"))
+    assert rc == cli.EXIT_OK and asked == [1]
+    out = capsys.readouterr().out
+    preflight = out[out.index("Preflight"):].splitlines()[1:5]
+    assert [line.split()[1] for line in preflight] == ["Target", "Source", "Identities", "Model"]
+    assert "readable source checkout" in preflight[1]
+
+
 def test_verify_shows_the_login_programs_before_the_confirmation(tmp_path, monkeypatch, capsys):
     import sys
 

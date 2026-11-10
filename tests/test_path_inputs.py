@@ -96,7 +96,7 @@ def test_path_sql_controls_exercise_real_query_behavior(tmp_path, parameterized)
     ctx.plan = replace(ctx.plan, endpoints=(Endpoint("GET", "/items/:id", None),))
     declaration = plan(path="/items/:id", input_location="path", input_name="id", baseline="pear",
                        sql_template="pear' AND {{predicate}} -- ", pointer="/ids")["args"]
-    actions = [{"tool": "plan_test", "args": declaration}, {"tool": "run_experiment", "args": {}},
+    actions = [{"tool": "plan_test", "args": declaration},
                {"verdict": {"verdict": "confirmed", "rationale": "Repeated complementary path controls",
                             "proof_steps": list(range(2, 12))}}]
 

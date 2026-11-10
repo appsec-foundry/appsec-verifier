@@ -110,6 +110,31 @@ def test_run_experiment_controls_keep_a_budget_apart_from_hand_probes(tmp_path):
         c.before("http_request", {"path": "/unrelated"})
 
 
+def test_a_revised_plan_gets_a_fresh_experiment_budget(tmp_path):
+    # An experiment that aborts on a bad template spends one send of a control; the corrected plan must be able
+    # to send that same control the two times its proof needs, because each accepted plan has its own namespace.
+    c = Controller(context(tmp_path))
+    req = {"method": "GET", "path": "/search", "params": {"q": "x"}}
+    c.plan = {"path": "/search", "positive": "a"}
+    c.before("http_request", req, experiment=True)      # aborted first experiment, baseline sent once
+    c.plan = {"path": "/search", "positive": "b"}        # revised plan: fresh predicates, new token
+    c.before("http_request", req, experiment=True)      # 1 of 2 under the revised plan
+    c.before("http_request", req, experiment=True)      # 2 of 2
+    with pytest.raises(LimitExceeded, match="allowance"):
+        c.before("http_request", req, experiment=True)  # re-sending the revised plan's control still stops
+
+
+def test_the_per_finding_experiment_count_is_bounded(tmp_path):
+    c = Controller(context(tmp_path))
+    req = {"method": "GET", "path": "/search", "params": {"q": "x"}}
+    for n in range(3):
+        c.plan = {"path": "/search", "positive": n}
+        c.before("http_request", req, experiment=True)  # three distinct experiments run their controls
+    c.plan = {"path": "/search", "positive": 99}
+    with pytest.raises(LimitExceeded, match="experiment allowance is exhausted"):
+        c.before("http_request", req, experiment=True)  # a fourth experiment is refused
+
+
 def test_missing_route_never_guessed(tmp_path):
     ctx = context(tmp_path)
     ctx.plan.endpoints = ()
@@ -474,7 +499,9 @@ def test_model_call_deadline_counts_as_host_failure(tmp_path, monkeypatch):
     assert host.failed_calls == 3 and host.broken
 
 
-def test_batch_repetitions_keep_evidence_and_stop_before_extra_requests(tmp_path):
+def test_an_accepted_plan_runs_its_controls_once_automatically(tmp_path):
+    # An accepted read-only SQL challenge runs its ten controls on acceptance, in one action and without a
+    # run_experiment step. The empty fake target gives no contrast, so the proof does not hold.
     sent = []
     ctx = context(tmp_path, lambda *a, **kw: sent.append(kw["params"]) or Resp())
     ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
@@ -482,19 +509,20 @@ def test_batch_repetitions_keep_evidence_and_stop_before_extra_requests(tmp_path
                  "input_location": "params", "input_name": "q", "semantics": "literal"}]}
     actions = iter([
         {"tool": "plan_test", "args": {"kind": "boolean", "hypothesis": "Test the declared SQL predicate",
-         "path": "/search", "strategy": STRATEGY, "input_location": "params", "input_name": "q",
+         "path": "/search", "input_location": "params", "input_name": "q",
          "baseline": "plain", "pointer": "/result", "sql_template": "plain' AND {{predicate}} -- "}},
-        {"tool": "run_experiment", "args": {}},
-        {"tool": "run_experiment", "args": {}},
+        {"verdict": {"verdict": "confirmed", "rationale": "controls", "proof_steps": list(range(2, 12))}},
     ])
 
     class Planner:
         def next_step(self, ctx, history):
-            return next(actions)
+            try:
+                return next(actions)
+            except StopIteration:
+                return {"verdict": {"verdict": "inconclusive", "rationale": "no contrast"}}
 
     result = AgentProbe("injection", Planner).run(ctx)
-    assert result.verdict == "inconclusive" and result.limits_hit == "stagnation"
-    assert len(sent) == 10 and len(result.poc["steps"]) == 10
+    assert len(sent) == 10 and result.verdict == "inconclusive"
 
 
 SEARCH_VARIANT = {"id": "v-search", "hypothesis": "q is rendered as HTML in the heading", "request": {
@@ -535,26 +563,18 @@ def page_loads(status, *steps):
     return {"condition": "The search page loads", "status": status, **({"steps": list(steps)} if steps else {})}
 
 
-def test_rejected_plans_leave_the_allowance_to_the_corrected_plan(tmp_path):
-    """Two plans rejected for their strategy must not use up the corrected one, whose key is the same."""
+def test_a_re_declared_plan_need_not_explain_itself(tmp_path):
+    """Dropping the revision-reason rule (VER-043): re-declaring a plan is accepted without a reason, and an
+    executed marker on the finding's route still confirms."""
     ctx = xss_context(tmp_path)
-    logs = []
-    ctx.log = logs.append
-    revised = xss_plan(page_loads("assumed"))
-    revised["args"]["strategy"] = {**revised["args"]["strategy"], "revision_reason": "the page reads q after load"}
     script = Script([
         xss_plan(page_loads("assumed")),
-        xss_plan(page_loads("assumed")),  # a revision without its reason
-        xss_plan(page_loads("assumed")),
-        revised,  # differs only in its strategy, so its repetition key is the same
+        xss_plan(page_loads("assumed")),  # re-declared, no reason required
         {"tool": "browser_check", "args": {"path": "/#/search?q=<svg/onload=alert('m1'.concat('m2'))>"}},
-        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [5]}},
+        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [3]}},
     ])
     result = AgentProbe("xss", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.limits_hit is None
-    errors = [r["result"]["error"] for r in logs if (r.get("result") or {}).get("error")]
-    assert len(errors) == 2
-    assert all("a revised plan must explain the new observation" in e for e in errors)
 
 
 @pytest.mark.parametrize("plan_path", ["/#/search", "/#/search?q=<test>", "/#/search?q=<test>&lang=en"])

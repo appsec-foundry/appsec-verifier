@@ -213,10 +213,21 @@ def run_verification(
     ]
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
+    def _variant_signature(plan):
+        """The request a plan tests (method, path, sorted inputs). Variants of one finding that share it are
+        verified once (VER-039)."""
+        variants = getattr(plan, "verification_context", {}).get("variants", [])
+        req = (variants[0].get("request") if variants else None) or (
+            {"method": plan.endpoints[0].method, "path": plan.endpoints[0].path}
+            if getattr(plan, "endpoints", ()) else {})
+        inputs = tuple(sorted((i.get("location"), i.get("name")) for i in (req.get("inputs") or [])))
+        return (req.get("method", "GET"), req.get("path", ""), inputs)
+
     results = []
     groups = {}
     last_variant = {p.id: i for i, p in enumerate(plans, start=1)}
     confirmed_ids: set[str] = set()  # VER-039: one confirmed variant retires the finding's other variants
+    tested_signatures: dict[str, set] = {}  # VER-039: a request already tested is not tested again
     stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
@@ -227,6 +238,13 @@ def run_verification(
             res = ProbeResult(
                 verdict="not-attempted",
                 rationale="not tested: another variant of this finding already confirmed it",
+            )
+            if progress is not None:
+                progress.finding(plan, agent=False)
+        elif shown and _variant_signature(plan) in tested_signatures.get(plan.id, set()):
+            res = ProbeResult(
+                verdict="not-attempted",
+                rationale="not tested: another variant of this finding already tested the same request",
             )
             if progress is not None:
                 progress.finding(plan, agent=False)
@@ -243,6 +261,8 @@ def run_verification(
         else:
             if shown and progress is not None:
                 progress.finding(plan)
+            if shown:
+                tested_signatures.setdefault(plan.id, set()).add(_variant_signature(plan))
             budget.begin_finding()  # VER-051: this finding's per-finding spend cap starts here
             try:
                 res = _verify_one(plan, registry, ctx_factory, log)
@@ -269,8 +289,18 @@ def run_verification(
             from .evidence_review import review_finding
 
             group = groups.pop(plan.id)
-            review_stop = review_finding([(c, r) for _, _, c, r in group],
-                                         stop="interrupted" if interrupted else stopped)
+            # VER-042: the evidence presentation is reviewed only for a finding with a confirmed variant; an
+            # unconfirmed finding records a not-reviewed state without a model call. A run interruption or limit
+            # takes precedence as the reason.
+            if interrupted:
+                review_reason = "interrupted"
+            elif stopped:
+                review_reason = stopped
+            elif plan.id not in confirmed_ids:
+                review_reason = "no confirmed variant to present"
+            else:
+                review_reason = None
+            review_stop = review_finding([(c, r) for _, _, c, r in group], stop=review_reason)
             if review_stop == "interrupted":
                 interrupted = True
             elif review_stop in _RUN_LIMITS:

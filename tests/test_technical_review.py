@@ -208,8 +208,12 @@ def test_qa_question_returns_to_same_loop_and_follow_up_produces_checked_proof(t
 def test_follow_up_cannot_reset_repetitions_and_retains_already_checked_proof(tmp_path):
     sent = []
     ctx = context(tmp_path, redirect_target(sent))
-    factory, _, _, _ = scripted_factory([attempt(), conclusion(1), attempt(), conclusion(3), attempt()],
-                                        [question(), question()])
+    # QA engages on the first inconclusive verdict, so it still reviews the later confirmed proof (VER-046); its
+    # follow-up cannot reset the repetition allowance, and the already-checked proof is retained when the
+    # follow-up stops at stagnation.
+    actions = [{"verdict": {"verdict": "inconclusive", "rationale": "no redirect observed yet"}},
+               attempt(), conclusion(2), attempt(), attempt()]
+    factory, _, _, _ = scripted_factory(actions, [question(), question()])
     result = AgentProbe("open-redirect", factory, max_steps=6).run(ctx)
     assert len(sent) == 2 and result.limits_hit == "stagnation"
     assert result.verdict == "confirmed" and result.proof["checked"]

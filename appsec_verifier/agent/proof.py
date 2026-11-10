@@ -86,6 +86,28 @@ def redirect_host(marker) -> str | None:
     return "".join(marker) + ".invalid" if marker and all(marker) else None
 
 
+def proof_ready(ctx, history: list[dict]):
+    """The recorded steps that already meet this finding's class proof through a signal the code sets itself —
+    an executed XSS marker, an SSRF callback hit, a path-traversal marker read — for the agent's next step, or
+    None. Pure: it selects nothing the model merely asserts, and proof.py re-checks every cited step before a
+    confirmed verdict stands (VER-009 to VER-013). Injection readiness is reported by the experiment feedback."""
+    cls = getattr(ctx.plan, "cls", None)
+    if cls == "xss":
+        steps = [n for n, h in enumerate(history, 1)
+                 if h.get("tool") == "browser_check" and isinstance(h.get("result"), dict)
+                 and h["result"].get("executed") is True and h["result"].get("context_verified") is True]
+    elif cls == "ssrf":
+        steps = [n for n, h in enumerate(history, 1)
+                 if h.get("tool") == "http_request" and (h.get("result") or {}).get("callback_hit") is True]
+    elif cls == "path-traversal" and not any(
+            r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", [])):
+        steps = [n for n, h in enumerate(history, 1)
+                 if h.get("tool") == "http_request" and (h.get("result") or {}).get("marker_read") is True]
+    else:
+        return None
+    return sorted(steps) or None
+
+
 def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeResult:
     """`result` if it is not confirmed or its proof holds, else an inconclusive result with the reason."""
     if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
@@ -331,23 +353,27 @@ def _downgrade(result: ProbeResult, reason: str, label: str = "indicative, not p
 
 
 def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
-    start, plan = latest_plan(history)
-    if getattr(ctx.plan, "verification_context", {}).get("variants") and (
-        not start or plan.get("kind") != "execution" or not plan.get("variant")
-    ):
-        return _downgrade(result, "declare an execution plan that selects the XSS variant; its route decides which "
-                                  "browser_check counts")
+    # No execution plan is required (VER-043). The probe is pinned to one variant (planning.expand_variants);
+    # that variant's request route, and any request the code derived for this finding, decide which
+    # browser_check counts, so the per-variant discipline the old plan provided is kept without the plan. If
+    # the agent did declare a plan with a path, it narrows to that path.
+    variants = getattr(ctx.plan, "verification_context", {}).get("variants", [])
+    routes = [v["request"]["path"] for v in variants if (v.get("request") or {}).get("path")]
+    routes += [r["path"] for r in getattr(ctx, "derived_requests", [])]
+    _, plan = latest_plan(history)
+    if plan.get("path"):
+        routes = [plan["path"]]
     proof_steps = [
         h
         for h in history
         if h.get("tool") == "browser_check"
-        and (not plan.get("path") or planned_route(plan["path"], h.get("args", {}).get("path") or ""))
+        and (not routes or any(planned_route(rp, h.get("args", {}).get("path") or "") for rp in routes))
         and isinstance(h.get("result"), dict)
         and h["result"].get("executed") is True
         and h["result"].get("context_verified") is True
     ]
     if not proof_steps:
-        where = f" on the planned route {plan['path']}" if plan.get("path") else ""
+        where = f" on the finding's route {routes[0]}" if routes else ""
         return _downgrade(result, "no browser_check saw the marker execute" + where, "indicative, not executed")
     joined = "".join(getattr(ctx, "marker", None) or ())
     # The echo guard applies to the proof step's own request: a browser_check whose URL already carries the

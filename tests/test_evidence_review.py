@@ -17,6 +17,7 @@ from test_runner import _plan, _run
 
 from appsec_verifier.agent.hosts import HostPlanner, HostReply
 from appsec_verifier.agent.technical_review import QA_SCHEMA
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import Limits, RunBudget
 from appsec_verifier.progress import RunProgress
 from appsec_verifier.scope import ScopeGuard
@@ -261,10 +262,17 @@ def test_dimensions_are_independent_of_model_opinion_and_paths_are_confined(tmp_
     ctx.evidence_dir = tmp_path / "evidence"
     ctx.evidence_dir.mkdir()
     png(ctx.evidence_dir / "tall.png", height=4000)
-    res.evidence = [{"kind": "screenshot", "path": "evidence/tall.png"}]
+    # An oversized application screenshot, which the report embeds, is flagged.
+    res.evidence = [{"kind": "screenshot", "presentation": "application", "path": "evidence/tall.png"}]
     review_finding([(ctx, res)])
     assert res.evidence_review["status"] == "needs-attention"
     assert res.evidence_review["issues"][0]["code"] == "readability"
+    # An HTTP exchange panel is saved as a file and not embedded, so its height is not a readability issue.
+    ctx2, res2, *_ = pair([CLEAR])
+    ctx2.evidence_dir = ctx.evidence_dir
+    res2.evidence = [{"kind": "screenshot", "path": "evidence/tall.png"}]
+    review_finding([(ctx2, res2)])
+    assert res2.evidence_review["status"] == "clear"
     outside = tmp_path / "outside.png"
     png(outside)
     (ctx.evidence_dir / "link.png").symlink_to(outside)
@@ -314,29 +322,29 @@ def test_report_leaves_out_the_revised_explanation_and_console_shows_rounds():
 
 
 def test_runner_groups_variants_and_report_matches_schema():
-    ctx, _, host, _, reviewers = pair([CLEAR, issue(), revision(), CLEAR])
-    agents = []
+    ctx, _, host, _, reviewers = pair([CLEAR])
 
     class Probe:
         def run(self, actual):
-            agents.append(Planner(host))
-            actual.evidence_test_planner = agents[-1]
+            actual.evidence_test_planner = Planner(host)
             actual.evidence_reviewer_factory = ctx.evidence_reviewer_factory
-            # A confirmation retires later variants (VER-039); unresolved variants still group for review.
-            return replace(pair([])[1], verdict="inconclusive", proof=None)
+            # One T-1 variant confirms, so the finding is reviewed (VER-042); its inconclusive sibling still
+            # groups with it. The variants carry different requests, so neither is dropped as a duplicate.
+            confirmed = actual.plan.variant_digest == "ab"
+            return replace(pair([])[1], verdict="confirmed" if confirmed else "inconclusive",
+                           proof={"checked": True, "executed": True} if confirmed else None)
 
-    a = _plan("T-1", "xss")
-    b = replace(a, variant_digest="ab")
+    a = replace(_plan("T-1", "xss"), endpoints=(Endpoint("GET", "/a", None),))
+    b = replace(a, variant_digest="ab", endpoints=(Endpoint("GET", "/b", None),))
     doc = _run([a, _plan("T-2", "xss"), b], registry=ProbeRegistry({"xss": Probe()}))
-    # T-2 finishes before the second T-1 variant, so its review is first.
-    # Give it the clear response and reserve corrections for the grouped T-1.
-    assert len(reviewers) == 2 and len(host.calls) == 4
-    assert len(agents[0].requests) == 1 and not agents[1].requests and not agents[2].requests
+    # T-2 stays inconclusive, so it is not reviewed; T-1's group, with both variants, is reviewed once.
+    assert doc["results"][1]["finding_ref"]["id"] == "T-2"
+    assert doc["results"][1]["evidence_review"]["status"] == "not-reviewed"
     assert doc["results"][0]["evidence_review"]["status"] == "clear"
-    schema = yaml.safe_load(Path("schemas/verification.schema.yaml").read_text())
-    Draft202012Validator(schema).validate(doc)
     assert doc["results"][0]["evidence_review"] == doc["results"][2]["evidence_review"]
     assert doc["results"][0]["evidence_review"]["variants"] == ["T-1", "T-1-ab"]
+    schema = yaml.safe_load(Path("schemas/verification.schema.yaml").read_text())
+    Draft202012Validator(schema).validate(doc)
 
 
 def test_strict_schemas_reject_unknown_fields_at_every_object():

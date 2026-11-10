@@ -45,14 +45,6 @@ def _tool_defs() -> list[dict]:
             },
         },
         {
-            "name": "run_experiment",
-            "description": "Execute the accepted mechanism-specific challenge plan: "
-            "ten read-only requests (five controls repeated twice). Each request is independently guarded, "
-            "budgeted and numbered in history. Cite those http_request step numbers. No automatic writes.",
-            "input_schema": {"type": "object",
-                             "properties": {"role": {"type": ["string", "null"]}}},
-        },
-        {
             "name": "plan_test",
             "description": "Declare the hypothesis and controls. An injection experiment must be declared BEFORE "
             "its proof requests; for other classes the plan guides you, and answered requests that already match "
@@ -332,13 +324,14 @@ def _system(ctx) -> str:
         "An intended calculator or query language is not an injection vulnerability. "
         "SQL confirmation needs sql_template with exactly one {{predicate}} placeholder at the SQL predicate "
         "position, e.g. known' AND {{predicate}} -- . The tool generates complementary fresh true/false pairs. "
-        "Once the plan is accepted, run the proof with run_experiment: it sends all ten read-only controls in one "
-        "action and submits the proof, so never send the controls one by one with http_request. Validate the "
-        "template first with at most one true and one false diagnostic probe; if a probe or run_experiment returns "
-        "a server error the template is wrong, so revise the plan (resubmit plan_test with the corrected template "
-        "and an optional short note) and run it again, rather than hand-probing a working template. Only a "
-        "write-only injection finding in intrusive mode sends each control yourself, twice per group, keeping all "
-        "other inputs and the identity fixed. Use the recorded controls unchanged. "
+        "When the plan is accepted the Verifier runs its read-only controls at once, in one step and without "
+        "another model call, and reports whether the proof holds and which steps carry it; then submit_verdict "
+        "citing those steps. Set role in the plan if the controls need an identity. You need not send the "
+        "controls yourself. Validate the template first with at most one true and one false diagnostic probe; if "
+        "a probe or the controls return a server error the template is wrong, so revise the plan (resubmit "
+        "plan_test with the corrected template) and let it run again, rather than hand-probing a working "
+        "template. Only a write-only injection finding in intrusive mode sends each control yourself, twice per "
+        "group, keeping all other inputs and the identity fixed. Use the recorded controls unchanged. "
         "Legacy boolean differences and timing alone cannot confirm injection; "
         "unimplemented mechanisms stay inconclusive. "
         "For timing, alternate two baseline and two delayed requests with the same response; use only a "
@@ -363,6 +356,8 @@ def _system(ctx) -> str:
         "For open redirect, path traversal and SSRF: follow the proof instructions below; never aim at system "
         "files, internal or metadata addresses, or anything other than the marker they name (VER-012). "
         "Do not pursue other weaknesses; note anything incidental as an observation. "
+        "A tool result may report proof_ready with the steps that already satisfy this finding's proof; when it "
+        "does, call submit_verdict with verdict confirmed and cite those steps in proof_steps. "
         "When you have enough evidence — or cannot get it — call submit_verdict. "
         "Negative verdicts also need cited reference and test observations. Scope refusals, login failures "
         "and transport errors do not establish a target control. Report only the tested variant." + _marker_hint(ctx)

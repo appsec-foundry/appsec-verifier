@@ -9,8 +9,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from appsec_verifier.agent.proof import check_proof
+from appsec_verifier.agent.proof import check_proof, proof_ready
 from appsec_verifier.verify.probes import ProbeResult
+
+
+def test_proof_ready_reports_code_checked_signals_only():
+    xss_exec = {"tool": "browser_check", "args": {"path": "/#/x"},
+                "result": {"executed": True, "context_verified": True}}
+    xss_reflect = {"tool": "browser_check", "args": {"path": "/#/x"},
+                   "result": {"executed": False, "context_verified": True}}
+    assert proof_ready(_ctx("xss"), [xss_reflect, xss_exec]) == [2]
+    assert proof_ready(_ctx("xss"), [xss_reflect]) is None
+    hit = {"tool": "http_request", "args": {"path": "/x"}, "result": {"status": 200, "callback_hit": True}}
+    assert proof_ready(_ctx("ssrf"), [hit]) == [1]
+    read = {"tool": "http_request", "args": {"path": "/x"}, "result": {"status": 200, "marker_read": True}}
+    assert proof_ready(_ctx("path-traversal", scope={}), [read]) == [1]
+    # Injection readiness is reported by the experiment feedback, not here.
+    assert proof_ready(_ctx("injection"), [hit]) is None
 
 
 def _ctx(cls, **kw):
@@ -163,7 +178,7 @@ def test_xss_execution_counts_only_on_the_planned_route(checked_path, verdict):
     res = _check("xss", _xss_history(checked_path), [2], marker=("m1", "m2"))
     assert res.verdict == verdict
     if verdict == "inconclusive":
-        assert "no browser_check saw the marker execute on the planned route /#/search?q=<test>" in res.rationale
+        assert "no browser_check saw the marker execute on the finding's route /#/search?q=<test>" in res.rationale
 
 
 def test_an_execution_before_the_latest_plan_counts_and_a_missing_assumption_blocks_nothing():

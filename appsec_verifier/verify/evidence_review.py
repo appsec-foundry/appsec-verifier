@@ -256,7 +256,10 @@ def _checks(variants):
             detail = None
             if not image["available"]:
                 detail = "A referenced screenshot is unavailable or its PNG dimensions cannot be checked."
-            elif not (0 < image["width"] <= 1280 and 0 < image["height"] <= 1200):
+            elif image["application"] and not (0 < image["width"] <= 1280 and 0 < image["height"] <= 1200):
+                # The compact limit governs the application screenshot embedded in the report. HTTP exchange
+                # panels are saved as files, not embedded (VER-035), so their height is not a presentation
+                # defect and is not raised against the test agent, which could not change it anyway.
                 detail = "A screenshot exceeds the compact 1280 by 1200 pixel panel limit or has invalid dimensions."
             if detail:
                 issue = {"variant": v["variant"], "code": "readability", "detail": detail}

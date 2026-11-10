@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import Limits
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.verify import default_registry, run_verification
@@ -111,6 +112,31 @@ def test_confirmed_variant_retires_remaining_variants_of_the_same_finding():
     assert doc["results"][0]["verdict"] == "confirmed"
     assert doc["results"][1]["verdict"] == "not-attempted"
     assert "another variant of this finding already confirmed it" in doc["results"][1]["rationale"]
+
+
+def test_a_variant_with_a_request_already_tested_is_not_retested():
+    """VER-039: variants that carry the same request are verified once, even when none confirms."""
+    seen = []
+
+    class RecordXss:
+        cls = "xss"
+
+        def run(self, ctx: ProbeContext) -> ProbeResult:
+            seen.append(ctx.plan.variant_id)
+            return ProbeResult(verdict="inconclusive", rationale="no proof")
+
+    reg = ProbeRegistry()
+    reg.register(RecordXss())
+    base = dict(id="T-1", cwe="CWE-79", severity="High", title="t", match_key="f.ts|CWE-79",
+                instance="f.ts:10", status="dynamic", cls="xss", reason="r")
+    v1 = FindingPlan(**base, variant_id="v1", endpoints=(Endpoint("GET", "/x", None),))
+    v2 = FindingPlan(**base, variant_id="v2", endpoints=(Endpoint("GET", "/x", None),))  # same request
+    v3 = FindingPlan(**base, variant_id="v3", endpoints=(Endpoint("GET", "/y", None),))  # different request
+    doc = _run([v1, v2, v3], registry=reg)
+    assert seen == ["v1", "v3"]  # v2 skipped as a duplicate request
+    assert doc["results"][1]["verdict"] == "not-attempted"
+    assert "already tested the same request" in doc["results"][1]["rationale"]
+    assert doc["results"][2]["verdict"] == "inconclusive"
 
 
 def test_identities_expose_role_only_no_secrets():

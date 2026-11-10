@@ -44,7 +44,7 @@ _PROPOSAL_CAP = 500
 
 
 def _request_attempts(history: list[dict]) -> int:
-    """Requests that count against the per-finding attempt cap (run_experiment's tagged controls are excluded)."""
+    """Requests that count against the per-finding attempt cap (an experiment's tagged controls are excluded)."""
     return sum(h.get("tool") in ("http_request", "browser_check") and not h.get("experiment") for h in history)
 
 
@@ -158,6 +158,44 @@ class AgentProbe:
             if entries:
                 sent.append({"step": step, "tool": name, "entries": entries})
 
+        def send_experiment_controls(role):
+            """Send the accepted plan's bounded, read-only controls as their own numbered steps, in one action
+            and without a model call (VER-011). Returns (the steps it sent, a ProbeResult to end the probe on a
+            limit, or None). When the accepted plan is not a read-only challenge (a write, out-of-band or other
+            flow), experiment_requests refuses it and nothing is sent, so the agent drives those itself."""
+            sent_steps: list[int] = []
+            try:
+                requests = controller.run(lambda: tools.experiment_requests(role=role))
+            except LimitExceeded as exc:
+                return sent_steps, attach_stopped(_stopped(ctx, len(history) + 1, exc))
+            except ToolError:
+                return sent_steps, None
+            for request in requests:
+                step_n = len(history) + 1
+                try:
+                    ctx.budget.check_time()
+                    ctx.guard.check_window()
+                    if _request_attempts(history) >= self._max_steps:
+                        raise LimitExceeded("attempts", "per-finding request attempt limit reached")
+                    controller.before("http_request", request, experiment=True)
+                    result = controller.run(lambda request=request: tools.http_request(**request))
+                except ToolError as exc:
+                    result = {"error": str(exc)}
+                except LimitExceeded as exc:
+                    keep(step_n, "http_request")
+                    return sent_steps, attach_stopped(_stopped(ctx, step_n, exc))
+                keep(step_n, "http_request")
+                controller.observe("http_request", request, result)
+                if ctx.sessions is not None:
+                    result = ctx.sessions.redact(result)
+                history.append({"tool": "http_request", "args": request, "result": result, "experiment": True})
+                _log(ctx, step_n, tool="http_request", args=request,
+                     result={k: result[k] for k in _LOGGED_RESULT if k in result})
+                sent_steps.append(step_n)
+                if result.get("error") or not 200 <= result.get("status", 0) < 300:
+                    break
+            return sent_steps, None
+
         for decision in range(1, self._max_steps + 1):
             step = len(history) + 1
             ctx.controller_state = {
@@ -211,7 +249,15 @@ class AgentProbe:
                 if last_rejected is not None and verdict.get("verdict") == "inconclusive":
                     result = last_rejected
                     verdict = {**verdict, "proof_steps": last_cited}
-                feedback = qa.consider(history, result, tools, controller, self._max_steps - decision)
+                # VER-046: a confirmed verdict whose proof check passed is not reviewed; QA stays for negative
+                # and unproven conclusions, where it can point at a missing attempt. If QA already engaged this
+                # finding on an earlier conclusion, it still runs so it can close out that objection.
+                feedback = None
+                confirmed_checked = result.verdict == "confirmed" and (result.proof or {}).get("checked") is True
+                if confirmed_checked and not qa.shared.get("reviews", 0):
+                    qa.state["reason"] = "A confirmed verdict whose proof check passed is not reviewed (VER-046)."
+                else:
+                    feedback = qa.consider(history, result, tools, controller, self._max_steps - decision)
                 if feedback is not None:
                     if (result.proof or {}).get("checked") is True:
                         qa_candidate = (result, verdict.get("proof_steps"))
@@ -229,46 +275,6 @@ class AgentProbe:
                 ctx.recapture = partial(recapture, ctx, tools, history, sent, result, verdict.get("proof_steps"))
                 return _finish(ctx, step, result)
             name, args = action["tool"], action["args"]
-            if name == "run_experiment":
-                try:
-                    requests = controller.run(lambda args=args: tools.experiment_requests(**args))
-                except LimitExceeded as exc:
-                    return attach_stopped(_stopped(ctx, step, exc))
-                except ToolError as exc:
-                    result = {"error": str(exc)}
-                    controller.observe(name, args, result)
-                    history.append({"tool": name, "args": args, "result": result})
-                    _log(ctx, step, tool=name, args=args, result=result)
-                    continue
-                for request in requests:
-                    step = len(history) + 1
-                    try:
-                        ctx.budget.check_time()
-                        ctx.guard.check_window()
-                        if _request_attempts(history) >= self._max_steps:
-                            raise LimitExceeded("attempts", "per-finding request attempt limit reached")
-                        controller.before("http_request", request, experiment=True)
-                        result = controller.run(lambda request=request: tools.http_request(**request))
-                    except ToolError as exc:
-                        result = {"error": str(exc)}
-                    except LimitExceeded as exc:
-                        keep(step, "http_request")
-                        return attach_stopped(_stopped(ctx, step, exc))
-                    keep(step, "http_request")
-                    controller.observe("http_request", request, result)
-                    if ctx.sessions is not None:
-                        result = ctx.sessions.redact(result)
-                    history.append({"tool": "http_request", "args": request, "result": result, "experiment": True})
-                    _log(
-                        ctx,
-                        step,
-                        tool="http_request",
-                        args=request,
-                        result={k: result[k] for k in _LOGGED_RESULT if k in result},
-                    )
-                    if result.get("error") or not 200 <= result.get("status", 0) < 300:
-                        break
-                continue
             call = {"tool": name, "args": args, **({"note": action["note"]} if action.get("note") else {})}
             if ctx.progress is not None:
                 ctx.progress.activity(decision, self._max_steps, name, args)
@@ -288,6 +294,29 @@ class AgentProbe:
                 result = ctx.sessions.redact(result)  # VER-016: no credential value reaches the planner
             _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})
             history.append({"tool": name, "args": args, "result": result})
+            # When the steps so far already meet the class proof by a signal the code sets itself (an executed
+            # XSS marker, an SSRF callback hit, a path-traversal marker read), tell the agent so its next step
+            # is the verdict (VER-043). The code still re-checks the cited steps before a confirmed verdict.
+            if name in ("http_request", "browser_check") and isinstance(result, dict):
+                from .proof import proof_ready
+
+                ready = proof_ready(ctx, history)
+                if ready:
+                    result["proof_ready"] = {"steps": ready,
+                                             "next": "submit_verdict confirmed and cite these steps in proof_steps"}
+            # An accepted read-only injection plan runs its own generated controls at once and reports whether
+            # the proof already holds, so the agent submits the verdict instead of a separate step (VER-011,
+            # VER-043). A write, out-of-band or other flow sends nothing here; the agent drives it itself.
+            if name == "plan_test" and result.get("accepted"):
+                sent_steps, stop = send_experiment_controls(args.get("role"))
+                if stop is not None:
+                    return _finish(ctx, len(history), stop)
+                if sent_steps:
+                    from .experiments import injection_ready
+
+                    feedback = injection_ready(ctx, history, sent_steps)
+                    _log(ctx, len(history) + 1, tool="experiment", result=feedback)
+                    history.append({"tool": "experiment", "args": {}, "result": feedback})
         return _finish(
             ctx,
             self._max_steps,

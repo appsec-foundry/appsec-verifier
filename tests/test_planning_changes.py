@@ -58,22 +58,17 @@ def test_parameter_binding_and_real_query_injection(tmp_path, vulnerable):
 
     class Planner:
         def next_step(self, context, history):
+            # The vulnerable plan carries a sql_template, so the Verifier runs its controls on acceptance; the
+            # non-vulnerable plan has explicit controls only, so this planner sends them by hand.
             if not history:
                 return {"tool": "plan_test", "args": declaration}
-            if vulnerable and len(history) == 1:
-                return {"tool": "run_experiment", "args": {}}
             if not vulnerable and len(history) < 7:
                 group = ("baseline", "positive", "negative")[(len(history) - 1) % 3]
                 return {"tool": "http_request", "args": {"path": "/search", "params": {"q": declaration[group]}}}
             if history[-1].get("tool") == "proof_feedback":
                 return {"verdict": {"verdict": "inconclusive", "rationale": "controls insufficient"}}
-            return {
-                "verdict": {
-                    "verdict": "confirmed",
-                    "rationale": "test",
-                    "proof_steps": list(range(2, len(history) + 1)),
-                }
-            }
+            steps = [n for n, h in enumerate(history, 1) if h.get("tool") == "http_request"]
+            return {"verdict": {"verdict": "confirmed", "rationale": "test", "proof_steps": steps}}
 
     try:
         result = AgentProbe("injection", Planner).run(ctx)
@@ -310,7 +305,6 @@ def test_expression_challenges_require_computed_results(tmp_path, cwe, evaluate)
         declaration["expression_template"] = "plain; printf '%s' \"$(({{expression}}))\""
     actions = [
         {"tool": "plan_test", "args": declaration},
-        {"tool": "run_experiment", "args": {}},
         {"verdict": {"verdict": "confirmed", "rationale": "arithmetic evaluation", "proof_steps": list(range(2, 12))}},
     ]
 
@@ -343,12 +337,11 @@ def test_batch_stops_at_request_budget(tmp_path):
     ctx.budget = ctx.http._budget = budget
     actions = [
         {"tool": "plan_test", "args": plan()["args"] | {"sql_template": "plain' AND {{predicate}} -- "}},
-        {"tool": "run_experiment", "args": {}},
     ]
 
     class Planner:
         def next_step(self, context, history):
-            return actions.pop(0)
+            return actions.pop(0) if actions else {"verdict": {"verdict": "inconclusive", "rationale": "stop"}}
 
     result = AgentProbe("injection", Planner).run(ctx)
     assert result.verdict == "inconclusive" and result.limits_hit == "requests"
@@ -452,7 +445,6 @@ def test_literal_inputs_vs_query_operators(tmp_path, mechanism, vulnerable):
     )
     actions = [
         {"tool": "plan_test", "args": declaration},
-        {"tool": "run_experiment", "args": {}},
         {"verdict": {"verdict": "confirmed", "rationale": "operator controls", "proof_steps": list(range(2, 12))}},
     ]
 

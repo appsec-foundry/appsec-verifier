@@ -13,7 +13,7 @@ SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 PLAN_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["kind", "hypothesis", "path", "strategy"],
+    "required": ["kind", "hypothesis", "path"],
     "properties": {
         "kind": {"enum": ["boolean", "timing", "access-control", "control", "execution", "session"]},
         "hypothesis": {"type": "string", "minLength": 10, "maxLength": 1000},
@@ -25,6 +25,8 @@ PLAN_SCHEMA = {
         "method": {"enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH"]},
         "input_location": {"enum": ["params", "query", "json", "form", "path"]},
         "input_name": {"type": "string", "minLength": 1, "maxLength": 128},
+        # The identity the Verifier sends the generated read-only controls as; omit or null for unauthenticated.
+        "role": {"type": ["string", "null"], "maxLength": 80},
         "baseline": SCALAR,
         "positive": SCALAR,
         "negative": SCALAR,
@@ -325,6 +327,18 @@ def injection_check(ctx, history, cited):
     if token(observed["positive"]) == token(observed["negative"]):
         return "the true and false predicates did not separate the observation into two classes"
     return None
+
+
+def injection_ready(ctx, history, steps):
+    """Whether the controls the Verifier just ran already meet the injection proof (VER-011), reported to the
+    agent so its next step is the verdict. Pure: it sets no verdict and writes no evidence; proof.py still
+    re-checks the cited steps before a confirmed verdict stands."""
+    problem = injection_check(ctx, history, steps)
+    if problem is None:
+        return {"proof": "holds", "steps": sorted(steps),
+                "next": "submit_verdict confirmed and cite these steps in proof_steps"}
+    return {"proof": "missing", "reason": problem, "steps": sorted(steps),
+            "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"}
 
 
 def callback_injection_check(ctx, history, cited):

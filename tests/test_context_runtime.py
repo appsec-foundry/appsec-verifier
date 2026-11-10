@@ -67,7 +67,6 @@ def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
     declared["variant"] = variant_id
     actions = [{"tool": "read_context", "args": {"variant": variant_id}}, {"tool": "plan_test", "args": declared}]
     actions += [
-        {"tool": "run_experiment", "args": {}},
         {
             "verdict": {
                 "verdict": "confirmed",
