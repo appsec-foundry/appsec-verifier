@@ -13,7 +13,7 @@ python -m pytest -q         # must pass
 ruff check .                # must be clean (config in pyproject.toml)
 ```
 
-Choose checks by what the change affects. Code, schema, data and packaging changes need `python -m pytest -q` and `ruff check .`; the suite is small, so run it whole. Purely editorial changes to documentation or these instructions need no pytest: check the diff, the links, and that commands and flags match `--help`. Do not repeat a passing check unless what it checks has changed. Report which checks ran and which did not; never present a failing or unexecuted check as passed.
+Choose checks by what the change affects. Code, schema, data and packaging changes need `ruff check .` and the tests that cover them: the test files of the changed modules and those that import them, run as `python -m pytest -q tests/test_x.py …`. Run the whole suite once before the change is reported as done or committed. Purely editorial changes to documentation or these instructions need no pytest: check the diff, the links, and that commands and flags match `--help`. Do not repeat a passing check unless what it checks has changed. Report which checks ran and which did not; never present a failing or unexecuted check as passed.
 
 Do not run `verify`, `preflight` or the guided run against a real target, or with real model calls, to check a change. That needs an explicit request, a target the maintainer is authorised to test, and a cost limit; a request to test or verify a change is not one. `scope` and `preflight --offline` contact nothing and may be used.
 
