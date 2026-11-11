@@ -201,7 +201,7 @@ def test_a_declined_finding_is_reported_untested_with_the_answer(tmp_path, monke
     rc, results, reads, seen = _verify_asking(tmp_path, monkeypatch, "\n")
     out = capsys.readouterr().out
     assert rc == cli.EXIT_OK and len(reads) == 1
-    assert "sqli in login · POST /rest/user/login · asks before it writes" in out
+    assert "  asks  sqli in login · POST /rest/user/login\n" in out and ", 1 asks before it writes\n" in out
     assert results["T-2"] == ("not-attempted", "not tested: safe mode; every request the finding names writes, "
                                                "and the proof sends each control twice; the operator declined "
                                                "write requests")

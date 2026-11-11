@@ -1544,14 +1544,16 @@ def _wrap_whole(text: str, width: int) -> list[str]:
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,
                 full: bool = True, ask=()) -> list[str]:
     """The test plan before the confirmation: one line per finding the run tests, with its title and
-    the requests the assessment names, those that prepare a test resource marked `(prepares)`. Findings
-    with declared variants add one indented line per variant, naming its own request; the runner tries
-    them in that order and stops at the first confirmed variant. Then the findings the run cannot test,
-    grouped by what they need and how to provide it.
+    the requests the assessment names, those that prepare a test resource marked `(prepares)`. A finding
+    whose declared variants differ in request or inputs adds one indented line per variant, naming its own
+    request and inputs, and its line names no requests; the runner tries them in that order and stops at
+    the first confirmed variant. Variants that do not differ get no lines: the finding's line names their
+    request and count. Then the findings the run cannot test, grouped by what they need and how to provide it.
     `hints` replaces a need's how-to with what is actually missing (the browser's cause). Without
     `full` (in `verify`) a line is cut to fit a terminal, and each need gets one row with a few words
     and a pointer to `preflight`, which shows the how-tos. A finding in `ask` is tested only if the operator
-    allows its write requests when it starts (VER-052)."""
+    allows its write requests when it starts (VER-052): the head counts these findings, and a column before
+    the title marks them, or the variant concerned, `asks`, so cutting a line never drops it."""
     if not plans:
         return []
     from .planning import evidence_id
@@ -1563,11 +1565,15 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         if p.id not in groups:
             order.append(p.id)
         groups.setdefault(p.id, []).append(p)
-    # `plans` holds one entry per variant; the head counts findings, and the runs their variants add.
+    # `plans` holds one entry per variant; the head counts findings, the runs their variants add, and the
+    # findings that ask before they write.
     findings = len({p.id for p in plans})
+    asking = [fid for fid in order if any(evidence_id(v) in ask for v in groups[fid])]
     runs = f" ({len(tested)} runs with their variants)" if len(tested) > len(groups) else ""
+    asks = (f", {len(asking)} " + ("asks before it writes" if len(asking) == 1 else "ask before they write")
+            if asking else "")
     head = (
-        f"{len(groups)} of {_count(findings, 'finding')} will be tested{runs}"
+        f"{len(groups)} of {_count(findings, 'finding')} will be tested{runs}{asks}"
         if tested
         else "this run can test none of them"
         if findings > 1
@@ -1576,44 +1582,60 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     lines = ["", f"{st('Test plan', 'bold')}     {head}"]
     id_w, sev_w, cls_w = (max((len(printable(getattr(p, k) or "")) for p in tested), default=0)
                           for k in ("id", "severity", "cls"))
+    indent = " " * (2 + id_w + 2 + sev_w + 2 + cls_w + 2)
+    width = len(indent) + (len("asks  ") if asking else 0)
+
+    def mark(asks: bool) -> str:       # a column of its own, so cutting a line never drops it
+        if not asking:
+            return ""
+        return st("asks", "warn") + "  " if asks else " " * len("asks  ")
 
     def request(endpoint) -> str:      # whether it needs a login is settled: without an account it is not tested
         return printable(str(endpoint)).removesuffix(" (login)")
 
-    def variant_request(p) -> str:
+    def variant_request(p) -> tuple[str, str]:
+        """`METHOD path` of the plan's variant and the inputs it names, e.g. `q (query)`."""
         variants = (getattr(p, "verification_context", None) or {}).get("variants") or []
         if not variants:
-            return ""
+            return "", ""
         req = (variants[0] or {}).get("request") or {}
         method = printable(req.get("method") or "")
         path = printable(req.get("path") or "")
-        return f"{method} {path}".strip()
+        inputs = ", ".join(f"{printable(i.get('name') or '')} ({printable(i.get('location') or '')})"
+                           for i in req.get("inputs") or [])
+        return f"{method} {path}".strip(), inputs
 
     for fid in order:
         group = groups[fid]
         p = group[0]
         title = printable(p.title or p.cwe or "")
-        requests = ", ".join([*map(request, p.endpoints[:2]),
-                              *(request(e) + " (prepares)" for e in getattr(p, "preparation", ()))])
-        tail_parts = [requests, f"{len(group)} variants"] if len(group) > 1 else [requests]
-        if any(evidence_id(v) in ask for v in group):
-            tail_parts.append("asks before it writes")
-        tail = " · ".join(x for x in tail_parts if x)
+        # Declared variants name their own requests: a row each when they differ, otherwise the shared one here.
+        rows = [variant_request(v) for v in group] if any(getattr(v, "variant_id", None) for v in group) else []
+        distinct = len(set(rows)) > 1
+        if distinct:
+            named = []
+        elif rows and rows[0][0]:
+            named = [rows[0][0]]
+        else:
+            named = list(map(request, p.endpoints[:2]))
+        requests = ", ".join([*named, *(request(e) + " (prepares)" for e in getattr(p, "preparation", ()))])
+        tail_parts = [requests, f"{len(group)} variants"] if len(group) > 1 and not distinct else [requests]
+        tail = " · ".join(x for x in tail_parts if x) or ("" if distinct else "no request in the assessment")
         text = title + ((" · " + tail) if tail else "")
         if st.enabled and not full:
-            text = _fit(text, max(columns() - 1 - (2 + id_w + 2 + sev_w + 2 + cls_w + 2), 20))
+            text = _fit(text, max(columns() - 1 - width, 20))
         rest = text[len(title):]
+        head_asks = not distinct and any(evidence_id(v) in ask for v in group)
         lines.append(f"  {printable(p.id):<{id_w}}  {st(f'{printable(p.severity).lower():<{sev_w}}', 'muted')}  "
-                     f"{printable(p.cls or ''):<{cls_w}}  {text[:len(title)]}" + (st(rest, "muted") if rest else ""))
-        if len(group) > 1:
-            indent = " " * (2 + id_w + 2 + sev_w + 2 + cls_w + 2)
-            for n, vp in enumerate(group, start=1):
+                     f"{printable(p.cls or ''):<{cls_w}}  {mark(head_asks)}{text[:len(title)]}"
+                     + (st(rest, "muted") if rest else ""))
+        if distinct:
+            for n, (vp, (req_text, inputs)) in enumerate(zip(group, rows, strict=True), start=1):
                 vid = printable(getattr(vp, "variant_id", None) or f"v{n}")
-                req_text = variant_request(vp) or "no request declared"
-                body = f"{vid}  {req_text}"
+                body = f"{vid}  {req_text or 'no request declared'}" + (f"  {inputs}" if inputs else "")
                 if st.enabled and not full:
-                    body = _fit(body, max(columns() - 1 - len(indent), 20))
-                lines.append(f"{indent}{st(body, 'muted')}")
+                    body = _fit(body, max(columns() - 1 - width, 20))
+                lines.append(f"{indent}{mark(evidence_id(vp) in ask)}{st(body, 'muted')}")
         if p.selection_reason:
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
