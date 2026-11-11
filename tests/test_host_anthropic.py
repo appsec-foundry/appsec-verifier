@@ -296,7 +296,12 @@ def _full_ctx(tmp_path, transport):
                         sessions=sessions, source=SourceReader(tmp_path), target_base=scope["base_url"])
 
 
-def test_scripted_model_confirms_idor_through_tools(tmp_path):
+_INTENDED = {"code": "interpretation", "detail": "The basket route shares baskets with every customer by design.",
+             "question": "Is a basket meant to be private?"}
+
+
+@pytest.mark.parametrize("issues", [[], [_INTENDED]])
+def test_scripted_model_confirms_idor_through_tools(tmp_path, issues):
     calls = []
 
     def transport(m, u, h, **k):
@@ -327,7 +332,8 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
                     proof_steps=[2, 3],
                 )
             ),
-            _msg({"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0}),
+            _msg({"action": "review", "status": "needs-attention" if issues else "clear", "issues": issues,
+                  "steps": [], "pointer": None, "offset": 0}),
         ]
     )
     ctx = _full_ctx(tmp_path, transport)
@@ -348,7 +354,11 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path):
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=8).run(ctx)
     assert res.verdict == "confirmed" and res.identities_used == ["customer-a", "customer-b"]
     assert calls == ["Bearer AAAA", "Bearer BBBB"]
-    # A confirmed verdict whose proof check passed is not reviewed (VER-046), so no QA model call is made.
-    assert ctx.budget.calls == 4 and ctx.budget.cost == pytest.approx(4 * 0.008)
-    assert res.technical_review["status"] == "not-reviewed" and res.proof["checked"]
+    # An access-control confirmation is reviewed for intended access (VER-046): one QA call within the run budget.
+    # An objection stands beside the verdict; it neither changes it nor starts another test step or round.
+    assert ctx.budget.calls == 5 and ctx.budget.cost == pytest.approx(5 * 0.008)
+    assert res.technical_review["status"] == ("needs-attention" if issues else "clear")
+    assert res.technical_review["issues"] == issues and res.technical_review["rounds"] == 0
+    assert res.proof["checked"] and "intended authorization" in client.calls[4]["system"]
+    assert json.loads(client.calls[4]["messages"][0]["content"])["remaining_correction_rounds"] == 0
     assert '"status": 200' in client.calls[2]["messages"][0]["content"]  # results reach the model as data

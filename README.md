@@ -129,7 +129,7 @@ Before it contacts the target, `verify` shows the test plan: the findings it wil
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots.
 
-Two further model reviews run within the run's limits: one checks negative and unproven results for missing tests, the other checks that the evidence of a confirmed finding is understandable ([technical QA](docs/cli.md#technical-qa-ver-046), [presentation review](docs/cli.md#evidence-presentation-review)).
+Two further model reviews run within the run's limits: one checks negative and unproven results for missing tests and whether a confirmed access-control result shows access the application intends, the other checks that the evidence of a confirmed finding is understandable ([technical QA](docs/cli.md#technical-qa-ver-046), [presentation review](docs/cli.md#evidence-presentation-review)).
 
 `--resume` continues a run that did not finish: findings with a verdict keep it, the others are tested. A report already in `--output` is replaced only with `--overwrite`. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding; the originals stay unchanged.
 

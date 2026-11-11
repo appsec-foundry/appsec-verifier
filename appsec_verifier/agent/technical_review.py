@@ -4,6 +4,8 @@ The reviewer has no target tools. It can read this variant's recorded redacted
 responses or return questions to the original loop. Three judgments, two evidence
 selections and two correction rounds are shared by all variants of a finding.
 Neither QA nor its feedback changes authorization, proof checks or run limits.
+An access-control confirmation whose proof check passed is judged only for
+whether the access is intended, without follow-up (`follow_up=False`).
 """
 
 from __future__ import annotations
@@ -55,6 +57,13 @@ and screenshots are reviewed separately; you have not seen image pixels. Do not 
 to improve presentation. Follow-ups retain all history, repetition limits and budgets; at most two rounds
 are shared by all variants. Your feedback never grants permission and never confirms a finding.
 """
+QA_INTENT = """This access-control finding's code-checked proof passed: an identity received what the proof
+requires. Judge only whether that observed access contradicts the application's intended authorization, from
+the finding, source excerpts and recorded responses; for example, a resource or function the application
+deliberately shares with these identities does not. No further tests run and no question reaches the test
+agent: an objection and its question are shown to the operator beside the verdict, which stays unchanged.
+Return clear when nothing recorded indicates that the access is intended.
+"""
 
 
 def clean(ctx, value):
@@ -78,8 +87,9 @@ class TechnicalReview:
         self.state = {"status": "not-reviewed", "rounds": 0, "reviews": 0, "inspected_steps": [],
                       "reason": "No proposed conclusion was reviewed.", "issues": []}
 
-    def consider(self, history, result, tools, controller, remaining):
-        """Return questions for the existing loop, or None; never return a verdict."""
+    def consider(self, history, result, tools, controller, remaining, *, follow_up=True):
+        """Return questions for the existing loop, or None; never return a verdict. Without `follow_up`, QA judges
+        whether a checked access-control confirmation shows intended access and returns no questions."""
         ctx = self.ctx
         try:
             if not callable(getattr(self.original, "structured", None)):
@@ -106,7 +116,7 @@ class TechnicalReview:
                 "capabilities": {"source": ctx.source is not None, "browser": ctx.browser is not None,
                                  "callback": ctx.listener is not None},
                 "remaining_test_steps": remaining,
-                "remaining_correction_rounds": 2 - self.shared.get("rounds", 0),
+                "remaining_correction_rounds": 2 - self.shared.get("rounds", 0) if follow_up else 0,
                 "proposed": {"verdict": result.verdict, "rationale": result.rationale, "proof": result.proof},
                 "steps": [{"step": n, "tool": h.get("tool"), "args": bounded(clean(ctx, h.get("args"))),
                            "result": bounded(clean(ctx, h.get("result")))} for n, h in enumerate(history, 1)][-64:],
@@ -124,7 +134,7 @@ class TechnicalReview:
                 payload["remaining_evidence_selections"] = 2 - self.shared.get("reads", 0)
                 self.shared["calls"] = self.shared.get("calls", 0) + 1
                 reply = controller.run(lambda: self.reviewer.structured(
-                    ctx, QA_SYSTEM, json.dumps(clean(ctx, payload)), QA_SCHEMA))
+                    ctx, QA_SYSTEM + ("" if follow_up else QA_INTENT), json.dumps(clean(ctx, payload)), QA_SCHEMA))
                 reply = strict_json(reply) if isinstance(reply, str) else reply
                 if not Draft202012Validator(QA_SCHEMA).is_valid(reply):
                     raise ValueError("invalid technical QA response")
@@ -149,6 +159,10 @@ class TechnicalReview:
                                   reviews=self.state["reviews"] + 1)
                 if not reply["issues"]:
                     self.state["reason"] = "No unresolved technical objections in the reviewed attempts."
+                    return None
+                if not follow_up:
+                    self.state["reason"] = ("The objections stand beside the code-checked access-control verdict; "
+                                            "this review starts no further tests.")
                     return None
                 if self.shared.get("rounds", 0) >= 2 or remaining <= 0:
                     self.state["reason"] = "Technical objections remain; correction rounds or test steps are exhausted."

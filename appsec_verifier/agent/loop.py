@@ -328,13 +328,16 @@ class AgentProbe:
                     verdict = {**verdict, "proof_steps": last_cited}
                 # VER-046: a confirmed verdict whose proof check passed is not reviewed; QA stays for negative
                 # and unproven conclusions, where it can point at a missing attempt. If QA already engaged this
-                # finding on an earlier conclusion, it still runs so it can close out that objection.
+                # finding on an earlier conclusion, it still runs so it can close out that objection. An
+                # access-control confirmation is judged for intended access only, with no follow-up.
                 feedback = None
                 confirmed_checked = result.verdict == "confirmed" and (result.proof or {}).get("checked") is True
-                if confirmed_checked and not qa.shared.get("reviews", 0):
+                intent_only = confirmed_checked and self.cls == "access-control"
+                if confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
                     qa.state["reason"] = "A confirmed verdict whose proof check passed is not reviewed (VER-046)."
                 else:
-                    feedback = qa.consider(history, result, tools, controller, self._max_steps - decision)
+                    feedback = qa.consider(history, result, tools, controller, self._max_steps - decision,
+                                           follow_up=not intent_only)
                 if feedback is not None:
                     if (result.proof or {}).get("checked") is True:
                         qa_candidate = (result, verdict.get("proof_steps"))

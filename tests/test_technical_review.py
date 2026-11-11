@@ -221,6 +221,14 @@ def test_follow_up_cannot_reset_repetitions_and_retains_already_checked_proof(tm
     assert "follow-up stopped" in " ".join(result.observations)
 
 
+def test_a_checked_confirmation_of_another_class_than_access_control_is_not_reviewed(tmp_path):
+    ctx = context(tmp_path, redirect_target([]))
+    factory, host, _, _ = scripted_factory([attempt(), conclusion(1)], [])
+    result = AgentProbe("open-redirect", factory, max_steps=3).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"]
+    assert not host.calls and result.technical_review["status"] == "not-reviewed"
+
+
 def test_qa_cannot_authorize_an_unrelated_follow_up(tmp_path):
     sent = []
     ctx = context(tmp_path, redirect_target(sent))
