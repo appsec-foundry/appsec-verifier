@@ -37,6 +37,10 @@ question for a higher cost ceiling waits (budget_prompt.py), the status line is 
 (CI, logs) each entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
 assessment, the model or the target passes the run's redaction and `printable` before it is shown, so no
 credential value, line break or escape sequence from it reaches the console.
+
+With ``--console-log``, `console_log` copies what `verify` prints to standard output and standard error to
+``console.log`` in the output directory, with the console's colour or, ``plain``, without colour codes; the
+status line is left out.
 """
 
 from __future__ import annotations
@@ -213,6 +217,77 @@ class _StatusGuard:
 
     def __getattr__(self, name: str):
         return getattr(self.stream, name)
+
+
+class ConsoleLog:
+    """The copy of the console for ``console.log``. What is printed before the output directory exists is
+    held until `start` names the file, and dropped if the run ends before that; from then on every line is
+    written as it comes, so a cut-off run keeps its log. The status line's redraws are not copied, and
+    ``plain`` leaves out the colour codes."""
+
+    def __init__(self, *, plain: bool = False):
+        self._plain = plain
+        self._lock = threading.Lock()
+        self._held: list[str] = []
+        self._fh = None
+        self.path = None
+
+    def start(self, path, *, append: bool = False) -> None:
+        """Write to ``path``, owner-only; ``append`` continues it (--resume), otherwise it is replaced."""
+        flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+        fd = os.open(path, flags, 0o600)
+        os.chmod(path, 0o600)             # also when an earlier run left the file with wider rights
+        with self._lock:
+            self._fh = os.fdopen(fd, "a" if append else "w", encoding="utf-8", buffering=1)
+            self._fh.write("".join(self._held))
+            self._held = []
+            self.path = path
+
+    def write(self, text: str) -> None:
+        if text == _CLEAR or text.startswith(_FRAME_OPEN):
+            return
+        if self._plain:
+            text = _ANSI.sub("", text)
+        with self._lock:
+            if self._fh is not None:
+                self._fh.write(text)
+            else:
+                self._held.append(text)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._fh is not None:
+                self._fh.close()
+                self._fh = None
+            self._held = []
+
+
+class _Tee:
+    """Stands in for standard output or error during `verify`: writes go to the console and to the log."""
+
+    def __init__(self, stream, log: ConsoleLog):
+        self.stream, self._log = stream, log
+
+    def write(self, text: str) -> int:
+        written = self.stream.write(text)
+        self._log.write(text)
+        return written
+
+    def __getattr__(self, name: str):
+        return getattr(self.stream, name)
+
+
+@contextmanager
+def console_log(*, plain: bool = False):
+    """Copy standard output and error to a `ConsoleLog` until the block ends."""
+    log = ConsoleLog(plain=plain)
+    out, err = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = _Tee(out, log), _Tee(err, log)
+    try:
+        yield log
+    finally:
+        sys.stdout, sys.stderr = out, err
+        log.close()
 
 
 class RunProgress:

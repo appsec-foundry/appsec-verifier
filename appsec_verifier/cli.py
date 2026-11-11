@@ -592,7 +592,19 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     `default_yes` is set by the guided run only, so Enter at its confirmation
     proceeds (VER-002). `secrets` holds values entered hidden and `pasted` the
     identities whose sessions were pasted, both from the guided run; they live
-    only in this process (VER-016)."""
+    only in this process (VER-016). With --console-log, what the run prints
+    also goes to console.log in the output directory, once the run writes a
+    report there."""
+    if not args.console_log:
+        return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=None)
+    from .progress import console_log
+
+    with console_log(plain=args.console_log == "plain") as console:
+        return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=console)
+
+
+def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool, *,
+            secrets: dict | None, pasted: list[dict] | None, console) -> int:
     assessment = Path(args.assessment)
     if not assessment.is_file():
         return _blocked(f"The assessment {assessment} was not found", fix="check the path given with --assessment")
@@ -865,6 +877,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             )
 
     out_dir = Path(args.output)
+    if console is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        console.start(out_dir / "console.log", append=existing is not None)
     action_log = progress = write_prompt = None
     started = time.monotonic()
     if contact:
@@ -958,6 +973,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
         extra.append(("Run", _run_usage(budget, time.monotonic() - started, agent_info, show_costs)))
     if action_log is not None:
         extra.append(("Action log", str(action_log.path)))
+    if console is not None:
+        extra.append(("Console", str(console.path)))
     if args.annotate:
         from .verify.annotated_report import write_annotated_report
 
@@ -2144,6 +2161,15 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         "--overwrite",
         action="store_true",
         help="replace a report already in the output directory (without this or --resume, such a report stops the run)",
+    )
+    out.add_argument(
+        "--console-log",
+        nargs="?",
+        const="color",
+        choices=("color", "plain"),
+        default=None,
+        help="also save the console output as console.log in the output directory, without the status line; "
+        "color keeps the console's colour (default), plain leaves out the colour codes",
     )
     out.add_argument(
         "--annotate",

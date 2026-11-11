@@ -425,7 +425,7 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("category", "--category"), ("cls", "--class"), ("severity", "--severity"),
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
                   *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
-                  ("screenshots", "--screenshots"))
+                  ("screenshots", "--screenshots"), ("console_log", "--console-log"))
 _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "--overwrite"),
           ("annotate", "--annotate"), ("allow_intrusive", "--allow-intrusive"),
           ("read_only", "--read-only"), ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),

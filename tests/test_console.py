@@ -1,18 +1,25 @@
 """Console output in the look of AppSec Analyzer: colour only on a terminal or
 with FORCE_COLOR, never with NO_COLOR, and escape sequences only from the
-Verifier itself, never from the assessment or the model (VER-005)."""
+Verifier itself, never from the assessment or the model (VER-005). With
+--console-log the run's console output is also saved, owner-only and without
+the status line. Offline: a fake transport and planner."""
 
 from __future__ import annotations
 
 import io
 import re
+import stat
+import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from appsec_verifier import cli, guided
 from appsec_verifier.preflight import Check, render
+from appsec_verifier.progress import _CLEAR, _FRAME_OPEN, console_log
 from appsec_verifier.term_style import Style, color_enabled
+from appsec_verifier.tools import httpx_transport
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 HOSTILE = "\x1b]0;pwned\x07\x1b[2J"   # sets the window title, rings, clears the screen
@@ -193,3 +200,83 @@ def test_top_level_help_lists_the_commands_with_examples(capsys):
     assert cli.main(["--help"]) == cli.EXIT_OK
     out = capsys.readouterr().out
     assert "Commands:" in out and "\nExamples:\n" in out and "  plan " not in out
+
+
+# ── --console-log ─────────────────────────────────────────────────────────────
+
+URL = "http://localhost:3000"
+
+
+def _verify(tmp_path, monkeypatch, *extra):
+    """A run against a fake target whose planner answers at once; returns the exit code and the output dir."""
+    class Planner:
+        def next_step(self, ctx, history):
+            return {"verdict": {"verdict": "inconclusive", "rationale": "x"}}
+
+    def target(method, url, headers, **kw):
+        assert (method, url) == ("GET", URL), url
+        return SimpleNamespace(status_code=200, headers={}, json=lambda: (_ for _ in ()).throw(ValueError()))
+
+    info = {"profile": "anthropic-api", "model": "m", "runtime": "Anthropic API", "auth": "API key"}
+    monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, dict(info)))
+    monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
+    threat = {"id": "T-1", "cwe": "CWE-639", "severity": "high", "title": "idor",
+              "evidence": {"file": "a.ts", "line": 1}}
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump({"threats": [threat]}))
+    out = tmp_path / "out"
+    rc = cli.main(["verify", "--assessment", str(tmp_path / "a.yaml"), "--yes", "--test-all", "--output", str(out),
+                   *extra])
+    return rc, out
+
+
+def test_the_console_log_is_written_only_with_console_log(tmp_path, monkeypatch, capsys):
+    rc, out = _verify(tmp_path, monkeypatch, "--url", URL)
+    assert rc == cli.EXIT_OK and (out / "verification.md").is_file() and not (out / "console.log").exists()
+    assert "console.log" not in capsys.readouterr().out
+
+    rc, out = _verify(tmp_path, monkeypatch, "--url", URL, "--console-log", "--overwrite")
+    shown = capsys.readouterr()
+    log = (out / "console.log").read_text(encoding="utf-8")
+    assert rc == cli.EXIT_OK and stat.S_IMODE((out / "console.log").stat().st_mode) == 0o600
+    # everything the run printed, from its settings before the output directory existed to the summary that names
+    # the log, in the order printed
+    for line in (shown.out + shown.err).splitlines():
+        assert line in log
+    assert log.index("Assessment :") < log.index("Preflight") < log.index("Done") < log.index(f"Console    : {out}/")
+
+
+def test_the_console_log_keeps_the_colour_unless_plain(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    _verify(tmp_path, monkeypatch, "--url", URL, "--console-log")
+    assert SGR.search(capsys.readouterr().out) and SGR.search((tmp_path / "out" / "console.log").read_text())
+
+    _verify(tmp_path, monkeypatch, "--url", URL, "--console-log", "plain", "--overwrite")
+    assert SGR.search(capsys.readouterr().out)          # the console keeps its colour
+    log = (tmp_path / "out" / "console.log").read_text()
+    assert "\x1b" not in log and "Done" in log
+
+
+def test_a_blocked_run_writes_no_console_log(tmp_path, monkeypatch):
+    rc, out = _verify(tmp_path, monkeypatch, "--url", "localhost:3000", "--console-log")
+    assert rc == cli.EXIT_BLOCKED and not out.exists()
+
+
+def test_the_console_log_leaves_out_the_status_line_and_appends_on_resume(tmp_path, capsys):
+    path = tmp_path / "console.log"
+    with console_log() as log:
+        print("before the output directory")
+        sys.stderr.write(_FRAME_OPEN + "⠋ status \x1b[K\r\x1b[?25h\x1b[?2026l")
+        sys.stderr.write(_CLEAR)
+        log.start(path)
+        print("entry")
+    assert path.read_text() == "before the output directory\nentry\n"
+    assert "status" in capsys.readouterr().err         # the console still shows the status line
+
+    with console_log() as log:
+        log.start(path, append=True)
+        print("resumed")
+    assert path.read_text() == "before the output directory\nentry\nresumed\n"
+
+    with console_log():
+        print("a run that ends before its output directory")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["console.log"]
