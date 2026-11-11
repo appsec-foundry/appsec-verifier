@@ -277,13 +277,17 @@ def _system(ctx) -> str:
         roles += (f". Privileged roles, read-only and the reference for privileged functions: "
                   f"{', '.join(privileged)}")
     part = (getattr(ctx, "marker", None) or ("",))[0]
+    write_rules = ("every write (POST, PUT, PATCH) must carry " + (part or "the finding's marker")
+                   + " in its path or a value, must not name an existing record by its identifier in the URL path, "
+                   "and must not name another account's record in its body: create, never change what may belong "
+                   "to someone else (VER-014)")
     mode = (
-        "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing)"
-        if ctx.safe
-        else "intrusive; every write (POST, PUT, PATCH) must carry " + (part or "the finding's marker")
-        + " in its path or a value, must not name an existing record by its identifier in the URL path, and "
-        "must not name another account's record in its body: create, never change what may belong to someone "
-        "else (VER-014)"
+        "intrusive; " + write_rules if not ctx.safe
+        else "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing). If this finding "
+        "needs a write, declare the plan or send the write anyway: the Verifier asks the operator, who may allow "
+        "writes for this finding; until then, and if declined, writes are refused. Once allowed, " + write_rules
+        if getattr(ctx, "ask_writes", None) is not None
+        else "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing)"
     )
     return _common(ctx, mode, roles) + _class_rules(ctx) + _closing() + _marker_hint(ctx)
 
@@ -539,7 +543,8 @@ def _seed(ctx) -> str:
         for k in ("affected_parameter", "mechanism_trace", "evidence_summary", "evidence_basis")
         if k in context
     }
-    safe = getattr(ctx, "safe", True) or getattr(ctx, "read_only", True)
+    # A write the operator can allow when asked is not unavailable (VER-052).
+    safe = (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True)) and getattr(ctx, "ask_writes", None) is None
     variants = [
         {
             "id": v["id"],

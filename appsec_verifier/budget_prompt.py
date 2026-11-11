@@ -22,14 +22,17 @@ def can_prompt(interactive: bool) -> bool:
     return interactive and sys.stdin is not None and sys.stdin.isatty() and sys.stderr.isatty()
 
 
-def read_answer(budget) -> str | None:
-    """One line typed after the question; "" at the end of input, None once the run time is up."""
+def read_answer(budget, timeout: float | None = None) -> str | None:
+    """One line typed after the question; "" at the end of input, None once the run time is up or, with
+    `timeout`, after that many seconds without an answer."""
     import select
     import termios
+    import time
 
     termios.tcflush(sys.stdin, termios.TCIFLUSH)     # what was typed while the run progressed is no answer
+    deadline = None if timeout is None else time.monotonic() + timeout
     while True:
-        if budget.remaining_time() == 0:
+        if budget.remaining_time() == 0 or (deadline is not None and time.monotonic() >= deadline):
             return None
         ready, _, _ = select.select([sys.stdin], [], [], 0.5)
         if ready:

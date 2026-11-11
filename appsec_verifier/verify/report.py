@@ -490,7 +490,11 @@ def _run_lines(doc: dict, analyzer_report: str | None = None) -> list[str]:
     meta = doc["meta"]
     target, safety = meta.get("target") or {}, meta.get("safety") or {}
     auth, scope = meta.get("authorization") or {}, meta.get("scope") or {}
-    if safety.get("read_only"):
+    if safety.get("read_only") and safety.get("writes_allowed_for"):     # VER-052
+        mode = (f"{safety.get('mode') or 'safe'}, read-only; the operator allowed writes for "
+                + ", ".join(_inline(f, 20) for f in safety["writes_allowed_for"][:20])
+                + "; what the test created stays on the target")
+    elif safety.get("read_only"):
         mode = f"{safety.get('mode') or 'safe'}, read-only"
     else:
         mode = f"{safety.get('mode') or 'intrusive'}, writes allowed"
@@ -599,6 +603,12 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
     elif generated := r.get("source_generated"):
         head.append("Original report")
         cells.append(_when(generated))
+    if permission := r.get("write_permission"):     # the operator's answer for this finding (VER-052)
+        head.append("Writes")
+        cells.append(("allowed by the operator" if permission.get("allowed") else
+                      "no answer" if permission.get("answer") == "no answer" else "declined by the operator")
+                     + (" for the rest of the run" if permission.get("answer") == "rest of the run" else "")
+                     + (f", {_when(permission['at'])}" if permission.get("at") else ""))
     if analyzer_report and fr.get("id") and anchor:
         head.append("In the assessment report")
         cells.append(f"[{_inline(_display_id(fid), cell=True)}]({analyzer_report}#{anchor})")

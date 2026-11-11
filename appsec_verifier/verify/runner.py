@@ -14,7 +14,10 @@ stopped a finding, the remaining findings are not tested and say so (VER-015,
 VER-024). Ctrl-C ends the run the same way: the finding under test ends
 inconclusive, the rest are not tested, and the document is still returned with
 `meta.interrupted` set, so the results gathered so far reach the report.
-A finding the run cannot confirm (cli._blocker) is not tested and says why.
+A finding the run cannot confirm (cli._blocker) is not tested and says why. One
+that only safe mode keeps from being tested is asked about before it starts, in
+a terminal: a yes runs it in intrusive mode, otherwise it is not tested and the
+report says the operator declined; each answer is kept on its result (VER-052).
 """
 
 from __future__ import annotations
@@ -100,6 +103,14 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
     }
 
 
+def _writes_allowed(ask_writes, budget, plan: FindingPlan, need: tuple[str, list[str]]) -> bool:
+    """Before a finding that only safe mode keeps from being tested starts: the operator's answer (VER-052)."""
+    from ..planning import evidence_id
+
+    return ask_writes(budget, key=evidence_id(plan), finding=f"{plan.id} · {plan.title or plan.cwe or ''}",
+                      requests=need[1], asked="before the finding")
+
+
 def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory, log=None) -> ProbeResult:
     """Decide one finding's outcome. Non-dynamic findings, and dynamic ones with
     no registered probe, are `not-attempted` with a reason — never refuted. A
@@ -152,13 +163,20 @@ def run_verification(
     evidence_dir: Path | None = None,
     progress=None,
     skipped: dict[str, str] | None = None,
+    ask_writes=None,
+    askable: dict[str, tuple[str, list[str]]] | None = None,
 ) -> dict:
     """`skipped` maps a finding id to why this run cannot confirm it; such a
-    finding is not tested and reports that reason (not-attempted)."""
+    finding is not tested and reports that reason (not-attempted).
+
+    `ask_writes` (write_prompt.WritePrompt), in an interactive run that may ask, decides write requests safe
+    mode does not send (VER-052): `askable` maps a finding that only safe mode keeps from being tested to that
+    reason and the write requests it names, and the operator is asked before it starts; the test agent of any
+    finding can ask while it tests. A finding the operator allows writes for runs in intrusive mode."""
     now = now or datetime.now(timezone.utc)
     from ..planning import evidence_id
 
-    skipped = skipped or {}
+    skipped, askable = skipped or {}, askable or {}
     budget = budget or RunBudget(limits)
     from ..scope import ScopeGuard
     from ..tools.browser import new_marker
@@ -173,6 +191,13 @@ def run_verification(
 
     def ctx_factory(plan: FindingPlan) -> ProbeContext:
         related = set(plan.context.get("dependencies", []))
+        key = evidence_id(plan)
+        writes = ask_writes is not None and ask_writes.covered(key)    # the operator allowed them (VER-052)
+
+        def ask(requests, reason, identity):
+            return ask_writes(budget, key=key, finding=f"{plan.id} · {plan.title or plan.cwe or ''}",
+                              requests=requests, reason=reason, identity=identity, asked="by the test agent")
+
         ctx = ProbeContext(
             plan=plan,
             scope=scope,
@@ -181,8 +206,9 @@ def run_verification(
             http=http,
             identities=identities,
             callback=scope.get("callback") or {},
-            safe=safe,
-            read_only=read_only,
+            safe=safe and not writes,
+            read_only=read_only and not writes,
+            ask_writes=ask if ask_writes is not None and not writes else None,
             sessions=sessions,
             source=source,
             target_base=target_base,
@@ -208,6 +234,9 @@ def run_verification(
         contexts[evidence_id(plan)] = ctx
         return ctx
 
+    if ask_writes is None:      # nobody to ask: a finding only safe mode keeps from being tested is skipped
+        skipped = {**skipped, **{key: reason for key, (reason, _) in askable.items()}}
+        askable = {}
     probed = [
         p.status == "dynamic" and registry.get(p.cls) is not None and evidence_id(p) not in skipped for p in plans
     ]
@@ -258,6 +287,14 @@ def run_verification(
             )
             if progress is not None:
                 progress.finding(plan, agent=False)  # no agent starts for it
+        elif shown and evidence_id(plan) in askable and not _writes_allowed(ask_writes, budget, plan,
+                                                                             askable[evidence_id(plan)]):
+            reason, _ = askable[evidence_id(plan)]
+            answer = ask_writes.records[evidence_id(plan)]["answer"]
+            res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {reason}; the operator "
+                              + ("gave no answer" if answer == "no answer" else "declined write requests"))
+            if progress is not None:
+                progress.finding(plan, agent=False)
         else:
             if shown and progress is not None:
                 progress.finding(plan)
@@ -280,6 +317,8 @@ def run_verification(
             if res.verdict == "confirmed":
                 confirmed_ids.add(plan.id)
         results.append(_result_entry(i, plan, res))
+        if ask_writes is not None and evidence_id(plan) in ask_writes.records:   # each answer, for its finding
+            results[-1]["write_permission"] = dict(ask_writes.records[evidence_id(plan)])
         if res.verdict != "not-attempted":
             results[-1]["timing"] = {"started": started, "finished": _iso(datetime.now(timezone.utc))}
         ctx = contexts.get(evidence_id(plan))
@@ -379,9 +418,13 @@ def run_verification(
         "safety": {
             "mode": "safe" if safe else "intrusive",
             "read_only": bool(read_only),
+            # VER-052: the findings the operator allowed write requests for in a safe run.
+            **({"writes_allowed_for": allowed} if (allowed := sorted({
+                r["finding_ref"]["id"] for r in results if (r.get("write_permission") or {}).get("allowed")
+            })) else {}),
             "destructive_actions": "forbidden",
             # Nothing is cleaned up: marked records a write created stay on the target (VER-010, VER-014).
-            "state_changes_cleaned": None if read_only else False,
+            "state_changes_cleaned": None if read_only and not allowed else False,
         },
         "contacted_target": bool(contacted),
         "interrupted": interrupted,

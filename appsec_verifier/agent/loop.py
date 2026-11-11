@@ -368,6 +368,7 @@ class AgentProbe:
                 if name in ("http_request", "browser_check") and _request_attempts(history) >= self._max_steps:
                     raise LimitExceeded("attempts", "per-finding request attempt limit reached")
                 controller.before(name, args)
+                tools.note = action.get("note")     # shown as the agent's reason if it asks for writes (VER-052)
                 result = controller.run(lambda name=name, args=args: tools.call(name, args))
             except ToolError as exc:
                 result = {"error": str(exc)}

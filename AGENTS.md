@@ -53,6 +53,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
 | `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first finding (VER-032) |
 | `limits.py`, `budget_prompt.py` | `RunBudget`: request, model-call, cost and time caps, raises `LimitExceeded`; in an interactive run the question for a higher cost ceiling (VER-015) |
+| `write_prompt.py` | in an interactive run the question for write requests safe mode does not send (VER-052) |
 | `term_style.py` | console colour and logo, adapted from AppSec Analyzer; colour only after `printable` |
 | `progress.py` | `RunProgress`: the run's progress grid and live status line during `verify`, as in AppSec Analyzer |
 | `update.py`, `version_info.py` | `update`: pipx reinstall after a yes (VER-033); `--version` from the build stamp `build-info.json` (written by `setup.py`) or Git |
@@ -85,12 +86,12 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 
 ## Safety invariants (do not weaken)
 
-These implement VER-001, -014 to -018, -025, -030, -040. A change that loosens one needs an explicit decision from the maintainer, not a workaround.
+These implement VER-001, -014 to -018, -025, -030, -040, -052. A change that loosens one needs an explicit decision from the maintainer, not a workaround.
 
 - Every request the Verifier sends goes through `GuardedHttpClient` and `ScopeGuard`. A login program the operator declares (VER-040) runs outside these controls; it is shown and confirmed before it starts, and the model cannot choose or change it. Do not add a code path that opens connections directly. The resolved address is checked when the connection is made (`AddressCheckingBackend` in `tools/httpx_transport.py`, rule in `ScopeGuard.address_allowed`); metadata and other link-local addresses are never contacted (VER-018).
 - Limits are enforced in code, outside the model. Reaching one stops the affected work.
 - The agent's tools are only those in `agent/tools.py`: guarded HTTP as a named identity, and read-only source access confined to the repository, without `.env` files, keys, credential stores or `.git/`. No shell, no raw network, no file writes.
-- Safe mode is the default: only GET, HEAD and OPTIONS. Write requests need `--allow-intrusive`; a scope file can forbid them with `allow_state_change: false`. An injection experiment's generated controls on a write are sent only when the agent asks for them (`send_controls`), at most twice each and once per accepted plan, never on acceptance of the plan (VER-011).
+- Safe mode is the default: only GET, HEAD and OPTIONS. Write requests need `--allow-intrusive` or, in a terminal, the operator's yes for that finding or the rest of the run, asked only for a write intrusive mode would send (VER-052, `write_prompt.py`); `--read-only` and a scope file's `allow_state_change: false` forbid them and suppress the question. An injection experiment's generated controls on a write are sent only when the agent asks for them (`send_controls`), at most twice each and once per accepted plan, never on acceptance of the plan (VER-011).
 - Secret values come from environment variables or, in an interactive run, from hidden input; sessions are obtained at run time from a login or a login program. None of them is stored. They never appear in logs, reports, prompts or files. The agent sees role names only.
 - Credentials are dropped on cross-origin redirects.
 - Model hosts only plan. Agent CLIs run without tools, MCP servers, settings or session history, from an empty temp directory, with an allow-listed environment (no identity secrets, no other provider's keys). Every step goes through `steps.parse_step`; where a CLI reports tool use (`claude`, `codex-cli`), it is a breach that stops all later model calls. Keep the isolation flags at least as strict as AppSec Analyzer's adapters (see Relation to AppSec Analyzer).

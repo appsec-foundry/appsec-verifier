@@ -144,6 +144,12 @@ properties:
               volume, no pervasive probing. "intrusive": the operator explicitly
               opted out for marked state-changing or more thorough probing.
           read_only:            { type: boolean }
+          writes_allowed_for:
+            type: array
+            items: { type: string }
+            description: >-
+              VER-052: in a safe run, the findings the operator allowed write
+              requests for when asked; they were tested in intrusive mode.
           destructive_actions:  { const: forbidden }
           state_changes_cleaned: { type: [boolean, "null"] }
 
@@ -385,6 +391,22 @@ properties:
           anyOf:
             - type: "null"
             - $ref: "#/$defs/technical_review"
+
+        write_permission:
+          type: object
+          description: >-
+            VER-052: the operator's answer when this finding needed write
+            requests safe mode does not send.
+          required: [allowed, answer, asked]
+          additionalProperties: false
+          properties:
+            allowed:   { type: boolean }
+            answer:    { enum: [finding, rest of the run, declined, no answer] }
+            at:        { type: string, description: When the answer was given (UTC). }
+            asked:     { enum: [before the finding, by the test agent, not asked] }
+            requests:  { type: array, items: { type: string }, description: The write requests shown. }
+            identity:  { type: string, description: The identity shown with them. }
+            given_for: { type: string, description: The finding whose question was answered for the rest of the run. }
 
         timing:
           type: object

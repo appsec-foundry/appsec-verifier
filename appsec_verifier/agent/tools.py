@@ -11,7 +11,10 @@ An identity's credentials go only to the origin it is bound to (its
 `target_origin`, by default the target base URL), never to another host in the
 scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode, with the finding's marker and
-without naming an existing record in the path (agent/controller.py); DELETE and
+without naming an existing record in the path (agent/controller.py). In safe
+mode, where the operator can be asked, a write that passes every other check,
+or a plan that needs writes, is put to the operator first, and a yes turns the
+finding intrusive (VER-052, write_prompt.py); DELETE and
 every other method are never sent (VER-014). A privileged account (--admin-account) only reads, in any
 mode (VER-041). An access-control plan without an operator test resource is
 accepted only when the run allows its proof: a resource a normal account
@@ -293,6 +296,11 @@ class AgentTools:
                     assumed.append(str(i))
                 prerequisites.append(prerequisite)
             plan = {**plan, "strategy": {**plan["strategy"], "prerequisites": prerequisites}}
+        # VER-052: when the operator can be asked, the plan is checked as in intrusive mode; what only intrusive
+        # mode allows is collected, and the operator is asked once every other check has passed.
+        asking = (self.ctx.safe or self.ctx.read_only) and self._ask_writes() is not None
+        safe_mode = (self.ctx.safe or self.ctx.read_only) and not asking
+        needs_writes: list[str] = []
         # Name every declaration problem at once, so one revision can fix them all.
         problems = []
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
@@ -303,10 +311,11 @@ class AgentTools:
             problems.append("this finding has no variants; omit variant")
         if plan["kind"] in ("boolean", "timing"):
             is_write = plan.get("method", "GET") not in SAFE_METHODS
-            intrusive = not (self.ctx.safe or self.ctx.read_only)
-            if is_write and not intrusive:
+            if is_write and safe_mode:
                 # VER-011 + VER-030: writes repeat only in intrusive mode; the agent sends each control itself.
                 problems.append("an experiment sends every control twice; a write needs --allow-intrusive")
+            elif is_write and asking:
+                needs_writes.append(f"{plan.get('method')} {plan.get('path')}, each control twice")
         if problems:
             raise ToolError("; ".join(problems))
         from .experiments import callback_controls, expression_controls, ldap_controls, operator_controls, sql_controls
@@ -372,8 +381,10 @@ class AgentTools:
                                 "declared as kind \"boolean\"")
             if self.ctx.listener is None:
                 raise ToolError("this run has no callback listener for an out-of-band proof")
-            if plan.get("method", "GET") not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only):
+            if plan.get("method", "GET") not in SAFE_METHODS and safe_mode:
                 raise ToolError("an out-of-band proof on a write needs --allow-intrusive")
+            if plan.get("method", "GET") not in SAFE_METHODS and asking:
+                needs_writes.append(f"{plan.get('method')} {plan.get('path')}, an out-of-band proof")
             try:
                 plan = callback_controls(plan, self.ctx.listener, self.ctx.marker)
             except ValueError as exc:
@@ -453,11 +464,14 @@ class AgentTools:
                 raise ToolError(f"the input does not match the finding variant; variant {variant['id']!r} declares "
                                 + ", ".join(f"{i['location']}:{i['name']}" for i in inputs[:6]))
             missing = missing_capabilities(
-                variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None,
+                variant, safe=safe_mode, browser=self.ctx.browser is not None,
                 identities=bool(getattr(self.ctx, "identities", None)),
             )
             if missing and not derived:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
+            if asking and not derived and "state-change" in missing_capabilities(
+                    variant, safe=True, browser=True, identities=True):
+                needs_writes.append(f"{vreq['method']} {vreq.get('path', '')}, the variant's state change")
             # VER-011: the generated controls are sent as they are, so they must carry every input the variant
             # declares; the request's other inputs come from fixed, a path input from the plan's path.
             if generates_controls(plan) and not derived and inputs:
@@ -476,7 +490,7 @@ class AgentTools:
         marker = None
         if plan["kind"] == "access-control" and not plan.get("resource"):
             methods = access_methods(self.ctx.plan.id, getattr(self.ctx.plan, "cwe", None), self.ctx.scope,
-                                     self.ctx.identities, writes=not (self.ctx.safe or self.ctx.read_only))
+                                     self.ctx.identities, writes=not safe_mode)
             if "resource" in methods:
                 raise ToolError("the operator-declared test resource takes precedence; plan with its resource id")
             if plan.get("method", "GET") != "GET":
@@ -488,6 +502,8 @@ class AgentTools:
                 if plan["owner"] not in normal_roles(self.ctx.identities):
                     raise ToolError("the owner must be a normal account; a privileged account only reads (VER-041)")
                 marker = "".join(self.ctx.marker)
+                if asking:      # the owner's write creates the record the comparison reads (VER-010)
+                    needs_writes.append(f"a write by {plan['owner']} that creates its test record with the marker")
                 if plan.get("change"):
                     if not record_segments(plan["change"]["path"]):
                         raise ToolError("change is the finding's write that changes a record by its identifier in "
@@ -497,6 +513,9 @@ class AgentTools:
                     while second == marker:
                         second = self.ctx.marker[0] + secrets.token_hex(4)
                     plan = {**plan, "second_marker": second}
+                    if asking:
+                        needs_writes.append(f"{plan['change']['method']} {plan['change']['path']} by another "
+                                            "account, to that record")
             else:
                 if "reference" not in methods:
                     raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
@@ -517,6 +536,9 @@ class AgentTools:
                 or resource.get("method", "GET") != plan.get("method", "GET")
             ):
                 raise ToolError("the plan needs a matching operator-supplied test resource")
+        if needs_writes and not self._may_write(needs_writes, plan.get("owner") or plan.get("role") or ""):
+            raise ToolError("this plan needs write requests, which safe mode does not send, and the operator did not "
+                            "allow them for this finding (VER-030, VER-052): " + "; ".join(needs_writes))
         self._experiment = plan
         notes = []
         if candidates and plan.get("method", "GET") not in SAFE_METHODS:
@@ -528,6 +550,9 @@ class AgentTools:
                          "of this finding with a recorded response")
         if variant_note:
             notes.append(variant_note)
+        if needs_writes:
+            notes.append("the operator allowed write requests for this finding (VER-052); every write carries the "
+                         "finding's marker and creates, never changes what may belong to someone else (VER-014)")
         return {
             "accepted": True,
             "kind": plan["kind"],
@@ -793,6 +818,21 @@ class AgentTools:
             return path
         return self.ctx.target_base.rstrip("/") + "/" + path.lstrip("/")
 
+    def _ask_writes(self):
+        """The operator's question for write requests safe mode does not send, or None (VER-052)."""
+        return getattr(self.ctx, "ask_writes", None)
+
+    def _may_write(self, requests: list[str], identity: str) -> bool:
+        """Whether this finding may send write requests: in intrusive mode, or after the operator allowed them,
+        which turns this finding intrusive (VER-052). The agent's step note is shown as its reason."""
+        if not (self.ctx.safe or self.ctx.read_only):
+            return True
+        ask = self._ask_writes()
+        if ask is None or not ask(requests, getattr(self, "note", None), identity):
+            return False
+        self.ctx.safe = self.ctx.read_only = False
+        return True
+
     def _privileged(self, role: str) -> bool:
         """Whether `role` is a privileged account, which only reads (VER-041)."""
         return any(i.get("role") == role and i.get("privileged") for i in (self.ctx.identities or []))
@@ -867,7 +907,7 @@ class AgentTools:
                 raise ToolError("exposure checks use only the operator-declared harmless read-only resource")
         if m not in ALLOWED_METHODS:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
-        if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only):
+        if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only) and self._ask_writes() is None:
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive")
         if m not in SAFE_METHODS and role and self._privileged(role):
             raise ToolError(f"{role} is a privileged account and only reads (VER-041); write as a normal account")
@@ -915,6 +955,12 @@ class AgentTools:
                     f"identity {role!r} is bound to {origin}; its credentials are not sent to "
                     f"another origin (VER-018). Send this request without a role."
                 )
+        # VER-052: every other check has passed, so the operator is asked only for a write the run would send in
+        # intrusive mode; before the session headers, which may sign in.
+        if m not in SAFE_METHODS and not self._may_write([f"{m} {urlsplit(url).path or '/'}"], role or ""):
+            raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); the operator did not allow "
+                            "write requests for this finding (VER-052)")
+        if role:
             headers = self._session_headers(role)
         try:
             resp = self._send(m, url, headers, params, json, form)
