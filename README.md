@@ -167,7 +167,7 @@ Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form log
 ## Limitations
 
 - Boolean injection checks need a stable JSON field in the response. Custom request headers and browser interactions such as clicks are not supported; findings whose variants need them are shown as untestable.
-- How well the agent chooses its tests has only been checked offline, not with live models against a running application. The proof browser has only been tested against a local fake target, and the `codex-cli` and `copilot-cli` profiles only with simulated answers.
+- How well the agent chooses its tests has been tried with a live model only against a local OWASP Juice Shop, with the `claude` profile. The proof browser has only been tested against a local fake target, and the `codex-cli` and `copilot-cli` profiles only with simulated answers.
 - The path-traversal and SSRF checks decode percent-encoding, but no other encodings a target might accept.
 - A sign-in in the browser works for applications whose API accepts the identity provider's token. An application that keeps its own session cookie after the SSO sign-in needs a copied session or a login program. Sessions copied from the browser are not renewed during the run.
 - A confirmed finding shows that the tested step works, not that a complete attack chain does.
