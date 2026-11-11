@@ -873,10 +873,12 @@ def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path, roles=N
             + ([difference(ctx, history, entry, ref)] if ref else [])}
 
 
-def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]],
-                    highlight) -> tuple[list[tuple], list[tuple], list[tuple[str, str]], list[tuple[str, bool]]]:
+def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]], highlight,
+                    beside=None) -> tuple[list[tuple], list[tuple], list[tuple[str, str]], list[tuple[str, bool]]]:
     """What the image of step `n` marks, as the code can locate it, each with its label: needles in the
-    request, needles and line prefixes in the response, and facts about the step with whether they decide."""
+    request, needles and line prefixes in the response, and facts about the step with whether they decide.
+    An injection's input is found against every step in `shown`; how its answer differs only against the steps
+    `beside` it in the same image (default `shown`), since a mark claims what the image shows (VER-035)."""
     from ..agent.proof import redirect_host
 
     cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
@@ -935,6 +937,8 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
                 decoded = (unquote_plus if token[0] == "line" else unquote)(token[2])   # a query's + is a space
                 if decoded != token[2]:
                     facts.append((f"input, decoded: {decoded}", True))
+            if beside is not None and not any(o is b for _, b in beside):
+                continue        # a difference from a step in another image is not marked in this one
             token = _diff_token(_text(e), _text(o), "body")
             if token and ("answer differs", token) not in res_marks:
                 res_marks.append(("answer differs", token))
@@ -1233,7 +1237,7 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     parts, total = [f"<header>{chr(10).join(lines)}</header>"], 0
     for n, e in shown:
         kind, label = roles.get(n, ("", ""))
-        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight)
+        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight, shown)
         facts = [(t, d) for t, d in facts if d or not t.startswith("answered in")]   # a time only where it decides
         # Compared with the normal request in the same image, else the closest one of the finding.
         ref = compared_with(n, e, shown, roles) or compared_with(n, e, everything, roles)

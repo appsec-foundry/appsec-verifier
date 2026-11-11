@@ -606,6 +606,34 @@ def test_an_injection_image_shows_the_baseline_above_each_condition_and_how_the_
     assert "the normal request does not get" not in page                           # no entry is new
 
 
+def test_an_injection_image_marks_only_differences_between_its_own_steps():
+    """VER-035: a login bypass, 401 for the baseline and the false condition, 200 for the true one. The image of
+    the baseline and the false condition shows two identical answers, so it marks no difference, although both
+    differ from the true condition in another image."""
+    plan = {**_EXPERIMENT, "path": "/login", "pointer": "/token"}
+    queries = {2: "x", 3: "x' OR 1=1--", 4: "x' OR 1=2--"}
+    history = [_accepted(**plan), *(_sent("/login", q=q) for q in queries.values())]
+
+    def exchange(q, status, body, mime):
+        return poc.entry({"method": "GET", "url": SCOPE["base_url"] + "/login?" + urlencode({"q": q}), "headers": [],
+                          "body": None, "status": status, "response_headers": [("Content-Type", mime)],
+                          "content": body.encode(), "time": "2026-11-10T20:30:23Z"})
+
+    refused = "<p>Invalid email or password.</p>"
+    shown = [(2, exchange(queries[2], 401, refused, "text/html")),
+             (3, exchange(queries[3], 200, '{"token":"t"}', "application/json")),
+             (4, exchange(queries[4], 401, refused, "text/html"))]
+    ctx = _role_ctx("injection")
+    first, second = poc.panels(shown, poc.step_roles(ctx, history, shown))
+    assert [n for n, _ in first] == [2, 3] and [n for n, _ in second] == [2, 4]
+    page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown)
+    assert page.count("◀ status differs") == 2
+    page, _ = poc.exchange_document(ctx, history, second, "confirmed", None, comparison=shown)
+    assert "Compared with the normal request in step 2: same status 401, the identical answer." in page
+    assert "differs</span>" not in page                     # neither "status differs" nor "answer differs"
+    assert "<span class=tag>input ▸</span><mark>x%27+OR+1%3D2--</mark>" in page      # what the attack sent
+
+
 def test_steps_outside_the_declared_comparison_get_no_role():
     """Nothing is guessed: another resource, an unknown control value or no accepted plan leaves a step unnamed."""
     ctx, history, shown = _injection()
