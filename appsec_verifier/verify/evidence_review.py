@@ -24,6 +24,7 @@ from ..agent.hosts import HostCallError
 from ..agent.steps import strict_json
 from ..limits import LimitExceeded, execution_deadline
 from ..planning import evidence_id, evidence_name
+from .poc import WITHHELD_BODY
 
 MAX_REVIEW_IMAGES = 3
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -96,10 +97,13 @@ claim to have changed old records. A missing screenshot with a stated reason is 
 presentation issue, including API-only findings, disabled captures, masking limits and unavailable
 browsers. Labelled credential masking is acceptable when the decisive observation remains visible.
 For inconclusive results explain missing evidence honestly; never demand new tests or invent proof.
-Use code readability only for the layout of what the Verifier renders itself: the step lines, the facts
-and marks in the HTTP panels, the comparison line and excerpt lengths. The test agent cannot change those;
-they are reported, not returned to it. Use context, comparison or excerpt for what the test agent's own
-explanation and quotes should make clear, and screenshot for an application image.
+Use code readability only for the layout of what the Verifier renders itself: the Test, Result and Shown
+lines of a panel, the step lines and their sizes, the facts and marks in the HTTP panels, the comparison
+line and excerpt lengths. The test agent cannot change those; they are reported, not returned to it. Use
+context, comparison or excerpt for what the test agent's own explanation and quotes should make clear, and
+screenshot for an application image. An answer shown as withheld from the model is withheld by design
+(an engine error text or an authenticated artifact); the code's observation of it is in the checked proof
+and the panel facts, so its absence from the excerpts is not an issue.
 Return clear with no issues only if the supplied presentation is understandable. An understandable
 inconclusive result can be clear. Otherwise return needs-attention with actionable issues.
 """
@@ -189,10 +193,17 @@ def _images(ctx, res):
     return out
 
 
+def _withheld_response(response: str) -> str:
+    """An answer no model may read (VER-049, VER-053): its status line and a notice. The reviewer and the test
+    agent's revision both get this excerpt, so neither sees an engine error text or an authenticated artifact."""
+    return response.split("\n", 1)[0][:200] + "\n\n" + WITHHELD_BODY
+
+
 def _variant(ctx, res, presentation):
     poc = res.poc or {}
     shown = [
-        {"step": s["step"], "request": s["request"][:6000], "response": s["response"][:6000]}
+        {"step": s["step"], "request": s["request"][:6000],
+         "response": _withheld_response(s["response"]) if s.get("withheld") else s["response"][:6000]}
         for s in poc.get("shown", [])[:6]
     ]
     return _clean(

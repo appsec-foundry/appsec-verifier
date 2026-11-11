@@ -129,7 +129,8 @@ def _tool_defs() -> list[dict]:
                     "path_inputs": {
                         "type": "object", "minProperties": 1, "maxProperties": 1,
                         "additionalProperties": {"type": "string", "maxLength": 4000},
-                        "description": "One declared path input; retain the plan path template. Encoded by the tool.",
+                        "description": "An injection experiment's declared path input only; keep the plan path "
+                                       "template. Tool-encoded.",
                     },
                     "params": {
                         "type": "object",
@@ -350,6 +351,15 @@ def _class_rules(ctx) -> str:
     instructions (VER-009 to VER-013)."""
     cls = getattr(getattr(ctx, "plan", None), "cls", None)
     if cls == "injection":
+        if getattr(ctx.plan, "cwe", None) == "CWE-943":
+            return _injection_rules() + (
+                "A NoSQL input spliced into a server-side JavaScript predicate such as $where, for example a path "
+                "segment, uses js_predicate_template: the baseline that finds a record, then && and one {{predicate}} "
+                "placeholder, such as 1 && {{predicate}} or abc' && {{predicate}} && 'x'=='x, never ||. The tool "
+                "generates fresh complementary predicates; the true ones must repeat the baseline's answer, the false "
+                "ones suppress it. Such an input has no engine-error probe. A query parameter may instead take "
+                "operator_challenge=nosql: the controls travel in bracket notation (q[$eq]=…), which Express 4 "
+                "and PHP turn into an object. ")
         return _injection_rules()
     if cls == "access-control":
         return ("Declaring a plan cannot grant a new route, except the GET of a write proof's change, for the "
@@ -476,9 +486,17 @@ def _access_hint(ctx) -> str:
             "Send it with the same inputs as that role, without "
             "a role, and as a normal account. Confirmed needs a 2xx with content for the privileged role, 401 or "
             "403 without a role, and the identical answer for the normal account; an answer that names the "
-            "signed-in user is never identical. Cite the three requests."
+            "signed-in user is never identical. Cite the three requests. This proof fits only a finding that "
+            "identifies a function as privileged. Where the request without a role already gets the content, it "
+            "cannot confirm: missing authentication is proven only with a configured test_resource. A tool result "
+            "then reports proof_unavailable with the next step; follow it rather than repeating the plan."
         )
-    return hint
+        if "owner" not in methods:
+            hint += ("\nA finding about another account's record, not a privileged function, cannot be confirmed in "
+                     "this run: it needs a configured test_resource or two normal accounts with --allow-intrusive. "
+                     "Report that missing prerequisite instead of trying other plans.")
+    return hint + ("\nNone of these proofs needs an account's user id or record id beforehand; reads that only "
+                   "look one up, such as a whoami route, are not part of the finding.")
 
 
 def _marker_hint(ctx) -> str:

@@ -69,6 +69,8 @@ from .experiments import (
     PLAN_SCHEMA,
     access_methods,
     agent_controls,
+    bracket_params,
+    brackets,
     control_values,
     engine_error_signature,
     generates_controls,
@@ -335,6 +337,7 @@ class AgentTools:
             callback_controls,
             error_controls,
             expression_controls,
+            js_controls,
             ldap_controls,
             marker_controls,
             operator_controls,
@@ -343,7 +346,7 @@ class AgentTools:
 
         if any(
             plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge",
-                                  "sql_marker", "error_probe")
+                                  "js_predicate_template", "sql_marker", "error_probe")
         ):
             # VER-011: an operator-declared injection_inputs entry pins the input for this finding; without one,
             # the agent chooses it from an assessed or independently derived request.
@@ -358,9 +361,23 @@ class AgentTools:
             ):
                 raise ToolError("the plan's input does not match a declared injection_inputs entry for this finding")
         if plan.get("operator_challenge"):
-            if self.ctx.plan.cwe != "CWE-943" or plan.get("input_location") != "json" or plan["kind"] != "boolean":
-                raise ToolError("NoSQL operator challenges need a JSON boolean experiment for CWE-943")
+            # VER-011: a JSON field, or a query parameter the controls reach in bracket notation (q[$eq]=…).
+            if (self.ctx.plan.cwe != "CWE-943" or plan.get("input_location") not in ("json", "params")
+                    or plan["kind"] != "boolean"):
+                raise ToolError("NoSQL operator challenges need a JSON field or query parameter in a boolean "
+                                "experiment for CWE-943")
             plan = operator_controls(plan)
+        if plan.get("js_predicate_template"):
+            # VER-011: a NoSQL input spliced into a server-side JavaScript predicate such as $where.
+            others = [k for k in ("sql_template", "expression_template", "predicate_template", "operator_challenge",
+                                  "sql_marker", "error_probe", "oob_template") if plan.get(k)]
+            if self.ctx.plan.cwe != "CWE-943" or plan["kind"] != "boolean" or others:
+                raise ToolError("JavaScript predicate controls need a boolean experiment for CWE-943 and no other "
+                                "control form in the same plan")
+            try:
+                plan = js_controls(plan)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
         if plan.get("predicate_template"):
             if self.ctx.plan.cwe != "CWE-90" or plan["kind"] != "boolean":
                 raise ToolError("LDAP predicate controls need a boolean experiment for CWE-90")
@@ -663,7 +680,8 @@ class AgentTools:
                 **({"role": role} if role else {}),
                 **{k: dict(v) for k, v in fixed.items()},
                 location: {**fixed.get(location, {}),
-                           plan["input_name"]: str(value) if location == "path_inputs" else value},
+                           **(bracket_params(plan["input_name"], value) if brackets(plan)
+                              else {plan["input_name"]: str(value) if location == "path_inputs" else value})},
             }
             for _ in range(1 if plan.get("auth_artifact") else 2)
             for value in control_values(plan).values()
@@ -1064,14 +1082,19 @@ class AgentTools:
                                "digest": digest}
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
+        withheld = bool(error_probe or auth_artifact_probe)
         out = {
             "role": role,
             "status": status,
-            "length": len(text),  # of the whole body, not of the excerpt
+            # In bytes of the whole body, the unit of the report's step lines, not of the excerpt. A body withheld
+            # from the model has neither size nor hash here: the notice's would read as the answer's (VER-053).
+            "length": None if withheld else len(text.encode("utf-8", "replace")),
             # of the redacted body, so no hash of a credential exists; lets the proof check compare answers
-            "body_sha256": hashlib.sha256(redacted.encode("utf-8", "replace")).hexdigest(),
+            "body_sha256": None if withheld else hashlib.sha256(redacted.encode("utf-8", "replace")).hexdigest(),
             "body_excerpt": redacted[:_BODY_EXCERPT],  # redacted before the cut: no partial token (VER-016)
         }
+        if withheld:
+            out["body_withheld"] = True
         resp_headers = getattr(resp, "headers", None) or {}
         location = resp_headers.get("Location") or resp_headers.get("location")
         if isinstance(status, int) and 300 <= status < 400 and location:

@@ -212,6 +212,27 @@ def test_the_system_prompt_requires_no_plan_and_no_strategy():
         assert '"strategy"' not in text
 
 
+def test_a_nosql_finding_is_offered_the_javascript_predicate_form():
+    """VER-011: only CWE-943 gets the form and its note, so other injection prompts stay within their bound."""
+    nosql = _injection_ctx()
+    nosql.plan.cwe = "CWE-943"
+    assert "uses js_predicate_template" in system_prompt(nosql) and '"js_predicate_template"' in system_prompt(nosql)
+    other = system_prompt(_injection_ctx())
+    assert "uses js_predicate_template" not in other and '"js_predicate_template"' not in other
+
+
+def test_the_privileged_comparison_names_what_it_cannot_prove():
+    """VER-010: without writes, an ownership or missing-authentication finding has no proof in this run, and no
+    proof needs a looked-up user id; the agent hears that before trying plans the tools refuse."""
+    ctx = _ctx()
+    ctx.identities = [{"role": "account-1"}, {"role": "admin-1", "privileged": True}]
+    text = system_prompt(ctx)
+    assert "fits only a finding that identifies a function as privileged" in text
+    assert "proof_unavailable" in text and "missing authentication is proven only with a configured" in text
+    assert "another account's record, not a privileged function, cannot be confirmed in this run" in text
+    assert "None of these proofs needs an account's user id" in text
+
+
 def test_a_finding_prompt_carries_only_its_own_class():
     """WP12: an access-control finding gets no injection, session or XSS rules or actions, and the other way
     round; send_controls is offered only to an injection finding in intrusive mode."""

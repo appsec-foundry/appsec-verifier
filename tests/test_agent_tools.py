@@ -6,6 +6,8 @@ never sent; identity and transport failures become tool errors
 
 from __future__ import annotations
 
+import re
+
 import httpx
 import pytest
 
@@ -458,6 +460,17 @@ def test_auth_artifact_presence_is_reported_without_leaking_the_token(tmp_path):
     assert token not in str(tools._last_response)              # not in the recorded body read_response would serve
 
 
+def test_a_withheld_answer_has_no_size_or_hash_and_others_count_bytes(tmp_path):
+    """VER-053, VER-049: an answer withheld from the model reports neither size nor hash, since the notice's would
+    read as the answer's; any other answer reports its size in bytes, the unit of the report's step lines."""
+    tools = _auth_tools(tmp_path, 200, '{"authentication":{"token":"abc"}}')
+    out = tools.http_request(path="/rest/user/login", method="POST", json={"email": "x' OR (1=1) -- ", "password": "p"})
+    assert out["length"] is None and out["body_sha256"] is None and out["body_withheld"] is True
+    tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: Resp(200, '{"name":"Müller"}')))
+    out = tools.http_request(role="customer-a", path="/whoami")
+    assert out["length"] == len('{"name":"Müller"}'.encode()) == 18 and "body_withheld" not in out
+
+
 def test_auth_artifact_reports_absence_when_the_artifact_is_missing(tmp_path):
     tools = _auth_tools(tmp_path, 401, '{"error":"Invalid email or password."}')
     out = tools.http_request(path="/rest/user/login", method="POST",
@@ -580,3 +593,21 @@ def test_returned_marker_and_engine_error_forms_are_gated_by_cwe(tmp_path):
     for refused in ("CWE-90", "CWE-78"):                       # LDAP and command keep their own forms
         with pytest.raises(ToolError, match="engine-error proof applies"):
             AgentTools(ctx_for(refused)).plan_test(**err)
+
+
+@pytest.mark.parametrize("cwe, extra, reason", [
+    ("CWE-89", {}, "need a boolean experiment for CWE-943"),
+    ("CWE-943", {"operator_challenge": "nosql", "input_location": "json"}, "no other control form in the same plan"),
+    ("CWE-943", {"js_predicate_template": "1 || {{predicate}}"}, "contains no ||"),
+])
+def test_javascript_predicate_plans_are_refused_outside_their_form(tmp_path, cwe, extra, reason):
+    """VER-011: the form is for a NoSQL finding, alone in its plan, and joined with && only; nothing is sent."""
+    sent = []
+    ctx = _ctx(tmp_path, lambda *a, **k: sent.append(a) or Resp())
+    ctx.plan.cls, ctx.plan.cwe = "injection", cwe
+    declaration = {"kind": "boolean", "hypothesis": "the id is spliced into a $where predicate", "path": "/items",
+                   "input_location": "params", "input_name": "id", "baseline": "1", "pointer": "/data",
+                   "js_predicate_template": "1 && {{predicate}}", **extra}
+    with pytest.raises(ToolError, match=re.escape(reason)):
+        AgentTools(ctx).plan_test(**declaration)
+    assert sent == []

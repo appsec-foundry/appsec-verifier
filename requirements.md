@@ -77,7 +77,7 @@ optional hardening.
     and function-level authorisation.
   - **Injection** (CWE-89 SQL, CWE-943 NoSQL, CWE-78 command, CWE-1336
     template, CWE-643 XPath, CWE-90 LDAP): mechanism-specific harmless controls.
-    NoSQL uses JSON operator controls; LDAP uses complementary filter predicates.
+    NoSQL uses JSON operator controls, also as bracket notation in a query parameter (`q[$eq]=…`), or, where the input is spliced into a server-side JavaScript predicate such as `$where`, complementary predicate controls; LDAP uses complementary filter predicates.
   - **Authentication and exposure** (CWE-306, CWE-200): operator-declared
     harmless protected resources with an independent allowed/denied contrast.
   - **Session-cookie attributes** (CWE-614, CWE-1004, CWE-1275): repeated
@@ -139,7 +139,7 @@ optional hardening.
   a contrast, and the true class need not reproduce an uninjected baseline. Timing needs alternating independent controls with
   identical responses and repeated separations of 2–5 seconds, but timing alone
   remains inconclusive because ordinary computation can cause the same effect.
-  SQL confirmation requires fresh complementary predicate controls. Command,
+  SQL confirmation requires fresh complementary predicate controls. NoSQL confirmation in a server-side JavaScript predicate requires fresh complementary predicates joined with AND to an input that finds a record, so the true control repeats the baseline and the false one suppresses it. The NoSQL operator controls may travel as bracket notation in a query parameter where the target builds an object from it. Command,
   code-evaluation, template and XPath confirmation requires fresh computed
   arithmetic results. Injection that surfaces no response difference may instead
   be confirmed by an out-of-band callback (VER-048), and injection whose effect
@@ -165,7 +165,7 @@ optional hardening.
   The Verifier distinguishes "I could not reproduce it" from "it is not
   exploitable" and never reports a weakness as confirmed without the evidence
   class its finding type requires. Negative verdicts also cite completed,
-  comparable attempts. A missing prerequisite or an unperformed request is
+  comparable attempts; for injection, the true and false controls of at least two declared contexts give the same stable answer while the baseline answers with content, and the report names those contexts. A missing prerequisite or an unperformed request is
   not a security control. The code assigns confidence and bounds corrections
   of insufficient proof. Results cover only the cited requests and variants.
 

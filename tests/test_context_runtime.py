@@ -120,21 +120,21 @@ def test_feedback_allows_a_missing_plan_to_be_repaired(tmp_path):
         for _ in range(2)
         for name in ("baseline", "positive", "negative")
     ]
-    actions += [
-        {
-            "verdict": {
-                "verdict": "not-reproducible",
-                "rationale": "Stable observation under all inputs",
-                "proof_steps": list(range(4, 10)),
-            }
-        }
-    ]
+    def verdict(history):
+        # VER-013: the controls of both declared contexts, as the experiments ran them
+        steps = [n for h in history if h.get("tool") == "experiment" for n in h["result"]["steps"]]
+        return {"verdict": {"verdict": "not-reproducible", "rationale": "Stable observation under all inputs",
+                            "proof_steps": steps}}
+
+    actions += [{"tool": "plan_test", "args": {**declaration, "positive": "plain OR 1=1",
+                                               "negative": "plain AND 1=2"}}, verdict]
     histories = []
 
     class Planner:
         def next_step(self, context, history):
             histories.append(copy.deepcopy(history))
-            return actions.pop(0)
+            action = actions.pop(0)
+            return action(history) if callable(action) else action
 
     result = AgentProbe("injection", Planner).run(ctx)
     assert result.verdict == "not-reproducible" and result.proof["checked"]

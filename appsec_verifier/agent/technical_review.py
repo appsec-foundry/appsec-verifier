@@ -45,7 +45,8 @@ proof is a recorded result, not a model claim; you cannot waive its requirements
 reached the relevant input and effect, distinguished a counter-hypothesis, used suitable controls and
 identities, and limited conclusions to observed attempts. A rejected payload alone does not refute other
 justified variants. A missing exploit recipe is not itself a reason to stop. Suggest harmless, informative
-follow-up QUESTIONS within the finding, supported tools and remaining scope/mode/budgets; never demand
+follow-up QUESTIONS within the finding, supported tools, proof_contract and remaining scope/mode/budgets: a
+question its routes or proof forms cannot answer costs test steps without changing the result; never demand
 an unrelated scan, secret access, destructive payload, arbitrary shell or wider authority. Accept a
 well-explained inconclusive result when the necessary capability is unavailable. Do not invent proof.
 Use action read_response to select one or two existing response step numbers, optionally a JSON pointer
@@ -64,6 +65,34 @@ deliberately shares with these identities does not. No further tests run and no 
 agent: an objection and its question are shown to the operator beside the verdict, which stays unchanged.
 Return clear when nothing recorded indicates that the access is intended.
 """
+
+
+def proof_contract(ctx, controller) -> dict:
+    """What a follow-up can still turn into a checked result in this run (VER-010, VER-011, VER-046): the routes
+    the finding may request, the proof forms open to its class, and how a verdict cites its steps. Questions
+    outside it cost test steps without changing the result."""
+    from .controller import _route_list
+    from .experiments import access_methods, confirming_form
+
+    plan = ctx.plan
+    cls, cwe = getattr(plan, "cls", None), getattr(plan, "cwe", None)
+    contract = {
+        "routes": _route_list(controller._routes()),
+        "citations": "a confirmation cites the steps of one experiment, sent after its plan; an injection's "
+                     "negative verdict cites boolean experiments on one input in at least two declared contexts; "
+                     "a later plan does not void an earlier experiment",
+        "identities": "no proof needs an account's user id or record id beforehand; a read that only looks one "
+                      "up is not part of the finding",
+    }
+    if cls == "access-control":
+        writes = not (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True))
+        contract["access_proofs"] = access_methods(getattr(plan, "id", None), cwe, getattr(ctx, "scope", None),
+                                                   getattr(ctx, "identities", None), writes=writes) or [
+            "none: a configured test_resource or two normal accounts with --allow-intrusive is missing"]
+    elif cls == "injection":
+        contract["confirming_inputs"] = {location: confirming_form(cwe, location) or "negative verdict only"
+                                         for location in ("params", "json", "path")}
+    return contract
 
 
 def clean(ctx, value):
@@ -111,6 +140,7 @@ class TechnicalReview:
                             "context": bounded(clean(ctx, getattr(ctx.plan, "context", {}))),
                             "verification_context": bounded(clean(ctx, ctx.plan.verification_context))},
                 "mode": "read-only" if ctx.safe or ctx.read_only else "marked state changes permitted",
+                "proof_contract": proof_contract(ctx, controller),
                 "identities": [{"role": i["role"], "privileged": bool(i.get("privileged"))}
                                for i in ctx.identities if i.get("role")],
                 "capabilities": {"source": ctx.source is not None, "browser": ctx.browser is not None,

@@ -488,6 +488,38 @@ def test_a_collection_emptiness_flip_confirms_without_matching_the_baseline(tmp_
     assert res.verdict == "confirmed" and res.confidence == "medium"
 
 
+def _later_plan():
+    return {"tool": "plan_test", "result": {"accepted": True},
+            "args": {"kind": "timing", "hypothesis": "a delay follows the input", "path": "/rest/products/search",
+                     "method": "GET", "input_location": "params", "input_name": "q", "baseline": "x",
+                     "positive": "x' AND sleep(2) -- "}}
+
+
+def test_an_experiment_stays_checkable_against_its_own_plan_after_a_later_plan(tmp_path):
+    """VER-011, VER-043: a later plan, for example one a technical QA question led to, does not void an earlier
+    experiment; its cited steps are checked against the plan that governed them."""
+    history, cited, responses = _sql_fixture()
+    history.append(_later_plan())
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence", responses=responses),
+                      history, ProbeResult(verdict="confirmed"), cited)
+    assert res.verdict == "confirmed" and res.proof["kind"] == "boolean"
+    assert res.proof["hypothesis"] == "q is spliced into the product search SQL"
+
+
+def test_a_negative_verdict_checks_each_cited_experiment_against_its_own_plan(tmp_path):
+    """VER-013: a negative verdict may cite several experiments; each is checked against its own plan, so a
+    confirming flip in the first one is named, not hidden behind the later plan."""
+    history, cited, responses = _sql_fixture()
+    history.append(_later_plan())
+    history += [_req(path="/rest/products/search", method="GET", params={"q": "x"}),
+                _req(path="/rest/products/search", method="GET", params={"q": "x' AND sleep(2) -- "})]
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence", responses=responses),
+                      history, ProbeResult(verdict="not-reproducible"), [*cited, 13, 14])
+    assert res.verdict == "inconclusive"
+    assert "the true and false controls answer differently, so this is no negative result (experiment of step 1)" \
+        in res.rationale
+
+
 def test_input_variation_not_decided_by_truth_value_is_downgraded(tmp_path):
     # A true predicate's complement observes a different result, so the signal tracks the literal
     # text rather than the predicate's truth value; that is ordinary input dependence, not injection.

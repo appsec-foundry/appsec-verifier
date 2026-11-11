@@ -194,6 +194,9 @@ def test_a_step_line_shows_the_agent_note_the_payload_and_the_model_time(monkeyp
                    "result": {"status": 500, "length": 90}})
     assert _rows(out)[-1].endswith("step 1 · login bypass with a quote · POST /rest/user/login?q=x'-- "
                                    '{"email":"a\'--"} → 500 · 90 B · model 14s')
+    progress.step({"step": 2, "tool": "http_request", "args": args,
+                   "result": {"status": 500, "length": None, "body_withheld": True}})
+    assert "→ 500 · body withheld" in _rows(out)[-1]          # no size of the notice that stands in for it
 
 
 

@@ -155,7 +155,8 @@ def test_the_identical_answer_for_a_normal_account_confirms_at_medium():
 
 
 @pytest.mark.parametrize("history, reason", [
-    (privileged(anonymous_status=200), "refused with 401 or 403"),
+    (privileged(anonymous_status=200), "missing authentication is proven only with a configured test_resource"),
+    (privileged(anonymous_status=500), "refused with 401 or 403"),
     (privileged(normal='{"config":{"name":"other"}}'), "identical answer"),
     (_change(privileged(), 3, identity="admin-1"), "identical answer"),                          # same session
     ([_plan_step(reference="admin-1", path=FN), _req("admin-1", path=FN), _req(None, "", 401, path=FN),
@@ -166,6 +167,33 @@ def test_the_identical_answer_for_a_normal_account_confirms_at_medium():
 def test_a_privileged_comparison_without_the_full_contrast_stays_inconclusive(history, reason):
     result = _check(history)
     assert result.verdict == "inconclusive" and reason in result.rationale
+
+
+def _unavailable(history):
+    from appsec_verifier.agent.experiments import reference_unavailable
+
+    history = copy.deepcopy(history)
+    for h in history:
+        h.pop("_response", None)
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe="CWE-862"))
+    return reference_unavailable(ctx, history)
+
+
+def test_an_anonymous_answer_with_content_tells_the_agent_the_privileged_plan_cannot_confirm():
+    """VER-010: as soon as the request without a role gets the content, the accepted privileged-function plan can
+    no longer confirm; the agent hears why at once, and the proof check gives the same reason."""
+    signal = _unavailable(privileged(anonymous_status=200)[:3])
+    assert "missing authentication is proven only with a configured test_resource" in signal["reason"]
+    assert "inconclusive" in signal["next"]
+    assert _unavailable(privileged()[:3]) is None                                    # refused: the plan holds
+    assert _unavailable(privileged(anonymous_status=200)[:2]) is None                # the reference request
+    probe = privileged(anonymous_status=200)[:3]
+    probe[2]["args"]["prerequisite"] = True
+    assert _unavailable(probe) is None                                               # not the plan's request
+    other = privileged(anonymous_status=200)[:3]
+    other[2]["args"]["path"] = "/rest/other"
+    assert _unavailable(other) is None                                               # another path
+    assert _unavailable([_plan_step(owner="account-2"), *owned()[1:4]]) is None      # an own-resource plan
 
 
 def test_answers_alike_only_after_redaction_are_not_identical():

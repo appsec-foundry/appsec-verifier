@@ -328,8 +328,10 @@ def _raw_response(e: dict, focus: int, har_path: str | None) -> str:
     else:
         start = max(0, min(focus - EXCERPT_CHARS // 3, len(text) - EXCERPT_CHARS))
         where = f"; full response in {har_path}" if har_path else ""
+        # The answer's size in the step lines' unit, bytes; a count of the redacted text would be a third figure.
         body = (("[…]\n" if start else "") + text[start:start + EXCERPT_CHARS]
-                + f"\n[… characters {start + 1} to {start + EXCERPT_CHARS} of {len(text)} shown{where}]")
+                + f"\n[… characters {start + 1} to {start + EXCERPT_CHARS} shown of a {content.get('size')}-byte "
+                  f"answer{where}]")
     return "\n".join(lines) + "\n\n" + body
 
 
@@ -458,7 +460,10 @@ def _sink(plan: dict, args: dict):
     values = dict(raw) if isinstance(raw, dict) else {}
     if location == "params":
         values.update(parse_qsl((args.get("path") or "").partition("?")[2], keep_blank_values=True))
-    return values.get(plan.get("input_name"), _MISSING)
+    from ..agent.experiments import brackets, take_sink
+
+    value = take_sink(values, plan.get("input_name"), brackets(plan))
+    return _MISSING if value is None else value
 
 
 def _declared_resource(ctx, plan: dict) -> dict | None:
@@ -1368,15 +1373,43 @@ def _tried(history: list[dict], steps: list[dict]) -> list[tuple[int, dict]]:
     return out
 
 
+WITHHELD_BODY = ("[body withheld from the model; it is kept only in the owner-only proof of concept "
+                  "(VER-049, VER-053)]")
+
+
+def withheld_steps(history: list[dict]) -> set[int]:
+    """The steps whose answer body no model may see (VER-016, VER-049, VER-053): an engine-error probe, whose error
+    text stays owner-only, and a login-bypass control, whose authenticated artifact is never shown. The test agent
+    got only the code's observation for them; the image and the report keep the body for the operator."""
+    return {n for n, h in enumerate(history, 1) if isinstance(h.get("result"), dict)
+            and ("engine_error" in h["result"] or "auth_artifact" in h["result"])}
+
+
+def _for_model(e: dict) -> dict:
+    """An exchange as a model may see it: the request, the status and a notice in place of the answer's headers
+    and body."""
+    response = e["response"]
+    return {**e, "response": {**response, "headers": [],
+                              "content": {**response["content"], "text": WITHHELD_BODY, "mimeType": "text/plain"}}}
+
+
 def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
                          highlight, *, cited: bool = True) -> list[dict]:
     shots = []
+    withheld = withheld_steps(history) & {n for n, _ in shown}
+    # What a model reviews of the panels (VER-042) is the page as it would look with every withheld answer
+    # replaced by a notice; the image itself keeps the answer for the operator.
+    safe = {n: _for_model(e) if n in withheld else e for n, e in shown}
     # Two exchanges per panel preserve the comparison without a long full-page image.
     for panel in panels(shown, step_roles(ctx, history, shown)):
         page, marked = exchange_document(ctx, history, panel, verdict, har_path,
                                          highlight, cited=cited, comparison=shown)
+        model_page = page
+        if withheld:
+            model_page, _ = exchange_document(ctx, history, [(n, safe[n]) for n, _ in panel], verdict, har_path,
+                                              highlight, cited=cited, comparison=list(safe.items()))
         visible = _VisibleText()
-        visible.feed(page)
+        visible.feed(model_page)
         ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
         try:
             shots += ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)
@@ -1450,6 +1483,11 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     """Write the finding's proof of concept and add it to `result` (VER-034, VER-035)."""
     if not steps:
         return result
+    from ..agent.experiments import plan_view
+
+    # The images describe the plan the checked steps ran under, not one accepted after them (plan_view).
+    history = plan_view(history, (result.proof or {}).get("steps") or cited)
+    withheld = withheld_steps(history)
     decisive = set(decisive_steps(ctx, history, result.verdict, cited))
     for step in steps:
         step["decisive"] = step["step"] in decisive
@@ -1466,7 +1504,8 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
         "shown": [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
                    "response": _raw_response(e, _focus(ctx, others, e), har_path),
-                   **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path, roles)}
+                   **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path, roles),
+                   **({"withheld": True} if n in withheld else {})}     # no model reads its answer (VER-053)
                   for n, e in shown_entries],
     }
     shots: list[dict] = []

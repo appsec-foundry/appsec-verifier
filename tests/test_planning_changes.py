@@ -451,6 +451,51 @@ def test_expression_proof_without_a_scope_contract_accepts_the_agents_input(tmp_
         AgentTools(ctx).plan_test(**agents_plan)
 
 
+@pytest.mark.parametrize("parses_brackets", [False, True])
+def test_query_operators_travel_in_bracket_notation(tmp_path, parses_brackets):
+    """VER-011: a NoSQL query parameter gets the operator controls as q[$eq]=… and q[$in][]=…. A target that builds
+    an object from them, as Express 4 and PHP do, confirms; one that reads q literally answers them like a
+    missing value, and nothing is confirmed."""
+    sent = []
+
+    def target(m, u, h, **kwargs):
+        params = dict(kwargs.get("params") or {})
+        sent.append(params)
+        if "q" in params:
+            found = params["q"] == "apple"
+        else:
+            found = parses_brackets and "apple" in (params.get("q[$eq]"), params.get("q[$in][]"))
+        return Resp(200, json.dumps({"result": [7] if found else []}))
+
+    ctx = _ctx(tmp_path, target)
+    ctx.scope = {**ctx.scope, "injection_inputs": [{"finding_id": "T-1", "path": "/search",
+                 "input_location": "params", "input_name": "q", "semantics": "literal"}]}
+    ctx.plan = replace(ctx.plan, cwe="CWE-943", cls="injection")
+    declaration = plan(baseline="apple", input_location="params")["args"] | {"operator_challenge": "nosql"}
+    confirmed = {"verdict": "confirmed", "rationale": "operator controls", "proof_steps": list(range(2, 12))}
+    actions = [{"tool": "plan_test", "args": declaration}, {"verdict": confirmed}]
+
+    class Planner:
+        def next_step(self, context, history):
+            return actions.pop(0) if actions else {"verdict": {"verdict": "inconclusive", "rationale": "literal input"}}
+
+    result = AgentProbe("injection", Planner).run(ctx)
+    assert result.verdict == ("confirmed" if parses_brackets else "inconclusive")
+    assert {"q[$eq]": "apple"} in sent and {"q[$in][]": "apple"} in sent and {"q": "apple"} in sent
+    assert all(len(p) == 1 for p in sent)                    # only the declared input, nothing else varies
+
+
+def test_bracket_notation_round_trips_to_the_operator_object():
+    from appsec_verifier.agent.experiments import bracket_params, take_sink
+
+    for control in ({"$eq": "apple"}, {"$in": ["apple"]}, "apple"):
+        values = {**bracket_params("q", control), "page": "2"}
+        assert take_sink(values, "q", True) == control and values == {"page": "2"}
+    values = {"q[$where]x": "1"}
+    assert take_sink(values, "q", True) is None and values == {"q[$where]x": "1"}     # unreadable: left in place
+    assert take_sink({"q[$eq]": "apple"}, "q", False) is None                          # JSON plans read q only
+
+
 @pytest.mark.parametrize("mechanism", ["nosql", "ldap"])
 @pytest.mark.parametrize("vulnerable", [False, True])
 def test_literal_inputs_vs_query_operators(tmp_path, mechanism, vulnerable):

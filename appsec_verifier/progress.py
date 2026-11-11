@@ -193,6 +193,8 @@ def _outcome(result: dict) -> list[tuple]:
         parts.append(str(result["status"]))
     if isinstance(result.get("length"), int):
         parts.append(f"{result['length']} B")
+    elif result.get("body_withheld"):          # an engine error or login artifact, never shown to a model
+        parts.append("body withheld")
     if "executed" in result:
         parts.append(("script executed", "ok", "bold") if result["executed"] else "no script executed")
     if result.get("marker_read"):

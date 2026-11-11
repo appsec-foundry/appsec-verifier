@@ -676,6 +676,69 @@ def test_an_engine_error_image_frames_the_error_its_proof_reads_not_the_status()
     assert report["response_excerpt"].count("⟦SQLITE_ERROR: near \"'%'\": syntax error⟧") == 1
 
 
+class _PanelBrowser:
+    screenshots = SCREENSHOT_CLASSES
+
+    def __init__(self):
+        self.pages = []
+
+    def render_exchanges(self, html, name, marked):
+        self.pages.append(html)
+        return []
+
+
+@pytest.mark.parametrize("key", ["engine_error", "auth_artifact"])
+def test_no_model_reads_a_withheld_answer_through_the_panel_text_or_the_excerpts(key):
+    """VER-053, VER-049, VER-016: the operator's image keeps the engine error, but the panel text and the
+    recorded excerpts the evidence reviewer and the test agent's revision read show a notice instead, so the
+    error text and an authenticated artifact never reach a model."""
+    from appsec_verifier.verify.evidence_review import _variant
+
+    ctx, history, shown = _error_probe()
+    if key == "auth_artifact":
+        for h in history[1:]:
+            h["result"]["auth_artifact"] = h["result"].pop("engine_error")
+    assert poc.withheld_steps(history) == {2, 3}
+    ctx.browser, ctx.evidence_panels = _PanelBrowser(), []
+    poc._exchange_screenshot(ctx, history, shown, "confirmed", None, None)
+    assert "SQLITE_ERROR" in ctx.browser.pages[0]                       # the operator's image keeps it
+    panel_text = json.dumps(ctx.evidence_panels)
+    assert "SQLITE_ERROR" not in panel_text and "syntax error" not in panel_text
+    assert "withheld from the model" in panel_text
+    response = poc._raw_response(shown[0][1], 0, None)
+    result = SimpleNamespace(poc={"shown": [{"step": 2, "request": "GET /search?q=apple%27 HTTP/1.1",
+                                             "response": response, "withheld": True}]},
+                             verdict="confirmed", proof={}, evidence=[], observations=[], rationale="")
+    ctx.sessions, ctx.evidence_panels = None, []
+    excerpt = _variant(ctx, result, None)["recorded_excerpts"][0]["response"]
+    assert "SQLITE_ERROR" in response and "SQLITE_ERROR" not in excerpt
+    assert excerpt.startswith("HTTP/1.1 500") and "withheld from the model" in excerpt
+
+
+def test_the_poc_marks_a_withheld_answer_and_the_images_follow_the_checked_plan(tmp_path):
+    """The report's excerpt of an engine-error step carries the withheld flag the review payload reads, and a
+    plan accepted after the checked steps does not change what their image describes (plan_view)."""
+    ctx, history, shown = _error_probe()
+    later = _accepted(**{**_EXPERIMENT, "kind": "timing", "pointer": None, "positive": "x' AND sleep(2)--"})
+    steps = [{"step": n, "tool": "http_request", "entries": [e]} for n, e in shown]
+    ctx.evidence_dir, ctx.sessions, ctx.browser, ctx.evidence_panels = tmp_path / "evidence", None, None, []
+    ctx.budget = RunBudget(Limits())
+    ctx.guard = SimpleNamespace(remaining_time=lambda: None)
+    result = SimpleNamespace(verdict="confirmed", proof={"steps": [2, 3]}, evidence=[], observations=[],
+                             planning=[], poc=None, limits_hit=None)
+    out = poc.attach(ctx, [*history, later], steps, result, [2, 3])
+    assert [s.get("withheld") for s in out.poc["shown"]] == [True, True]
+    assert [p["step"] for p in out.planning] == [1, 4]                  # the report still lists both plans
+    page, _ = poc.exchange_document(ctx, poc_view(history, later), shown, "confirmed", None)
+    assert "with q carrying each syntax break" in page
+
+
+def poc_view(history, later):
+    from appsec_verifier.agent.experiments import plan_view
+
+    return plan_view([*history, later], [2, 3])
+
+
 def test_an_engine_error_is_framed_only_where_the_code_recorded_one():
     """A balanced counterpart the code recorded as raising one is framed too; a break the code did not classify
     as an engine error gets no frame, whatever its answer says."""

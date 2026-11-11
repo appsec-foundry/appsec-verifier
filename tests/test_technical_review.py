@@ -80,6 +80,28 @@ def test_qa_redacts_before_truncating_context_and_history(tmp_path):
     assert "fixture-cr" not in serialized and "[redacted]" in serialized
 
 
+def test_qa_gets_the_proof_contract_its_follow_ups_must_fit(tmp_path):
+    """VER-046: the reviewer sees the routes, the proof forms open to the class and the citation rule, so it asks
+    only what a follow-up can still turn into a checked result."""
+    ctx = context(tmp_path)
+    ctx.plan = replace(ctx.plan, cls="access-control", cwe="CWE-639")
+    ctx.identities = [{"role": "account-1"}, {"role": "admin-1", "privileged": True}]
+    ctx.agent_history = [{"tool": "http_request", "args": {"path": "/go"}, "result": {"status": 200}}]
+    qa, host = reviewer(ctx, [CLEAR])
+    assert consider(ctx, qa) is None
+    contract = host.calls[0][1]["proof_contract"]
+    assert contract["access_proofs"] == ["reference"] and "one experiment" in contract["citations"]
+    assert "user id" in contract["identities"] and contract["routes"]
+    injection = context(tmp_path)
+    injection.plan = replace(injection.plan, cls="injection", cwe="CWE-943")
+    injection.agent_history = ctx.agent_history
+    qa, host = reviewer(injection, [CLEAR])
+    assert consider(injection, qa) is None
+    assert host.calls[0][1]["proof_contract"]["confirming_inputs"] == {
+        "params": "operator_challenge or js_predicate_template", "json": "operator_challenge",
+        "path": "js_predicate_template"}
+
+
 @pytest.mark.parametrize("reply", [selection(999), {**CLEAR, "action": "http_request"},
                                   {**CLEAR, "verdict": "confirmed"}, {**CLEAR, "status": "needs-attention"},
                                   {**CLEAR, "steps": [1]}, {**selection(), "steps": [0]}])

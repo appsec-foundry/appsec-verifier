@@ -26,10 +26,14 @@ def bind_path_input(ctx, plan, path, values):
 
     name = plan.get("input_name", "")
     if (ctx.plan.cls != "injection" or plan.get("kind") not in ("boolean", "timing")
-            or plan.get("input_location") != "path" or path != plan.get("path")
-            or not isinstance(values, dict) or set(values) != {name}
+            or plan.get("input_location") != "path"):
+        # The usual mistake: a placeholder route of another plan, e.g. an access-control plan on /items/:id.
+        raise ToolError("path_inputs only carry an accepted injection experiment's declared path input; "
+                        "otherwise write the value into path itself, e.g. /items/3 for /items/:id")
+    if (path != plan.get("path") or not isinstance(values, dict) or set(values) != {name}
             or not isinstance(values.get(name), str) or len(values[name]) > 4000):
-        raise ToolError("path input must match the accepted experiment")
+        raise ToolError(f"path input must match the accepted experiment: keep path {plan.get('path')} and give "
+                        f"only {name}")
     pinned = [r for r in ctx.scope.get("injection_inputs", []) if r["finding_id"] == ctx.plan.id]
     if pinned and not any(r["path"] == path and r["input_location"] == "path"
                and r["input_name"] == name and r["semantics"] == "literal"

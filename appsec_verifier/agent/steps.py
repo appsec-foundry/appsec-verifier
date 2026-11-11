@@ -68,19 +68,22 @@ def offered(ctx, name: str) -> bool:
     return True
 
 
-def _offered_schema(tool: dict) -> dict:
+def _offered_schema(tool: dict, ctx=None) -> dict:
     """The schema shown to the model. A plan's optional strategy (VER-043) is accepted but not offered, so the
-    model is not prompted to write one."""
+    model is not prompted to write one; the JavaScript predicate form is offered to a NoSQL finding only."""
     schema = tool["input_schema"]
-    if tool["name"] == "plan_test" and "strategy" in schema.get("properties", {}):
-        schema = {**schema, "properties": {k: v for k, v in schema["properties"].items() if k != "strategy"}}
+    if tool["name"] == "plan_test":
+        hidden = {"strategy"}
+        if getattr(getattr(ctx, "plan", None), "cwe", None) != "CWE-943":
+            hidden.add("js_predicate_template")
+        schema = {**schema, "properties": {k: v for k, v in schema.get("properties", {}).items() if k not in hidden}}
     return schema
 
 
 def system_prompt(ctx) -> str:
     """Without a source checkout read_source is not offered: a call would only return an error."""
     source = getattr(ctx, "source", None) is not None
-    actions = [{"name": t["name"], "description": t["description"], "input_schema": _offered_schema(t)}
+    actions = [{"name": t["name"], "description": t["description"], "input_schema": _offered_schema(t, ctx)}
                for t in _tool_defs() if offered(ctx, t["name"])]
     return (
         _system(ctx)

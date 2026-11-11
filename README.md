@@ -73,7 +73,7 @@ Each finding ends with one of these verdicts. A negative verdict covers only the
 - By default it sends only GET, HEAD and OPTIONS. Write requests (POST, PUT, PATCH), needed for stored XSS and some access-control tests, require `--allow-intrusive` or, in a terminal, your yes when the test agent asks for one during a test, and a scope can forbid them with `allow_state_change: false`. Use them only against a test instance you can reset; records the Verifier creates stay on the target. DELETE is never sent.
 - Requests, request rate, model calls, model cost and run time are capped; the defaults are in [`data/limits.yaml`](data/limits.yaml). A limit that is reached stops the finding or the run it applies to; in a terminal the run first asks whether to raise the cost limit. Ctrl-C stops the run and still writes the report.
 - Passwords and tokens come from environment variables or hidden input and are not stored. They are kept out of the model's input, the logs and the report; the model knows the accounts by role name only. An `--admin-account` sends only GET, HEAD and OPTIONS.
-- The model sees the target's responses and, for the evidence review, application screenshots. Both can contain target data such as account names.
+- The model sees the target's responses and, for the evidence review, application screenshots. Both can contain target data such as account names. The error text a malformed input provokes and the token of a login bypass stay in the owner-only evidence; no model sees them.
 - The agent proposes one step at a time, and the Verifier checks each step before it runs it. The agent has no shell and no file access. With `--source` it can read the target's source code, but not `.env` files, keys or `.git/`.
 
 ## Model profiles

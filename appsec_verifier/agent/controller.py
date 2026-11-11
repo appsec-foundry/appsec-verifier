@@ -26,7 +26,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
-from .experiments import control_values, normal_roles, token
+from .experiments import brackets, control_values, normal_roles, take_sink, token
 from .tools import ToolError, _strings
 
 
@@ -192,10 +192,11 @@ class Controller:
                     raise ToolError("experiment requests cannot contain duplicate query inputs")
                 supplied["params"].update(pairs)
                 location = "path_inputs" if plan["input_location"] == "path" else plan["input_location"]
-                selected = supplied[location]
+                rest = dict(supplied[location])
                 controls = list(control_values(plan).values())
-                sink = selected.get(plan["input_name"])
-                if plan["input_name"] not in selected or token(sink) not in {token(v) for v in controls}:
+                # The sink, an operator object rebuilt from bracket notation in a query parameter (VER-011).
+                sink = take_sink(rest, plan["input_name"], brackets(plan))
+                if sink is None or token(sink) not in {token(v) for v in controls}:
                     values = ", ".join(repr(str(v)[:60]) for v in controls)
                     raise ToolError(
                         "request must carry the accepted experiment's sink value; "
@@ -208,8 +209,7 @@ class Controller:
                 # proof compare answers that differ for the wrong reason (VER-011).
                 shape = {k: tuple(sorted((kk, str(vv)) for kk, vv in v.items())) for k, v in supplied.items()
                          if k != location}
-                shape[location] = tuple(sorted((kk, str(vv)) for kk, vv in selected.items()
-                                                if kk != plan["input_name"]))
+                shape[location] = tuple(sorted((kk, str(vv)) for kk, vv in rest.items()))
                 if self._experiment_shape is None:
                     self._experiment_shape = shape
                 elif shape != self._experiment_shape:

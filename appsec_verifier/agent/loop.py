@@ -43,7 +43,7 @@ from .tools import AgentTools, ToolError
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
 _LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "error", "path", "start_line",
-                  "marker_read", "callback_hit", "accepted", "elapsed_ms")
+                  "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "body_withheld")
 _PROPOSAL_CAP = 500
 
 
@@ -399,6 +399,12 @@ class AgentProbe:
                 if ready:
                     result["proof_ready"] = {"steps": ready,
                                              "next": "submit_verdict confirmed and cite these steps in proof_steps"}
+                # The opposite signal: the accepted privileged-function plan can no longer confirm (VER-010).
+                from .experiments import reference_unavailable
+
+                unavailable = reference_unavailable(ctx, history)
+                if unavailable:
+                    result["proof_unavailable"] = unavailable
             # An accepted read injection plan runs its generated controls, or the agent's own, at once and reports
             # whether the proof already holds, or that own controls support only a negative verdict, so the agent
             # submits the verdict instead of a separate step (VER-011, VER-043). A write plan sends nothing here;

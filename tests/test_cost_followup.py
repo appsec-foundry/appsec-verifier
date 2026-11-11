@@ -5,6 +5,7 @@ the refused case. Offline: SQLite stands in for the target's query, a fake plann
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import replace
 
@@ -397,8 +398,12 @@ def _reviews_target(sent, *, vulnerable):
     def target(m, u, h, **kw):
         value = unquote(urlsplit(u).path.split("/")[3])
         sent.append((m, value))
+        predicate = re.fullmatch(r"1 && \((\d+)(===|!==)(\d+)\)", value)
         if value.isdigit():
             hit = value == "1"
+        elif vulnerable and predicate:          # this.product == 1 && (a === b), evaluated as JavaScript
+            a, op, b = predicate.groups()
+            hit = (a == b) == (op == "===")
         elif vulnerable:
             hit = "|| true" in value
         else:
@@ -430,7 +435,7 @@ def _feedback(history):
 
 def test_own_read_controls_run_at_once_and_say_they_support_only_a_negative_verdict(tmp_path):
     """The run's T-033: the agent's own controls are sent on acceptance, each twice, without a model call per
-    request, and the feedback says no declaration confirms a NoSQL injection through a path input."""
+    request, and the feedback names the JavaScript predicate form that could confirm it through a path input."""
     sent = []
     script = Script([_reviews_plan(), {"verdict": {"verdict": "inconclusive", "rationale": "Number() conversion"}}])
     result = AgentProbe("injection", lambda: script).run(_reviews_ctx(tmp_path, sent))
@@ -438,7 +443,55 @@ def test_own_read_controls_run_at_once_and_say_they_support_only_a_negative_verd
     assert sorted(v for _, v in sent) == ["1", "1", "1 && false", "1 && false", "1 || true", "1 || true"]
     feedback = _feedback(script.history)
     assert feedback and feedback[0]["proof"] == "negative-only"
-    assert "no declaration can confirm" in feedback[0]["next"] and len(feedback[0]["steps"]) == 6
+    assert "declare a plan with js_predicate_template" in feedback[0]["next"] and len(feedback[0]["steps"]) == 6
+
+
+def _negative_across(history):
+    steps = [n for feedback in _feedback(history) for n in feedback["steps"]]
+    return {"verdict": {"verdict": "not-reproducible", "rationale": "Number() conversion", "proof_steps": steps}}
+
+
+def _quoted():
+    return _reviews_plan(positive="1' || '1'=='1", negative="1' && '1'=='2")
+
+
+def test_the_runs_t033_is_not_reproducible_with_a_second_context(tmp_path):
+    """VER-013: the run's T-033 once more, with a quoted context beside the numeric one. Both control pairs
+    answer alike while the baseline finds its review, so the finding is not reproducible on this target; one
+    context is not enough, and a target that evaluates the id keeps the split that refutes the negative."""
+    one = Script([_reviews_plan(), _negative_across])
+    result = AgentProbe("injection", lambda: one).run(_reviews_ctx(tmp_path, []))
+    assert result.verdict == "inconclusive" and "at least two declared contexts" in result.rationale
+    two = Script([_reviews_plan(), _quoted(), _negative_across])
+    result = AgentProbe("injection", lambda: two).run(_reviews_ctx(tmp_path, []))
+    assert result.verdict == "not-reproducible" and result.confidence == "medium"
+    assert [c["context"] for c in result.proof["contexts"]] == ["1 || true / 1 && false",
+                                                                "1' || '1'=='1 / 1' && '1'=='2"]
+    evaluated = Script([_reviews_plan(), _quoted(), _negative_across])
+    result = AgentProbe("injection", lambda: evaluated).run(_reviews_ctx(tmp_path, [], vulnerable=True))
+    assert result.verdict == "inconclusive" and "answer differently" in result.rationale
+
+
+def _js_plan():
+    plan = _reviews_plan(js_predicate_template="1 && {{predicate}}")
+    for key in ("positive", "negative"):
+        plan["args"].pop(key)
+    return plan
+
+
+def test_a_javascript_predicate_confirms_the_where_injection_without_more_than_the_baseline(tmp_path):
+    """VER-011: the Verifier's fresh JavaScript predicates, joined with && to the id that finds the review, repeat
+    the baseline when true and suppress it when false on a target that evaluates the id; where the target turns
+    the id into a number, they find nothing and nothing is confirmed."""
+    sent = []
+    script = Script([_js_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(_reviews_ctx(tmp_path, sent, vulnerable=True))
+    assert result.verdict == "confirmed" and result.proof["checked"] and result.confidence == "medium"
+    assert all(v == "1" or (v.startswith("1 && (") and "||" not in v) for _, v in sent)
+    coerced = Script([_js_plan(), _confirm])
+    result = AgentProbe("injection", lambda: coerced).run(_reviews_ctx(tmp_path, []))
+    assert result.verdict == "inconclusive"
+    assert "true predicates produced an empty observation" in _feedback(coerced.history)[0]["reason"]
 
 
 def test_own_read_controls_name_the_form_that_could_confirm(tmp_path):

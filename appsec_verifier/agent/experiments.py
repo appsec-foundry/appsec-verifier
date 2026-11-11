@@ -86,6 +86,8 @@ PLAN_SCHEMA = {
         "expression_template": _candidates({"type": "string", "minLength": 5, "maxLength": 3000}),
         "operator_challenge": {"enum": ["nosql"]},
         "predicate_template": {"type": "string", "minLength": 15, "maxLength": 3000},
+        # VER-011: a NoSQL input spliced into a server-side JavaScript predicate such as $where (CWE-943).
+        "js_predicate_template": {"type": "string", "minLength": 10, "maxLength": 3000},
         "predicate_attribute": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"},
         "sql_template": _candidates({"type": "string", "minLength": 15, "maxLength": 3000}),
         # VER-048: a blind-injection out-of-band proof carries the callback URL instead of observing a field.
@@ -154,7 +156,7 @@ def generates_controls(plan) -> bool:
     """Whether the Verifier generates this accepted plan's controls itself (VER-011, VER-053)."""
     return plan.get("kind") == "boolean" and bool(
         plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
-        or plan.get("sql_marker") or plan.get("error_probe"))
+        or plan.get("js_predicate_template") or plan.get("sql_marker") or plan.get("error_probe"))
 
 
 def agent_controls(plan) -> bool:
@@ -162,7 +164,7 @@ def agent_controls(plan) -> bool:
     result but never a confirmation (VER-011)."""
     return plan.get("kind") in ("boolean", "timing") and not any(
         plan.get(k) for k in ("sql_template", "expression_template", "operator_challenge", "predicate_template",
-                              "oob_template", "sql_marker", "error_probe"))
+                              "js_predicate_template", "oob_template", "sql_marker", "error_probe"))
 
 
 def confirming_form(cwe, location) -> str | None:
@@ -171,7 +173,8 @@ def confirming_form(cwe, location) -> str | None:
     if cwe == "CWE-89":
         return "sql_template"
     if cwe == "CWE-943":
-        return "operator_challenge" if location == "json" else None
+        return {"json": "operator_challenge", "params": "operator_challenge or js_predicate_template",
+                "query": "operator_challenge or js_predicate_template"}.get(location, "js_predicate_template")
     if cwe in ("CWE-78", "CWE-94", "CWE-95", "CWE-1336", "CWE-643"):
         return "expression_template"
     return "predicate_template" if cwe == "CWE-90" else None
@@ -293,7 +296,11 @@ def error_controls(plan, cwe, marker=""):
 
 
 def operator_controls(plan):
+    """VER-011: fresh equality and membership operators against the literal baseline lookup. In a query parameter
+    they travel in bracket notation (bracket_params), whose values arrive as text, so they are text there too."""
     baseline = plan["baseline"]
+    if plan.get("input_location") in ("params", "query"):
+        baseline = str(baseline)
     absent = "vrf" + secrets.token_hex(16)
     return {
         **plan,
@@ -302,6 +309,68 @@ def operator_controls(plan):
         "positive_other": {"$in": [baseline]},
         "negative_other": {"$in": [absent]},
     }
+
+
+_BRACKET = re.compile(r"\[(\$[a-z]{2,10})\](\[\])?")
+
+
+def brackets(plan) -> bool:
+    """Whether the plan's controls travel as bracket notation in a query parameter (VER-011)."""
+    return bool(plan.get("operator_challenge")) and plan.get("input_location") in ("params", "query")
+
+
+def bracket_params(name: str, value) -> dict:
+    """An operator control as query parameters the way Express 4 (qs) and PHP build an object from them (VER-011):
+    {"$eq": "1"} as q[$eq]=1, {"$in": ["1"]} as q[$in][]=1. Any other value stays name=value."""
+    if not isinstance(value, dict):
+        return {name: value}
+    out = {}
+    for operator, v in value.items():
+        if isinstance(v, list):
+            if len(v) != 1:
+                raise ValueError("a bracket-notation membership control carries exactly one value")
+            out[f"{name}[{operator}][]"] = v[0]
+        else:
+            out[f"{name}[{operator}]"] = v
+    return out
+
+
+def take_sink(values: dict, name: str, bracketed: bool):
+    """Removes the declared input from a request's inputs and returns it, or None when it is absent. With
+    `bracketed` an operator object is rebuilt from name[$op] and name[$op][] keys, as the target would build it;
+    a key it cannot read stays in `values`, so the request's shape differs from its controls'."""
+    if name in values or not bracketed:
+        return values.pop(name, None)
+    found = {}
+    for key in [k for k in values if k.startswith(name + "[")]:
+        match = _BRACKET.fullmatch(key[len(name):])
+        if match:
+            found[match.group(1)] = [values.pop(key)] if match.group(2) else values.pop(key)
+    return found or None
+
+
+def js_controls(plan):
+    """VER-011: fresh complementary JavaScript predicates for a NoSQL input spliced into a server-side JavaScript
+    predicate such as $where (CWE-943). The template is the baseline that finds a record, joined with && to its one
+    {{predicate}} placeholder, so the true predicates repeat the baseline and the false ones suppress it. It holds
+    no ||, so no control can widen the answer beyond the baseline's record (no exfiltration, VER-011)."""
+    template, baseline = plan["js_predicate_template"], str(plan.get("baseline", ""))
+    if template.count("{{predicate}}") != 1:
+        raise ValueError("a JavaScript predicate proof needs a template with exactly one {{predicate}} placeholder")
+    if "||" in template or not baseline or not template.startswith(baseline):
+        raise ValueError("the template starts with the baseline that finds a record and contains no ||")
+    before, after = (part.strip() for part in template.split("{{predicate}}"))
+    if not (before.endswith("&&") or after.startswith("&&")):
+        raise ValueError("join {{predicate}} to the baseline with &&, for example 1 && {{predicate}}")
+    a = 100000 + secrets.randbelow(800000)
+    b = a + 1 + secrets.randbelow(9999)
+    predicates = {
+        "positive": f"({a}==={a})",
+        "negative": f"({a}==={b})",
+        "positive_other": f"({b}!=={a})",
+        "negative_other": f"({b}!=={b})",
+    }
+    return {**plan, **{k: template.replace("{{predicate}}", v) for k, v in predicates.items()}}
 
 
 def ldap_controls(plan):
@@ -388,6 +457,21 @@ def latest_plan(history: list[dict]):
     return 0, {}
 
 
+def plan_view(history: list[dict], cited) -> list[dict]:
+    """The history as the cited steps saw it (VER-011, VER-043): when a plan was accepted before the last cited
+    step, a plan accepted after it does not govern them, so an experiment stays checkable against its own plan
+    when a later plan follows it, for example one a technical QA question led to. Steps sent before any plan
+    still count under the plan that follows them (VER-043). Step numbers are unchanged, and every check still
+    applies to the governing plan. Without valid citations the history is returned as it is."""
+    steps = [n for n in cited if type(n) is int and 1 <= n <= len(history)] if isinstance(cited, list) else []
+    if not steps or not latest_plan(history[:max(steps)])[0]:
+        return history
+    last = max(steps)
+    return [{**h, "result": {"superseded": f"accepted after step {last}"}}
+            if n > last and h.get("tool") == "plan_test" and (h.get("result") or {}).get("accepted") is True
+            else h for n, h in enumerate(history, 1)]
+
+
 def observation(ctx, step, pointer):
     response = getattr(ctx, "responses", {}).get(step)
     if not response or not response.get("complete"):
@@ -433,8 +517,8 @@ def experiment_groups(history, cited):
             value = sent["path_inputs"].pop(plan.get("input_name"), None)
             signatures.add(token([args.get("role"), path, sent]))
         else:
-            values = sent[plan.get("input_location", "params")]
-            value = values.pop(plan.get("input_name"), None)
+            values = sent["params" if plan.get("input_location") == "query" else plan.get("input_location", "params")]
+            value = take_sink(values, plan.get("input_name"), brackets(plan))
             signatures.add(token([args.get("role"), path, sent]))
         bucket = next((k for k, v in control_map.items() if token(value) == token(v)), None)
         if bucket is None:
@@ -540,7 +624,7 @@ def injection_check(ctx, history, cited):
             return "the expression observation is unavailable"
         return None
     if (
-        not (plan.get("sql_template") or plan.get("operator_challenge"))
+        not (plan.get("sql_template") or plan.get("operator_challenge") or plan.get("js_predicate_template"))
         or not {"positive_other", "negative_other"} <= groups.keys()
     ):
         return "ordinary input-dependent results are not proof; use fresh complementary SQL predicate challenges"
@@ -564,6 +648,9 @@ def injection_check(ctx, history, cited):
         return "the complementary false predicates did not produce the same observation"
     if token(observed["positive"]) == token(observed["negative"]):
         return "the true and false predicates did not separate the observation into two classes"
+    if plan.get("js_predicate_template") and token(observed["positive"]) != token(observed.get("baseline")):
+        # VER-011: joined with && to the baseline's record, a true predicate repeats it and nothing beyond it.
+        return "the true JavaScript predicates did not repeat the baseline's answer"
     return None
 
 
@@ -575,6 +662,11 @@ def injection_proof(ctx, history, cited):
     if plan.get("auth_artifact"):
         return auth_artifact_check(ctx, history, cited)
     return injection_check(ctx, history, cited)
+
+
+NEGATIVE_CONTEXTS = ("A negative verdict needs true and false controls that answer alike in at least two declared "
+                     "contexts on the same input, such as a numeric and a quoted one: declare another plan for the "
+                     "second and cite both experiments.")
 
 
 def injection_ready(ctx, history, steps):
@@ -591,14 +683,15 @@ def injection_ready(ctx, history, steps):
                     "reason": "controls you chose can support a negative verdict, never a confirmation",
                     "next": (f"to confirm, declare a plan with {form}; " if form else
                              "no declaration can confirm this finding's CWE through this input; ")
-                    + "otherwise submit the verdict these steps support, citing them"}
+                    + "otherwise submit the verdict these steps support, citing them. " + NEGATIVE_CONTEXTS}
     else:
         problem = injection_proof(ctx, history, steps)
         if problem is None:
             return {"proof": "holds", "steps": sorted(steps),
                     "next": "submit_verdict confirmed and cite these steps in proof_steps"}
         feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
-                    "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"}
+                    "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"
+                    + ("" if plan.get("error_probe") or plan.get("kind") != "boolean" else ". " + NEGATIVE_CONTEXTS)}
     failed = next((n for n in reversed(steps) if (history[n - 1].get("result") or {}).get("status", 0) >= 500
                    or (history[n - 1].get("result") or {}).get("error")), None)
     if failed is not None:
@@ -853,6 +946,30 @@ def changed_check(ctx, history, cited, *, negative=False, blocked=False):
     return "the change was not refused with 403 or 404, or the owner's read no longer shows the marker"
 
 
+REFERENCE_ANONYMOUS = ("a request without a role got a 2xx answer, so the privileged-function comparison cannot "
+                       "confirm this finding; missing authentication is proven only with a configured test_resource")
+
+
+def reference_unavailable(ctx, history: list[dict]) -> dict | None:
+    """Told to the agent as soon as an accepted privileged-function plan can no longer confirm (VER-010, VER-036):
+    its request without a role was answered 2xx with content. The finding may still name another path, so the
+    agent decides; nothing stops here, and the proof check refuses that plan with the same reason."""
+    if getattr(ctx.plan, "cls", None) != "access-control" or not history:
+        return None
+    _, plan = latest_plan(history)
+    if plan.get("kind") != "access-control" or not plan.get("reference") or plan.get("owner"):
+        return None
+    h = history[-1]
+    args, res = h.get("args") or {}, h.get("result") or {}
+    if (h.get("tool") == "http_request" and not args.get("role") and not args.get("prerequisite")
+            and isinstance(res.get("status"), int) and 200 <= res["status"] < 300 and res.get("length")
+            and planned_route(plan.get("path") or "", args.get("path") or "")):
+        return {"reason": REFERENCE_ANONYMOUS,
+                "next": "submit_verdict inconclusive naming the missing test_resource, or plan another path of "
+                        "this finding where a request without a role is refused"}
+    return None
+
+
 def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
     """A privileged function (VER-010, VER-041): the privileged account gets 2xx, a request without a role 401 or
     403, and a normal account the identical answer (confirmed) or 403/404 (blocked-by-control). Identical means the
@@ -871,6 +988,8 @@ def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
         return "the privileged account's request was not answered with content"
     statuses = [res["status"] for _, role, _, res in reads if role is None]
     if not blocked and (not statuses or any(s not in (401, 403) for s in statuses)):
+        if any(200 <= s < 300 for s in statuses):
+            return REFERENCE_ANONYMOUS
         return "a request without a role must be refused with 401 or 403"
     ids, roles = {i for i, _ in reference}, normal_roles(getattr(ctx, "identities", None))
     normal = [(response.get("identity"), res["status"], response.get("digest")) for _, role, response, res in reads

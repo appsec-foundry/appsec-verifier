@@ -51,6 +51,23 @@ def test_unmatched_path_inputs_send_nothing(tmp_path, path, values):
     assert sent == []
 
 
+def test_path_inputs_outside_an_injection_experiment_name_the_way_out(tmp_path):
+    """An access-control plan on a placeholder route takes the identifier in its path; the refusal says so, and
+    nothing is sent."""
+    sent = []
+    ctx = _ctx(tmp_path, lambda *a, **k: sent.append(a) or Resp())
+    ctx.plan.cls = "access-control"
+    with pytest.raises(ToolError, match=r"write the value into path itself, e\.g\. /items/3"):
+        AgentTools(ctx).http_request(path="/items/:id", path_inputs={"id": "3"})
+    assert sent == []
+
+
+def test_a_mismatched_path_input_names_the_declared_template_and_input(tmp_path):
+    tools = tools_for(tmp_path, lambda *a, **k: Resp())
+    with pytest.raises(ToolError, match="keep path /items/:id and give only id"):
+        tools.http_request(path="/items/:id", path_inputs={"other": "1"})
+
+
 def test_mismatched_operator_contract_refuses_path_input(tmp_path):
     tools = tools_for(tmp_path, lambda *a, **k: Resp())
     tools.ctx.scope["injection_inputs"][0]["path"] = "/other/:id"

@@ -7,8 +7,11 @@ as the prompt and the action log number them. The code checks those steps
 against what the tools actually returned. The latest test plan names the route,
 variant and identities the proof must match; for a confirmation its steps may
 also precede that plan, except in an injection experiment (VER-011), and an
-assumption the plan still lists as missing blocks nothing (VER-043). A negative
-verdict still needs attempts after its plan:
+assumption the plan still lists as missing blocks nothing (VER-043). Cited
+steps are checked against the plan they were sent under, not one accepted after
+them. A negative verdict still needs attempts after its plan; an injection's
+needs boolean experiments without a true/false split in at least two declared
+contexts on one input (VER-013):
 
 - xss (VER-009): a browser_check in which the marker executed. The browser's
   screenshot and event record become the evidence; no proof_steps are needed.
@@ -80,6 +83,7 @@ from .experiments import (
     injection_proof,
     latest_plan,
     observation,
+    plan_view,
     token,
 )
 from .tools import _decoded
@@ -164,15 +168,17 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
         return result
     if result.verdict != "confirmed":
-        return _negative(ctx, history, result, cited)
+        return _negative(ctx, plan_view(history, cited), result, cited)
     # The plan guides the agent; an assumption it still lists as missing blocks nothing once the class's proof
-    # below holds, and steps sent before the latest plan count when they meet it (VER-043).
+    # below holds, and steps sent before the latest plan count when they meet it (VER-043). Cited steps are
+    # checked against the plan that governed them, not one accepted after them (plan_view).
     cls = getattr(ctx.plan, "cls", None)
     if cls == "session":
         from .session_proof import session_check
 
-        error = session_check(ctx, history, cited)
-        return _downgrade(result, error) if error else _checked(result, history, cited)
+        view = plan_view(history, cited)
+        error = session_check(ctx, view, cited)
+        return _downgrade(result, error) if error else _checked(result, view, cited)
 
     if cls == "xss":
         executed = [
@@ -200,31 +206,33 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         result = _checked(result, history, selected, ctx)
         result.proof["archive"] = proof
         return result
-    if cls == "injection" and latest_plan(history)[1].get("oob_template"):
-        exchanges, problem = _cited_exchanges(ctx, history, cited, 2)
+    if cls == "injection" and latest_plan(plan_view(history, cited))[1].get("oob_template"):
+        view = plan_view(history, cited)
+        exchanges, problem = _cited_exchanges(ctx, view, cited, 2)
         if problem is None:
-            problem = callback_injection_check(ctx, history, cited)
+            problem = callback_injection_check(ctx, view, cited)
         if problem is not None:
             return _downgrade(result, problem)
         result.evidence = _write_record(ctx, "exchanges", exchanges)
-        return _checked(result, history, cited, ctx)
+        return _checked(result, view, cited, ctx)
     if cls == "injection":
         # The auth-artifact form for a login bypass (VER-049), otherwise the response-field or timing form
         # (VER-011). Steps chosen by code (VER-043): when the cited steps do not carry the proof but the latest
         # experiment the Verifier ran reported it holds, check and record those steps instead. XSS and SSRF
         # already work this way; the code never confirms on steps it has not re-checked here.
         effective = cited if isinstance(cited, list) else []
-        if injection_proof(ctx, history, effective):
+        if injection_proof(ctx, plan_view(history, effective), effective):
             holding = _holding_experiment_steps(history)
-            if holding and injection_proof(ctx, history, holding) is None:
+            if holding and injection_proof(ctx, plan_view(history, holding), holding) is None:
                 effective = holding
-        exchanges, problem = _cited_exchanges(ctx, history, effective, 2)
+        view = plan_view(history, effective)
+        exchanges, problem = _cited_exchanges(ctx, view, effective, 2)
         if problem is None:
-            problem = injection_proof(ctx, history, effective)
+            problem = injection_proof(ctx, view, effective)
         if problem is not None:
             return _downgrade(result, problem)
         result.evidence = _write_record(ctx, "exchanges", exchanges)
-        return _checked(result, history, effective, ctx)
+        return _checked(result, view, effective, ctx)
     check, minimum = {
         "access-control": (None, 2),
         "open-redirect": (_redirect, 1),
@@ -232,16 +240,17 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     }.get(cls, (None, 0))
     if check is None and cls != "access-control":
         return _downgrade(result, f"there is no proof check for class {cls!r}")
-    exchanges, problem = _cited_exchanges(ctx, history, cited, minimum)
+    view = plan_view(history, cited)
+    exchanges, problem = _cited_exchanges(ctx, view, cited, minimum)
     if problem is None:
         if cls == "access-control":
-            problem = access_check(ctx, history, cited)
+            problem = access_check(ctx, view, cited)
         else:
             problem = check(ctx, exchanges)
     if problem is not None:
         return _downgrade(result, problem)
     result.evidence = _write_record(ctx, "exchanges", exchanges)
-    return _checked(result, history, cited, ctx)
+    return _checked(result, view, cited, ctx)
 
 
 def _checked(result, history, cited, ctx=None):
@@ -330,9 +339,16 @@ def _negative(ctx, history, result, cited):
         ):
             return _checked(result, history, cited)
         return _downgrade(result, "the browser did not complete an unblocked execution attempt")
+    if ctx.plan.cls == "injection":
+        return _injection_negative(ctx, history, result, cited)
     start, plan = latest_plan(history)
-    if not start or len(cited) < 2 or any(n <= start for n in cited):
+    if not start or len(cited) < 2:
         return _downgrade(result, "declare a hypothesis and cite a reference plus a fresh test attempt")
+    if early := sorted(n for n in cited if n <= start):
+        # The plan that governs the citations is the last one before the last cited step (plan_view).
+        return _downgrade(result, f"step {early[0]} precedes the plan in step {start} that governs the cited "
+                                  "steps; cite a reference plus a fresh test attempt of one experiment, sent after "
+                                  "its plan")
     # An own-resource proof also cites the owner's write, and its plan path may hold a placeholder: access_check
     # matches those paths itself.
     own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference"))
@@ -347,51 +363,6 @@ def _negative(ctx, history, result, cited):
         problem = access_check(ctx, history, cited, negative=True, blocked=result.verdict == "blocked-by-control")
         if problem:
             return _downgrade(result, problem)
-    elif ctx.plan.cls == "injection":
-        plan, groups, error = experiment_groups(history, cited)
-        if plan.get("error_probe"):
-            # VER-053/VER-054: the engine-error probe triages reachability; a probe that raised no engine error is
-            # not a checked negative, so a negative verdict rests on a boolean or response-field proof instead.
-            return _downgrade(result, "the engine-error probe has no checked negative form; cite a boolean or "
-                              "response-field experiment for a negative verdict")
-        if error or plan.get("kind") not in ("boolean", "timing") or any(len(g) < 2 for g in groups.values()):
-            return _downgrade(result, error or "repeat each planned input before drawing a negative conclusion")
-        statuses = [h["result"]["status"] for h in selected]
-        if result.verdict == "blocked-by-control":
-            baseline = [r["status"] for _, r in groups["baseline"]]
-            tests = [r["status"] for k, g in groups.items() if k != "baseline" for _, r in g]
-            if not (
-                len(set(baseline)) == 1
-                and all(200 <= s < 300 for s in baseline)
-                and tests
-                and len(set(tests)) == 1
-                and all(s in (400, 403, 406, 422) for s in tests)
-            ):
-                return _downgrade(result, "no repeatable target rejection contrasts with a working reference")
-        elif plan["kind"] == "timing":
-            times = [h["result"].get("elapsed_ms") for h in selected]
-            if (
-                any(type(t) is not int or t < 0 for t in times)
-                or max(times) - min(times) > 500
-                or len({h["result"].get("body_sha256") for h in selected}) != 1
-                or any(not h["result"].get("length") for h in selected)
-                or len(set(statuses)) != 1
-                or not all(200 <= s < 300 for s in statuses)
-            ):
-                return _downgrade(result, "the timing observations do not establish a stable undelayed result")
-        else:
-            try:
-                values = [observation(ctx, n, plan["pointer"]) for n in cited]
-            except (ValueError, KeyError, TypeError, IndexError, RecursionError):
-                return _downgrade(result, "the planned response observation cannot be compared")
-            if (
-                len({token(v) for v in values}) != 1
-                or values[0] in (None, "", [], {})
-                or any(str(plan[k]) in token(v) for k in ("positive", "negative") for v in values)
-                or len(set(statuses)) != 1
-                or not all(200 <= s < 300 for s in statuses)
-            ):
-                return _downgrade(result, "the observations do not establish a stable negative result")
     else:
         return _downgrade(
             result, "this class has no checked negative experiment; report the observations as inconclusive"
@@ -401,6 +372,102 @@ def _negative(ctx, history, result, cited):
         return _downgrade(result, error)
     result.evidence = _write_record(ctx, "exchanges", exchanges)
     return _checked(result, history, cited, ctx)
+
+
+_TEMPLATES = ("sql_template", "expression_template", "predicate_template", "operator_challenge",
+              "js_predicate_template", "sql_marker")
+_REJECTIONS = (400, 403, 406, 422)
+
+
+def _injection_negative(ctx, history, result, cited):
+    """VER-013, VER-011: an injection's negative verdict rests on experiments on one input in at least two
+    declared contexts, each checked against its own plan: the baseline answers 2xx with the same content every
+    time, and the true and false controls answer alike, so the injected condition decides nothing. They answer
+    2xx alike for not-reproducible, with one repeatable rejection for blocked-by-control. A context is the
+    declared template, or the control pair the agent chose. The proof names the contexts, and that a syntax
+    error the target answers like an empty result is not excluded."""
+    experiments: dict[int, list[int]] = {}
+    for n in sorted(cited):
+        if history[n - 1].get("tool") != "http_request":
+            return _downgrade(result, f"step {n} is not an answered request; cite only the experiments' requests")
+        start, _ = latest_plan(history[:n - 1])
+        if not start:
+            return _downgrade(result, f"step {n} precedes every plan; cite the controls of declared experiments")
+        experiments.setdefault(start, []).append(n)
+    inputs, contexts = set(), {}
+    for start, steps in experiments.items():
+        plan, groups, error = experiment_groups(plan_view(history, steps), steps)
+        if plan.get("error_probe"):
+            # VER-053/VER-054: the engine-error probe triages reachability; a probe that raised no engine error is
+            # not a checked negative, so a negative verdict rests on boolean experiments instead.
+            return _downgrade(result, "the engine-error probe has no checked negative form; cite boolean "
+                              "experiments for a negative verdict")
+        if not error and plan.get("kind") != "boolean":
+            return _downgrade(result, f"the experiment of step {start} has no true and false controls; a negative "
+                              "verdict cites boolean experiments")
+        if error or len(groups.get("baseline") or []) < 2 or any(len(g) < 2 for g in groups.values()):
+            return _downgrade(result, error or "repeat the baseline and each control before drawing a negative "
+                              "conclusion")
+        problem = _no_split(ctx, plan, groups, result.verdict)
+        if problem:
+            return _downgrade(result, f"{problem} (experiment of step {start})")
+        inputs.add(token([plan.get("path"), plan.get("method", "GET"), plan.get("input_location"),
+                          plan.get("input_name")]))
+        declared = next((plan[k] for k in _TEMPLATES if plan.get(k)), None)
+        context = token(declared) if declared is not None else token([plan.get("positive"), plan.get("negative")])
+        contexts.setdefault(context, (start, declared if declared is not None
+                                      else f"{plan.get('positive')} / {plan.get('negative')}"))
+    if len(inputs) != 1:
+        return _downgrade(result, "cite experiments on one input; each input needs its own negative result")
+    if len(contexts) < 2:
+        return _downgrade(result, "a negative verdict needs true and false controls that answer alike in at least "
+                          "two declared contexts on the same input, such as a numeric and a quoted one; declare "
+                          "another plan for the second and cite both experiments")
+    exchanges, error = _cited_exchanges(ctx, history, cited, 2)
+    if error:
+        return _downgrade(result, error)
+    result.evidence = _write_record(ctx, "exchanges", exchanges)
+    result = _checked(result, history, cited, ctx)
+    named = "; ".join(f"step {s}: {str(c)[:80]}" for s, c in sorted(contexts.values(), key=lambda v: v[0]))
+    result.proof["contexts"] = [{"plan_step": s, "context": c} for s, c in sorted(contexts.values(),
+                                                                                    key=lambda v: v[0])]
+    result.proof["scope"] = (f"cited requests only; the true and false controls answered alike in {len(contexts)} "
+                             f"declared contexts ({named}); a syntax error the target answers like an empty result "
+                             "is not excluded")
+    return result
+
+
+def _no_split(ctx, plan, groups, verdict) -> str | None:
+    """One experiment of an injection's negative verdict (VER-013): the baseline answers 2xx with the same
+    content each time, and every control answers alike: 2xx with one observation, not merely the sent value
+    echoed, for not-reproducible; one repeatable rejection for blocked-by-control."""
+    baseline = groups["baseline"]
+    tests = [(n, r) for k, g in groups.items() if k != "baseline" for n, r in g]
+    statuses = [r["status"] for _, r in baseline]
+    if not tests or len(set(statuses)) != 1 or not 200 <= statuses[0] < 300:
+        return "the baseline does not answer 2xx the same way each time"
+    try:
+        values = [observation(ctx, n, plan["pointer"]) for n, _ in baseline]
+    except (ValueError, KeyError, TypeError, IndexError, RecursionError):
+        return "the planned response observation cannot be compared"
+    if len({token(v) for v in values}) != 1 or values[0] in (None, "", [], {}):
+        return "the baseline does not answer with the same content each time"
+    answers = [r["status"] for _, r in tests]
+    if verdict == "blocked-by-control":
+        if len(set(answers)) != 1 or answers[0] not in _REJECTIONS:
+            return "no repeatable target rejection contrasts with a working reference"
+        return None
+    if len(set(answers)) != 1 or not 200 <= answers[0] < 300:
+        return "the true and false controls do not answer 2xx alike"
+    try:
+        values = [observation(ctx, n, plan["pointer"]) for n, _ in tests]
+    except (ValueError, KeyError, TypeError, IndexError, RecursionError):
+        return "the planned response observation cannot be compared"
+    if len({token(v) for v in values}) != 1:
+        return "the true and false controls answer differently, so this is no negative result"
+    if any(str(plan[k]) in token(v) for k in ("positive", "negative") if plan.get(k) for v in values):
+        return "the controls' answer carries the sent value"
+    return None
 
 
 def _downgrade(result: ProbeResult, reason: str, label: str = "indicative, not proven") -> ProbeResult:

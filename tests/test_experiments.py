@@ -6,7 +6,7 @@ import copy
 import hashlib
 import json
 from types import SimpleNamespace
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 import pytest
 
@@ -77,11 +77,12 @@ def context(history, cls="injection", **kw):
 
 
 def check(history, cited=None, verdict="confirmed", ctx=None):
+    requests = [n for n, h in enumerate(history, 1) if n > 1 and h.get("tool") != "plan_test"]
     return check_proof(
         ctx or context(history),
         history,
         ProbeResult(verdict=verdict, confidence="high", rationale="claim"),
-        cited if cited is not None else list(range(2, len(history) + 1)),
+        cited if cited is not None else requests,
     )
 
 
@@ -222,12 +223,77 @@ def test_no_requests_cannot_support_negative_verdict(verdict):
     assert check([], [], verdict).verdict == "not-attempted"
 
 
+def second_context(history, positive="plain OR 1=1", negative="plain AND 1=2"):
+    """The same experiment once more in another declared context: a numeric control pair for the same input."""
+    again = copy.deepcopy(history)
+    swap = {again[0]["args"]["positive"]: positive, again[0]["args"]["negative"]: negative}
+    again[0]["args"].update(positive=positive, negative=negative)
+    for h in again[1:]:
+        args = h["args"]
+        if "params" in args:
+            args["params"]["q"] = swap.get(args["params"]["q"], args["params"]["q"])
+        else:
+            route, _, query = args["path"].partition("?")
+            values = dict(parse_qsl(query))
+            values["q"] = swap.get(values["q"], values["q"])
+            args["path"] = route + "?" + urlencode(values)
+    return history + again
+
+
 def test_repeated_no_effect_supports_only_the_tested_negative():
+    """VER-013: a negative verdict needs the true and false controls to answer alike in two declared contexts
+    on one input; the proof names them, and what it cannot exclude."""
     history = boolean_history()
     for h in history[1:]:
         h["_body"] = '{"result":"fixture-record"}'
-    result = check(history, verdict="not-reproducible")
-    assert result.verdict == "not-reproducible" and result.proof["scope"] == "cited requests only"
+    one = check(history, verdict="not-reproducible")
+    assert one.verdict == "inconclusive" and "at least two declared contexts" in one.rationale
+    result = check(second_context(history), verdict="not-reproducible")
+    assert result.verdict == "not-reproducible" and result.confidence == "medium"
+    assert [c["plan_step"] for c in result.proof["contexts"]] == [1, 8]
+    assert "answered alike in 2 declared contexts" in result.proof["scope"]
+    assert "syntax error the target answers like an empty result is not excluded" in result.proof["scope"]
+
+
+def _coerced(values=("fixture-record", [], [])):
+    """An input the target turns into a number before the query: the baseline finds its record, both controls
+    become the same non-matching value and find nothing."""
+    history = boolean_history()
+    for h in history[1:]:
+        q = h["args"]["params"]["q"]
+        h["_body"] = json.dumps({"result": dict(zip(("plain", "plain' AND '1'='1", "plain' AND '1'='2"),
+                                                    values, strict=True))[q]})
+    return second_context(history)
+
+
+def test_controls_that_answer_alike_but_unlike_the_baseline_support_a_negative():
+    """VER-013: the controls need not reproduce the baseline; an empty answer to both, while the baseline
+    answers with content, is no split between true and false."""
+    assert check(_coerced(), verdict="not-reproducible").verdict == "not-reproducible"
+
+
+@pytest.mark.parametrize("values, reason", [
+    (("fixture-record", "fixture-record", []), "answer differently"),          # a split: no negative result
+    (([], [], []), "baseline does not answer with the same content"),          # nothing shows the query works
+])
+def test_a_negative_without_a_working_baseline_or_with_a_split_stays_inconclusive(values, reason):
+    result = check(_coerced(values), verdict="not-reproducible")
+    assert result.verdict == "inconclusive" and reason in result.rationale
+
+
+def test_a_negative_names_cited_steps_outside_its_experiments_and_other_inputs():
+    history = boolean_history()
+    for h in history[1:]:
+        h["_body"] = '{"result":"fixture-record"}'
+    early = [req()] + second_context(history)
+    assert "step 1 precedes every plan" in check(early, list(range(1, len(early) + 1)), "not-reproducible").rationale
+    other = second_context(history)
+    for h in other[7:]:
+        if h["tool"] == "plan_test":
+            h["args"]["input_name"] = "page"
+        else:
+            h["args"]["params"] = {"page": h["args"]["params"]["q"]}
+    assert "cite experiments on one input" in check(other, verdict="not-reproducible").rationale
 
 
 def _unchanged_history(plan_path="/search?q=<test>"):
@@ -240,18 +306,18 @@ def _unchanged_history(plan_path="/search?q=<test>"):
 
 def test_a_query_template_in_the_plan_path_still_matches_its_requests():
     """The plan may show its input as `?q=<test>`; the requests go to the same route (VER-011)."""
-    assert check(_unchanged_history(), verdict="not-reproducible").verdict == "not-reproducible"
+    assert check(second_context(_unchanged_history()), verdict="not-reproducible").verdict == "not-reproducible"
 
 
 def test_the_input_may_travel_in_the_path_query_as_the_controller_sends_it():
     history = _unchanged_history("/search")
     for h in history[1:]:
         h["args"]["path"] = "/search?" + urlencode(h["args"].pop("params"))
-    assert check(history, verdict="not-reproducible").verdict == "not-reproducible"
+    assert check(second_context(history), verdict="not-reproducible").verdict == "not-reproducible"
 
 
 @pytest.mark.parametrize("change, reason", [
-    ("other-route", "planned target"),
+    ("other-route", "declared target"),
     ("other-query-input", "only the declared input may change"),
     ("query-without-input", "declared control value"),
 ])
@@ -277,10 +343,11 @@ def test_repeatable_rejection_needs_working_matched_controls():
     for h in history[1:]:
         if h["args"]["params"]["q"] != history[0]["args"]["baseline"]:
             h["result"]["status"] = 403
-    result = check(history, verdict="blocked-by-control")
+    result = check(second_context(history), verdict="blocked-by-control")
     assert result.verdict == "blocked-by-control" and result.confidence == "medium"
+    assert check(history, verdict="blocked-by-control").verdict == "inconclusive"     # one context only
     history[-1]["args"]["params"]["page"] = 2
-    assert check(history, verdict="blocked-by-control").verdict == "inconclusive"
+    assert check(second_context(history), verdict="blocked-by-control").verdict == "inconclusive"
 
 
 def test_access_negative_cannot_override_observed_resource():
@@ -296,14 +363,13 @@ def test_access_negative_cannot_override_observed_resource():
     assert check(history, ctx=ctx, verdict="blocked-by-control").verdict == "blocked-by-control"
 
 
-def test_timing_negative_does_not_hide_slow_samples():
+def test_a_timing_experiment_supports_no_negative_verdict():
+    """VER-013: a timing experiment has no true and false controls, so an undelayed answer is no negative."""
     history = timing_history()
-    assert check(history, verdict="not-reproducible").verdict == "inconclusive"
     for h in history[1:]:
         h["result"]["elapsed_ms"] = 90
-    assert check(history, verdict="not-reproducible").verdict == "not-reproducible"
-    history[2]["result"]["status"] = 403
-    assert check(history, verdict="blocked-by-control").verdict == "inconclusive"
+    result = check(history, verdict="not-reproducible")
+    assert result.verdict == "inconclusive" and "has no true and false controls" in result.rationale
 
 
 def verification_context():
@@ -442,3 +508,29 @@ def test_marker_controls_builds_only_null_and_a_concatenated_marker():
     assert out["markers"]["positive"] != out["markers"]["negative"]
     # The joined marker (what the database computes) is not present verbatim in the sent payload.
     assert out["markers"]["positive"] not in out["positive"]
+
+
+@pytest.mark.parametrize("template, reason", [
+    ("1 || {{predicate}}", "contains no ||"),
+    ("2 && {{predicate}}", "starts with the baseline"),
+    ("1 + {{predicate}}", "join {{predicate}} to the baseline with &&"),
+    ("1 && {{predicate}} && {{predicate}}", "exactly one {{predicate}} placeholder"),
+])
+def test_a_javascript_predicate_template_joins_the_baseline_with_and_only(template, reason):
+    """VER-011: no || can widen the answer beyond the baseline's record, and the predicate is joined to it."""
+    from appsec_verifier.agent.experiments import js_controls
+
+    with pytest.raises(ValueError) as refused:
+        js_controls({"baseline": "1", "js_predicate_template": template})
+    assert reason in str(refused.value)
+
+
+def test_javascript_predicate_controls_are_fresh_and_complementary():
+    from appsec_verifier.agent.experiments import js_controls
+
+    first = js_controls({"baseline": "1", "js_predicate_template": "1 && {{predicate}}"})
+    second = js_controls({"baseline": "1", "js_predicate_template": "1 && {{predicate}}"})
+    controls = [first[k] for k in ("positive", "negative", "positive_other", "negative_other")]
+    assert len(set(controls)) == 4 and all(c.startswith("1 && (") and "||" not in c for c in controls)
+    assert first["positive"] != second["positive"]                         # fresh values per plan
+    assert "===" in first["positive"] and "!==" in first["positive_other"]
