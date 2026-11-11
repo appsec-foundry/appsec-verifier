@@ -26,14 +26,15 @@ Nothing is sent to the target before the confirmation. Each finding is tested on
 
 ## How the model is integrated
 
-The model plans; the Verifier's code does everything else.
+The model plans the test and picks what its evidence shows; the Verifier's code runs every step and decides the result.
 
 | The model | The Verifier's code |
 | --- | --- |
 | reads the finding and decides what to try next | builds the prompt for every step and keeps the list of steps |
-| builds the payloads | allows only requests that belong to the finding and refuses the rest with the reason |
+| builds the payloads; for injection it declares a template, from which the Verifier generates the controls | allows only requests that belong to the finding and refuses the rest with the reason |
 | proposes one step at a time | sends every request itself, through the scope check, safe mode, the rate and the limits |
 | claims a verdict and cites the steps that prove it | checks the proof in the recorded steps and downgrades the verdict if it does not hold |
+| for a confirmed finding, explains the screenshot in one sentence and, for access control and injection, picks the page and the values it shows | opens that page once, read-only, and keeps the screenshot only if a picked value appears on it; no screenshot changes a verdict |
 | knows the identities by role name | holds the sessions and redacts their values from every result |
 
 ### One model call per step
@@ -109,7 +110,7 @@ The agent ends a finding with `submit_verdict`: `confirmed`, `not-reproducible`,
 
 If the check fails while steps are left, the next prompt carries `proof_feedback` with what is missing, and the agent may repair the proof in at most two rounds; the console shows `proof not accepted`. A claim that stays unproven ends `inconclusive`, and the report names what the check missed.
 
-For a negative or unproven result, an independent [technical QA](cli.md#technical-qa-ver-046) reads the recorded steps in separate model calls, with its own prompt and no target tools, and may return questions. The agent answers them with recorded evidence or with follow-up steps through the same tools and limits. A confirmed verdict whose proof check passed is not reviewed. After a finding with a confirmed variant, an [evidence presentation review](cli.md#evidence-presentation-review) checks whether the report's text and screenshots show the proof. Neither review can confirm a weakness or relax a proof rule or a limit, and the evidence review never changes a verdict.
+For a negative or unproven result, an independent [technical QA](cli.md#technical-qa-ver-046) reads the recorded steps in separate calls to the same model, with its own prompt and no target tools, and may return questions. The agent answers them with recorded evidence or with follow-up steps through the same tools and limits. A confirmed access-control result is reviewed only for whether the application intends the access it shows: an objection stands beside the verdict, which stays confirmed, and no question goes back to the agent. Other confirmed verdicts whose proof check passed are reviewed only when QA has already reviewed an earlier result of the finding. After a finding with a confirmed variant, an [evidence presentation review](cli.md#evidence-presentation-review), also by the same model, checks whether the report's text and screenshots show the proof; the agent can answer it with quotes from the recorded exchanges or, for an unclear screenshot of an access-control or injection result, with another page. Neither review can confirm a weakness or relax a proof rule or a limit, and the evidence review never changes a verdict.
 
 Every step, refused step, limit and verdict goes to `agent-log.jsonl`, without response bodies.
 
@@ -258,7 +259,7 @@ Every class has a marker or a contrast that only a real weakness can produce, an
 | Open redirect | redirect to `https://<marker>.invalid/` | a 301 to 308 answer whose `Location` names that host; `.invalid` never resolves |
 | Path traversal | return the marker file the operator placed | the file's content in a response; the model never sees that content |
 | SSRF | call the Verifier's loopback listener with the marker | a hit on the listener ([tools/callback.py](../appsec_verifier/tools/callback.py)) |
-| Injection | answer controls the Verifier generates in a way only evaluation explains | a JSON value that follows repeated true and false controls, an authenticated artifact only the true condition yields, or a callback hit only the injecting payload causes; a status change, an error or a delay alone never counts |
+| Injection | answer controls the Verifier generates in a way only evaluation explains | a JSON value that follows repeated true and false controls, an authenticated artifact only the true condition yields, a marker of the Verifier's own that a SQL query returns for one control and not for its complement, a database or XPath engine error only a syntax-breaking control raises, or a callback hit only the injecting payload causes; a status change, a generic error or a delay alone never counts |
 | Access control | show a protected resource to an identity that must not see it | the contrast between independently signed-in identities: on a declared test resource, on a record another account created with the marker, or on a privileged function a normal account gets identically to a privileged one |
 | Session | set the session cookie of a declared session check | its attributes, in two reads |
 
