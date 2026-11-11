@@ -7,6 +7,7 @@ without a new request and mark only values found in it."""
 from __future__ import annotations
 
 import copy
+import html
 import json
 import re
 import stat
@@ -632,6 +633,89 @@ def test_an_injection_image_marks_only_differences_between_its_own_steps():
     assert "Compared with the normal request in step 2: same status 401, the identical answer." in page
     assert "differs</span>" not in page                     # neither "status differs" nor "answer differs"
     assert "<span class=tag>input ▸</span><mark>x%27+OR+1%3D2--</mark>" in page      # what the attack sent
+
+
+_ERROR_PAGE = ("<html><head><style>" + "body{color:#000}" * 60 + "</style></head><body><h1>Error: SQLITE_ERROR: "
+               "near \"'%'\": syntax error</h1><p>OWASP Juice Shop 500 Error: SQLITE_ERROR: near \"'%'\": syntax "
+               "error</p></body></html>")
+
+
+def _probe_exchange(q, status, body, mime):
+    return poc.entry({"method": "GET", "url": SCOPE["base_url"] + "/search?" + urlencode({"q": q}), "headers": [],
+                      "body": None, "status": status, "response_headers": [("Content-Type", mime)],
+                      "content": body.encode(), "time": "2026-11-10T20:30:23Z"})
+
+
+def _error_probe(balance_error=False):
+    """VER-053: the engine-error sweep, one break and its balanced counterpart, each as the code recorded it."""
+    plan = {**_EXPERIMENT, "pointer": "/data", "baseline": "apple", "error_probe": True,
+            "error_set": [{"name": "'", "break": "apple'", "balance": "apple''"}]}
+    history = [_accepted(**plan),
+               {**_sent("/search", q="apple'"), "result": {"status": 500, "engine_error": True}},
+               {**_sent("/search", q="apple''"), "result": {"status": 200, "engine_error": balance_error}}]
+    shown = [(2, _probe_exchange("apple'", 500, _ERROR_PAGE, "text/html")),
+             (3, _probe_exchange("apple''", 200, '{"data":[]}', "application/json"))]
+    return _role_ctx("injection"), history, shown
+
+
+def test_an_engine_error_image_frames_the_error_its_proof_reads_not_the_status():
+    """VER-053, VER-035: the break's answer frames the engine error once, where the image and the report show
+    it; the status and answer differences are not marked, since the proof does not rest on them."""
+    ctx, history, shown = _error_probe()
+    page, _ = poc.exchange_document(ctx, history, shown, "confirmed", None)
+    error = html.escape("SQLITE_ERROR: near \"'%'\": syntax error")
+    assert f"<mark>{error}</mark><span class=note>◀ engine error</span>" in page
+    assert page.count("<mark>SQLITE_ERROR") == 1                         # once, although the page repeats it
+    assert "differs</span>" not in page                                  # neither status nor answer difference
+    assert "<b>engine error: yes</b>" in page and "<b>engine error: no</b>" in page
+    assert html.escape("balanced \"'\": no engine error · syntax break \"'\": engine error.") in page
+    assert "with q carrying each syntax break (&#x27;) and its balanced counterpart" in page
+    assert "true and false" not in page
+    roles = poc.step_roles(ctx, history, shown)
+    report = poc._report_excerpts(ctx, history, 2, shown[0][1], shown, None, None, roles)
+    assert report["response_excerpt"].count("⟦SQLITE_ERROR: near \"'%'\": syntax error⟧") == 1
+
+
+def test_an_engine_error_is_framed_only_where_the_code_recorded_one():
+    """A balanced counterpart the code recorded as raising one is framed too; a break the code did not classify
+    as an engine error gets no frame, whatever its answer says."""
+    ctx, history, shown = _error_probe(balance_error=True)
+    shown[1] = (3, _probe_exchange("apple''", 500, _ERROR_PAGE, "text/html"))
+    page, _ = poc.exchange_document(ctx, history, shown, "inconclusive", None)
+    assert page.count("◀ engine error") == 2 and "no engine error" not in page
+    history[1]["result"]["engine_error"] = False
+    page, _ = poc.exchange_document(ctx, history, shown[:1], "inconclusive", None)
+    assert "<mark>SQLITE" not in page and "<b>engine error: no</b>" in page
+
+
+def test_a_login_bypass_image_states_the_artifact_its_proof_reads_not_the_status_flip():
+    """VER-049: the code's auth-artifact observation, not the 401-to-200 flip, is what the image states."""
+    plan = {**_EXPERIMENT, "path": "/login", "pointer": "/token", "auth_artifact": True}
+    queries = {2: "x", 3: "x' OR 1=1--"}
+    history = [_accepted(**plan), *({**_sent("/login", q=q), "result": {"status": s, "auth_artifact": s == 200}}
+                                    for q, s in ((queries[2], 401), (queries[3], 200)))]
+    shown = [(2, _probe_exchange(queries[2], 401, "<p>Invalid email or password.</p>", "text/html")),
+             (3, _probe_exchange(queries[3], 200, '{"token":"t"}', "application/json"))]
+    page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "confirmed", None)
+    assert "status differs" not in page
+    assert "<b>authenticated artifact in the answer: no</b>" in page
+    assert "<b>authenticated artifact in the answer: yes</b>" in page
+    assert "baseline input: no authenticated artifact · true condition: authenticated artifact." in page
+
+
+def test_a_returned_marker_image_frames_each_steps_own_marker():
+    """VER-053: the returned-marker form reads each control's own generated marker from its answer; another
+    control's marker is not its proof."""
+    plan = {**_EXPERIMENT, "pointer": "/items", "sql_marker": {"prefix": "'", "columns": 2, "column": 1},
+            "positive": "x' UNION SELECT NULL,'ab'||'cd' -- ", "negative": "x' UNION SELECT NULL,'ef'||'gh' -- ",
+            "markers": {"positive": "abcd", "negative": "efgh"}}
+    history = [_accepted(**plan), _sent("/search", q=plan["positive"]), _sent("/search", q=plan["negative"])]
+    shown = [(2, _probe_exchange(plan["positive"], 200, '{"items":[{"id":null,"name":"abcd"}]}', "application/json")),
+             (3, _probe_exchange(plan["negative"], 200, '{"items":[{"id":null,"name":"abcd"}]}', "application/json"))]
+    page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "inconclusive", None)
+    assert page.count("◀ its generated marker returned") == 1 and "<mark>abcd</mark>" in page
+    assert "<b>its generated marker returned: yes</b>" in page and "<b>its generated marker returned: no</b>" in page
+    assert "true condition: its marker returned · false condition: its marker absent." in page
 
 
 def test_steps_outside_the_declared_comparison_get_no_role():

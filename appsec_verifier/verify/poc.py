@@ -37,7 +37,11 @@ identities an access-control proof compares, the XSS or SSRF marker, the
 redirect host and Location header, the marker file and its content, the input
 and answer that differ between injection requests, the session cookie's
 Set-Cookie line. Facts about a step, such as the page a browser check opened
-or the time of each answer, stand above it, in bold where they decide.
+or the time of each answer, stand above it, in bold where they decide. A step
+whose proof check reads an observation of its own (an executed marker, a read
+marker file, a callback hit, an authenticated artifact, an engine error or a
+returned generated marker; VER-048, VER-049, VER-053) is shown by that, framed
+where its answer shows it, not by a status or answer difference.
 Where the accepted test plan or the finding's payload says what a step is
 (`step_roles`), the image shows a normal request on top and the attack below
 it, with a line on how the attack's answer compares; an injection experiment's
@@ -896,6 +900,7 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
     cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
     step = history[n - 1] if n <= len(history) else {}
     res = step.get("result") or {}
+    seen = _proof_observation(ctx, history, n, e)
     req_marks, res_marks, res_lines = [], [], []
     facts: list[tuple[str, bool]] = []
     times = [o.get("time") or 0 for _, o in shown]
@@ -910,8 +915,6 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
         if step.get("tool") == "browser_check":     # a fragment (#/search?q=…) never reaches the server
             facts.append((f"opened in the browser: {unquote(str((step.get('args') or {}).get('path', '')))[:300]}",
                           True))
-        if "executed" in res:
-            facts.append((f"marker executed in the browser: {'yes' if res['executed'] is True else 'no'}", True))
     elif cls == "open-redirect":
         host = redirect_host(marker)
         if host:
@@ -923,14 +926,9 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
         name = str(marker_file.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
         req_marks += [("marker file", name)] if name else []
         res_marks += [("marker file content", marker_file["content"])] if marker_file.get("content") else []
-        if "marker_read" in res:
-            facts.append((f"marker file read: {'yes' if res['marker_read'] is True else 'no'}", True))
     elif cls == "ssrf":
         joined = res.get("callback_attempt") or "".join(marker)
         req_marks += [("callback marker", joined)] if joined else []
-        if "callback_hit" in res:
-            facts.append((f"callback listener received the marker: {'yes' if res['callback_hit'] is True else 'no'}",
-                          True))
     elif cls == "injection":
         path = e["request"]["url"].split("?")[0]
         status_differs = False
@@ -949,6 +947,8 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
                 decoded = (unquote_plus if token[0] == "line" else unquote)(token[2])   # a query's + is a space
                 if decoded != token[2]:
                     facts.append((f"input, decoded: {decoded}", True))
+            if seen is not None:
+                continue        # the proof reads the step's own observation, not how the answers differ
             if beside is not None and not any(o is b for _, b in beside):
                 continue        # a difference from a step in another image is not marked in this one
             token = _diff_token(_text(e), _text(o), "body")
@@ -964,7 +964,54 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
         res_marks += [("named in the verdict", value) for value in _values(highlight, _text(e))]
     elif cls == "session":
         res_lines += _session_cookie_line(ctx, history, res)
+    if seen is not None:
+        key, yes, frame = seen
+        facts.append((f"{_OBSERVATIONS[key][1]}: {'yes' if yes else 'no'}", True))
+        res_marks += [(_OBSERVATIONS[key][1], frame)] if frame else []
     return req_marks, res_marks, res_lines, facts
+
+
+# What a proof check reads from a step itself, recorded by the code, never taken from the model (VER-009, VER-012,
+# VER-013, VER-048, VER-049, VER-053): the classes whose proof reads it, the fact the image states, and the Result
+# line's words for yes and no. Such a step is shown by this observation, not by its status or answer difference.
+_OBSERVATIONS = {
+    "executed": (("xss",), "marker executed in the browser", "marker executed", "marker not executed"),
+    "marker_read": (("path-traversal",), "marker file read", "marker file read", "marker file not read"),
+    "callback_hit": (("ssrf", "injection"), "callback listener received the marker", "callback received",
+                     "no callback"),
+    "auth_artifact": (("injection",), "authenticated artifact in the answer", "authenticated artifact",
+                      "no authenticated artifact"),
+    "engine_error": (("injection",), "engine error", "engine error", "no engine error"),
+    "marker_returned": (("injection",), "its generated marker returned", "its marker returned",
+                        "its marker absent"),
+}
+
+
+def _proof_observation(ctx, history: list[dict], n: int, e: dict) -> tuple[str, bool, tuple | None] | None:
+    """The observation the proof check reads from step `n` itself, as (key in _OBSERVATIONS, yes or no, where
+    the answer shows it or None), or None where the proof compares answers instead. The returned-marker form
+    (VER-053) reads the step's own generated marker from its recorded answer, the others what the code recorded
+    in the step's result; the engine error and the marker are located for a frame."""
+    from ..agent.experiments import latest_plan, token
+
+    cls = getattr(ctx.plan, "cls", None)
+    step = history[n - 1] if 1 <= n <= len(history) else {}
+    res = step.get("result") or {}
+    key = next((k for k, row in _OBSERVATIONS.items() if k in res and cls in row[0]), None)
+    if key is not None:
+        yes = res[key] is True
+        return key, yes, _engine_error(e) if key == "engine_error" and yes else None
+    _, plan = latest_plan(history)
+    if cls != "injection" or not plan.get("sql_marker"):
+        return None
+    sent = _sink(plan, step.get("args") or {})
+    group = next((g for g in ("positive", "negative")
+                  if sent is not _MISSING and g in plan and token(sent) == token(plan[g])), None)
+    own = (plan.get("markers") or {}).get(group) if group else None
+    if not isinstance(own, str) or not own:
+        return None
+    yes = own in _text(e)
+    return "marker_returned", yes, ("body", "", own) if yes else None
 
 
 _SESSION_ATTRIBUTES = {"CWE-614": "Secure", "CWE-1004": "HttpOnly", "CWE-1275": "SameSite"}
@@ -990,6 +1037,28 @@ def _session_cookie_line(ctx, history: list[dict], res: dict) -> list[tuple[str,
     else:
         label = f"{attribute} {'set' if seen.get(attribute.lower()) else 'missing'}"
     return [(label, f"set-cookie: {name}=")]
+
+
+def _engine_error(e: dict) -> tuple[str, str, str] | None:
+    """VER-053: the engine error in an answer as the image and the report show it, an HTML page by its visible
+    text: the first match and those right after it, e.g. `SQLITE_ERROR: near "'%'": syntax error`, marked once."""
+    from ..agent.experiments import _ENGINE_ERROR
+
+    text = _text(e)
+    if "html" in e["response"]["content"].get("mimeType", "").lower():
+        parser = _VisibleText()
+        parser.feed(text[:MAX_BODY_CHARS])
+        text = " ".join(parser.parts)
+    found = _ENGINE_ERROR.finditer(text)
+    first = next(found, None)
+    if first is None:
+        return None
+    end = first.end()
+    for match in found:
+        if match.start() > end + 3:
+            break
+        end = match.end()
+    return "body", "", text[first.start():end][:200]
 
 
 class _VisibleText(HTMLParser):
@@ -1133,6 +1202,10 @@ def _test_line(ctx, history: list[dict]) -> str:
     _, plan = latest_plan(history)
     cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
     target = f"{plan.get('method', 'GET')} {plan['path']}" if plan.get("path") else "the finding's request"
+    if cls == "injection" and plan.get("error_set") and plan.get("input_name"):
+        names = " ".join(str(entry["name"]) for entry in plan["error_set"])
+        return (f"{target} with {plan['input_name']} carrying each syntax break ({names}) and its balanced "
+                "counterpart; proof: an engine error that only the break raises")
     if cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
         normal = f"{target} with {plan['input_name']} = {_quoted(plan.get('baseline'))} as the normal input, then"
         if plan["kind"] == "timing":
@@ -1190,7 +1263,9 @@ def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], r
         name = (label.replace(", second form", "") + (f" {who}" if who and cls == "access-control" else "")
                 if kind else f"step {n} as {who or 'anonymous'}")
         value, ref = observed(ctx, history, e), compared_with(n, e, everything, roles)
-        if value is not _MISSING:
+        if proof := _proof_observation(ctx, history, n, e):     # what the proof reads, not the status or value
+            seen = _OBSERVATIONS[proof[0]][2 if proof[1] else 3]
+        elif value is not _MISSING:
             seen = _brief(value)
         elif timing and isinstance(e.get("time"), int):
             seen = f"{e['time']} ms"
