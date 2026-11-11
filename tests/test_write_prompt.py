@@ -169,6 +169,27 @@ def test_a_plan_that_needs_writes_is_accepted_only_after_the_operator_allows_the
     assert not tools.ctx.safe
 
 
+def test_a_write_the_variant_declares_is_refused_without_asking(tmp_path):
+    """The write a variant lists was known before the run: --allow-intrusive decides it, not a question mid-run.
+    Here a read that triggers what a write stored, as for stored code evaluation."""
+    from dataclasses import replace
+
+    from appsec_verifier.agent.prompts import _seed
+
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+    stored = {"id": "v", "hypothesis": "A stored name is evaluated", "required_capabilities": ["state-change"],
+              "request": {"method": "GET", "path": "/profile"}}
+    tools.ctx.plan = replace(tools.ctx.plan, cls="injection", cwe="CWE-95",
+                             verification_context={"version": 1, "variants": [stored]}, variant_id="v")
+    asked = _asking(tools, True)
+    assert '"unavailable": ["state-change"]' in _seed(tools.ctx)
+    with pytest.raises(ToolError, match="unavailable capabilities: state-change"):
+        tools.plan_test(kind="boolean", hypothesis="The stored name is evaluated", variant="v", path="/profile",
+                        method="GET", input_location="params", input_name="q", baseline="a", positive="b",
+                        negative="c", pointer="/data")
+    assert asked == [] and tools.ctx.safe and getattr(tools, "_experiment", None) is None
+
+
 # ── in a run (cli.py, verify/runner.py) ──────────────────────────────────────
 
 _SAFE_MODE_ONLY = ("not-attempted", "not tested: safe mode; every request the finding names writes, and the proof "

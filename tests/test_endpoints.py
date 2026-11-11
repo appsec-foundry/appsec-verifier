@@ -229,6 +229,18 @@ def test_an_injection_finding_with_a_read_request_is_tested_without_a_scope_cont
         "contract", "no read request to run controls on, and no injection_inputs entry")
 
 
+def test_a_read_variant_that_lists_state_change_is_not_tested_in_safe_mode():
+    """VER-052: the write such a variant needs is known before the run, so the test plan lists it under intrusive
+    mode instead of the test agent asking for it mid-run, whatever a read request or the source could add."""
+    stored = _plan("injection", Endpoint("GET", "/profile", None))
+    stored.verification_context = {"variants": [{"id": "v", "required_capabilities": ["state-change"],
+                                                 "request": {"method": "GET", "path": "/profile"}}]}
+    for source in (True, False):
+        assert _blocker(stored, source=source) == ("intrusive", "safe mode; every declared variant needs a state "
+                                                                "change")
+        assert _blocker(stored, safe=False, source=source) is None
+
+
 def test_a_contract_declares_how_the_proof_reaches_the_input():
     """A JSON or form field travels in the body of the write the finding names; a query parameter the
     contract declares travels in a GET on its path, which the proof may repeat even in safe mode. A write-only

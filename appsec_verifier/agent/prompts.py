@@ -553,8 +553,8 @@ def _seed(ctx) -> str:
         for k in ("affected_parameter", "mechanism_trace", "evidence_summary", "evidence_basis")
         if k in context
     }
-    # A write the operator can allow when asked is not unavailable (VER-052).
-    safe = (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True)) and getattr(ctx, "ask_writes", None) is None
+    # A write a variant declares stays unavailable in safe mode; the operator is not asked for it (VER-052).
+    safe = getattr(ctx, "safe", True) or getattr(ctx, "read_only", True)
     variants = [
         {
             "id": v["id"],

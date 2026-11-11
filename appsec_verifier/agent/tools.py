@@ -13,8 +13,8 @@ scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode, with the finding's marker and
 without naming an existing record in the path (agent/controller.py). In safe
 mode, where the operator can be asked, a write that passes every other check,
-or a plan that needs writes, is put to the operator first, and a yes turns the
-finding intrusive (VER-052, write_prompt.py); DELETE and
+or a plan that needs writes its variant does not declare, is put to the operator
+first, and a yes turns the finding intrusive (VER-052, write_prompt.py); DELETE and
 every other method are never sent (VER-014). A privileged account (--admin-account) only reads, in any
 mode (VER-041). An access-control plan without an operator test resource is
 accepted only when the run allows its proof: a resource a normal account
@@ -506,15 +506,14 @@ class AgentTools:
             ):
                 raise ToolError(f"the input does not match the finding variant; variant {variant['id']!r} declares "
                                 + ", ".join(f"{i['location']}:{i['name']}" for i in inputs[:6]))
+            # VER-052: the write a variant declares was known before the run, so --allow-intrusive decides it and
+            # the operator is not asked; only a write the agent comes upon while testing is.
             missing = missing_capabilities(
-                variant, safe=safe_mode, browser=self.ctx.browser is not None,
+                variant, safe=self.ctx.safe or self.ctx.read_only, browser=self.ctx.browser is not None,
                 identities=bool(getattr(self.ctx, "identities", None)),
             )
             if missing and not derived:
                 raise ToolError("this variant needs unavailable capabilities: " + ", ".join(missing))
-            if asking and not derived and "state-change" in missing_capabilities(
-                    variant, safe=True, browser=True, identities=True):
-                needs_writes.append(f"{vreq['method']} {vreq.get('path', '')}, the variant's state change")
             # VER-011: the generated controls are sent as they are, so they must carry every input the variant
             # declares; the request's other inputs come from fixed, a path input from the plan's path.
             if generates_controls(plan) and not derived and inputs:

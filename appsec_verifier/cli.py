@@ -1485,6 +1485,10 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
     if plan.cls == "ssrf" and listener is None:
         return "callback", "no callback in the scope"
     variants = getattr(plan, "verification_context", {}).get("variants", [])
+    # VER-052: a variant that lists state-change needs the write for its proof, even when its request reads, so
+    # safe mode does not test it, with or without the source; --allow-intrusive decides that at the start.
+    if safe and variants and all("state-change" in (v.get("required_capabilities") or []) for v in variants):
+        return "intrusive", "safe mode; every declared variant needs a state change"
     missing = [missing_capabilities(v, safe=safe, browser=browser is not None, identities=bool(identities))
                for v in variants]
     diagnostic_read = any(v["request"]["method"] in ("GET", "HEAD", "OPTIONS") for v in variants)
