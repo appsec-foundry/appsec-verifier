@@ -58,7 +58,7 @@ from jsonschema import Draft202012Validator
 from ..auth.sessions import AuthError
 from ..planning import evidence_name
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
-from ..verification_context import missing_capabilities, path_values, record_segments, route_matches
+from ..verification_context import missing_capabilities, path_values, planned_route, record_segments
 from ..verify import poc
 from .experiments import (
     PLAN_SCHEMA,
@@ -430,7 +430,7 @@ class AgentTools:
                 pm, pp = plan.get("method", "GET"), plan.get("path", "")
                 by_route = [v for v in variants
                             if ((v.get("request") or {}).get("method") == pm
-                                and route_matches((v.get("request") or {}).get("path") or "", pp))]
+                                and planned_route((v.get("request") or {}).get("path") or "", pp))]
                 if len(by_route) == 1:
                     variant = by_route[0]
                     variant_note = (f"variant {plan['variant']!r} accepted as {variant['id']!r} "
@@ -447,14 +447,16 @@ class AgentTools:
             # a variant that names the write is met by the change. The schema allows only POST, PUT and PATCH there,
             # and the controller still checks it is a write this finding names and who may send it.
             change = plan.get("change") if plan["kind"] == "access-control" else None
-            as_change = bool(change) and vreq["method"] == change["method"] and route_matches(vreq["path"],
+            as_change = bool(change) and vreq["method"] == change["method"] and planned_route(vreq["path"],
                                                                                               change["path"])
             hint = ("; for an access-control write proof read with GET and name this request as change"
                     if plan["kind"] == "access-control" and vreq["method"] not in SAFE_METHODS else "")
             if not derived and not as_change and vreq["method"] != plan.get("method", "GET"):
                 raise ToolError(f"the method does not match the finding variant; variant {variant['id']!r} uses "
                                 f"{vreq['method']} {vreq.get('path', '')}{hint}")
-            if not derived and not as_change and not route_matches(vreq["path"], plan["path"]):
+            # planned_route, as the controller and the proof check use: a `#` route is part of the variant's route,
+            # so a plan on /#/profile does not pass for a variant on /#/search.
+            if not derived and not as_change and not planned_route(vreq["path"], plan["path"]):
                 raise ToolError(f"the path does not match the finding variant; variant {variant['id']!r} uses "
                                 f"{vreq['method']} {vreq.get('path', '')}{hint}")
             inputs = vreq.get("inputs", [])

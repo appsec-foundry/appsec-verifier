@@ -692,6 +692,31 @@ def test_a_plan_without_a_variant_is_held_to_the_probes_only_one(tmp_path):
         AgentTools(_pinned_xss(tmp_path)).plan_test(**{**xss_plan(variant=None)["args"], "path": "/profile"})
 
 
+def test_a_plan_on_another_hash_route_is_refused_and_proves_nothing(tmp_path):
+    """Refused case: the probe tests the variant on /#/search, and the finding also names /#/profile, so the
+    controller allows both routes. A plan naming /#/profile fails the variant check like any other path, so a
+    marker executed there cannot confirm the /#/search variant."""
+    def pinned():
+        ctx = _pinned_xss(tmp_path)
+        ctx.plan = replace(ctx.plan, endpoints=(Endpoint("GET", "/#/search", None),
+                                                Endpoint("GET", "/#/profile", None)))
+        return ctx
+
+    with pytest.raises(ToolError, match="the path does not match the finding variant; variant 'v-search'"):
+        AgentTools(pinned()).plan_test(**{**xss_plan()["args"], "path": "/#/profile"})
+    script = Script([
+        {"tool": "plan_test", "args": {**xss_plan()["args"], "path": "/#/profile"}},
+        {"tool": "browser_check", "args": {"path": "/#/profile?name=<svg/onload=alert('m1'.concat('m2'))>"}},
+        {"verdict": {"verdict": "confirmed", "rationale": "the marker executed", "proof_steps": [2]}},
+    ])
+    result = AgentProbe("xss", lambda: script).run(pinned())
+    assert result.verdict != "confirmed"
+    # The `#` route also tells two variants apart when an unknown id is resolved by method and path.
+    accepted = AgentTools(_two_variants(tmp_path)).plan_test(
+        **{**xss_plan(variant="v-unknown")["args"], "path": "/#/profile"})
+    assert accepted["experiment"]["variant"] == "v-profile"
+
+
 def test_variant_mismatch_errors_name_the_valid_variants(tmp_path):
     """Fehlertexte, die Varianten betreffen, listen die zulassigen Optionen, damit der Agent in einem Step
     korrigieren kann statt in die Stagnation zu laufen."""
