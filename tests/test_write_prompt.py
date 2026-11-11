@@ -26,7 +26,7 @@ def _prompt(*answers):
         shown.append(("read", wait))
         return reads.pop(0)
 
-    return WritePrompt(write=shown.append, read=read, identities=["account-1", "account-2"], wait=7), shown
+    return WritePrompt(write=shown.append, read=read, wait=7), shown
 
 
 def _ask(prompt, key="T-1", **kw):
@@ -40,15 +40,16 @@ def test_y_allows_writes_for_the_finding_and_says_what_stays_on_the_target():
     prompt, shown = _prompt("y\n")
     assert _ask(prompt) is True
     text = "".join(s for s in shown if isinstance(s, str))
-    assert "T-1 · sqli in login needs write requests, which this run does not send in safe mode:" in text
+    assert ("T-1 · sqli in login: the test agent asks for write requests, which this run does not send in safe "
+            "mode:") in text
     assert "  POST /rest/user/login\n" in text
-    assert "Identity: chosen by the test agent: account-1, account-2, without login" in text
-    assert "stays on the target and is not cleaned up" in text
+    assert "Identity: without login\n" in text                   # the request's own identity, never a list
+    assert "anything it creates stays on the target and is not cleaned up" in text
     assert "Allow writes for this finding (y), for the rest of the run (a), or not (Enter)? " in text
     assert "Writes allowed for this finding." in text
     assert ("read", 7) in shown                                  # the answer is awaited for a bounded time
     record = prompt.records["T-1"]
-    assert (record["allowed"], record["answer"], record["asked"]) == (True, "finding", "before the finding")
+    assert (record["allowed"], record["answer"], record["asked"]) == (True, "finding", "by the test agent")
     assert record["requests"] == ["POST /rest/user/login"]
     assert not prompt.covered("T-2")                              # y covers this finding only
 
@@ -168,12 +169,16 @@ def test_a_plan_that_needs_writes_is_accepted_only_after_the_operator_allows_the
     assert not tools.ctx.safe
 
 
-# ── before the finding starts (cli.py, verify/runner.py) ─────────────────────
+# ── in a run (cli.py, verify/runner.py) ──────────────────────────────────────
+
+_SAFE_MODE_ONLY = ("not-attempted", "not tested: safe mode; every request the finding names writes, and the proof "
+                   "sends each control twice")
 
 
-def _verify_asking(tmp_path, monkeypatch, answer, *extra, scope=None):
-    """test_endpoints' run, in a terminal: T-2 names only a POST, so safe mode alone keeps it from being
-    tested. Returns the run's outcome, what the planner saw, and how often the operator was asked."""
+def _verify_asking(tmp_path, monkeypatch, answer, *extra, scope=None, agent_asks=None):
+    """test_endpoints' run, in a terminal: T-1 names a read, T-2 only a POST, so safe mode alone keeps T-2 from
+    being tested. The test agent of `agent_asks` asks for a write when its finding starts. Returns the run's
+    outcome, how often the operator was asked, and per finding started its mode and whether its agent may ask."""
     reads, seen = [], []
     monkeypatch.setattr(cli, "_stdin_is_terminal", lambda: True)
     monkeypatch.setattr(budget_prompt, "can_prompt", lambda interactive: interactive)
@@ -185,7 +190,9 @@ def _verify_asking(tmp_path, monkeypatch, answer, *extra, scope=None):
     def seeing(plan, registry, ctx_factory, log=None):      # the mode each finding's context starts in
         def factory(p):
             ctx = ctx_factory(p)
-            seen.append((p.id, ctx.safe, ctx.read_only))
+            seen.append((p.id, ctx.safe, ctx.read_only, ctx.ask_writes is not None))
+            if p.id == agent_asks and ctx.ask_writes is not None:
+                ctx.ask_writes(["POST /rest/products/search"], "the search also takes a POST", "")
             return ctx
 
         return original(plan, registry, factory, log)
@@ -195,34 +202,40 @@ def _verify_asking(tmp_path, monkeypatch, answer, *extra, scope=None):
     return rc, results, reads, seen
 
 
-def test_a_declined_finding_is_reported_untested_with_the_answer(tmp_path, monkeypatch, capsys):
-    import yaml
-
-    rc, results, reads, seen = _verify_asking(tmp_path, monkeypatch, "\n")
-    out = capsys.readouterr().out
-    assert rc == cli.EXIT_OK and len(reads) == 1
-    assert "  asks  sqli in login · POST /rest/user/login\n" in out and ", 1 asks before it writes\n" in out
-    assert results["T-2"] == ("not-attempted", "not tested: safe mode; every request the finding names writes, "
-                                               "and the proof sends each control twice; the operator declined "
-                                               "write requests")
-    assert [s for s in seen if s[0] == "T-2"] == []                  # no agent started for it
-    report = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
-    entry = next(r for r in report["results"] if r["finding_ref"]["id"] == "T-2")
-    assert entry["write_permission"]["answer"] == "declined" and entry["write_permission"]["allowed"] is False
-    assert "writes_allowed_for" not in report["meta"]["safety"]
-
-
-def test_an_allowed_finding_is_tested_in_intrusive_mode_and_the_report_says_so(tmp_path, monkeypatch):
+def test_a_finding_whose_requests_all_write_is_not_asked_about_and_stays_untested(tmp_path, monkeypatch, capsys):
+    """VER-052: only the test agent asks, during a test; --allow-intrusive tests such a finding."""
     import yaml
 
     rc, results, reads, seen = _verify_asking(tmp_path, monkeypatch, "y\n")
-    assert len(reads) == 1 and ("T-2", False, False) in seen
-    assert all(s[1] for s in seen if s[0] != "T-2")                  # the other findings stay safe
+    out = capsys.readouterr().out
+    assert rc == cli.EXIT_OK and reads == []
+    assert "T-2 → run with --allow-intrusive" in out and "asks" not in out
+    assert results["T-2"] == _SAFE_MODE_ONLY
+    assert [s for s in seen if s[0] == "T-2"] == []                  # no agent started for it
+    assert ("T-1", True, True, True) in seen                         # the agent of a read finding may ask
     report = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
-    assert report["meta"]["safety"]["writes_allowed_for"] == ["T-2"]
-    assert report["meta"]["safety"]["state_changes_cleaned"] is False
+    assert all("write_permission" not in r for r in report["results"])
+    assert "writes_allowed_for" not in report["meta"]["safety"]
+
+
+@pytest.mark.parametrize("answer, allowed", [("y\n", True), ("\n", False)])
+def test_the_report_gives_the_answer_to_the_test_agent_s_question(tmp_path, monkeypatch, answer, allowed):
+    import yaml
+
+    rc, results, reads, seen = _verify_asking(tmp_path, monkeypatch, answer, agent_asks="T-1")
+    assert len(reads) == 1
+    report = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
+    entry = next(r for r in report["results"] if r["finding_ref"]["id"] == "T-1")
+    assert (entry["write_permission"]["allowed"], entry["write_permission"]["asked"]) == (allowed, "by the test agent")
+    assert entry["write_permission"]["requests"] == ["POST /rest/products/search"]
     md = (tmp_path / "out" / "verification.md").read_text()
-    assert "the operator allowed writes for T-2" in md
+    if allowed:
+        assert report["meta"]["safety"]["writes_allowed_for"] == ["T-1"]
+        assert report["meta"]["safety"]["state_changes_cleaned"] is False
+        assert "the operator allowed writes for T-1" in md
+    else:
+        assert "writes_allowed_for" not in report["meta"]["safety"]
+        assert "the operator allowed writes" not in md
 
 
 @pytest.mark.parametrize("extra, scope", [
@@ -231,10 +244,10 @@ def test_an_allowed_finding_is_tested_in_intrusive_mode_and_the_report_says_so(t
     (("--non-interactive",), None),                    # nobody to ask
 ])
 def test_nothing_is_asked_where_writes_are_forbidden_or_nobody_can_answer(tmp_path, monkeypatch, extra, scope):
-    rc, results, reads, seen = _verify_asking(tmp_path, monkeypatch, "y\n", *extra, scope=scope)
+    rc, results, reads, seen = _verify_asking(tmp_path, monkeypatch, "y\n", *extra, scope=scope, agent_asks="T-1")
     assert reads == [] and all(s[0] != "T-2" for s in seen)
-    assert results["T-2"] == ("not-attempted", "not tested: safe mode; every request the finding names writes, "
-                                               "and the proof sends each control twice")
+    assert [s for s in seen if s[0] == "T-1"] == [("T-1", True, True, False)]    # its agent cannot ask
+    assert results["T-2"] == _SAFE_MODE_ONLY
 
 
 def test_the_agent_is_told_it_may_ask_only_when_the_operator_can_answer(tmp_path):
@@ -252,7 +265,7 @@ def test_a_report_with_the_operators_answers_is_schema_valid(tmp_path, monkeypat
     import yaml
     from jsonschema.validators import validator_for
 
-    _verify_asking(tmp_path, monkeypatch, "y\n")
+    _verify_asking(tmp_path, monkeypatch, "y\n", agent_asks="T-1")
     schema = yaml.safe_load((Path(__file__).resolve().parent.parent / "schemas" / "verification.schema.yaml")
                             .read_text())
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())

@@ -437,38 +437,6 @@ def test_variants_alike_in_request_and_inputs_share_the_finding_s_line(monkeypat
     assert nothing[-1] == "  T-1  high  xss  t · no request in the assessment"
 
 
-def test_the_test_plan_counts_and_marks_what_asks_before_it_writes_and_a_cut_line_keeps_the_mark(monkeypatch):
-    """VER-052: the head counts the findings that ask before they write, and a column before the title marks them,
-    or the variant concerned, so cutting a line to the terminal never drops it."""
-    import re
-    from dataclasses import replace
-
-    from appsec_verifier.planning import evidence_id
-
-    monkeypatch.setenv("COLUMNS", "70")
-    read = _plan("access-control", GET_LOGIN)
-    write = replace(_plan("access-control", Endpoint("PUT", "/api/BasketItems/{id}", True)), id="T-2",
-                    title="Basket item update lacks ownership check and field validation")
-    feedback = [replace(_plan("xss"), id="T-3", variant_id=v["id"], variant_digest=str(i) * 16,
-                        verification_context={"version": 1, "variants": [v]})
-                for i, v in enumerate([{"id": "variant-001", "request": {"method": "GET", "path": "/api/Feedbacks"}},
-                                       {"id": "variant-002", "request": {"method": "POST", "path": "/api/Feedbacks"}}])]
-    sgr = re.compile(r"\x1b\[[0-9;]*m")
-    lines = [sgr.sub("", line) for line in cli._test_cases(cli.Style(True), [read, write, *feedback], {}, full=False,
-                                                            ask={evidence_id(write), evidence_id(feedback[1])})]
-    assert "Test plan     3 of 3 findings will be tested (4 runs with their variants), 2 ask before they write" in lines
-    by_id = {line.split()[0]: line for line in lines if line.startswith("  T-")}
-    assert by_id["T-1"] == "  T-1  high  access-control        t · GET /a"
-    assert by_id["T-2"].startswith("  T-2  high  access-control  asks  Basket item update lacks")
-    assert by_id["T-2"].endswith("…") and len(by_id["T-2"]) == 69
-    assert by_id["T-3"] == f"  T-3  high  {'xss':<14}        t"       # the variants name the requests and ask
-    assert "asks" not in lines[-2] and lines[-2].endswith("      variant-001  GET /api/Feedbacks")
-    assert lines[-1].endswith("  asks  variant-002  POST /api/Feedbacks")
-    one = "\n".join(cli._test_cases(cli.Style(False), [read, write], {}, ask={evidence_id(write)}))
-    assert "2 of 2 findings will be tested, 1 asks before it writes" in one
-    assert "asks" not in "\n".join(cli._test_cases(cli.Style(False), [read], {}))
-
-
 def test_the_request_hint_names_a_scope_entry_only_where_one_can_name_the_request(monkeypatch):
     """--source helps only when the finding's file declares its route; a test_resources entry names the request
     of an access-control finding, and no scope entry does that for SSRF and the other classes."""

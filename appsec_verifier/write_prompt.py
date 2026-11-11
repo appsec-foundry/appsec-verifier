@@ -1,13 +1,13 @@
 """The question for write requests the run's mode does not allow, in an interactive terminal (VER-052).
 
-A run in safe mode sends no state-changing request (VER-030). When a finding needs one, the Verifier asks
-the operator instead of skipping it: before the finding starts when every request it names writes
-(cli.py, verify/runner.py), or when the test agent asks for one (agent/tools.py). The caller asks only
-for a request the run would send in intrusive mode; nothing is asked with --read-only, when the scope
-forbids state change, or without a terminal (cli.py).
+A run in safe mode sends no state-changing request (VER-030). When the test agent finds during a test that
+it needs one, it can ask the operator instead of giving up (agent/tools.py); a finding whose named requests
+all write is not asked about and stays untested in safe mode (cli.py). The caller asks only for a request
+the run would send in intrusive mode; nothing is asked with --read-only, when the scope forbids state
+change, or without a terminal (cli.py).
 
-`WritePrompt` pauses the status line and shows the finding, the request, the identity, that marked test
-data stays on the target, and the agent's reason, marked as its claim. `y` allows writes for that
+`WritePrompt` pauses the status line and shows the finding, the request, the identity, that anything a
+write creates stays on the target, and the agent's reason, marked as its claim. `y` allows writes for that
 finding, `a` for the rest of the run; Enter, any other answer, the end of input, ``WAIT_S`` seconds
 without an answer or the end of the run time decline, and the finding goes on read-only. Keys pressed
 before the question are discarded. A finding is asked at most once. Every answer is kept in `records`
@@ -35,9 +35,8 @@ class WritePrompt:
     ``prompt(budget, key=, finding=, requests=, reason=, identity=, asked=)`` and returning True when writes are
     allowed for that finding."""
 
-    def __init__(self, progress=None, *, identities=(), write=None, read=None, wait: float = WAIT_S):
+    def __init__(self, progress=None, *, write=None, read=None, wait: float = WAIT_S):
         self._progress = progress
-        self._identities = [printable(r)[:60] for r in identities]
         self._write = write or (lambda text: (sys.stderr.write(text), sys.stderr.flush()))
         self._read = read or read_answer
         self._wait = wait
@@ -56,9 +55,8 @@ class WritePrompt:
         return self.allowed(key)
 
     def __call__(self, budget, *, key: str, finding: str, requests: list[str], reason: str | None = None,
-                 identity: str | None = None, asked: str = "before the finding") -> bool:
-        """`identity` is the role of the request the agent asks for, "" without one; None before the finding
-        starts, when the agent will choose among the run's identities."""
+                 identity: str = "", asked: str = "by the test agent") -> bool:
+        """`identity` is the role of the request the agent asks for, "" without one."""
         if key in self.records:                 # one question per finding
             return self.allowed(key)
         requests = [printable(r)[:200] for r in requests[:4]]
@@ -66,8 +64,6 @@ class WritePrompt:
             self.records[key] = {"allowed": True, "answer": "rest of the run", "at": self._whole_run["at"],
                                  "given_for": self._whole_run["finding"], "asked": asked, "requests": requests}
             return True
-        if identity is None:
-            identity = "chosen by the test agent: " + ", ".join([*self._identities, "without login"])
         identity = printable(identity)[:200] or "without login"
         if self._progress is None:
             answer = self._ask(budget, finding, requests, identity, reason)
@@ -82,10 +78,11 @@ class WritePrompt:
         return record["allowed"]
 
     def _ask(self, budget, finding: str, requests: list[str], identity: str, reason: str | None) -> str:
-        lines = [f"\n{printable(finding)[:200]} needs write requests, which this run does not send in safe mode:",
+        lines = [f"\n{printable(finding)[:200]}: the test agent asks for write requests, which this run does not "
+                 "send in safe mode:",
                  *(f"  {r}" for r in requests),
                  f"Identity: {identity}",
-                 "Each write carries the finding's marker; what it creates stays on the target and is not "
+                 "Each write carries the finding's marker; anything it creates stays on the target and is not "
                  "cleaned up (VER-014)."]
         if reason:
             lines.append(f"The test agent's reason, its claim: {printable(reason)[:300]}")

@@ -754,16 +754,9 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     )
     from .budget_prompt import can_prompt
 
-    # VER-052: in a terminal, a finding that only safe mode keeps from being tested is asked about before it
-    # starts, if it could be tested in intrusive mode; an explicit no (--read-only, the scope) asks nothing.
+    # VER-052: in a terminal, the test agent may ask for a write safe mode does not send; an explicit no
+    # (--read-only, the scope) asks nothing. A finding whose named requests all write stays untested in safe mode.
     may_ask = safe and not args.read_only and scope.get("allow_state_change") is not False and can_prompt(interactive)
-    askable = {}
-    for key, (need, reason) in list(blocked.items()) if may_ask else []:
-        plan = next(p for p in probed if evidence_id(p) == key)
-        if need == "intrusive" and _blocker(plan, identities=identities, browser=browser, listener=listener,
-                                            scope=scope, safe=False, source=source is not None) is None:
-            askable[key] = (reason, _write_requests(plan))
-            del blocked[key]
     skipped = {fid: reason for fid, (_, reason) in blocked.items()}
     contact = any(evidence_id(p) not in skipped for p in probed)
 
@@ -802,8 +795,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             )
         )
     )
-    print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing), full=False,
-                                 ask=askable)))
+    print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing), full=False)))
     if probed and not contact:
         return _blocked(
             "Nothing to test in this run; no report was written",
@@ -899,8 +891,8 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
 
         if can_prompt(interactive):     # VER-015: a higher cost ceiling only from what the operator types
             budget.ask_ceiling = CeilingPrompt(progress, api_prices=not agent_info.get("api_billing", False))
-        if may_ask:                      # VER-052: write requests safe mode does not send, after a question
-            write_prompt = WritePrompt(progress, identities=[i["role"] for i in identities])
+        if may_ask:                      # VER-052: a write the test agent asks for, after a question
+            write_prompt = WritePrompt(progress)
     try:
         if listener is not None and contact:
             try:
@@ -938,7 +930,6 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
             progress=progress,
             skipped=skipped,
             ask_writes=write_prompt,
-            askable=askable,
         )
     finally:
         if progress is not None:
@@ -1433,15 +1424,6 @@ def _run_hints(doc: dict, target: str, browser_missing: str | None) -> dict[str,
     return {"identity": identity, **({"browser": [browser_missing]} if browser_missing else {})}
 
 
-def _write_requests(plan) -> list[str]:
-    """The write requests a finding names, as `METHOD /path`, for the question before it starts (VER-052)."""
-    variants = getattr(plan, "verification_context", {}).get("variants", [])
-    named = [*((e.method, e.path) for e in plan.endpoints),
-             *((v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants)]
-    return list(dict.fromkeys(f"{m} {p}" for m, p in named if m in ("POST", "PUT", "PATCH")))[:4] or [
-        "a write request"]
-
-
 def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) -> tuple[str, str] | None:
     """What this run lacks to confirm `plan` (a _NEEDS key and the reason for the
     report), or None when it can try: first what its class's proof needs (VER-009
@@ -1542,7 +1524,7 @@ def _wrap_whole(text: str, width: int) -> list[str]:
 
 
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,
-                full: bool = True, ask=()) -> list[str]:
+                full: bool = True) -> list[str]:
     """The test plan before the confirmation: one line per finding the run tests, with its title and
     the requests the assessment names, those that prepare a test resource marked `(prepares)`. A finding
     whose declared variants differ in request or inputs adds one indented line per variant, naming its own
@@ -1551,9 +1533,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     request and count. Then the findings the run cannot test, grouped by what they need and how to provide it.
     `hints` replaces a need's how-to with what is actually missing (the browser's cause). Without
     `full` (in `verify`) a line is cut to fit a terminal, and each need gets one row with a few words
-    and a pointer to `preflight`, which shows the how-tos. A finding in `ask` is tested only if the operator
-    allows its write requests when it starts (VER-052): the head counts these findings, and a column before
-    the title marks them, or the variant concerned, `asks`, so cutting a line never drops it."""
+    and a pointer to `preflight`, which shows the how-tos."""
     if not plans:
         return []
     from .planning import evidence_id
@@ -1565,15 +1545,11 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         if p.id not in groups:
             order.append(p.id)
         groups.setdefault(p.id, []).append(p)
-    # `plans` holds one entry per variant; the head counts findings, the runs their variants add, and the
-    # findings that ask before they write.
+    # `plans` holds one entry per variant; the head counts findings, and the runs their variants add.
     findings = len({p.id for p in plans})
-    asking = [fid for fid in order if any(evidence_id(v) in ask for v in groups[fid])]
     runs = f" ({len(tested)} runs with their variants)" if len(tested) > len(groups) else ""
-    asks = (f", {len(asking)} " + ("asks before it writes" if len(asking) == 1 else "ask before they write")
-            if asking else "")
     head = (
-        f"{len(groups)} of {_count(findings, 'finding')} will be tested{runs}{asks}"
+        f"{len(groups)} of {_count(findings, 'finding')} will be tested{runs}"
         if tested
         else "this run can test none of them"
         if findings > 1
@@ -1583,12 +1559,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     id_w, sev_w, cls_w = (max((len(printable(getattr(p, k) or "")) for p in tested), default=0)
                           for k in ("id", "severity", "cls"))
     indent = " " * (2 + id_w + 2 + sev_w + 2 + cls_w + 2)
-    width = len(indent) + (len("asks  ") if asking else 0)
-
-    def mark(asks: bool) -> str:       # a column of its own, so cutting a line never drops it
-        if not asking:
-            return ""
-        return st("asks", "warn") + "  " if asks else " " * len("asks  ")
+    width = len(indent)
 
     def request(endpoint) -> str:      # whether it needs a login is settled: without an account it is not tested
         return printable(str(endpoint)).removesuffix(" (login)")
@@ -1625,9 +1596,8 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         if st.enabled and not full:
             text = _fit(text, max(columns() - 1 - width, 20))
         rest = text[len(title):]
-        head_asks = not distinct and any(evidence_id(v) in ask for v in group)
         lines.append(f"  {printable(p.id):<{id_w}}  {st(f'{printable(p.severity).lower():<{sev_w}}', 'muted')}  "
-                     f"{printable(p.cls or ''):<{cls_w}}  {mark(head_asks)}{text[:len(title)]}"
+                     f"{printable(p.cls or ''):<{cls_w}}  {text[:len(title)]}"
                      + (st(rest, "muted") if rest else ""))
         if distinct:
             for n, (vp, (req_text, inputs)) in enumerate(zip(group, rows, strict=True), start=1):
@@ -1635,7 +1605,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
                 body = f"{vid}  {req_text or 'no request declared'}" + (f"  {inputs}" if inputs else "")
                 if st.enabled and not full:
                     body = _fit(body, max(columns() - 1 - width, 20))
-                lines.append(f"{indent}{mark(evidence_id(vp) in ask)}{st(body, 'muted')}")
+                lines.append(f"{indent}{st(body, 'muted')}")
         if p.selection_reason:
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
