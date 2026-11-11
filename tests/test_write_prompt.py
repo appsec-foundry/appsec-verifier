@@ -149,22 +149,41 @@ _OWNER_PLAN = {"kind": "access-control", "hypothesis": "B reads A's basket", "st
                "path": "/rest/basket/{id}", "method": "GET", "owner": "customer-a"}
 
 
-def test_a_plan_that_needs_writes_is_refused_in_safe_mode_without_anyone_to_ask(tmp_path):
-    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp(), idents=_TWO))
-    with pytest.raises(ToolError, match="creating a resource needs two normal accounts and --allow-intrusive"):
-        tools.plan_test(**_OWNER_PLAN)
+@pytest.mark.parametrize("change", [None, {"method": "PUT", "path": "/rest/basket/{id}"}])
+def test_the_resource_an_access_control_proof_creates_is_refused_in_safe_mode_without_asking(tmp_path, change):
+    """The record an account creates for the comparison (VER-010) was known before the run: --allow-intrusive
+    decides it, not a question mid-run, whether the operator could be asked or not."""
+    plan = {**_OWNER_PLAN, **({"change": change} if change else {})}
+    for asking in (False, True):
+        tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp(), idents=_TWO))
+        asked = _asking(tools, True) if asking else []
+        with pytest.raises(ToolError, match="creating a resource needs two normal accounts and --allow-intrusive"):
+            tools.plan_test(**plan)
+        assert asked == [] and tools.ctx.safe and getattr(tools, "_experiment", None) is None
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp(), idents=_TWO, safe=False, read_only=False))
+    assert tools.plan_test(**plan)["accepted"] is True
+
+
+_WRITE_PLAN = {"kind": "boolean", "hypothesis": "email is spliced into the login SQL query", "strategy": STRATEGY,
+               "path": "/rest/user/login", "method": "POST", "input_location": "json", "input_name": "email",
+               "baseline": "nobody@x", "pointer": "/authentication/token", "sql_template": "x' OR {{predicate}} -- "}
 
 
 def test_a_plan_that_needs_writes_is_accepted_only_after_the_operator_allows_them(tmp_path):
-    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp(), idents=_TWO))
+    def tools_for_injection():
+        tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+        tools.ctx.plan.cls, tools.ctx.plan.cwe = "injection", "CWE-89"
+        return tools
+
+    tools = tools_for_injection()
     asked = _asking(tools, False)
     with pytest.raises(ToolError, match="the operator did not allow them for this finding"):
-        tools.plan_test(**_OWNER_PLAN)
-    assert asked[0][0] == ["a write by customer-a that creates its test record with the marker"]
-    assert asked[0][2] == "customer-a" and getattr(tools, "_experiment", None) is None and tools.ctx.safe
-    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp(), idents=_TWO))
+        tools.plan_test(**_WRITE_PLAN)
+    assert asked[0][0] == ["POST /rest/user/login, each control twice"]
+    assert getattr(tools, "_experiment", None) is None and tools.ctx.safe
+    tools = tools_for_injection()
     _asking(tools, True)
-    accepted = tools.plan_test(**_OWNER_PLAN)
+    accepted = tools.plan_test(**_WRITE_PLAN)
     assert accepted["accepted"] is True and "the operator allowed write requests" in accepted["note"]
     assert not tools.ctx.safe
 

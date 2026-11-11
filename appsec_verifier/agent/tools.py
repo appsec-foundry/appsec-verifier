@@ -13,7 +13,8 @@ scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode, with the finding's marker and
 without naming an existing record in the path (agent/controller.py). In safe
 mode, where the operator can be asked, a write that passes every other check,
-or a plan that needs writes its variant does not declare, is put to the operator
+or a plan that needs writes neither its variant declares nor an access-control
+proof's created resource needs, is put to the operator
 first, and a yes turns the finding intrusive (VER-052, write_prompt.py); DELETE and
 every other method are never sent (VER-014). A privileged account (--admin-account) only reads, in any
 mode (VER-041). An access-control plan without an operator test resource is
@@ -540,8 +541,11 @@ class AgentTools:
                                     + f" a value in fixed, e.g. fixed: {example}")
         marker = None
         if plan["kind"] == "access-control" and not plan.get("resource"):
+            # VER-052: the resource an account creates, and the change to it, are known before the run as the
+            # intrusive-mode proof of VER-010, so --allow-intrusive decides them and the operator is not asked; a
+            # yes for an earlier write of this finding has already made it intrusive.
             methods = access_methods(self.ctx.plan.id, getattr(self.ctx.plan, "cwe", None), self.ctx.scope,
-                                     self.ctx.identities, writes=not safe_mode)
+                                     self.ctx.identities, writes=not (self.ctx.safe or self.ctx.read_only))
             if "resource" in methods:
                 raise ToolError("the operator-declared test resource takes precedence; plan with its resource id")
             if plan.get("method", "GET") != "GET":
@@ -553,8 +557,6 @@ class AgentTools:
                 if plan["owner"] not in normal_roles(self.ctx.identities):
                     raise ToolError("the owner must be a normal account; a privileged account only reads (VER-041)")
                 marker = "".join(self.ctx.marker)
-                if asking:      # the owner's write creates the record the comparison reads (VER-010)
-                    needs_writes.append(f"a write by {plan['owner']} that creates its test record with the marker")
                 if plan.get("change"):
                     if not record_segments(plan["change"]["path"]):
                         raise ToolError("change is the finding's write that changes a record by its identifier in "
@@ -564,9 +566,6 @@ class AgentTools:
                     while second == marker:
                         second = self.ctx.marker[0] + secrets.token_hex(4)
                     plan = {**plan, "second_marker": second}
-                    if asking:
-                        needs_writes.append(f"{plan['change']['method']} {plan['change']['path']} by another "
-                                            "account, to that record")
             else:
                 if "reference" not in methods:
                     raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
