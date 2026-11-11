@@ -130,6 +130,7 @@ def test_search_finds_a_symbol_inside_another_file(tmp_path):
     out = _search_repo(tmp_path).search("getPaymentMethods")
     found = {(m["path"], m["line"]) for m in out["matches"]}
     assert found == {("routes/payment.ts", 1), ("server.ts", 2)} and out["truncated"] is False
+    assert "more_files" not in out
     line = next(m["text"] for m in out["matches"] if m["path"] == "server.ts")
     assert line.startswith("app.get('/api/Cards'")
 
@@ -156,6 +157,42 @@ def test_search_stays_in_the_repository_and_bounds_its_answer(tmp_path):
     out = r.search("needle")
     assert len(out["matches"]) == 40 and out["truncated"] is True
     assert all(len(m["text"]) <= 200 for m in out["matches"])
+    assert out["more_files"] == [{"path": "many.ts", "lines": 20}]
+
+
+def test_search_names_a_definition_the_walk_reaches_after_the_line_limit(tmp_path):
+    """VER-050: usages that come first in the walk do not hide the file that defines the symbol; the further
+    files carry only path and count, and the excluded files stay out of that list too (refused case)."""
+    r = _search_repo(tmp_path)
+    (tmp_path / "a_usages.ts").write_text("\n".join(f"use(getPaymentMethods) // {i}" for i in range(45)))
+    out = r.search("getPaymentMethods")
+    assert len(out["matches"]) == 40 and {m["path"] for m in out["matches"]} == {"a_usages.ts"}
+    assert out["truncated"] is True
+    assert out["more_files"] == [{"path": "a_usages.ts", "lines": 5}, {"path": "server.ts", "lines": 1},
+                                 {"path": "routes/payment.ts", "lines": 1}]
+
+
+def test_search_counts_a_directory_of_many_further_files_as_one_entry(tmp_path):
+    """Copies in one directory, such as fixtures or generated code, do not crowd a single definition out of the
+    list of further files."""
+    (tmp_path / "a.ts").write_text("needle\n")
+    (tmp_path / "fixtures").mkdir()
+    for i in range(5):
+        (tmp_path / "fixtures" / f"f{i}.ts").write_text("needle\nneedle\n")
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "def.ts").write_text("const needle = 1\n")
+    out = SourceReader(tmp_path).search("needle", limit=1, file_limit=2)
+    assert out["more_files"] == [{"path": "fixtures/", "files": 5, "lines": 10}, {"path": "lib/def.ts", "lines": 1}]
+    assert out["truncated"] is True
+
+
+def test_search_bounds_the_list_of_further_files(tmp_path):
+    for name in ("a.ts", "b.ts", "c.ts", "d.ts"):
+        (tmp_path / name).write_text("needle\n")
+    out = SourceReader(tmp_path).search("needle", limit=1, file_limit=2)
+    assert [m["path"] for m in out["matches"]] == ["a.ts"]
+    assert out["more_files"] == [{"path": "b.ts", "lines": 1}, {"path": "c.ts", "lines": 1}]
+    assert out["truncated"] is True
 
 
 @pytest.mark.parametrize("text", ["", "ab", "  a ", "x" * 201, "a\x00bc"])

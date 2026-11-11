@@ -11,6 +11,7 @@ the agent sees as a tool error. This tool never writes.
 """
 
 import os
+from collections import Counter
 from pathlib import Path
 
 # Matched case-insensitively against every part of the resolved path below the repository root.
@@ -27,6 +28,7 @@ _FIND_SCAN_CAP = 200_000  # bounded traversal, so a pathological tree cannot sta
 _SEARCH_READ_CAP = 64 * 1_048_576  # total bytes one content search reads (VER-036)
 _SEARCH_LINE_CAP = 200  # characters of a matching line returned to the model
 _SEARCH_TEXT = (3, 200)  # length bounds of a content-search string
+_SEARCH_DIR_FILES = 3  # further matching files a directory lists one by one before it becomes one entry
 
 
 class SourceAccessError(Exception):
@@ -93,19 +95,38 @@ class SourceReader:
         matches.sort(key=lambda r: (needle not in Path(r).name.lower(), r))   # name matches before path-only matches
         return {"query": query, "matches": matches, "truncated": False}
 
-    def search(self, text: str, *, limit: int = 40) -> dict:
+    def search(self, text: str, *, limit: int = 40, file_limit: int = 40) -> dict:
         """Repo-confined content search (VER-050): the lines that contain `text` as a literal, case-insensitive
-        string, as path, line number and the line cut to a fixed length. The same exclusions as `find` apply
-        (credential, key and VCS files, heavy vendor directories, symlinks that leave the repository); files
-        above the read limit and binary files are skipped, and the traversal and the bytes read are bounded.
-        Read-only; the model supplies no pattern, only a string."""
+        string, as path, line number and the line cut to a fixed length. Past `limit` lines the search goes on
+        within the same bounds and names, in up to `file_limit` entries, the further files with the number of
+        their matching lines not shown, so a file the walk reaches late, such as a definition behind many usages,
+        is not hidden. A directory with more than `_SEARCH_DIR_FILES` such files is one entry with their count,
+        so fixtures, generated code or copies in one directory do not crowd out the rest.
+        The same exclusions as `find` apply (credential, key and VCS files, heavy vendor directories, symlinks
+        that leave the repository); files above the read limit and binary files are skipped, and the traversal
+        and the bytes read are bounded. Read-only; the model supplies no pattern, only a string."""
         if not isinstance(text, str) or "\x00" in text or not _SEARCH_TEXT[0] <= len(text.strip()) <= _SEARCH_TEXT[1]:
             raise SourceAccessError(f"a content search needs {_SEARCH_TEXT[0]} to {_SEARCH_TEXT[1]} characters")
         needle = text.lower()
-        matches, scanned, read = [], 0, 0
+        matches, more, scanned, read = [], {}, 0, 0
 
-        def done(truncated):
-            return {"text": text, "matches": matches, "truncated": truncated}
+        def done(stopped):
+            out = {"text": text, "matches": matches, "truncated": stopped or bool(more)}
+            if more:
+                files, lines = Counter(), Counter()
+                for path, n in more.items():
+                    files[os.path.dirname(path)] += 1
+                    lines[os.path.dirname(path)] += n
+                entries, collapsed = [], set()
+                for path, n in more.items():
+                    folder = os.path.dirname(path)
+                    if files[folder] <= _SEARCH_DIR_FILES:
+                        entries.append({"path": path, "lines": n})
+                    elif folder not in collapsed:
+                        collapsed.add(folder)
+                        entries.append({"path": (folder or ".") + "/", "files": files[folder], "lines": lines[folder]})
+                out["more_files"] = entries[:file_limit]
+            return out
 
         for dirpath, dirnames, filenames in os.walk(self.root):   # followlinks=False: a symlinked dir is not entered
             dirnames[:] = sorted(d for d in dirnames if d.lower() not in _PRUNE_DIRS)
@@ -127,11 +148,15 @@ class SourceReader:
                 read += len(data)
                 if len(data) > MAX_SOURCE_BYTES or b"\x00" in data[:8192]:   # grown since stat, or binary
                     continue
+                unshown = 0
                 for number, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
                     if needle in line.lower():
-                        matches.append({"path": str(rel), "line": number, "text": line.strip()[:_SEARCH_LINE_CAP]})
-                        if len(matches) >= limit:
-                            return done(True)
+                        if len(matches) < limit:
+                            matches.append({"path": str(rel), "line": number, "text": line.strip()[:_SEARCH_LINE_CAP]})
+                        else:
+                            unshown += 1
+                if unshown:
+                    more[str(rel)] = unshown
         return done(False)
 
     def read_all(self, relpath: str) -> str:

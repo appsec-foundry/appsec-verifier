@@ -304,6 +304,10 @@ class AgentTools:
         # Name every declaration problem at once, so one revision can fix them all.
         problems = []
         variants = getattr(self.ctx.plan, "verification_context", {}).get("variants", [])
+        if len(variants) == 1 and not plan.get("variant"):
+            # A probe tests one variant (planning.expand_variants), so a plan that names none means that one; the
+            # checks below hold it to that variant's request as if the agent had named it.
+            plan = {**plan, "variant": variants[0]["id"]}
         if variants and not plan.get("variant"):
             problems.append("select an evidenced finding variant for this plan; variants: "
                             + _variant_catalog(variants))

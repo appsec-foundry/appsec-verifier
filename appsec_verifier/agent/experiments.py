@@ -61,11 +61,10 @@ PLAN_SCHEMA = {
         # VER-049: the observation is the presence of an authenticated artifact at `pointer`, not a field's value.
         "auth_artifact": {"type": "boolean"},
         # VER-011: values for the request's other inputs, such as the password next to a login's user name, that
-        # every generated control carries unchanged.
+        # every generated control carries unchanged. An empty object gives none, like an absent one.
         "fixed": {
             "type": "object",
             "additionalProperties": False,
-            "minProperties": 1,
             "properties": {
                 location: {"type": "object", "minProperties": 1, "maxProperties": 8,
                            "propertyNames": {"minLength": 1, "maxLength": 128},

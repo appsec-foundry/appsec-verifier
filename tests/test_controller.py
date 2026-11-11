@@ -630,7 +630,7 @@ def test_xss_proof_takes_the_planned_route_with_or_without_a_query_template(tmp_
 
 
 def test_identical_rejected_plans_still_stop_after_three_failures(tmp_path):
-    ctx = xss_context(tmp_path)
+    ctx = _two_variants(tmp_path)           # no variant named among two: each plan is rejected
     logs = []
     ctx.log = logs.append
     script = Script([xss_plan(variant=None) for _ in range(4)])
@@ -668,13 +668,28 @@ def test_an_observed_prerequisite_without_a_recorded_response_counts_as_assumed(
     assert "note" not in AgentTools(ctx).plan_test(**xss_plan(page_loads("observed", 2))["args"])
 
 
+def _two_variants(tmp_path):
+    ctx = xss_context(tmp_path)
+    ctx.plan = replace(ctx.plan, verification_context={"variants": [SEARCH_VARIANT, PROFILE_VARIANT]})
+    return ctx
+
+
 def test_a_plan_names_its_variant_problem(tmp_path):
     with pytest.raises(ToolError, match="select an evidenced finding variant"):
-        AgentTools(xss_context(tmp_path)).plan_test(**xss_plan(variant=None)["args"])
+        AgentTools(_two_variants(tmp_path)).plan_test(**xss_plan(variant=None)["args"])
     ctx = xss_context(tmp_path)
     ctx.plan = replace(ctx.plan, verification_context={})
     with pytest.raises(ToolError, match="this finding has no variants; omit variant"):
         AgentTools(ctx).plan_test(**xss_plan()["args"])
+
+
+def test_a_plan_without_a_variant_is_held_to_the_probes_only_one(tmp_path):
+    """A probe tests one variant (expand_variants): a plan that names none takes it and passes the same checks as
+    if it had named it, so a request outside that variant is still refused."""
+    accepted = AgentTools(_pinned_xss(tmp_path)).plan_test(**xss_plan(variant=None)["args"])
+    assert accepted["experiment"]["variant"] == "v-search"
+    with pytest.raises(ToolError, match="the path does not match the finding variant; variant 'v-search'"):
+        AgentTools(_pinned_xss(tmp_path)).plan_test(**{**xss_plan(variant=None)["args"], "path": "/profile"})
 
 
 def test_variant_mismatch_errors_name_the_valid_variants(tmp_path):
@@ -683,10 +698,9 @@ def test_variant_mismatch_errors_name_the_valid_variants(tmp_path):
     ctx = xss_context(tmp_path)
     tools = AgentTools(ctx)
     # select-variant lists the catalog
-    try:
-        tools.plan_test(**xss_plan(variant=None)["args"])
-    except ToolError as exc:
-        assert "v-search" in str(exc) and "GET /#/search" in str(exc)
+    with pytest.raises(ToolError) as exc:
+        AgentTools(_two_variants(tmp_path)).plan_test(**xss_plan(variant=None)["args"])
+    assert "v-search" in str(exc.value) and "GET /#/search" in str(exc.value) and "v-profile" in str(exc.value)
     # unknown variant names what the user sent and the available ids when method/path also do not
     # identify a declared variant uniquely.
     with pytest.raises(ToolError, match=r"unknown finding variant 'v-missing'.*v-search"):

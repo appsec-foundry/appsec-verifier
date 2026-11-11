@@ -175,7 +175,9 @@ def _tool_defs() -> list[dict]:
             "name": "search_source",
             "description": "Search the target's source for a literal string inside files, e.g. a handler name to "
             "find where a route is registered. Returns the matching repository paths, line numbers and lines, "
-            "never more. Read-only and confined to the repository.",
+            "never more; past 40 lines, more_files names further files with their count of matching lines not "
+            "shown, a directory with many of them as one entry with its file count, so read those instead of "
+            "repeating the search. Read-only and confined to the repository.",
             "input_schema": {
                 "type": "object",
                 "properties": {"text": {"type": "string", "minLength": 3, "maxLength": 200}},

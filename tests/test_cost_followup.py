@@ -307,6 +307,23 @@ def test_a_query_key_in_fixed_means_params(tmp_path):
     assert all(r["params"]["sort"] == "name" for r in tools.experiment_requests())
 
 
+def test_an_empty_fixed_is_accepted_and_adds_no_value(tmp_path):
+    """The run's T-004 sent `fixed: {}`; it is a plan with no fixed values, not a declaration error."""
+    import json
+
+    from appsec_verifier.agent.steps import parse_step
+    from appsec_verifier.agent.tools import AgentTools
+
+    args = {**_search_plan(["x' AND {{predicate}} -- "])["args"], "fixed": {}}
+    assert parse_step({"action": "plan_test", "args_json": json.dumps(args)})["tool"] == "plan_test"
+    tools = AgentTools(_search_ctx(tmp_path, []))
+    assert tools.plan_test(**args)["accepted"] is True
+    without = AgentTools(_search_ctx(tmp_path, []))
+    without.plan_test(**{k: v for k, v in args.items() if k != "fixed"})
+    keys = [sorted(r["params"]) for r in tools.experiment_requests()]
+    assert keys and keys == [sorted(r["params"]) for r in without.experiment_requests()]
+
+
 def test_controls_refused_before_sending_leave_the_plan_unsent(tmp_path):
     """A write control the controller refuses never reaches the target, so a second send_controls repeats the
     refusal instead of claiming the controls ran."""
