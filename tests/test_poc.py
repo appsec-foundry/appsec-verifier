@@ -11,6 +11,7 @@ import json
 import re
 import stat
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -201,7 +202,11 @@ def test_confirmed_idor_writes_the_cited_exchanges_owner_only_and_hides_them_fro
     kinds = [e["kind"] for e in result.evidence]
     assert "har" in kinds and "exchange" in kinds
     assert all(e["path"] != "evidence/made-up.png" for e in result.evidence)   # the model's account is not taken
-    assert [s["step"] for s in result.poc["shown"]] == [2, 3]
+    # The allowed identity's read, the normal request, before the denied identity's, the attack (VER-035).
+    assert [(s["step"], s["role"]) for s in result.poc["shown"]] == [(3, "normal"), (2, "attack")]
+    assert result.poc["shown"][1]["role_label"] == "denied identity"
+    assert result.poc["shown"][1]["facts"] == ["Compared with the normal request in step 3: same status 200, "
+                                               "the identical answer."]
     assert result.poc["shown"][0]["request"].startswith("GET /rest/basket/2 HTTP/1.1\nHost: shop.example.com\n")
     assert "HTTP/1.1 200 OK" in result.poc["shown"][0]["response"]
     assert all("_step" not in seen and "headers" not in seen for seen in planner.seen)   # history stays as it was
@@ -533,6 +538,126 @@ def test_exchange_image_marks_no_cookie_without_a_declared_session_plan():
     assert marked == 0 and "<mark>" not in page and "Set-Cookie: sid=" in page
 
 
+def _exchange(path, body="{}", role=None, method="GET", status=200):
+    raw = {"method": method, "url": SCOPE["base_url"] + path, "headers": [], "body": None, "status": status,
+           "response_headers": [("Content-Type", "application/json")], "content": body.encode(),
+           "time": "2026-11-10T20:30:23Z"}
+    return poc.entry(raw, role=role)
+
+
+def _sent(path, role=None, method="GET", **params):
+    return {"tool": "http_request", "result": {"status": 200},
+            "args": {"path": path, "method": method, **({"role": role} if role else {}),
+                     **({"params": params} if params else {})}}
+
+
+def _accepted(**plan):
+    return {"tool": "plan_test", "args": plan, "result": {"accepted": True, "experiment": plan}}
+
+
+def _role_ctx(cls, **scope):
+    idents = [{"role": "customer-a"}, {"role": "customer-b"}, {"role": "admin", "privileged": True}]
+    return SimpleNamespace(plan=SimpleNamespace(id="T-001", cls=cls, title="t", cwe="CWE-89"),
+                           marker=("vrfaa11", "bb22"), scope={**SCOPE, **scope}, identities=idents)
+
+
+_EXPERIMENT = {"kind": "boolean", "path": "/search", "method": "GET", "input_location": "params", "input_name": "q",
+               "pointer": "/items", "baseline": "x", "positive": "x' OR 1=1--", "negative": "x' OR 1=2--"}
+
+
+def _injection():
+    """A boolean experiment: baseline, true and false condition, baseline again; a target value with markup."""
+    queries = {2: "x", 3: "x' OR 1=1--", 4: "x' OR 1=2--", 5: "x"}
+    bodies = {2: '{"items":[{"id":1,"name":"a"}]}', 3: '{"items":[{"id":1,"name":"a"},{"id":2,"name":"<b>z</b>"}]}',
+              4: '{"items":[]}', 5: '{"items":[{"id":1,"name":"a"}]}'}
+    history = [_accepted(**_EXPERIMENT), *(_sent("/search", q=q) for q in queries.values())]
+    shown = [(n, _exchange("/search?" + urlencode({"q": q}), bodies[n])) for n, q in queries.items()]
+    return _role_ctx("injection"), history, shown
+
+
+def test_an_injection_image_shows_the_baseline_above_each_condition_and_how_the_answer_differs():
+    """VER-035: the normal request on top, the attack below it, the difference spelled out and highlighted."""
+    ctx, history, shown = _injection()
+    roles = poc.step_roles(ctx, history, shown)
+    assert roles == {2: ("normal", "baseline input"), 3: ("attack", "true condition"),
+                     4: ("attack", "false condition"), 5: ("normal", "baseline input")}
+    first, second = poc.panels(shown, roles)
+    assert [n for n, _ in first] == [2, 3] and [n for n, _ in second] == [5, 4]
+    page, _ = poc.exchange_document(ctx, history, first, "confirmed", "evidence/T-001-poc.har", comparison=shown)
+    assert page.index("<span class=role>Normal request</span>baseline input · Step 2") < page.index(
+        "<span class=role>Attack</span>true condition · Step 3")
+    assert ("Compared with the normal request in step 2: same status 200; /items has 1 entry there and 2 entries "
+            "here, 1 of them not in the normal answer.") in page
+    assert "<span class=tag>answer differs ▸</span><mark>/items: 2 entries (normal request: 1 entry)</mark>" in page
+    assert "+ [1] id 2 · name &quot;&lt;b&gt;z&lt;/b&gt;&quot;" in page and "<b>z</b>" not in page
+    assert "Attack: step 4 · false condition · as anonymous → 200 · /items: 0 entries" in page     # the overview
+    page, _ = poc.exchange_document(ctx, history, second, "confirmed", "evidence/T-001-poc.har", comparison=shown)
+    assert "Compared with the normal request in step 5: same status 200; /items has 1 entry there and 0 " in page
+    assert "+ not in the normal answer" not in page                                 # no entry is new
+
+
+def test_steps_outside_the_declared_comparison_get_no_role():
+    """Nothing is guessed: another resource, an unknown control value or no accepted plan leaves a step unnamed."""
+    ctx, history, shown = _injection()
+    history[2] = _sent("/search", q="x' OR 3=3--")
+    assert 3 not in poc.step_roles(ctx, history, shown)
+    assert poc.step_roles(ctx, [{"tool": "plan_test", "args": _EXPERIMENT, "result": {"error": "no"}},
+                                *history[1:]], shown) == {}
+    page, _ = poc.exchange_document(ctx, [{}, *history[1:]], shown[:2], "inconclusive", None)
+    assert "Comparison: step 2: anonymous → 200" in page and "class=role" not in page
+
+
+def test_an_access_image_puts_the_owners_read_above_the_other_accounts():
+    ctx = _role_ctx("access-control")
+    history = [_accepted(kind="access-control", owner="customer-a", path="/rest/basket/{id}"),
+               _sent("/rest/basket", "customer-a", "POST"), _sent("/rest/basket/7", "customer-a"),
+               _sent("/rest/basket/7"), _sent("/rest/basket/7", "customer-b"), _sent("/rest/basket/8", "customer-b")]
+    shown = [(n, _exchange(h["args"]["path"], '{"id":7,"UserId":1}', h["args"].get("role"), h["args"]["method"]))
+             for n, h in enumerate(history[1:], 2)]
+    roles = poc.step_roles(ctx, history, shown)
+    assert roles == {2: ("normal", "owner creates the record"), 3: ("normal", "owner reads its record"),
+                     4: ("control", "without login"), 5: ("attack", "another account reads the owner's record")}
+    assert [[n for n, _ in p] for p in poc.panels(shown, roles)] == [[3, 5], [2, 4], [6]]   # nothing left out
+    assert poc.difference(ctx, history, shown[3][1], shown[1]) == (
+        "Compared with the normal request in step 3: same status 200, the identical answer.")
+
+
+def test_a_comparison_claims_no_identical_answer_it_did_not_record():
+    ctx, history = _role_ctx("access-control"), []
+    a, b = _exchange("/x", "same"), _exchange("/x", "same")
+    a["response"]["content"]["_truncated"] = True
+    assert poc.difference(ctx, history, a, (1, b)).endswith("same status 200, the identical answer as far as recorded.")
+    for e in (a, b):
+        e["response"]["content"] = {"size": 9, "mimeType": "application/json", "_omitted": "finding body limit"}
+    assert poc.difference(ctx, history, a, (1, b)).endswith("the answers are not recorded to compare.")
+    a["response"]["content"]["_sha256"] = b["response"]["content"]["_sha256"] = "ab" * 32
+    assert poc.difference(ctx, history, a, (1, b)).endswith("the identical answer.")
+    assert poc.difference(ctx, history, _exchange("/x", status=403), (1, b)).startswith(
+        "Compared with the normal request in step 1: status 403 instead of 200")
+
+
+def test_a_change_is_the_attack_and_the_owners_next_read_its_effect():
+    ctx = _role_ctx("access-control")
+    history = [_accepted(kind="access-control", owner="customer-a", path="/rest/basket/{id}",
+                         change={"method": "PUT", "path": "/rest/basket/{id}"}),
+               _sent("/rest/basket", "customer-a", "POST"), _sent("/rest/basket/7", "customer-a"),
+               _sent("/rest/basket/7", "customer-b", "PUT"), _sent("/rest/basket/7", "customer-a")]
+    shown = [(n, _exchange(h["args"]["path"], role=h["args"].get("role"), method=h["args"]["method"]))
+             for n, h in enumerate(history[1:], 2)]
+    roles = poc.step_roles(ctx, history, shown)
+    assert [roles[n][0] for n in (2, 3, 4, 5)] == ["normal", "normal", "attack", "effect"]
+    assert [[n for n, _ in p] for p in poc.panels(shown, roles)] == [[3, 4], [3, 5], [2]]
+
+
+def test_a_request_with_the_payload_is_the_attack_and_one_without_it_the_normal_request():
+    ctx = _role_ctx("open-redirect")
+    history = [_sent("/go", to="https://vrfaa11bb22.invalid/"), _sent("/go", to="/home")]
+    shown = [(1, _exchange("/go")), (2, _exchange("/go"))]
+    roles = poc.step_roles(ctx, history, shown)
+    assert roles == {1: ("attack", "carries the payload"), 2: ("normal", "without the payload")}
+    assert [n for n, _ in poc.by_role(shown, roles)] == [2, 1]
+
+
 def test_screenshots_show_times_to_the_second():
     assert poc.shown_time("2026-11-08T13:24:45.623716Z") == "2026-11-08T13:24:45Z"
     assert poc.shown_time("2026-11-08T13:24:45.5+01:00") == "2026-11-08T13:24:45+01:00"
@@ -560,6 +685,10 @@ def test_report_shows_the_proof_of_concept_as_raw_http_that_target_content_canno
     block = md.split("`````http\n", 1)[1].split("\n`````", 1)[0]
     assert "HTTP/1.1 200 OK" in block and block.index("HTTP/1.1") < block.index("HTTP/1.1 200 OK")
     assert "review before sharing" in md.split("## Summary")[0]
+    # The normal request first, then the attack with how its answer compares (VER-035).
+    assert (md.index("**Normal request · step 3** (allowed identity)")
+            < md.index("**Attack · step 2** (denied identity)"))
+    assert "Compared with the normal request in step 3: same status 200, the identical answer." in md
 
 
 _NOTES = json.dumps({"data": [{"id": i, "role": "customer", "note": "n" * 40} for i in range(30)]})

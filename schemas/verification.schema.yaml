@@ -367,6 +367,8 @@ properties:
                 required: [step, request, response]
                 properties:
                   step:       { type: integer }
+                  role:       { enum: [normal, control, attack, effect], description: What the step is in the test, where the plan or markers say so. }
+                  role_label: { type: string, description: The step's part in the comparison, e.g. "true condition". }
                   request:    { type: string }
                   response:   { type: string }
                   elapsed_ms: { type: [integer, "null"], description: How long the answer took. }

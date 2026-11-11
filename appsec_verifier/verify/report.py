@@ -38,7 +38,7 @@ from urllib.parse import quote
 import yaml
 
 from ..version_info import resource_root
-from .poc import TARGET_DATA_NOTE
+from .poc import ROLE_TITLES, TARGET_DATA_NOTE
 
 _VERDICT_LABEL = {
     "confirmed": "confirmed",
@@ -778,6 +778,9 @@ def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: b
     for shown in poc.get("shown") or []:
         s = parsed.get(shown["step"]) or {}
         title = f"**Step {_inline(shown['step'], 8)}**"
+        if shown.get("role") in ROLE_TITLES:     # the normal requests come first, then the attacks (VER-035)
+            title = (f"**{ROLE_TITLES[shown['role']]} · step {_inline(shown['step'], 8)}**"
+                     + (f" ({_inline(shown['role_label'], 80)})" if shown.get("role_label") else ""))
         if s.get("method"):
             title += (f" · {_code(s['method'] + ' ' + s['path'])} as {_inline(s['role'], 60)} → "
                       f"{_inline(s['answer'], 80)}")

@@ -38,6 +38,11 @@ redirect host and Location header, the marker file and its content, the input
 and answer that differ between injection requests, the session cookie's
 Set-Cookie line. Facts about a step, such as the page a browser check opened
 or the time of each answer, stand above it, in bold where they decide.
+Where the accepted test plan or the finding's payload says what a step is
+(`step_roles`), the image shows a normal request on top and the attack below
+it, with a line on how the attack's answer compares; an injection experiment's
+response shows the observed value, entries the normal answer lacks marked `+`.
+The report lists normal requests before attacks, with the same comparison.
 Response bodies and screenshots can show target data and are marked for
 review before sharing (VER-022).
 """
@@ -430,6 +435,280 @@ def _target(url: str) -> str:
     return (parts.path or "/") + ("?" + parts.query if parts.query else "")
 
 
+# ── what each shown step is in the test (VER-035) ────────────────────────────
+
+ROLE_TITLES = {"normal": "Normal request", "control": "Control", "attack": "Attack", "effect": "Effect"}
+_ROLE_ORDER = {kind: i for i, kind in enumerate(ROLE_TITLES)}
+_MISSING = object()
+_EXPERIMENT_ROLES = {"baseline": ("normal", "baseline input"), "positive": ("attack", "true condition"),
+                     "negative": ("attack", "false condition"),
+                     "positive_other": ("attack", "true condition, second form"),
+                     "negative_other": ("attack", "false condition, second form")}
+
+
+def _sink(plan: dict, args: dict):
+    """The value a request sent for the experiment's declared input, as the proof check reads it (VER-011)."""
+    location = {"path": "path_inputs", "query": "params"}.get(plan.get("input_location"),
+                                                               plan.get("input_location") or "params")
+    raw = args.get(location)
+    values = dict(raw) if isinstance(raw, dict) else {}
+    if location == "params":
+        values.update(parse_qsl((args.get("path") or "").partition("?")[2], keep_blank_values=True))
+    return values.get(plan.get("input_name"), _MISSING)
+
+
+def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[int, tuple[str, str]]:
+    """What each shown step is in the test, as (kind, label): `normal` (the baseline, the identity a resource
+    belongs to or a request without the finding's payload), `control` (a request without a role that must be
+    refused), `attack`, or `effect` (the owner's read after another account's change). Only the latest accepted
+    test plan, the declared test resource and the finding's markers decide; a step they do not place gets no
+    role, nothing is guessed (VER-035)."""
+    from ..agent.experiments import latest_plan, normal_roles, token
+
+    cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
+    _, plan = latest_plan(history)
+    steps = {n: history[n - 1] if 1 <= n <= len(history) else {} for n, _ in shown}
+    args = {n: h.get("args") or {} for n, h in steps.items()}
+    roles: dict[int, tuple[str, str]] = {}
+    if cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
+        for n, _ in shown:
+            sent = _sink(plan, args[n])
+            group = next((k for k in _EXPERIMENT_ROLES if k in plan and sent is not _MISSING
+                          and token(sent) == token(plan[k])), None)
+            if group == "positive" and plan["kind"] == "timing":
+                roles[n] = ("attack", "delay condition")
+            elif group:
+                roles[n] = _EXPERIMENT_ROLES[group]
+    elif cls == "access-control" and plan.get("kind") == "access-control":
+        role = {n: a.get("role") or None for n, a in args.items()}
+        method = {n: (a.get("method") or "GET").upper() for n, a in args.items()}
+        resource = next((r for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])
+                         if r.get("id") == plan.get("resource") and r.get("finding_id") == ctx.plan.id), None)
+        if resource is not None:
+            for n, _ in shown:
+                if args[n].get("path") != resource.get("path"):
+                    continue
+                if role[n] in resource.get("allowed_roles", []):
+                    roles[n] = ("normal", "allowed identity")
+                elif role[n] in resource.get("denied_roles", []):
+                    roles[n] = ("attack", "denied identity")
+                elif role[n] is None:
+                    roles[n] = ("control", "without login")
+        elif plan.get("owner") or plan.get("reference"):
+            owner = plan.get("owner") or plan.get("reference")
+            normal = set(normal_roles(getattr(ctx, "identities", None))) - {owner}
+            owner_paths = {args[n].get("path") for n, _ in shown if role[n] == owner and method[n] == "GET"}
+            changes = [n for n, _ in shown if role[n] in normal and method[n] in ("POST", "PUT", "PATCH", "DELETE")]
+            for n, _ in shown:
+                if role[n] == owner and method[n] != "GET" and plan.get("owner"):
+                    roles[n] = ("normal", "owner creates the record")
+                elif role[n] == owner and plan.get("change") and changes and n > min(changes):
+                    roles[n] = ("effect", "owner reads the record after the change")
+                elif role[n] == owner:
+                    roles[n] = ("normal", "owner reads its record" if plan.get("owner") else "privileged account")
+                elif args[n].get("path") not in owner_paths and n not in changes:
+                    continue        # another resource: not the comparison the plan declares
+                elif role[n] is None:
+                    roles[n] = ("control", "without login")
+                elif n in changes:
+                    roles[n] = ("attack", "another account changes the owner's record")
+                elif role[n] in normal:
+                    roles[n] = ("attack", "another account reads the owner's record" if plan.get("owner")
+                                else "normal account calls the privileged function")
+    elif cls == "session":
+        roles = {n: ("normal", "the session cookie as set") for n, _ in shown}
+    elif cls in ("xss", "open-redirect", "path-traversal", "ssrf"):
+        from ..agent.proof import redirect_host
+
+        marker_file = (getattr(ctx, "scope", None) or {}).get("marker_file") or {}
+        payload = {"xss": marker[0], "open-redirect": redirect_host(marker),
+                   "path-traversal": str(marker_file.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1],
+                   "ssrf": "".join(marker)}[cls]
+        if payload:
+            for n, _ in shown:
+                sent = unquote(json.dumps(args[n], ensure_ascii=False))
+                roles[n] = ("attack", "carries the payload") if payload in sent else (
+                    "normal", "without the payload")
+    return roles
+
+
+def by_role(shown: list[tuple[int, dict]], roles: dict[int, tuple[str, str]]) -> list[tuple[int, dict]]:
+    """The normal requests first, then controls, attacks and effects, each in the order sent; steps without a
+    role last (VER-035)."""
+    return sorted(shown, key=lambda s: (_ROLE_ORDER.get(roles.get(s[0], ("",))[0], len(_ROLE_ORDER)), s[0]))
+
+
+def _closest(test: tuple[int, dict], refs: list[tuple[int, dict]], used: set[int], roles) -> tuple[int, dict]:
+    """The normal request to show above `test`: the same request target first, then a normal request before a
+    control, an unused one before one already shown, the earlier one first."""
+    n, e = test
+    method, path = e["request"]["method"], urlsplit(e["request"]["url"]).path
+
+    def score(ref):
+        m, r = ref
+        same = (r["request"]["method"] == method) + 0
+        target = 0 if urlsplit(r["request"]["url"]).path == path else 1
+        return (target, -same, roles[m][0] != "normal", m in used, m)
+
+    return min(refs, key=score)
+
+
+def panels(shown: list[tuple[int, dict]], roles: dict[int, tuple[str, str]], limit: int = 3) -> list[list]:
+    """The exchange images (VER-035): each attack, one per label, below the normal request it is compared with;
+    then the other normal requests, controls and steps without a role. Two exchanges per image; without both
+    kinds, in role order."""
+    refs = [s for s in by_role(shown, roles) if roles.get(s[0], ("",))[0] in ("normal", "control")]
+    tests = [s for s in by_role(shown, roles) if roles.get(s[0], ("",))[0] in ("attack", "effect")]
+    if not refs or not tests:
+        ordered = by_role(shown, roles)
+        return [ordered[i:i + 2] for i in range(0, min(len(ordered), 2 * limit), 2)]
+    out, used, labels = [], set(), set()
+    for test in tests:
+        if roles[test[0]] in labels or len(out) == limit:
+            continue
+        labels.add(roles[test[0]])
+        ref = _closest(test, refs, used, roles)
+        used.add(ref[0])
+        out.append([ref, test])
+    rest = [s for s in refs if s[0] not in used] + [s for s in by_role(shown, roles) if s[0] not in roles]
+    out += [rest[i:i + 2] for i in range(0, len(rest), 2)][:limit - len(out)]
+    return out
+
+
+def compared_with(n: int, e: dict, shown: list[tuple[int, dict]], roles) -> tuple[int, dict] | None:
+    """The normal request an attack or effect is compared with, or None."""
+    if roles.get(n, ("",))[0] not in ("attack", "effect"):
+        return None
+    refs = [s for s in shown if roles.get(s[0], ("",))[0] == "normal"]
+    return _closest((n, e), refs, set(), roles) if refs else None
+
+
+def _json(e: dict):
+    try:
+        return json.loads(_text(e))
+    except (ValueError, RecursionError):
+        return _MISSING
+
+
+def observed(ctx, history: list[dict], e: dict):
+    """The value the injection experiment observes (its JSON pointer) in this redacted response, or _MISSING."""
+    from ..agent.experiments import latest_plan
+
+    _, plan = latest_plan(history)
+    pointer = plan.get("pointer") if getattr(ctx.plan, "cls", None) == "injection" else None
+    if not isinstance(pointer, str) or e["response"]["content"].get("_omitted"):
+        return _MISSING
+    value = _json(e)
+    try:
+        for part in pointer.split("/")[1:]:
+            part = part.replace("~1", "/").replace("~0", "~")
+            value = value[int(part)] if isinstance(value, list) else value[part]
+    except (KeyError, IndexError, ValueError, TypeError):
+        return _MISSING
+    return value
+
+
+def _brief(value) -> str:
+    if isinstance(value, list):
+        return f"{len(value)} entr{'y' if len(value) == 1 else 'ies'}"
+    if isinstance(value, dict):
+        return f"an object with {len(value)} field{'' if len(value) == 1 else 's'}"
+    return json.dumps(value, ensure_ascii=False)[:60]
+
+
+_ID_KEYS = ("id", "_id", "uuid", "key")
+_NAME_KEYS = ("name", "title", "email", "username", "label", "description", "comment", "message")
+
+
+def _row(item) -> str:
+    """One entry of an observed list in a line: its identifier and name, else its first two plain fields."""
+    if not isinstance(item, dict):
+        return json.dumps(item, ensure_ascii=False)[:80]
+    lower = {str(k).lower(): k for k in list(item)[:64]}
+    keys = [next((lower[k] for k in group if k in lower), None) for group in (_ID_KEYS, _NAME_KEYS)]
+    plain = [k for k in keys if k is not None and not isinstance(item[k], dict | list)]
+    if not plain:
+        plain = [k for k in list(item)[:32] if not isinstance(item[k], dict | list)][:2]
+    return " · ".join(f"{k} {json.dumps(item[k], ensure_ascii=False)[:50]}" for k in plain) or "{…}"
+
+
+_VIEW_ROWS = 8
+
+
+def _value_view(pointer: str, value, normal=_MISSING) -> tuple[str, list[tuple[str, str]]]:
+    """The observed value as lines for the image, and the line to mark: a list as one row per entry, `+` before
+    an entry the normal answer does not contain."""
+    from ..agent.experiments import token
+
+    differs = normal is not _MISSING and token(value) != token(normal)
+    head = f"{pointer}: {_brief(value)}" + (f" (normal request: {_brief(normal)})" if differs else "")
+    lines = [head]
+    if isinstance(value, list):
+        known = {token(v) for v in normal} if differs and isinstance(normal, list) else None
+        for i, item in enumerate(value[:_VIEW_ROWS]):
+            lines.append(f"{'+' if known is not None and token(item) not in known else ' '} [{i}] {_row(item)}")
+        if len(value) > _VIEW_ROWS:
+            lines.append(f"  … {len(value) - _VIEW_ROWS} more; full record in HAR")
+        if any(line.startswith("+") for line in lines):
+            lines.append("+ not in the normal answer")
+    elif isinstance(value, dict):
+        lines += [f"  {k}: {json.dumps(v, ensure_ascii=False)[:60]}" for k, v in list(value.items())[:_VIEW_ROWS]]
+    return "\n".join(lines), ([("answer differs", head)] if differs else [])
+
+
+def _leaves(value, path="", out=None):
+    out = {} if out is None else out
+    if len(out) >= 256:
+        return out
+    if isinstance(value, dict):
+        for k, v in list(value.items())[:64]:
+            _leaves(v, f"{path}/{k}", out)
+    elif isinstance(value, list):
+        for i, v in enumerate(value[:64]):
+            _leaves(v, f"{path}/{i}", out)
+    else:
+        out[path or "/"] = value
+    return out
+
+
+def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict]) -> str:
+    """How an attack's answer compares with the normal request's, in one sentence from the recorded answers."""
+    m, r = ref
+    start = f"Compared with the normal request in step {m}: "
+    a, b = e["response"]["status"], r["response"]["status"]
+    status = f"status {a} instead of {b}" if a != b else f"same status {a}"
+    mine, theirs = observed(ctx, history, e), observed(ctx, history, r)
+    if mine is not _MISSING and theirs is not _MISSING:
+        from ..agent.experiments import latest_plan, token
+
+        pointer = latest_plan(history)[1].get("pointer")
+        if token(mine) == token(theirs):
+            return start + f"{status}, the same {pointer} ({_brief(mine)})."
+        text = f"{status}; {pointer} has {_brief(theirs)} there and {_brief(mine)} here"
+        if isinstance(mine, list) and isinstance(theirs, list):
+            known = {token(v) for v in theirs}
+            new = sum(token(v) not in known for v in mine)
+            text += f", {new} of them not in the normal answer" if new else ""
+        return start + text + "."
+    ce, cr = e["response"]["content"], r["response"]["content"]
+    if ce.get("_omitted") or cr.get("_omitted"):      # no text to compare: a binary body only by its hash
+        same = ce.get("_sha256") and ce.get("_sha256") == cr.get("_sha256")
+        return start + f"{status}, " + ("the identical answer." if same else "the answers are not recorded to compare.")
+    if _text(e) == _text(r):
+        cut = ce.get("_truncated") or cr.get("_truncated")
+        return start + f"{status}, the identical answer" + (" as far as recorded." if cut else ".")
+    mine, theirs = _json(e), _json(r)
+    if isinstance(mine, dict | list) and isinstance(theirs, dict | list):
+        x, y = _leaves(mine), _leaves(theirs)
+        changed = [p for p in dict.fromkeys([*y, *x]) if x.get(p, _MISSING) != y.get(p, _MISSING)]
+        if not changed:
+            return start + f"{status}, the same JSON content."
+        examples = "; ".join(f"{p}: {_brief(y[p]) if p in y else 'absent'} → {_brief(x[p]) if p in x else 'absent'}"
+                             for p in changed[:2])
+        return start + f"{status}; {len(changed)} of {len(set(x) | set(y))} JSON values differ, e.g. {examples}."
+    return start + f"{status}; the answer differs ({len(_text(r))} → {len(_text(e))} characters)."
+
+
 def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
     """`text` as escaped HTML with what `needles` and `lines` name in <mark>, each a (label, what) pair: a
     string at each occurrence, a (region, context, token) from `_diff_token` once in the request line or the
@@ -535,16 +814,19 @@ def _report_body(ctx, e, body, marks) -> str:
     return _image_excerpt(body, marks, limit=1000)
 
 
-def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path):
+def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path, roles=None):
     req, res, lines, facts = _exchange_marks(ctx, history, n, entry, shown, highlight)
     response = _raw_response(entry, _focus(ctx, [e for _, e in shown], entry), har_path)
     headers, _, body = response.partition("\n\n")
     kept = [line for i, line in enumerate(headers.splitlines())
             if i == 0 or line.lower().startswith(("content-type:", "location:", "www-authenticate:", "set-cookie:"))]
     response = "\n".join(kept) + "\n\n" + _report_body(ctx, entry, body, res)
-    return {"request_excerpt": _code_excerpt(_image_request(entry, req), req),
+    ref = compared_with(n, entry, shown, roles or {})
+    role = {"role": roles[n][0], "role_label": roles[n][1]} if roles and n in roles else {}
+    return {**role, "request_excerpt": _code_excerpt(_image_request(entry, req), req),
             "response_excerpt": _code_excerpt(response, res, lines),
-            "facts": [fact for fact, decisive in facts if decisive]}
+            "facts": [fact for fact, decisive in facts if decisive]
+            + ([difference(ctx, history, entry, ref)] if ref else [])}
 
 
 def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]],
@@ -723,13 +1005,15 @@ def _json_fields(value, marks):
         f"{path}: {_image_excerpt(value, marks, limit=180)}" for _, path, value in chosen)
 
 
-def _image_response(ctx, e, marks, marked_lines):
+def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
     res = e["response"]
     lines = [f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()]
     keep = {"location", "www-authenticate", "set-cookie"}
     lines += [f"{h['name']}: {h['value']}" for h in res["headers"]
               if h["name"].lower() in keep or any(h["name"].lower() + ":" == prefix.lower()
                                                 for _, prefix in marked_lines)]
+    if view is not None:      # the experiment's observed value, already bounded
+        return _image_excerpt("\n".join(lines), limit=450) + "\n\n" + view
     text = _text(e)
     mime = res["content"].get("mimeType", "").lower()
     if "html" in mime:
@@ -760,7 +1044,35 @@ h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:16px;border-bottom:1px
 .cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:15px;color:#555}
 pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
 mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}.hit{display:inline-block;max-width:100%}
-.tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}"""
+.tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}
+section.normal{border:2px solid #2e7d32}section.control{border:2px solid #546e7a}
+section.attack{border:2px solid #b00020}section.effect{border:2px solid #e65100}
+.normal h2{background:#e8f5e9}.control h2{background:#eceff1}.attack h2{background:#fdecea}
+.effect h2{background:#fff3e0}
+.role{color:#fff;font:bold 14px sans-serif;text-transform:uppercase;padding:2px 8px;margin-right:8px;border-radius:3px}
+.normal .role{background:#2e7d32}.control .role{background:#546e7a}.attack .role{background:#b00020}
+.effect .role{background:#e65100}
+.diff{padding:6px 10px;border-bottom:1px solid #ccc;background:#fff8e1;font-weight:bold}"""
+
+
+def _overview(ctx, history: list[dict], shown: list[tuple[int, dict]], roles) -> str:
+    """One line per kind of step: its role, the steps, the identity, the status and the observed value."""
+    from ..agent.experiments import latest_plan
+
+    pointer = latest_plan(history)[1].get("pointer")
+    rows: dict[tuple, list[int]] = {}
+    for n, e in shown:
+        kind, label = roles.get(n, ("", ""))
+        value = observed(ctx, history, e)
+        seen = f" · {pointer}: {_brief(value)}" if value is not _MISSING else ""
+        key = (_ROLE_ORDER.get(kind, len(_ROLE_ORDER)), ROLE_TITLES.get(kind, "Other"), label,
+               e.get("_role") or "anonymous", e["response"]["status"], seen)
+        rows.setdefault(key, []).append(n)
+    lines = []
+    for (_, title, label, who, status, seen), ns in sorted(rows.items(), key=lambda row: (row[0][0], row[1][0]))[:8]:
+        steps = f"step{'s' if len(ns) > 1 else ''} {', '.join(map(str, ns[:6]))}{', …' if len(ns) > 6 else ''}"
+        lines.append(f"{title}: {steps}{' · ' + label if label else ''} · as {who} → {status}{seen}")
+    return "\n".join(lines)
 
 
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
@@ -769,6 +1081,8 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     response side by side per step, what the verdict rests on marked. Without `cited` they are the answered
     requests after the last test plan of a verdict that cites no step, and the header says so. Returns the page
     and the number of marks. Every recorded value is escaped; the page has no script."""
+    from ..agent.experiments import latest_plan
+
     cls = getattr(ctx.plan, "cls", None) or "finding"
     captured = shown[0][1].get("startedDateTime", "") if shown else ""
     head = (f"<b>AppSec Verifier · {html.escape(str(ctx.plan.id))} · {html.escape(cls)} · "
@@ -784,20 +1098,43 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
         "blocked-by-control": "The tested operation was refused with matched control evidence.",
         "not-reproducible": "Not reproduced in the cited attempts; this does not prove absence.",
     }.get(verdict, "No completed proof.")
-    overview = " | ".join(f"step {n}: {e.get('_role') or 'anonymous'} → {e['response']['status']}"
-                          for n, e in (comparison or shown)[:12])
-    head += "\n" + html.escape(interpretation) + "\nComparison: " + html.escape(overview)
+    everything = comparison or shown
+    roles = step_roles(ctx, history, everything)
+    head += "\n" + html.escape(interpretation)
+    if roles:
+        head += "\n" + html.escape(_overview(ctx, history, everything, roles))
+        kinds = {kind for kind, _ in roles.values()}
+        if kinds & {"normal", "control"} and kinds & {"attack", "effect"}:
+            head += "\nEach image shows a normal request on top and the attack compared with it below."
+    else:
+        overview = " | ".join(f"step {n}: {e.get('_role') or 'anonymous'} → {e['response']['status']}"
+                              for n, e in everything[:12])
+        head += "\nComparison: " + html.escape(overview)
     head += "\nSelected excerpts; routine headers and unrelated body content omitted. Full record in HAR."
+    pointer = latest_plan(history)[1].get("pointer")
     parts, total = [f"<header>{head}</header>"], 0
-    for n, e in shown[:6]:
-        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, comparison or shown, highlight)
+    for n, e in by_role(shown, roles)[:6]:
+        req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight)
+        # Compared with the normal request in the same image, else the closest one of the finding.
+        ref = compared_with(n, e, shown, roles) or compared_with(n, e, everything, roles)
+        view, value = None, observed(ctx, history, e)
+        if value is not _MISSING:
+            view, view_lines = _value_view(pointer, value, observed(ctx, history, ref[1]) if ref else _MISSING)
+            res_marks = [m for m in res_marks if m[0] != "answer differs"]    # the view shows the difference
+            res_lines = [*res_lines, *view_lines]
         req_html, a = _marked(_image_request(e, req_marks), req_marks)
-        res_html, b = _marked(_image_response(ctx, e, res_marks, res_lines), res_marks, res_lines)
+        res_html, b = _marked(_image_response(ctx, e, res_marks, res_lines, view), res_marks, res_lines)
         fact_html = " · ".join(f"<b>{html.escape(t)}</b>" if decides else html.escape(t) for t, decides in facts)
         total += a + b
         who = html.escape(e.get("_role") or "anonymous")
-        parts.append(f"<section><h2>Step {n} · {html.escape(e['request']['method'])} as {who} → "
+        kind, label = roles.get(n, ("", ""))
+        banner = (f"<span class=role>{html.escape(ROLE_TITLES[kind])}</span>{html.escape(label)} · "
+                  if kind else "")
+        diff = difference(ctx, history, e, ref) if ref else ""
+        parts.append(f"<section{' class=' + kind if kind else ''}><h2>{banner}Step {n} · "
+                     f"{html.escape(e['request']['method'])} as {who} → "
                      f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"
+                     + (f"<div class=diff>{html.escape(diff)}</div>" if diff else "")
                      + (f"<div class=facts>{fact_html}</div>" if facts else "")
                      + f"<div class=cols><div><h3>Request</h3><pre>{req_html}</pre></div>"
                      f"<div><h3>Response</h3><pre>{res_html}</pre></div></div></section>")
@@ -823,8 +1160,8 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
                          highlight, *, cited: bool = True) -> list[dict]:
     shots = []
     # Two exchanges per panel preserve the comparison without a long full-page image.
-    for start in range(0, min(len(shown), 6), 2):
-        page, marked = exchange_document(ctx, history, shown[start:start + 2], verdict, har_path,
+    for panel in panels(shown, step_roles(ctx, history, shown)):
+        page, marked = exchange_document(ctx, history, panel, verdict, har_path,
                                          highlight, cited=cited, comparison=shown)
         visible = _VisibleText()
         visible.feed(page)
@@ -909,13 +1246,15 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     har_path = har[0]["path"] if har else None
     shown_entries = [(s["step"], _shown_entry(s)) for s in steps if s["decisive"]]
     shown_entries = [(n, e) for n, e in shown_entries if e is not None]
+    roles = step_roles(ctx, history, shown_entries)
+    shown_entries = by_role(shown_entries, roles)       # the normal requests before the attacks (VER-035)
     others = [e for _, e in shown_entries]
     result.poc = {
         "file": har_path,
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
         "shown": [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
                    "response": _raw_response(e, _focus(ctx, others, e), har_path),
-                   **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path)}
+                   **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path, roles)}
                   for n, e in shown_entries],
     }
     shots: list[dict] = []
