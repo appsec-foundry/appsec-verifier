@@ -16,7 +16,7 @@ from test_experiments import STRATEGY, plan
 from appsec_verifier.agent.loop import AgentProbe
 from appsec_verifier.agent.session_proof import cookie_observations
 from appsec_verifier.loader import plans_from
-from appsec_verifier.planning import dependency_order, expand_variants, severity_order, supplement
+from appsec_verifier.planning import dependency_order, expand_variants, severity_order, supplement, variant_key
 from appsec_verifier.tools.browser import execution_context
 from appsec_verifier.verify.report import merge_reports, remaining_variants
 
@@ -103,6 +103,23 @@ def test_variants_keep_independent_coverage():
     old = report(variants[0])
     old["results"][0]["proof"]["contract"] = 2
     assert len(remaining_variants([p], old)) == 2
+
+
+def test_variants_that_need_no_write_run_first():
+    # VER-026: a write request or the capability state-change makes a variant wait for those that need no write;
+    # otherwise the assessment's order stays, and so does each variant's evidence id.
+    doc = {"threats": [{"id": "T-1", "cwe": "CWE-79", "evidence": {"file": "a.py", "line": 1}}]}
+    p = plans_from(doc)[0]
+    p.verification_context = {"variants": [
+        {"id": "stored", "request": {"method": "GET", "path": "/a"}, "required_capabilities": ["state-change"]},
+        {"id": "post", "request": {"method": "POST", "path": "/a"}},
+        {"id": "read", "request": {"method": "GET", "path": "/b"}},
+        {"id": "plain", "request": {"path": "/c"}},
+    ]}
+    expanded = expand_variants([p])
+    assert [v.variant_id for v in expanded] == ["read", "plain", "stored", "post"]
+    assert {v.variant_id: v.variant_digest for v in expanded} == {
+        v["id"]: variant_key(p, v) for v in p.verification_context["variants"]}
 
 
 def test_related_architecture_and_supplement_are_bounded():

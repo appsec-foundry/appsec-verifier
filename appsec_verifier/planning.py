@@ -226,13 +226,21 @@ def variant_key(plan, variant):
     return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
 
 
+def _needs_write(variant) -> bool:
+    """Whether a variant needs a write (VER-026): its request writes, or it lists the capability state-change."""
+    method = str((variant.get("request") or {}).get("method") or "GET").upper()
+    return method not in _READ_METHODS or "state-change" in (variant.get("required_capabilities") or [])
+
+
 def expand_variants(plans):
+    """One plan per variant. Within a finding, variants that need no write come first, otherwise in assessment
+    order, so a confirmation without a write leaves the others untested (VER-026, VER-039)."""
     out = []
     for p in plans:
         variants = p.verification_context.get("variants", [])
         if not variants:
             out.append(p)
-        for v in variants:
+        for v in sorted(variants, key=_needs_write):
             out.append(
                 replace(
                     p,

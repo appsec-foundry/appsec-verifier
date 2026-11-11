@@ -63,7 +63,7 @@ optional hardening.
   non-interactive mode the selection comes entirely from the invocation. An empty
   selection is reported, not silently treated as "verify everything".
   Findings the Verifier can confirm cheaply, XSS and SQL or NoSQL injection whose request the assessment names and a read can send, form the category `quick`. A severity selection also tests them whatever their severity, marked as added in the test plan; `--strict-severity` leaves them out, and `--category quick` selects them alone.
-  Findings are tested most severe first, with prerequisites before the findings that depend on them; within one severity, findings whose request the assessment names and that need no write come first. A run stopped by a limit has spent its budget on the highest-severity findings it could reach.
+  Findings are tested most severe first, with prerequisites before the findings that depend on them; within one severity, findings whose request the assessment names and that need no write come first. Within a finding, variants that need no write come before those that do, so a confirmation without a write leaves the others untested (VER-039, VER-052). A run stopped by a limit has spent its budget on the highest-severity findings it could reach.
 
 - **VER-006: Select only verifiable finding classes.** A finding is eligible for
   active verification only when its weakness can be probed against a running
