@@ -380,7 +380,7 @@ def _closing() -> str:
 
 
 def _injection_rules() -> str:
-    """Injection proof rules (VER-011, VER-044, VER-048, VER-049)."""
+    """Injection proof rules (VER-011, VER-044, VER-048, VER-049, VER-053)."""
     return (
         "The supported injection checks need comparable successful responses; a status change alone never proves "
         "injection, except the auth-artifact form below. "
@@ -403,6 +403,14 @@ def _injection_rules() -> str:
         "An intended calculator or query language is not an injection vulnerability. "
         "SQL confirmation needs sql_template with exactly one {{predicate}} placeholder at the SQL predicate "
         "position, e.g. known' AND {{predicate}} -- . The tool generates complementary fresh true/false pairs. "
+        "Two further forms make the proof clearer. For a returned marker, give sql_marker with a prefix of "
+        "punctuation closing the current literal and parentheses, the UNION column count and the marker column; "
+        "the Verifier builds the UNION and its own marker constant, and that marker returning through the query "
+        "channel proves a read primitive without reading a real column. For a backend engine error, set "
+        "error_probe true (SQL, XPath or NoSQL; LDAP keeps its result-set contrast): the Verifier sends a "
+        "syntax-breaking and a balanced control, and only the break raising an engine error confirms. For SQL and "
+        "XPath add a baseline it appends the break to; the error text stays owner-only, so rely on the "
+        "engine_error field each control reports. "
         "When a read plan is accepted the Verifier runs its controls at once, in one step and without another "
         "model call, and reports whether the proof holds and which steps carry it; then submit_verdict citing "
         "those steps. Controls you choose yourself, without a template, run the same way on a read and can "

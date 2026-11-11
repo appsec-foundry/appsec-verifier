@@ -390,3 +390,49 @@ def test_results_are_structured_and_measurements_survive_excerpt_bounding():
     assert PLAN_SCHEMA["additionalProperties"] is False
     proposal = {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 1, 2, 2]}}
     assert check_action(proposal)["verdict"]["verdict"] == "inconclusive"
+
+
+# ── VER-053: engine-error classification and the Verifier-built UNION ──────────
+
+
+@pytest.mark.parametrize("body", [
+    'unrecognized token: "\'))"',                               # SQLite, the stray quote
+    'near "UNION": syntax error',                               # SQLite, an unbalanced UNION
+    "You have an error in your SQL syntax near '...'",          # MySQL
+    "syntax error at or near \"'\"",                            # PostgreSQL
+    "ORA-00933: SQL command not properly ended",               # Oracle
+    '{"errmsg":"Regular expression is invalid: missing )"}',    # MongoDB $regex
+    "net.sf.saxon.trans.XPathException: Invalid XPath",         # XPath / Saxon
+])
+def test_engine_error_signature_catches_each_engine(body):
+    from appsec_verifier.agent.experiments import engine_error_signature
+
+    assert engine_error_signature(body) is True
+
+
+@pytest.mark.parametrize("body", [
+    "Internal Server Error",                                    # a generic 500
+    "Bad Request",                                              # input validation
+    '{"error":"Invalid email or password."}',                  # an ordinary application error
+    "",                                                        # no body
+    '{"data":[1,2,3]}',                                         # a normal success body
+])
+def test_a_generic_failure_is_not_an_engine_error(body):
+    from appsec_verifier.agent.experiments import engine_error_signature
+
+    assert engine_error_signature(body) is False
+
+
+def test_marker_controls_builds_only_null_and_a_concatenated_marker():
+    """VER-053: the Verifier owns the SELECT list, so no FROM or real column can be injected, and each marker is a
+    concatenation the database computes (an echo cannot reproduce the joined value)."""
+    from appsec_verifier.agent.experiments import marker_controls
+
+    plan = {"sql_marker": {"prefix": "'))", "columns": 3, "column": 1, "comment": "-- "}}
+    out = marker_controls(plan)
+    for control in (out["positive"], out["negative"]):
+        assert control.startswith("'))") and "UNION SELECT NULL," in control and control.endswith("-- ")
+        assert "FROM" not in control.upper() and "'||'" in control
+    assert out["markers"]["positive"] != out["markers"]["negative"]
+    # The joined marker (what the database computes) is not present verbatim in the sent payload.
+    assert out["markers"]["positive"] not in out["positive"]

@@ -1,5 +1,5 @@
 """The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
-VER-043, VER-046, VER-047).
+VER-043, VER-046, VER-047, VER-053).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
 when a control meets a server error; a write plan's controls run only when the agent asks with send_controls.
@@ -51,11 +51,17 @@ def _control_failed(tools, result: dict) -> bool:
     """Whether a generated control's answer stops the experiment (VER-011): a transport error or a server error
     always; for the response-field form any non-2xx answer, since its proof needs comparable successful
     responses. An auth-artifact control (VER-049) expects 401 or 403 from its false controls, so only an error
-    or a 5xx stops it."""
+    or a 5xx stops it. An engine-error control (VER-053) is meant to raise an engine error, so a 5xx that carries
+    the engine-error class does not stop it; a transport error or a 5xx without that class still does."""
     status = result.get("status", 0)
+    experiment = getattr(tools, "_experiment", None) or {}
+    if experiment.get("error_probe"):
+        if result.get("error"):
+            return True
+        return not (result.get("engine_error") is True or (isinstance(status, int) and 200 <= status < 300))
     if result.get("error") or not isinstance(status, int) or status >= 500:
         return True
-    if (getattr(tools, "_experiment", None) or {}).get("auth_artifact"):
+    if experiment.get("auth_artifact"):
         return False
     return not 200 <= status < 300
 

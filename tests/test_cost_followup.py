@@ -473,3 +473,150 @@ def test_own_controls_on_a_write_are_never_sent_by_the_verifier(tmp_path):
     assert sent == []
     errors = [h["result"].get("error", "") for h in script.history if h.get("tool") == "send_controls"]
     assert errors and "not a challenge" in errors[0]
+
+
+# ── VER-053: returned marker and engine-error forms ───────────────────────────
+
+
+def _inj_ctx(tmp_path, target, *, cwe="CWE-89", method="GET", path="/rest/products/search",
+             safe=True, read_only=True):
+    ctx = _ctx(tmp_path, target, safe=safe, read_only=read_only)
+    ctx.plan = replace(ctx.plan, cls="injection", cwe=cwe, instance="routes/search.ts:23",
+                       endpoints=(Endpoint(method, path, None),))
+    return ctx
+
+
+def _marker_plan(**extra):
+    return {"tool": "plan_test", "args": {
+        "kind": "boolean", "hypothesis": "The term sits in two parentheses; a UNION returns a chosen value",
+        "path": "/rest/products/search", "input_location": "params", "input_name": "q",
+        "sql_marker": {"prefix": "'))", "columns": 1, "column": 0, "comment": "-- "}, **extra}}
+
+
+def _error_plan(**extra):
+    return {"tool": "plan_test", "args": {
+        "kind": "boolean", "hypothesis": "The term is concatenated; a stray quote breaks the query",
+        "path": "/rest/products/search", "input_location": "params", "input_name": "q",
+        "baseline": "zzz", "error_probe": True, **extra}}
+
+
+def test_returned_marker_confirms_through_the_query_channel(tmp_path):
+    """VER-053: a UNION the Verifier builds returns its own constant, proving a read primitive. The marker is a
+    concatenation the database computes, so an echo of the payload could not reproduce it."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _search_target(sent))
+    script = Script([_marker_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    assert any("UNION SELECT" in q for q in sent) and not any("FROM" in q.upper() for q in sent)
+
+
+def _echo_target(sent):
+    """Reflects the query term verbatim but runs no SQL, so the joined marker never appears."""
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "")
+        sent.append(q)
+        return Resp(200, json.dumps({"query": q, "data": []}))
+
+    return target
+
+
+def test_an_echo_without_execution_does_not_confirm_the_marker_form(tmp_path):
+    """Refused case: the payload is reflected, but the concatenated marker is never computed, so no confirmation."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _echo_target(sent))
+    script = Script([_marker_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict != "confirmed"
+
+
+def test_engine_error_confirms_sql_injection(tmp_path):
+    """VER-053: a stray quote raises a database engine error that the balanced control does not."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _search_target(sent))
+    script = Script([_error_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    assert "zzz'" in sent and "zzz''" in sent                 # the break and the balanced control
+
+
+def test_engine_error_text_is_withheld_from_the_model(tmp_path):
+    """VER-053/VER-016: the model sees only the engine-error class, never the error text."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _search_target(sent))
+    script = Script([_error_plan(), _confirm])
+    AgentProbe("injection", lambda: script).run(ctx)
+    controls = [h["result"] for h in script.history if h.get("experiment")]
+    assert any(c.get("engine_error") is True for c in controls)
+    assert all("body withheld" in c.get("body_excerpt", "") for c in controls)
+    assert not any("unrecognized token" in c.get("body_excerpt", "") for c in controls)
+
+
+def _generic_500_target(sent):
+    """A plain 500 with no engine detail, as a WAF or a generic error handler returns."""
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "")
+        sent.append(q)
+        if q.count("'") % 2 == 1:
+            return Resp(500, "Internal Server Error")
+        return Resp(200, json.dumps({"data": []}))
+
+    return target
+
+
+def test_a_generic_failure_does_not_confirm_the_engine_error_form(tmp_path):
+    """Refused case: a 500 without an engine-error signature is not proof; input validation or a WAF look like it."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _generic_500_target(sent))
+    script = Script([_error_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict != "confirmed"
+
+
+def _nosql_target(sent):
+    """A Mongo-style endpoint: an invalid $regex (an unclosed group) raises an engine error, a valid one does not."""
+    def target(m, u, h, **kw):
+        val = (kw.get("json") or {}).get("q")
+        sent.append(val)
+        if isinstance(val, dict) and str(val.get("$regex", "")).startswith("("):
+            return Resp(500, json.dumps({"errmsg": "Regular expression is invalid: missing )", "code": 51091}))
+        return Resp(200, json.dumps({"data": []}))
+
+    return target
+
+
+def test_engine_error_confirms_nosql_injection(tmp_path):
+    """VER-053: the engine-error form is not SQL-only; a NoSQL operator injection confirms the same way. On a POST
+    write the controls carry the finding marker, so they stay attributable (VER-014)."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _nosql_target(sent), cwe="CWE-943", method="POST", path="/rest/user/find",
+                   safe=False, read_only=False)
+    ctx.marker = (MARK, "bb")                                  # a POST write must carry the finding marker
+    plan = {"tool": "plan_test", "args": {"kind": "boolean", "hypothesis": "q is a Mongo operator field",
+            "path": "/rest/user/find", "method": "POST", "input_location": "json", "input_name": "q",
+            "error_probe": True}}
+    script = Script([plan, {"tool": "send_controls", "args": {}}, _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    assert all(isinstance(v, dict) and MARK in v.get("$regex", "") for v in sent)   # every write is attributable
+
+
+def _xpath_target(sent):
+    """An XPath endpoint: an unbalanced quote raises a parser error, a balanced one does not."""
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "")
+        sent.append(q)
+        if q.count("'") % 2 == 1:
+            return Resp(500, "net.sf.saxon.trans.XPathException: Invalid XPath expression")
+        return Resp(200, json.dumps({"data": []}))
+
+    return target
+
+
+def test_engine_error_confirms_xpath_injection(tmp_path):
+    """VER-053: an XPath injection confirms through the same engine-error form."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _xpath_target(sent), cwe="CWE-643")
+    script = Script([_error_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True

@@ -1,5 +1,5 @@
 """The evidence the code requires before a finding counts as confirmed
-(VER-009 to VER-013, VER-022, VER-043).
+(VER-009 to VER-013, VER-022, VER-043, VER-053).
 
 The model's verdict alone never confirms a finding. A confirmed verdict cites
 its proof in `proof_steps`: step numbers of the loop's history, counted from 1
@@ -26,7 +26,12 @@ verdict still needs attempts after its plan:
   conditions twice, holding every other input and identity fixed. A selected
   JSON value reproduces the nonempty baseline only for the true condition.
   Timing needs alternating controls and two 2–5 s separations with identical
-  response bodies. Error codes, body hashes and reflections alone are no proof.
+  response bodies. Error codes, body hashes and reflections alone are no proof
+  for this form. Two further declared forms exist (VER-053): a Verifier-built
+  UNION whose own marker constant returns through the query channel, and a
+  syntax-breaking versus balanced pair whose break alone raises a backend
+  engine error (its class, not the error text, decides). All are checked in
+  experiments.injection_check.
 - open-redirect (VER-012): a cited http_request answered 301, 302, 303, 307 or
   308 whose `location` leads to the finding's redirect host,
   `<marker>.invalid`. The marker is random per finding, so only a target that

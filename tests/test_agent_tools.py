@@ -544,3 +544,37 @@ def test_a_plan_takes_at_most_three_template_candidates(tmp_path):
     assert validator.is_valid({**base, "sql_template": [template, template + " ", template + "  "]})
     assert not validator.is_valid({**base, "sql_template": [template + " " * n for n in range(4)]})
     assert not validator.is_valid({**base, "sql_template": []})
+
+
+# ── VER-053: the returned-marker and engine-error forms are gated by CWE ───────
+
+
+def test_returned_marker_and_engine_error_forms_are_gated_by_cwe(tmp_path):
+    from test_experiments import STRATEGY
+
+    def ctx_for(cwe):
+        c = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False)
+        c.plan.cls, c.plan.cwe = "injection", cwe
+        return c
+
+    marker = {"kind": "boolean", "hypothesis": "q is spliced into the product search SQL",
+              "path": "/rest/products/search", "method": "GET", "input_location": "params", "input_name": "q",
+              "strategy": STRATEGY, "sql_marker": {"prefix": "'))", "columns": 1, "column": 0}}
+    assert AgentTools(ctx_for("CWE-89")).plan_test(**marker)["accepted"] is True
+    with pytest.raises(ToolError, match="returned-marker proof applies only to boolean SQL"):
+        AgentTools(ctx_for("CWE-943")).plan_test(**marker)
+
+    err = {"kind": "boolean", "hypothesis": "a stray quote breaks the query",
+           "path": "/rest/products/search", "method": "GET", "input_location": "params", "input_name": "q",
+           "baseline": "zzz", "strategy": STRATEGY, "error_probe": True}
+    for cwe in ("CWE-89", "CWE-643"):                          # SQL and XPath share the string break
+        assert AgentTools(ctx_for(cwe)).plan_test(**err)["accepted"] is True
+    with pytest.raises(ToolError, match="NoSQL engine-error proof needs a JSON input"):
+        AgentTools(ctx_for("CWE-943")).plan_test(**err)
+    nosql = {k: v for k, v in err.items() if k != "baseline"}
+    nosql.update(method="POST", input_location="json", input_name="q")
+    accepted = AgentTools(ctx_for("CWE-943")).plan_test(**nosql)
+    assert accepted["accepted"] is True and accepted["experiment"]["positive"] == {"$regex": "(x"}
+    for refused in ("CWE-90", "CWE-78"):                       # LDAP and command keep their own forms
+        with pytest.raises(ToolError, match="engine-error proof applies"):
+            AgentTools(ctx_for(refused)).plan_test(**err)

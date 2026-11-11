@@ -39,7 +39,10 @@ content never reaches the model: it is replaced by "[marker-file]" in every
 tool result, and http_request reports `marker_read` instead. An SSRF probe's
 http_request reports `callback_hit` once the listener has seen the finding's
 marker. Every http_request reports `elapsed_ms`, the time httpx measured for
-the exchange, for a timing proof of injection (VER-011).
+the exchange, for a timing proof of injection (VER-011). For an engine-error
+injection experiment, http_request reports only the `engine_error` class and
+withholds the response body from the model, the recorded body and the hash; the
+error text stays in the owner-only proof of concept (VER-053, VER-016).
 """
 
 from __future__ import annotations
@@ -64,6 +67,7 @@ from .experiments import (
     PLAN_SCHEMA,
     access_methods,
     agent_controls,
+    engine_error_signature,
     generates_controls,
     normal_roles,
     pointer_value,
@@ -78,6 +82,8 @@ _HIDDEN = "[marker-file]"
 # VER-049: an auth-artifact probe's body may hold a fresh session token; only its presence (computed in code) is
 # kept, and this stands in for the body everywhere the model or the log could read it.
 _AUTH_ARTIFACT_NOTICE = "[auth-artifact probe: body withheld; the token value never reaches the model or logs]"
+_ERROR_NOTICE = ("[engine-error probe: body withheld; the error text is kept only in the owner-only proof of "
+                 "concept (VER-053)]")
 _CALLBACK_WAIT_S = 1.0
 _DRIVE = re.compile(r"^[A-Za-z]:")
 
@@ -322,10 +328,19 @@ class AgentTools:
                 needs_writes.append(f"{plan.get('method')} {plan.get('path')}, each control twice")
         if problems:
             raise ToolError("; ".join(problems))
-        from .experiments import callback_controls, expression_controls, ldap_controls, operator_controls, sql_controls
+        from .experiments import (
+            callback_controls,
+            error_controls,
+            expression_controls,
+            ldap_controls,
+            marker_controls,
+            operator_controls,
+            sql_controls,
+        )
 
         if any(
-            plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge")
+            plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge",
+                                  "sql_marker", "error_probe")
         ):
             # VER-011: an operator-declared injection_inputs entry pins the input for this finding; without one,
             # the agent chooses it from an assessed or independently derived request.
@@ -374,6 +389,28 @@ class AgentTools:
                 raise ToolError("SQL challenges apply only to boolean SQL injection experiments")
             try:
                 plan = sql_controls(plan)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+        if plan.get("sql_marker"):
+            # VER-053: the returned-marker form, a SQL read primitive proven with the Verifier's own constant.
+            if plan["kind"] != "boolean" or getattr(self.ctx.plan, "cwe", "") != "CWE-89":
+                raise ToolError("a returned-marker proof applies only to boolean SQL injection experiments (CWE-89)")
+            try:
+                plan = marker_controls(plan)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+        if plan.get("error_probe"):
+            # VER-053: the engine-error form covers SQL, XPath and NoSQL; LDAP keeps its result-set contrast.
+            cwe = getattr(self.ctx.plan, "cwe", "")
+            if plan["kind"] != "boolean" or cwe not in ("CWE-89", "CWE-643", "CWE-943"):
+                raise ToolError("the engine-error proof applies to boolean SQL, XPath or NoSQL injection "
+                                "(CWE-89, CWE-643, CWE-943)")
+            if cwe == "CWE-943" and plan.get("input_location") != "json":
+                raise ToolError("a NoSQL engine-error proof needs a JSON input")
+            if cwe in ("CWE-89", "CWE-643") and not isinstance(plan.get("baseline"), str | int | float):
+                raise ToolError("the engine-error proof needs a baseline value to append the break metacharacter to")
+            try:
+                plan = error_controls(plan, cwe, marker="".join(self.ctx.marker or ()))
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
         if plan.get("oob_template"):
@@ -995,12 +1032,21 @@ class AgentTools:
         redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
         redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
         experiment = getattr(self, "_experiment", None) or {}
+        # VER-053: classify the engine error from the real body before any body is withheld; the class, not the
+        # text, is the signal the proof uses.
+        error_probe = self.ctx.plan.cls == "injection" and experiment.get("error_probe")
+        engine_error = engine_error_signature(text) if error_probe else None
         auth_artifact_probe = self.ctx.plan.cls == "injection" and experiment.get("auth_artifact")
         auth_present = _auth_artifact_present(text, experiment.get("pointer")) if auth_artifact_probe else None
         if auth_artifact_probe:
             # The presence is kept; the body itself stands down everywhere it could be read: the recorded body
             # (read_response), the excerpt the model sees, and the hash (VER-049, VER-016).
             text = redacted = _AUTH_ARTIFACT_NOTICE
+        if error_probe:
+            # VER-053/VER-016: only the engine-error class reaches the model. The error text stays in the
+            # owner-only proof of concept (captured by _record above), never in the recorded body, the excerpt,
+            # the hash or read_response.
+            text = redacted = _ERROR_NOTICE
         identity_key = tuple(sorted(headers.items()))
         identity = self._identities.setdefault(identity_key, len(self._identities))
         cap = min(64000, max(0, 256000 - self._response_chars))
@@ -1029,6 +1075,8 @@ class AgentTools:
             out["session_cookies"] = session_cookies
         if auth_artifact_probe:
             out["auth_artifact"] = bool(auth_present)   # the code's observation; the token value is withheld
+        if error_probe:
+            out["engine_error"] = bool(engine_error)    # the code's observation; the error text is withheld
         plan = getattr(self, "_experiment", None) or {}
         if plan.get("change") and role == plan.get("owner") and isinstance(status, int) and 200 <= status < 300:
             # A change may name only a record the owner's write created (its answer's id) and the owner's read

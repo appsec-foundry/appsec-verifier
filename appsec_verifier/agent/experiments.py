@@ -1,8 +1,10 @@
-"""Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041)."""
+"""Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
+VER-053)."""
 
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from urllib.parse import parse_qsl, unquote
 
@@ -10,6 +12,25 @@ from ..planning import STRATEGY_SCHEMA
 from ..verification_context import planned_route, record_segments, route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
+
+# VER-053: tokens that mark a database, NoSQL or XPath engine error, as opposed to a generic server failure or a
+# validation message. Only membership of this class, never the error text, decides the engine-error proof.
+_ENGINE_ERROR = re.compile(
+    r"SQLITE_ERROR|unrecognized token|near \"[^\"]*\": syntax error|incomplete input|"
+    r"you have an error in your SQL syntax|SQL syntax|syntax error at or near|"
+    r"unterminated quoted string|quoted string not properly terminated|ORA-\d{5}|SQLSTATE\[|"
+    r"PG::|psycopg|sqlalchemy|SQLException|MySQL|MariaDB|PostgreSQL|"
+    r"XPathException|Invalid XPath|xmlXPathEval|XPST\d{4}|XPTY\d{4}|Saxon|"
+    r"MongoError|BSONError|E11000|\$regex|Regular expression is invalid|"
+    r"unknown (?:top level )?operator \$",
+    re.IGNORECASE,
+)
+
+
+def engine_error_signature(text: str) -> bool:
+    """VER-053: whether a response body carries a database, NoSQL or XPath engine error. Only this, not the error
+    text, decides the engine-error proof; the text stays owner-only evidence (agent/tools.py, VER-016)."""
+    return bool(text) and _ENGINE_ERROR.search(text) is not None
 
 
 def _candidates(template: dict) -> dict:
@@ -60,6 +81,24 @@ PLAN_SCHEMA = {
         "oob_template": {"type": "string", "minLength": 5, "maxLength": 3000},
         # VER-049: the observation is the presence of an authenticated artifact at `pointer`, not a field's value.
         "auth_artifact": {"type": "boolean"},
+        # VER-053: a Verifier-built UNION that returns a marker constant of the Verifier's own. The prefix only
+        # closes the current literal and parentheses (punctuation and whitespace); the Verifier owns the SELECT
+        # list, so no real column or row can be named.
+        "sql_marker": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["prefix", "columns", "column"],
+            "properties": {
+                "prefix": {"type": "string", "maxLength": 16, "pattern": "^[\\s'\")(]*$"},
+                "columns": {"type": "integer", "minimum": 1, "maximum": 20},
+                "column": {"type": "integer", "minimum": 0, "maximum": 19},
+                "comment": {"enum": ["-- ", "-- -", "#"]},
+                "concat": {"enum": ["||", "concat"]},
+            },
+        },
+        # VER-053: the engine-error form; the Verifier sends a syntax-breaking and a balanced control and observes
+        # whether a backend engine error results. True when present.
+        "error_probe": {"const": True},
         # VER-011: values for the request's other inputs, such as the password next to a login's user name, that
         # every generated control carries unchanged. An empty object gives none, like an absent one.
         "fixed": {
@@ -75,13 +114,19 @@ PLAN_SCHEMA = {
     },
     "allOf": [
         {
-            "if": {"properties": {"kind": {"const": "boolean"}}, "not": {"required": ["oob_template"]}},
+            "if": {"properties": {"kind": {"const": "boolean"}},
+                   "not": {"anyOf": [{"required": ["oob_template"]}, {"required": ["sql_marker"]},
+                                     {"required": ["error_probe"]}]}},
             "then": {"required": ["input_location", "input_name", "baseline", "pointer"]},
         },
         {
             "if": {"required": ["oob_template"]},
             "then": {"required": ["input_location", "input_name"]},
         },
+        # VER-053: the returned-marker and engine-error forms name the input but need no field pointer; the marker
+        # form needs no baseline (the generated UNION replaces the input value).
+        {"if": {"required": ["sql_marker"]}, "then": {"required": ["input_location", "input_name"]}},
+        {"if": {"required": ["error_probe"]}, "then": {"required": ["input_location", "input_name"]}},
         {
             "if": {"properties": {"kind": {"const": "timing"}}},
             "then": {"required": ["input_location", "input_name", "baseline", "positive"]},
@@ -95,9 +140,10 @@ PLAN_SCHEMA = {
 }
 
 def generates_controls(plan) -> bool:
-    """Whether the Verifier generates this accepted plan's controls itself (VER-011)."""
+    """Whether the Verifier generates this accepted plan's controls itself (VER-011, VER-053)."""
     return plan.get("kind") == "boolean" and bool(
-        plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge"))
+        plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
+        or plan.get("sql_marker") or plan.get("error_probe"))
 
 
 def agent_controls(plan) -> bool:
@@ -105,7 +151,7 @@ def agent_controls(plan) -> bool:
     result but never a confirmation (VER-011)."""
     return plan.get("kind") in ("boolean", "timing") and not any(
         plan.get(k) for k in ("sql_template", "expression_template", "operator_challenge", "predicate_template",
-                              "oob_template"))
+                              "oob_template", "sql_marker", "error_probe"))
 
 
 def confirming_form(cwe, location) -> str | None:
@@ -159,6 +205,47 @@ def sql_controls(plan):
         "negative_other": f"({b}<>{b})",
     }
     return {**plan, **{k: template.replace("{{predicate}}", v) for k, v in predicates.items()}}
+
+
+def marker_controls(plan):
+    """VER-053: a Verifier-built UNION that returns a constant marker the Verifier chose, so a returned marker
+    proves a read primitive without reading any real column or row. The prefix (punctuation and whitespace only,
+    enforced by the schema) closes the current literal and parentheses; the Verifier owns the SELECT list, which
+    is NULLs and one concatenated marker, so no FROM or real column can be added. Each marker is two halves the
+    database concatenates, so an echo of the sent payload cannot reproduce the joined value."""
+    m = plan["sql_marker"]
+    prefix, columns, column = m["prefix"], m["columns"], m["column"]
+    if column >= columns:
+        raise ValueError("the marker column is outside the declared column count")
+    comment, concat = m.get("comment", "-- "), m.get("concat", "||")
+
+    def payload(h1, h2):
+        cell = f"'{h1}'||'{h2}'" if concat == "||" else f"CONCAT('{h1}','{h2}')"
+        cols = [cell if i == column else "NULL" for i in range(columns)]
+        return f"{prefix} UNION SELECT " + ",".join(cols) + f" {comment}"
+
+    a, b = (secrets.token_hex(6), secrets.token_hex(6)), (secrets.token_hex(6), secrets.token_hex(6))
+    return {
+        **plan,
+        "positive": payload(*a),
+        "negative": payload(*b),
+        "markers": {"positive": "".join(a), "negative": "".join(b)},
+    }
+
+
+def error_controls(plan, cwe, marker=""):
+    """VER-053: complementary controls for the engine-error form. A syntax-breaking control (an unescaped
+    metacharacter for a string context, or an invalid operator for NoSQL) should raise a backend engine error
+    that a balanced control does not. The error class, classified in code (engine_error_signature), is the
+    signal; the error text never reaches the model (VER-016). On a write the controls carry the finding marker,
+    so the request stays attributable (VER-014); the NoSQL break stays an unclosed group either way."""
+    if cwe in ("CWE-89", "CWE-643"):
+        base = str(plan.get("baseline", ""))
+        return {**plan, "positive": base + "'", "negative": base + "''"}
+    if cwe == "CWE-943":
+        tag = marker or "x"
+        return {**plan, "positive": {"$regex": "(" + tag}, "negative": {"$regex": tag}}
+    raise ValueError("the engine-error form covers SQL, XPath and NoSQL injection")
 
 
 def operator_controls(plan):
@@ -264,6 +351,14 @@ def observation(ctx, step, pointer):
     return pointer_value(response["body"], pointer)
 
 
+def body_of(ctx, step) -> str:
+    """The whole recorded response body of a step, for the returned-marker membership check (VER-053)."""
+    response = getattr(ctx, "responses", {}).get(step)
+    if not response or not response.get("complete"):
+        raise ValueError("recorded response unavailable or truncated")
+    return response["body"]
+
+
 def experiment_groups(history, cited):
     start, plan = latest_plan(history)
     if not start:
@@ -314,6 +409,16 @@ def injection_check(ctx, history, cited):
     short = [f"{name} {len(group)} of 2" for name, group in groups.items() if len(group) < 2]
     if short:
         return ("repeat every declared control at least twice using distinct requests; so far " + ", ".join(short))
+    if plan.get("error_probe"):
+        # VER-053: the engine-error form expects the break control to fail, so it precedes the uniform-status
+        # rule. The break must raise a backend engine error (classified in code) that the balanced control does
+        # not; a generic failure or a validation message is not that class.
+        if not all(r.get("engine_error") is True for _, r in groups.get("positive", [])):
+            return ("the syntax-breaking control did not raise a backend engine error; a generic failure or a "
+                    "validation message is not proof")
+        if any(r.get("engine_error") for _, r in groups.get("negative", [])):
+            return "the balanced control also raised an engine error, so the break is not what caused it"
+        return None
     statuses = {r["status"] for group in groups.values() for _, r in group}
     if len(statuses) != 1 or not all(200 <= s < 300 for s in statuses):
         # A login-bypass injection flips 401 to 200; that is proven with the auth-artifact form, not here.
@@ -322,6 +427,27 @@ def injection_check(ctx, history, cited):
             return ("the controls flip the response status (e.g. 401 to 200); that is a login-bypass proof: "
                     "declare the plan with auth_artifact true and pointer at the token field, not a response field")
         return "error/status changes alone do not prove injection; obtain comparable successful responses"
+    if plan.get("sql_marker"):
+        # VER-053: each control's own generated marker (the concatenation the database computes, which an echo of
+        # the sent payload cannot reproduce) returns in its response and not in the complementary one.
+        markers = plan.get("markers", {})
+        mp, mn = markers.get("positive", ""), markers.get("negative", "")
+        if not mp or not mn:
+            return "the generated markers are missing from the plan"
+        try:
+            pos_bodies = [body_of(ctx, n) for n, _ in groups.get("positive", [])]
+            neg_bodies = [body_of(ctx, n) for n, _ in groups.get("negative", [])]
+        except ValueError:
+            return "the returned-marker observation is missing or incomplete"
+        if not pos_bodies or not neg_bodies:
+            return "cite the marker-returning control and its complementary control"
+        if not all(mp in b for b in pos_bodies):
+            return "the generated marker did not return through the query channel for its control"
+        if any(mp in b for b in neg_bodies) or any(mn in b for b in pos_bodies):
+            return "a marker returned for the complementary control too, so it is not driven by the injection"
+        if not all(mn in b for b in neg_bodies):
+            return "the complementary marker did not return for its control"
+        return None
     if plan["kind"] == "timing":
         fast, slow = groups["baseline"], groups["positive"]
         order = ["baseline" if n in {s for s, _ in fast} else "positive" for n in sorted(cited)]
