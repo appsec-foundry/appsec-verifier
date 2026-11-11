@@ -209,6 +209,20 @@ def test_xss_execution_counts_only_on_the_planned_route(checked_path, verdict):
         assert "no browser_check saw the marker execute on the finding's route /#/search?q=<test>" in res.rationale
 
 
+@pytest.mark.parametrize("checked_path, broke, label", [
+    ("/#/search?q=<svg/onload=x>", True, "indicative: breaks HTML context"),
+    ("/#/search?q=<svg/onload=x>", False, "indicative, not executed"),
+    ("/#/score-board?q=<svg/onload=x>", True, "indicative, not executed"),   # a break on another route
+])
+def test_a_markup_break_without_execution_stays_indicative(checked_path, broke, label):
+    """VER-009: a marker that broke out of its HTML context but did not execute is a stronger indicative signal,
+    never a confirmation; only a break on the finding's route counts."""
+    plan, check = _xss_history(checked_path)
+    check["result"] = {"executed": False, "context_verified": False, "markup_break": broke, "evidence": []}
+    res = _check("xss", [plan, check], [2], marker=("m1", "m2"))
+    assert res.verdict == "inconclusive" and res.rationale.startswith(label + ":")
+
+
 def test_an_execution_before_the_latest_plan_counts_and_a_missing_assumption_blocks_nothing():
     """VER-043: a plan revised after the browser saw the marker execute does not discard the execution."""
     plan, check = _xss_history("/#/search?q=<svg/onload=alert('m1'.concat('m2'))>")

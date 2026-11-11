@@ -18,7 +18,9 @@ available, the browser does not start and XSS stays unproven.
 Only evaluation proves execution: the payload must call alert() with an
 expression that joins the two marker parts at runtime, and only a dialog whose
 message equals the joined marker counts. A page that merely echoes the payload
-text shows the expression, not its value. On execution a JSON event record is
+text shows the expression, not its value. Without execution the check reports
+`markup_break`: whether a marker part parsed into an injected <script> element
+or event-handler attribute, which is indicative only. On execution a JSON event record is
 saved owner-only under evidence/, with a screenshot when screenshots are on for
 XSS (VER-035): the elements that carry the payload are outlined, and what of
 the page covered the payload (a dialog, a backdrop) or floats over it
@@ -288,6 +290,27 @@ def _init_script() -> str:
     } });
   }
 })();"""
+
+
+# VER-009: whether a marker part parsed into the DOM as markup structure rather than inert text — the text of an
+# injected <script> element, or an injected event-handler (on*) attribute. This is stronger than plain reflection
+# (the payload broke out of its HTML context toward script) but is not execution, so it never confirms; it is
+# recorded as "indicative: breaks HTML context". The scan is conservative: a marker part sitting in ordinary text
+# or a benign attribute value does not count.
+_MARKUP_BREAK_SCRIPT = """(parts) => {
+  try {
+    for (const el of document.querySelectorAll('*')) {
+      for (const p of parts) {
+        if (!p) continue;
+        if (el.tagName === 'SCRIPT' && (el.textContent || '').includes(p)) return true;
+        for (const a of el.attributes || []) {
+          if (a.name.slice(0, 2).toLowerCase() === 'on' && String(a.value).includes(p)) return true;
+        }
+      }
+    }
+  } catch (e) {}
+  return false;
+}"""
 
 
 # Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
@@ -688,7 +711,16 @@ class ProofBrowser:
                 raise limits[0]
             joined = marker[0] + marker[1]
             executed = any(message == joined for _, message in events)
-            result = {"executed": executed, "status": status, "final_url": page.url[:300],
+            markup_break = False
+            if not executed and error is None and observation is None:
+                # VER-009: the XSS marker did not execute; record whether it still broke out of its HTML context.
+                # An access-control observation carries no XSS payload, so it is not scanned.
+                try:
+                    markup_break = bool(page.evaluate(_MARKUP_BREAK_SCRIPT, list(marker)))
+                except PlaywrightError:
+                    markup_break = False
+            result = {"executed": executed, "markup_break": markup_break, "status": status,
+                      "final_url": page.url[:300],
                       "context_verified": executed, "attempt": attempt, "execution_contexts": contexts,
                       "dialogs": [{"kind": k, "is_marker": m == joined} for k, m in events][:20],
                       "blocked": blocked[:20], "_exchanges": exchanges}

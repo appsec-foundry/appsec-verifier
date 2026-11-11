@@ -26,7 +26,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
-from .experiments import normal_roles, token
+from .experiments import control_values, normal_roles, token
 from .tools import ToolError, _strings
 
 
@@ -193,8 +193,7 @@ class Controller:
                 supplied["params"].update(pairs)
                 location = "path_inputs" if plan["input_location"] == "path" else plan["input_location"]
                 selected = supplied[location]
-                controls = [plan[k] for k in ("baseline", "positive", "negative", "positive_other", "negative_other")
-                            if k in plan]
+                controls = list(control_values(plan).values())
                 sink = selected.get(plan["input_name"])
                 if plan["input_name"] not in selected or token(sink) not in {token(v) for v in controls}:
                     values = ", ".join(repr(str(v)[:60]) for v in controls)

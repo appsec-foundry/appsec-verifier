@@ -14,7 +14,9 @@ verdict still needs attempts after its plan:
   screenshot and event record become the evidence; no proof_steps are needed.
   If any request of the probe carried the marker already joined (also
   percent-encoded), the dialog could be a page echoing a parameter through
-  alert(), so it does not count.
+  alert(), so it does not count. A marker that broke out of its HTML context on
+  the finding's route without executing is labelled "indicative: breaks HTML
+  context", never confirmed.
 - access-control (VER-010): a declared operator-owned resource is present for
   an allowed identity and an independently authenticated denied identity.
   Without one, at medium confidence: a resource a normal account created with
@@ -347,6 +349,11 @@ def _negative(ctx, history, result, cited):
             return _downgrade(result, problem)
     elif ctx.plan.cls == "injection":
         plan, groups, error = experiment_groups(history, cited)
+        if plan.get("error_probe"):
+            # VER-053/VER-054: the engine-error probe triages reachability; a probe that raised no engine error is
+            # not a checked negative, so a negative verdict rests on a boolean or response-field proof instead.
+            return _downgrade(result, "the engine-error probe has no checked negative form; cite a boolean or "
+                              "response-field experiment for a negative verdict")
         if error or plan.get("kind") not in ("boolean", "timing") or any(len(g) < 2 for g in groups.values()):
             return _downgrade(result, error or "repeat each planned input before drawing a negative conclusion")
         statuses = [h["result"]["status"] for h in selected]
@@ -424,6 +431,18 @@ def _xss(ctx, history: list[dict], result: ProbeResult) -> ProbeResult:
     ]
     if not proof_steps:
         where = f" on the finding's route {routes[0]}" if routes else ""
+        # VER-009: no execution, but a browser_check on the route may still have seen the marker break out of its
+        # HTML context — a stronger indicative signal than plain reflection, still not a confirmation.
+        broke = any(
+            h.get("tool") == "browser_check"
+            and (not routes or any(planned_route(rp, h.get("args", {}).get("path") or "") for rp in routes))
+            and isinstance(h.get("result"), dict)
+            and h["result"].get("markup_break") is True
+            for h in history
+        )
+        if broke:
+            return _downgrade(result, "the marker broke out of its HTML context but did not execute" + where,
+                              "indicative: breaks HTML context")
         return _downgrade(result, "no browser_check saw the marker execute" + where, "indicative, not executed")
     joined = "".join(getattr(ctx, "marker", None) or ())
     # The echo guard applies to the proof step's own request: a browser_check whose URL already carries the

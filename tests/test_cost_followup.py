@@ -620,3 +620,77 @@ def test_engine_error_confirms_xpath_injection(tmp_path):
     script = Script([_error_plan(), _confirm])
     result = AgentProbe("injection", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.proof["checked"] is True
+
+
+def _double_quoted_target(sent):
+    """The term sits in a double-quoted SQL string and the application strips single quotes, so only the double
+    quote of the metacharacter set breaks the query."""
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE products(id INTEGER, name TEXT)")
+
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "").replace("'", "")
+        sent.append(q)
+        try:
+            db.execute('SELECT id FROM products WHERE name = "' + q + '"').fetchall()
+        except sqlite3.Error as exc:
+            return Resp(500, json.dumps({"error": str(exc)}))
+        return Resp(200, json.dumps({"data": []}))
+
+    return target
+
+
+def test_the_metacharacter_set_finds_a_break_the_single_quote_misses(tmp_path):
+    """VER-053: the sweep sends more than the single quote; here only the double quote reaches the parser, and
+    one breaking metacharacter whose counterpart stays quiet confirms."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _double_quoted_target(sent))
+    script = Script([_error_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    assert {'zzz"', 'zzz""', "zzz`", "zzz``"} <= set(sent)   # the whole set was sent, not only the quote
+
+
+def _template_target(sent):
+    """A Jinja-style template sink: an unclosed {{ raises a template syntax error, a single { is inert text."""
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "")
+        sent.append(q)
+        if q.count("{{") > q.count("}}"):
+            return Resp(500, "jinja2.exceptions.TemplateSyntaxError: unexpected end of template")
+        return Resp(200, json.dumps({"data": []}))
+
+    return target
+
+
+def test_engine_error_confirms_template_injection(tmp_path):
+    """VER-053: template injection confirms through its delimiter set; nothing is evaluated."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _template_target(sent), cwe="CWE-1336")
+    script = Script([_error_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    assert "zzz{{" in sent and "zzz{" in sent
+
+
+def _always_failing_target(sent):
+    """Every input with a metacharacter raises the same engine error, balanced or not."""
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "")
+        sent.append(q)
+        if q != "zzz":
+            return Resp(500, 'unrecognized token: "x"')
+        return Resp(200, json.dumps({"data": []}))
+
+    return target
+
+
+def test_a_break_whose_counterpart_also_fails_does_not_confirm(tmp_path):
+    """Refused case: when the balanced counterpart raises the engine error too, the break is not what caused it."""
+    sent = []
+    ctx = _inj_ctx(tmp_path, _always_failing_target(sent))
+    script = Script([_error_plan(), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict != "confirmed"
+    feedback = next(h["result"] for h in script.history if h.get("tool") == "experiment")
+    assert feedback["proof"] == "missing" and "counterpart did too" in feedback["reason"]

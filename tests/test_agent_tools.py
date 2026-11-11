@@ -574,7 +574,9 @@ def test_returned_marker_and_engine_error_forms_are_gated_by_cwe(tmp_path):
     nosql = {k: v for k, v in err.items() if k != "baseline"}
     nosql.update(method="POST", input_location="json", input_name="q")
     accepted = AgentTools(ctx_for("CWE-943")).plan_test(**nosql)
-    assert accepted["accepted"] is True and accepted["experiment"]["positive"] == {"$regex": "(x"}
+    assert accepted["accepted"] is True
+    assert accepted["experiment"]["error_set"] == [{"name": "$regex", "break": {"$regex": "(x"},
+                                                    "balance": {"$regex": "x"}}]
     for refused in ("CWE-90", "CWE-78"):                       # LDAP and command keep their own forms
         with pytest.raises(ToolError, match="engine-error proof applies"):
             AgentTools(ctx_for(refused)).plan_test(**err)

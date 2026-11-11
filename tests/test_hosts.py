@@ -216,7 +216,7 @@ def test_a_finding_prompt_carries_only_its_own_class():
     """WP12: an access-control finding gets no injection, session or XSS rules or actions, and the other way
     round; send_controls is offered only to an injection finding in intrusive mode."""
     access = system_prompt(_ctx())
-    assert "SQL confirmation needs sql_template" not in access and "session_checks resource" not in access
+    assert "sql_template with exactly one" not in access and "session_checks resource" not in access
     assert '"name": "browser_check"' not in access and '"name": "send_controls"' not in access
     assert '"name": "plan_test"' in access
     injection = system_prompt(_injection_ctx())
@@ -226,7 +226,7 @@ def test_a_finding_prompt_carries_only_its_own_class():
     xss.plan = SimpleNamespace(id="T-1", cwe="CWE-79", cls="xss", title="xss", instance="a.ts:1", reason="s")
     text = system_prompt(xss)
     assert '"name": "browser_check"' in text and '"name": "plan_test"' not in text and "sql_template" not in text
-    assert "SQL confirmation needs sql_template" in injection
+    assert "sql_template with exactly one" in injection
     # Fixed bounds, so the prompts cannot silently grow back (characters, not tokens).
     assert len(text) < 16_000 and len(injection) < 21_000
 

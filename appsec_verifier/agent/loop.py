@@ -42,8 +42,8 @@ from .tools import AgentTools, ToolError
 
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
-_LOGGED_RESULT = ("status", "length", "executed", "blocked", "error", "path", "start_line", "marker_read",
-                  "callback_hit", "accepted", "elapsed_ms")
+_LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "error", "path", "start_line",
+                  "marker_read", "callback_hit", "accepted", "elapsed_ms")
 _PROPOSAL_CAP = 500
 
 
@@ -51,14 +51,13 @@ def _control_failed(tools, result: dict) -> bool:
     """Whether a generated control's answer stops the experiment (VER-011): a transport error or a server error
     always; for the response-field form any non-2xx answer, since its proof needs comparable successful
     responses. An auth-artifact control (VER-049) expects 401 or 403 from its false controls, so only an error
-    or a 5xx stops it. An engine-error control (VER-053) is meant to raise an engine error, so a 5xx that carries
-    the engine-error class does not stop it; a transport error or a 5xx without that class still does."""
+    or a 5xx stops it. An engine-error sweep (VER-053) sends several metacharacters at once and any status is a
+    valid observation for one of them, so only a transport error stops it; the proof decides on the engine-error
+    class."""
     status = result.get("status", 0)
     experiment = getattr(tools, "_experiment", None) or {}
     if experiment.get("error_probe"):
-        if result.get("error"):
-            return True
-        return not (result.get("engine_error") is True or (isinstance(status, int) and 200 <= status < 300))
+        return bool(result.get("error"))
     if result.get("error") or not isinstance(status, int) or status >= 500:
         return True
     if experiment.get("auth_artifact"):

@@ -403,6 +403,10 @@ def test_results_are_structured_and_measurements_survive_excerpt_bounding():
     "ORA-00933: SQL command not properly ended",               # Oracle
     '{"errmsg":"Regular expression is invalid: missing )"}',    # MongoDB $regex
     "net.sf.saxon.trans.XPathException: Invalid XPath",         # XPath / Saxon
+    "jinja2.exceptions.TemplateSyntaxError: unexpected end of template",   # Jinja2
+    "Twig\\Error\\SyntaxError: Unexpected token \"end of template\"",      # Twig
+    "freemarker.core.ParseException: Syntax error in template",          # FreeMarker
+    "SyntaxError: Unexpected end of input",                     # an evaluated JavaScript expression
 ])
 def test_engine_error_signature_catches_each_engine(body):
     from appsec_verifier.agent.experiments import engine_error_signature
@@ -416,6 +420,8 @@ def test_engine_error_signature_catches_each_engine(body):
     '{"error":"Invalid email or password."}',                  # an ordinary application error
     "",                                                        # no body
     '{"data":[1,2,3]}',                                         # a normal success body
+    '{"data":[{"name":"Velocity Runner"},{"name":"Twig Basket"}]}',   # engine names as ordinary words
+    "<p>Handlebars, Mako shark poster, Smarty pants</p>",
 ])
 def test_a_generic_failure_is_not_an_engine_error(body):
     from appsec_verifier.agent.experiments import engine_error_signature

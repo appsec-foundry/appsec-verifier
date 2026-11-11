@@ -476,7 +476,19 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
     steps = {n: history[n - 1] if 1 <= n <= len(history) else {} for n, _ in shown}
     args = {n: h.get("args") or {} for n, h in steps.items()}
     roles: dict[int, tuple[str, str]] = {}
-    if cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
+    if cls == "injection" and plan.get("error_set") and plan.get("input_name"):
+        # VER-053: the engine-error sweep's requests are a syntax break and its balanced counterpart per
+        # metacharacter; label which each step carried.
+        for n, _ in shown:
+            sent = _sink(plan, args[n])
+            if sent is _MISSING:
+                continue
+            for entry in plan["error_set"]:
+                if token(sent) == token(entry["break"]):
+                    roles[n] = ("attack", f"syntax break {entry['name']!r}")
+                elif token(sent) == token(entry["balance"]):
+                    roles[n] = ("control", f"balanced {entry['name']!r}")
+    elif cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
         for n, _ in shown:
             sent = _sink(plan, args[n])
             group = next((k for k in _EXPERIMENT_ROLES if k in plan and sent is not _MISSING

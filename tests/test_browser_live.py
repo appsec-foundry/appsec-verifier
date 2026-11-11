@@ -37,6 +37,7 @@ MARKER = ("vrf1a2b3c4d", "5e6f7a8b")
 
 class Target:
     """A tiny vulnerable app: /reflect echoes q unencoded, /safe encodes it,
+    /csp echoes q unencoded under a policy that blocks all script,
     /echo passes q to alert() as text, /ext loads an out-of-scope script,
     /webrtc sends STUN over UDP to 127.0.0.1:<port>."""
 
@@ -53,6 +54,8 @@ class Target:
         pages = {
             "/reflect": f"<html><body><p>Results for {q}</p></body></html>",
             "/safe": f"<html><body><p>Results for {html.escape(q)}</p></body></html>",
+            "/csp": "<html><head><meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\">"
+                    f"</head><body><p>Results for {q}</p></body></html>",
             "/echo": "<html><body><script>alert(new URLSearchParams(location.search).get('q'))</script></body></html>",
             "/ext": '<html><body><script src="https://evil.example.net/x.js"></script></body></html>',
             "/live": "<html><body><script>new WebSocket('wss://shop.example.com/socket')</script>"
@@ -118,6 +121,17 @@ def test_encoded_reflection_is_not_execution(browser):
     b, _, _ = browser
     result = _check(b, "/safe?q=" + quote(f"<script>alert({marker_expression(MARKER)})</script>", safe=""))
     assert result["executed"] is False and "evidence" not in result
+
+
+def test_a_blocked_payload_that_broke_its_html_context_is_marked_but_not_executed(browser):
+    """VER-009: under a policy that blocks script, the injected handler still parses into the DOM: a markup break,
+    not execution. An encoded reflection is neither."""
+    b, _, _ = browser
+    payload = quote(f"<img src=x onerror=alert({marker_expression(MARKER)})>", safe="")
+    blocked = _check(b, "/csp?q=" + payload)
+    assert blocked["executed"] is False and blocked["markup_break"] is True and "evidence" not in blocked
+    encoded = _check(b, "/safe?q=" + payload)
+    assert encoded["executed"] is False and encoded["markup_break"] is False
 
 
 def test_echoed_payload_text_is_not_execution(browser):

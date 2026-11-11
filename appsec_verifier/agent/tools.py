@@ -64,9 +64,11 @@ from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_ori
 from ..verification_context import missing_capabilities, path_values, planned_route, record_segments
 from ..verify import poc
 from .experiments import (
+    ENGINE_ERROR_CWES,
     PLAN_SCHEMA,
     access_methods,
     agent_controls,
+    control_values,
     engine_error_signature,
     generates_controls,
     normal_roles,
@@ -400,14 +402,15 @@ class AgentTools:
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
         if plan.get("error_probe"):
-            # VER-053: the engine-error form covers SQL, XPath and NoSQL; LDAP keeps its result-set contrast.
+            # VER-053: the engine-error form covers SQL, XPath, NoSQL, template and code-evaluation injection;
+            # LDAP keeps its result-set contrast and command execution stays out of scope.
             cwe = getattr(self.ctx.plan, "cwe", "")
-            if plan["kind"] != "boolean" or cwe not in ("CWE-89", "CWE-643", "CWE-943"):
-                raise ToolError("the engine-error proof applies to boolean SQL, XPath or NoSQL injection "
-                                "(CWE-89, CWE-643, CWE-943)")
+            if plan["kind"] != "boolean" or cwe not in ENGINE_ERROR_CWES:
+                raise ToolError("the engine-error proof applies to boolean SQL, XPath, NoSQL, template or "
+                                "code-evaluation injection (" + ", ".join(ENGINE_ERROR_CWES) + ")")
             if cwe == "CWE-943" and plan.get("input_location") != "json":
                 raise ToolError("a NoSQL engine-error proof needs a JSON input")
-            if cwe in ("CWE-89", "CWE-643") and not isinstance(plan.get("baseline"), str | int | float):
+            if cwe != "CWE-943" and not isinstance(plan.get("baseline"), str | int | float):
                 raise ToolError("the engine-error proof needs a baseline value to append the break metacharacter to")
             try:
                 plan = error_controls(plan, cwe, marker="".join(self.ctx.marker or ()))
@@ -443,11 +446,17 @@ class AgentTools:
             if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
                 # Command probes send nothing but the harmless arithmetic controls (_check_steering).
                 raise ToolError("command injection probes carry no other values, so fixed is not available")
-        groups = [plan[k] for k in ("baseline", "positive", "negative") if k in plan]
-        if plan["kind"] == "boolean" and not all(k in plan for k in ("positive", "negative")):
-            raise ToolError("boolean experiments need sql_template or explicit positive and negative controls")
-        if len({token(v) for v in groups}) != len(groups):
-            raise ToolError("control values must be distinct")
+        if plan.get("error_set"):
+            # VER-053: the engine-error sweep's controls are its break/balance set, not the five fixed groups.
+            values = [v for e in plan["error_set"] for v in (e["break"], e["balance"])]
+            if len({token(v) for v in values}) != len(values):
+                raise ToolError("control values must be distinct")
+        else:
+            groups = [plan[k] for k in ("baseline", "positive", "negative") if k in plan]
+            if plan["kind"] == "boolean" and not all(k in plan for k in ("positive", "negative")):
+                raise ToolError("boolean experiments need sql_template or explicit positive and negative controls")
+            if len({token(v) for v in groups}) != len(groups):
+                raise ToolError("control values must be distinct")
         if plan["kind"] == "timing" and "negative" in plan:
             raise ToolError("timing uses baseline and positive only")
         if plan.get("input_location") == "form" and plan.get("method", "GET") in SAFE_METHODS:
@@ -646,7 +655,8 @@ class AgentTools:
         location = "path_inputs" if plan.get("input_location") == "path" else plan["input_location"]
         fixed = plan.get("fixed") or {}
         # Every control carries the same fixed values for the request's other inputs; only the declared input
-        # differs (VER-011).
+        # differs (VER-011). The engine-error sweep (VER-053) has a break and a balance per metacharacter instead
+        # of the five fixed groups; control_values yields whichever the plan declares.
         requests = [
             {
                 "path": plan["path"],
@@ -654,11 +664,10 @@ class AgentTools:
                 **({"role": role} if role else {}),
                 **{k: dict(v) for k, v in fixed.items()},
                 location: {**fixed.get(location, {}),
-                           plan["input_name"]: str(plan[group]) if location == "path_inputs" else plan[group]},
+                           plan["input_name"]: str(value) if location == "path_inputs" else value},
             }
             for _ in range(1 if plan.get("auth_artifact") else 2)
-            for group in ("baseline", "positive", "negative", "positive_other", "negative_other")
-            if group in plan
+            for value in control_values(plan).values()
         ]
         if write:
             self._controls_sent.add(token(plan))

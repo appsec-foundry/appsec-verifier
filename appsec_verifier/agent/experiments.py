@@ -22,7 +22,18 @@ _ENGINE_ERROR = re.compile(
     r"PG::|psycopg|sqlalchemy|SQLException|MySQL|MariaDB|PostgreSQL|"
     r"XPathException|Invalid XPath|xmlXPathEval|XPST\d{4}|XPTY\d{4}|Saxon|"
     r"MongoError|BSONError|E11000|\$regex|Regular expression is invalid|"
-    r"unknown (?:top level )?operator \$",
+    r"unknown (?:top level )?operator \$|"
+    # VER-053: template-engine and code-evaluation parse errors, for the engine-error form of template and
+    # code-evaluation injection. Broad tokens (SyntaxError, Unexpected token) are safe here: engine_error_signature
+    # runs only for an error-probe control, and a balanced counterpart that also raises one fails the proof closed.
+    # Library-specific tokens only: a bare engine name (Twig, Velocity, Handlebars, Mako) is an ordinary word in
+    # page text such as a product name.
+    r"TemplateSyntaxError|jinja2|Twig\\Error|Twig_Error|freemarker\.core|FreeMarker template error|"
+    r"org\.apache\.velocity|ParseErrorException|org\.thymeleaf|TemplateProcessingException|"
+    r"SpelParseException|SpelEvaluationException|SmartyCompilerException|Smarty error|"
+    r"Liquid::SyntaxError|Liquid syntax error|Parse error on line|mako\.exceptions|"
+    r"unexpected end of template|unexpected '%\}'|unexpected '\}\}'|"
+    r"SyntaxError|invalid syntax|unexpected EOF|Unexpected token|Unexpected end of input",
     re.IGNORECASE,
 )
 
@@ -233,19 +244,52 @@ def marker_controls(plan):
     }
 
 
+# VER-053: the per-class set of syntax-breaking metacharacters the engine-error form sends, each paired with a
+# balanced counterpart. The Verifier owns this set; the agent only asks for the form (error_probe). A string
+# context appends the break to the finding's baseline and the counterpart doubles or closes it, so only the break
+# leaves the literal or expression open; NoSQL breaks the operator structure instead. LDAP and command execution
+# have no engine-error form.
+_STRING_BREAKS = {
+    "CWE-89": [("'", "''"), ('"', '""'), ("`", "``")],   # SQL: string quote and the MySQL identifier quote
+    "CWE-643": [("'", "''"), ('"', '""')],               # XPath: string quotes
+}
+_TEMPLATE_BREAKS = [("${", "$"), ("{{", "{"), ("<%", "<"), ("#{", "#")]   # template delimiters, no evaluation
+_TEMPLATE_CWES = ("CWE-94", "CWE-95", "CWE-1336")
+# VER-053: the CWEs the engine-error form covers; VER-054 gates every other confirming form behind its probe.
+ENGINE_ERROR_CWES = ("CWE-89", "CWE-643", "CWE-943", *_TEMPLATE_CWES)
+
+_GROUP_NAMES = ("baseline", "positive", "negative", "positive_other", "negative_other")
+
+
+def control_values(plan) -> dict:
+    """The control name -> sink value map the proof buckets cited requests by (VER-011). The response-field,
+    marker, arithmetic and auth forms use the five fixed groups; the engine-error form (VER-053) uses one
+    break and one balance per metacharacter of its generated set, so it is not bounded to five."""
+    error_set = plan.get("error_set")
+    if error_set:
+        values = {}
+        for entry in error_set:
+            values[f"break:{entry['name']}"] = entry["break"]
+            values[f"balance:{entry['name']}"] = entry["balance"]
+        return values
+    return {k: plan[k] for k in _GROUP_NAMES if k in plan}
+
+
 def error_controls(plan, cwe, marker=""):
-    """VER-053: complementary controls for the engine-error form. A syntax-breaking control (an unescaped
-    metacharacter for a string context, or an invalid operator for NoSQL) should raise a backend engine error
-    that a balanced control does not. The error class, classified in code (engine_error_signature), is the
+    """VER-053: the engine-error form's break/balance set for the class. A syntax-breaking metacharacter (an
+    unclosed string quote, template delimiter, or NoSQL operator group) should raise a backend engine error that
+    its balanced counterpart does not. The error class, classified in code (engine_error_signature), is the
     signal; the error text never reaches the model (VER-016). On a write the controls carry the finding marker,
     so the request stays attributable (VER-014); the NoSQL break stays an unclosed group either way."""
-    if cwe in ("CWE-89", "CWE-643"):
+    if cwe in _STRING_BREAKS or cwe in _TEMPLATE_CWES:
         base = str(plan.get("baseline", ""))
-        return {**plan, "positive": base + "'", "negative": base + "''"}
+        pairs = _STRING_BREAKS.get(cwe, _TEMPLATE_BREAKS)
+        return {**plan, "error_set": [{"name": b, "break": base + b, "balance": base + g} for b, g in pairs]}
     if cwe == "CWE-943":
         tag = marker or "x"
-        return {**plan, "positive": {"$regex": "(" + tag}, "negative": {"$regex": tag}}
-    raise ValueError("the engine-error form covers SQL, XPath and NoSQL injection")
+        return {**plan, "error_set": [{"name": "$regex", "break": {"$regex": "(" + tag},
+                                       "balance": {"$regex": tag}}]}
+    raise ValueError("the engine-error form covers SQL, XPath, NoSQL, template and code-evaluation injection")
 
 
 def operator_controls(plan):
@@ -363,7 +407,8 @@ def experiment_groups(history, cited):
     start, plan = latest_plan(history)
     if not start:
         return {}, {}, "declare a plan_test before collecting proof"
-    groups = {k: [] for k in ("baseline", "positive", "negative", "positive_other", "negative_other") if k in plan}
+    control_map = control_values(plan)
+    groups = {k: [] for k in control_map}
     signatures = set()
     for n in cited:
         if n <= start:
@@ -391,7 +436,7 @@ def experiment_groups(history, cited):
             values = sent[plan.get("input_location", "params")]
             value = values.pop(plan.get("input_name"), None)
             signatures.add(token([args.get("role"), path, sent]))
-        bucket = next((k for k in groups if token(value) == token(plan[k])), None)
+        bucket = next((k for k, v in control_map.items() if token(value) == token(v)), None)
         if bucket is None:
             return plan, {}, f"a cited request did not use a declared control value: step {n}"
         groups[bucket].append((n, result))
@@ -400,25 +445,40 @@ def experiment_groups(history, cited):
     return plan, groups, None
 
 
+def _error_probe_check(groups, plan) -> str | None:
+    """VER-053: the engine-error sweep confirms when at least one metacharacter breaks the backend and its
+    balanced counterpart does not, each repeated. Other metacharacters of the set that did not break are part of
+    the sweep and do not refute it."""
+    any_break = False
+    for entry in plan.get("error_set", []):
+        breaks = groups.get(f"break:{entry['name']}", [])
+        balances = groups.get(f"balance:{entry['name']}", [])
+        if any(r.get("engine_error") for _, r in breaks):
+            any_break = True
+        if (len(breaks) >= 2 and all(r.get("engine_error") is True for _, r in breaks)
+                and len(balances) >= 2 and not any(r.get("engine_error") for _, r in balances)):
+            return None
+    if any_break:
+        return ("a syntax-breaking metacharacter raised an engine error but its balanced counterpart did too, so "
+                "the break is not what caused it")
+    return ("no syntax-breaking metacharacter raised a backend engine error; a generic failure or a validation "
+            "message is not proof")
+
+
 def injection_check(ctx, history, cited):
     plan, groups, error = experiment_groups(history, cited)
     if error:
         return error
     if plan.get("kind") not in ("boolean", "timing"):
         return "declare a boolean or timing experiment for injection"
+    if plan.get("error_probe"):
+        # VER-053: the engine-error form expects a break to fail, so it precedes the uniform-status and repeat
+        # rules. At least one metacharacter of the generated set must raise a backend engine error (classified in
+        # code) on every one of its break requests that its balanced counterpart raises on none, each repeated.
+        return _error_probe_check(groups, plan)
     short = [f"{name} {len(group)} of 2" for name, group in groups.items() if len(group) < 2]
     if short:
         return ("repeat every declared control at least twice using distinct requests; so far " + ", ".join(short))
-    if plan.get("error_probe"):
-        # VER-053: the engine-error form expects the break control to fail, so it precedes the uniform-status
-        # rule. The break must raise a backend engine error (classified in code) that the balanced control does
-        # not; a generic failure or a validation message is not that class.
-        if not all(r.get("engine_error") is True for _, r in groups.get("positive", [])):
-            return ("the syntax-breaking control did not raise a backend engine error; a generic failure or a "
-                    "validation message is not proof")
-        if any(r.get("engine_error") for _, r in groups.get("negative", [])):
-            return "the balanced control also raised an engine error, so the break is not what caused it"
-        return None
     statuses = {r["status"] for group in groups.values() for _, r in group}
     if len(statuses) != 1 or not all(200 <= s < 300 for s in statuses):
         # A login-bypass injection flips 401 to 200; that is proven with the auth-artifact form, not here.
