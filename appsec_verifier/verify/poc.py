@@ -457,6 +457,12 @@ def _sink(plan: dict, args: dict):
     return values.get(plan.get("input_name"), _MISSING)
 
 
+def _declared_resource(ctx, plan: dict) -> dict | None:
+    """The operator's test resource the plan names for this finding, or None."""
+    return next((r for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])
+                 if r.get("id") == plan.get("resource") and r.get("finding_id") == ctx.plan.id), None)
+
+
 def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[int, tuple[str, str]]:
     """What each shown step is in the test, as (kind, label): `normal` (the baseline, the identity a resource
     belongs to or a request without the finding's payload), `control` (a request without a role that must be
@@ -482,8 +488,7 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
     elif cls == "access-control" and plan.get("kind") == "access-control":
         role = {n: a.get("role") or None for n, a in args.items()}
         method = {n: (a.get("method") or "GET").upper() for n, a in args.items()}
-        resource = next((r for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])
-                         if r.get("id") == plan.get("resource") and r.get("finding_id") == ctx.plan.id), None)
+        resource = _declared_resource(ctx, plan)
         if resource is not None:
             for n, _ in shown:
                 if args[n].get("path") != resource.get("path"):
@@ -641,19 +646,40 @@ def _value_view(pointer: str, value, normal=_MISSING) -> tuple[str, list[tuple[s
     from ..agent.experiments import token
 
     differs = normal is not _MISSING and token(value) != token(normal)
-    head = f"{pointer}: {_brief(value)}" + (f" (normal request: {_brief(normal)})" if differs else "")
-    lines = [head]
+    head = f"{pointer}: {_brief(value)}"          # its label says how the normal request's differs
+    lines, new = [head], 0
     if isinstance(value, list):
         known = {token(v) for v in normal} if differs and isinstance(normal, list) else None
+        new = sum(token(v) not in known for v in value) if known is not None else 0
         for i, item in enumerate(value[:_VIEW_ROWS]):
             lines.append(f"{'+' if known is not None and token(item) not in known else ' '} [{i}] {_row(item)}")
         if len(value) > _VIEW_ROWS:
             lines.append(f"  … {len(value) - _VIEW_ROWS} more; full record in HAR")
-        if any(line.startswith("+") for line in lines):
-            lines.append("+ not in the normal answer")
     elif isinstance(value, dict):
         lines += [f"  {k}: {json.dumps(v, ensure_ascii=False)[:60]}" for k, v in list(value.items())[:_VIEW_ROWS]]
-    return "\n".join(lines), ([("answer differs", head)] if differs else [])
+    marks = []
+    if differs:      # the labels say why the line counts, not only that it is marked
+        both = isinstance(value, list) and isinstance(normal, list)
+        marks.append((f"{len(value)} entries instead of {len(normal)}" if both
+                       else f"{_brief(value)} instead of {_brief(normal)}", head))
+    if any(line.startswith("+") for line in lines):
+        marks.append((f"{new} entr{'y' if new == 1 else 'ies'} the normal request does not get", "+ ["))
+    return "\n".join(lines), marks
+
+
+_OWNER_KEYS = {"userid", "user_id", "ownerid", "owner_id", "owner", "customerid", "accountid", "email", "username"}
+
+
+def _same_owner_fields(e: dict, ref: tuple[int, dict]) -> list[tuple[str, str]]:
+    """The ownership fields an attack's JSON answer shares with the normal request's, such as `/data/UserId: 1`
+    another account received, as response lines to mark; at most two."""
+    mine, theirs = _json(e), _json(ref[1])
+    if not isinstance(mine, dict | list) or not isinstance(theirs, dict | list):
+        return []
+    x, y = _leaves(mine), _leaves(theirs)
+    who, other = e.get("_role") or "a request without login", ref[1].get("_role") or "a request without login"
+    return [(f"{who} gets the same {p.rsplit('/', 1)[-1]} as {other}", f"{p}: {json.dumps(v, ensure_ascii=False)}")
+            for p, v in x.items() if p.rsplit("/", 1)[-1].lower() in _OWNER_KEYS and p in y and y[p] == v][:2]
 
 
 def _leaves(value, path="", out=None):
@@ -709,11 +735,12 @@ def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict]) -> str:
     return start + f"{status}; the answer differs ({len(_text(r))} → {len(_text(e))} characters)."
 
 
-def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
+def _marked(text: str, needles=(), lines=(), *, sent: bool = False) -> tuple[str, int]:
     """`text` as escaped HTML with what `needles` and `lines` name in <mark>, each a (label, what) pair: a
     string at each occurrence, a (region, context, token) from `_diff_token` once in the request line or the
     body, and in `lines` a prefix that marks each line starting with it. A red tag before the first mark of
-    each label says what is marked; tag and mark wrap to the next line together, not inside a word. Nothing of
+    each label says what is marked; tag and mark wrap to the next line together, not inside a word. `sent` marks
+    what a request carried, in a colour of its own, so it is not read as the proof in a response. Nothing of
     `text` is ever parsed as markup."""
     spans = []
     blank = text.find("\n\n")
@@ -733,10 +760,14 @@ def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
         while needle and len(spans) < 50 and (i := text.find(needle, start)) >= 0:
             spans.append((i, i + len(needle), label))
             start = i + len(needle)
-    pos = 0
+    pos, previous = 0, None
     for line in text.split("\n"):
         label = next((label for label, prefix in lines if line.lower().startswith(prefix.lower())), None)
-        if label is not None:
+        if label is not None and previous is not None and spans[previous][2] == label \
+                and spans[previous][1] == pos - 1:
+            spans[previous] = (spans[previous][0], pos + len(line), label)    # consecutive lines: one framed block
+        elif label is not None:
+            previous = len(spans)
             spans.append((pos, pos + len(line), label))
         pos += len(line) + 1
     merged: list[list] = []
@@ -750,9 +781,22 @@ def _marked(text: str, needles=(), lines=()) -> tuple[str, int]:
     for a, b, labels in merged:
         new = [label for label in dict.fromkeys(labels) if label not in tagged]
         tagged.update(new)
-        tag = f"<span class=tag>{html.escape(' · '.join(new))} ▸</span>" if new else ""
-        out += [html.escape(text[last:a]), f"<span class=hit>{tag}<mark>{html.escape(text[a:b])}</mark></span>"]
+        words, block = html.escape(" · ".join(new)), "\n" in text[a:b]
+        marked = f"<mark>{html.escape(text[a:b])}</mark>"
+        if sent:          # what a request carried: highlighted after its label
+            tag = f"<span class=tag>{words} ▸</span>" if new else ""
+            hit = f'<span class="hit sent">{tag}{marked}</span>'
+        elif block:       # an answer's lines: one red frame, the note above it
+            note = f"<span class=note>▼ {words}</span>" if new else ""
+            hit = f'<span class="hit block">{note}{marked}</span>'
+        else:             # an answer's value: a red frame, the note beside it
+            note = f"<span class=note>◀ {words}</span>" if new else ""
+            hit = f"<span class=hit>{marked}{note}</span>"
+        out += [html.escape(text[last:a]), hit]
         last = b
+        if block and text[b:b + 1] == "\n":     # a block ends its own line; the report's excerpt keeps the break
+            out.append("<span class=nl>\n</span>")
+            last = b + 1
     out.append(html.escape(text[last:]))
     return "".join(out), len(merged)
 
@@ -769,7 +813,7 @@ class _CodeMarks(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag == "mark":
             self.parts.append("⟦")
-        elif tag == "span" and ("class", "tag") in attrs:
+        elif tag == "span" and (("class", "tag") in attrs or ("class", "note") in attrs):
             self._label = True
 
     def handle_endtag(self, tag):
@@ -858,7 +902,8 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
         host = redirect_host(marker)
         if host:
             req_marks.append(("redirect target", host))
-        res_lines.append(("redirect", "location:"))
+        location = next((h["value"] for h in e["response"]["headers"] if h["name"].lower() == "location"), "")
+        res_lines.append(("redirect to the test host" if host and host in location else "redirect", "location:"))
     elif cls == "path-traversal":
         marker_file = (getattr(ctx, "scope", None) or {}).get("marker_file") or {}
         name = str(marker_file.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1]
@@ -1038,12 +1083,17 @@ def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
 
 _EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 ui-monospace,Menlo,Consolas,monospace}
 header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #b00020;white-space:pre-wrap}
-header b{font-size:20px}section{margin:14px;border:1px solid #ccc}
+header b{font-size:20px}header .k{color:#ffeb3b;font-weight:bold}header small{color:#bbb;font-size:13px}
+.hit.block{display:block}.block mark{display:block;background:none;outline:none;border:2px solid #b00020}
+.sent mark{background:#ffeb3b;outline:2px solid #b00020;outline-offset:0}
+.note{color:#b00020;font:bold 14px sans-serif;margin-left:8px}.block .note{display:block;margin:0 0 3px}
+.nl{display:none}
+section{margin:14px;border:1px solid #ccc}
 h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:16px;border-bottom:1px solid #ccc}
 .facts{padding:4px 10px;border-bottom:1px solid #ccc}.cols{display:flex}.cols>div{flex:1;min-width:0}
 .cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:15px;color:#555}
 pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
-mark{background:#ffeb3b;color:#000;outline:2px solid #b00020}.hit{display:inline-block;max-width:100%}
+mark{background:none;color:#000;outline:2px solid #b00020;outline-offset:1px}.hit{display:inline-block;max-width:100%}
 .tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}
 section.normal{border:2px solid #2e7d32}section.control{border:2px solid #546e7a}
 section.attack{border:2px solid #b00020}section.effect{border:2px solid #e65100}
@@ -1055,24 +1105,102 @@ section.attack{border:2px solid #b00020}section.effect{border:2px solid #e65100}
 .diff{padding:6px 10px;border-bottom:1px solid #ccc;background:#fff8e1;font-weight:bold}"""
 
 
-def _overview(ctx, history: list[dict], shown: list[tuple[int, dict]], roles) -> str:
-    """One line per kind of step: its role, the steps, the identity, the status and the observed value."""
+def _quoted(value) -> str:
+    return json.dumps(value, ensure_ascii=False)[:60]
+
+
+def _test_line(ctx, history: list[dict]) -> str:
+    """What the test did, in one sentence from the accepted plan and the finding's class; "" when unknown."""
+    from ..agent.experiments import latest_plan
+    from ..agent.proof import redirect_host
+
+    _, plan = latest_plan(history)
+    cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
+    target = f"{plan.get('method', 'GET')} {plan['path']}" if plan.get("path") else "the finding's request"
+    if cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
+        normal = f"{target} with {plan['input_name']} = {_quoted(plan.get('baseline'))} as the normal input, then"
+        if plan["kind"] == "timing":
+            return f"{normal} with a condition that delays the answer; compared: the answer time"
+        if plan.get("expression_template"):
+            return f"{normal} with computed expressions; compared: {plan.get('pointer')}"
+        return f"{normal} with injected conditions that are true and false; compared: {plan.get('pointer')}"
+    if cls == "access-control" and plan.get("kind") == "access-control":
+        resource, owner = _declared_resource(ctx, plan), plan.get("owner")
+        if resource is not None:
+            return (f"{resource.get('method', 'GET')} {resource.get('path')} as an identity allowed to read it and "
+                    "as one that must not")
+        if owner and isinstance(plan.get("change"), dict):
+            return (f"{owner} creates a record with the test marker, another account changes it with "
+                    f"{plan['change'].get('method')} {plan['change'].get('path')}, then {owner} reads it again")
+        if owner:
+            return (f"{owner} creates a record with the test marker; {owner}, a request without login and another "
+                    "account read it")
+        if plan.get("reference"):
+            return f"{target} as the privileged account {plan['reference']}, without login and as a normal account"
+    if cls == "xss":
+        return "the page opened with a payload that calls alert() with the finding's marker; proof: the marker runs"
+    if cls == "open-redirect" and (host := redirect_host(marker)):
+        return f"a request that names {host} as the redirect target; proof: a redirect to that host"
+    if cls == "path-traversal":
+        return "a request for the operator's marker file; proof: the file's content in the answer"
+    if cls == "ssrf":
+        return "a request that makes the target call the Verifier's listener; proof: the listener gets the marker"
+    if cls == "session" and (attribute := _SESSION_ATTRIBUTES.get(getattr(ctx.plan, "cwe", None))):
+        return f"the session cookie as the target sets it; checked: its {attribute} attribute"
+    return ""
+
+
+_VERDICT_SENTENCE = {
+    "confirmed": "The proof check accepted it.",
+    "inconclusive": "This does not complete the required proof.",
+    "blocked-by-control": "The operation was refused, with matched control evidence.",
+    "not-reproducible": "Not reproduced in these attempts, which does not prove absence.",
+}
+
+
+def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], roles, verdict: str,
+                 cited: bool) -> str:
+    """What the steps showed, per kind of step, and what the verdict makes of it."""
     from ..agent.experiments import latest_plan
 
-    pointer = latest_plan(history)[1].get("pointer")
-    rows: dict[tuple, list[int]] = {}
-    for n, e in shown:
+    timing = latest_plan(history)[1].get("kind") == "timing"
+    cls = getattr(ctx.plan, "cls", None)
+    rows: dict[str, list[str]] = {}
+    for n, e in by_role(everything, roles):
         kind, label = roles.get(n, ("", ""))
-        value = observed(ctx, history, e)
-        seen = f" · {pointer}: {_brief(value)}" if value is not _MISSING else ""
-        key = (_ROLE_ORDER.get(kind, len(_ROLE_ORDER)), ROLE_TITLES.get(kind, "Other"), label,
-               e.get("_role") or "anonymous", e["response"]["status"], seen)
-        rows.setdefault(key, []).append(n)
-    lines = []
-    for (_, title, label, who, status, seen), ns in sorted(rows.items(), key=lambda row: (row[0][0], row[1][0]))[:8]:
-        steps = f"step{'s' if len(ns) > 1 else ''} {', '.join(map(str, ns[:6]))}{', …' if len(ns) > 6 else ''}"
-        lines.append(f"{title}: {steps}{' · ' + label if label else ''} · as {who} → {status}{seen}")
-    return "\n".join(lines)
+        if roles and not kind:        # outside the comparison the plan declares
+            continue
+        who = e.get("_role")
+        name = (label.replace(", second form", "") + (f" {who}" if who and cls == "access-control" else "")
+                if kind else f"step {n} as {who or 'anonymous'}")
+        value, ref = observed(ctx, history, e), compared_with(n, e, everything, roles)
+        if value is not _MISSING:
+            seen = _brief(value)
+        elif timing and isinstance(e.get("time"), int):
+            seen = f"{e['time']} ms"
+        elif ref is None:
+            seen = str(e["response"]["status"])
+        else:
+            same = _text(e) == _text(ref[1]) and not (e["response"]["content"].get("_omitted")
+                                                       or ref[1]["response"]["content"].get("_omitted"))
+            seen = f"{e['response']['status']}, {'the same' if same else 'a different'} answer"
+        if seen not in rows.setdefault(name, []):
+            rows[name].append(seen)
+    shown = [f"{name}: {', '.join(seen[:3])}" for name, seen in list(rows.items())[:5]]
+    closing = (_VERDICT_SENTENCE.get(verdict, "No completed proof.") if cited
+               else "The verdict cites no step, so these requests prove nothing.")
+    return " · ".join(shown) + ". " + closing
+
+
+def _shown_line(panel: list[tuple[int, dict]], roles) -> str:
+    """The steps in this image, top and below."""
+    parts = []
+    for i, (n, e) in enumerate(panel):
+        kind, label = roles.get(n, ("", ""))
+        what = (f"the {ROLE_TITLES[kind].lower()} ({label})" if kind else
+                f"{e['request']['method']} as {e.get('_role') or 'anonymous'} → {e['response']['status']}")
+        parts.append(("top: " if i == 0 else "below: ") * (len(panel) > 1) + f"step {n}, {what}")
+    return "; ".join(parts)
 
 
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
@@ -1082,39 +1210,31 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     requests after the last test plan of a verdict that cites no step, and the header says so. Returns the page
     and the number of marks. Every recorded value is escaped; the page has no script."""
     from ..agent.experiments import latest_plan
+    from ..planning import _TITLE_LOCATION
 
     cls = getattr(ctx.plan, "cls", None) or "finding"
     captured = shown[0][1].get("startedDateTime", "") if shown else ""
-    head = (f"<b>AppSec Verifier · {html.escape(str(ctx.plan.id))} · {html.escape(cls)} · "
-            f"{html.escape(verdict)}</b>\nRecorded, redacted exchanges"
-            f"{' from ' + html.escape(har_path) if har_path else ''}; no new request. "
-            f"First captured {html.escape(shown_time(captured))}.\n"
-            + ("Marked: what the verdict rests on, as the code locates it." if cited else
-               "The verdict cites no step: the answered requests after the last test plan. Marked: what the code "
-               "locates in them; it proves nothing."))
-    interpretation = {
-        "confirmed": "The proof checker accepted the cited evidence.",
-        "inconclusive": "Not established: the observations do not complete the required proof.",
-        "blocked-by-control": "The tested operation was refused with matched control evidence.",
-        "not-reproducible": "Not reproduced in the cited attempts; this does not prove absence.",
-    }.get(verdict, "No completed proof.")
     everything = comparison or shown
     roles = step_roles(ctx, history, everything)
-    head += "\n" + html.escape(interpretation)
-    if roles:
-        head += "\n" + html.escape(_overview(ctx, history, everything, roles))
-        kinds = {kind for kind, _ in roles.values()}
-        if kinds & {"normal", "control"} and kinds & {"attack", "effect"}:
-            head += "\nEach image shows a normal request on top and the attack compared with it below."
-    else:
-        overview = " | ".join(f"step {n}: {e.get('_role') or 'anonymous'} → {e['response']['status']}"
-                              for n, e in everything[:12])
-        head += "\nComparison: " + html.escape(overview)
-    head += "\nSelected excerpts; routine headers and unrelated body content omitted. Full record in HAR."
+    shown = by_role(shown, roles)[:6]
+    title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
+    test = _test_line(ctx, history)
+    if not test and cited and not latest_plan(history)[0]:
+        test = "no accepted test plan; shown are the requests the verdict cites"
+    lines = [f"<b>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), cls, title, verdict))))}</b>",
+             *([f"<span class=k>Test:</span> {html.escape(test)}"] if test else []),
+             f"<span class=k>Result:</span> "
+             f"{html.escape(_result_line(ctx, history, everything, roles, verdict, cited))}",
+             f"<span class=k>Shown:</span> {html.escape(_shown_line(shown, roles))}",
+             f"<small>AppSec Verifier · recorded and redacted{' in ' + html.escape(har_path) if har_path else ''}"
+             f" at {html.escape(shown_time(captured))}; nothing sent again. Excerpts shortened; yellow marks what "
+             "a request sent, a red frame what an answer shows.</small>"]
     pointer = latest_plan(history)[1].get("pointer")
-    parts, total = [f"<header>{head}</header>"], 0
-    for n, e in by_role(shown, roles)[:6]:
+    parts, total = [f"<header>{chr(10).join(lines)}</header>"], 0
+    for n, e in shown:
+        kind, label = roles.get(n, ("", ""))
         req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight)
+        facts = [(t, d) for t, d in facts if d or not t.startswith("answered in")]   # a time only where it decides
         # Compared with the normal request in the same image, else the closest one of the finding.
         ref = compared_with(n, e, shown, roles) or compared_with(n, e, everything, roles)
         view, value = None, observed(ctx, history, e)
@@ -1122,12 +1242,13 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
             view, view_lines = _value_view(pointer, value, observed(ctx, history, ref[1]) if ref else _MISSING)
             res_marks = [m for m in res_marks if m[0] != "answer differs"]    # the view shows the difference
             res_lines = [*res_lines, *view_lines]
-        req_html, a = _marked(_image_request(e, req_marks), req_marks)
+        if ref and cls == "access-control":       # e.g. the owner's UserId in another account's answer
+            res_lines = [*res_lines, *_same_owner_fields(e, ref)]
+        req_html, a = _marked(_image_request(e, req_marks), req_marks, sent=True)
         res_html, b = _marked(_image_response(ctx, e, res_marks, res_lines, view), res_marks, res_lines)
         fact_html = " · ".join(f"<b>{html.escape(t)}</b>" if decides else html.escape(t) for t, decides in facts)
         total += a + b
         who = html.escape(e.get("_role") or "anonymous")
-        kind, label = roles.get(n, ("", ""))
         banner = (f"<span class=role>{html.escape(ROLE_TITLES[kind])}</span>{html.escape(label)} · "
                   if kind else "")
         diff = difference(ctx, history, e, ref) if ref else ""

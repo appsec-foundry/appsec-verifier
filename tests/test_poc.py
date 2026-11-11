@@ -318,7 +318,7 @@ def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, p
         assert "<mark>[identity customer-a]</mark>" in page and "<mark>[identity customer-b]</mark>" in page
         if verdict == "confirmed":
             assert "<mark>bob@shop.test</mark>" in page and "not on the page" not in page
-            assert "<span class=tag>named in the verdict ▸</span><mark>bob@shop.test</mark>" in page
+            assert "<mark>bob@shop.test</mark><span class=note>◀ named in the verdict</span>" in page
         else:
             assert result.verdict == "inconclusive" and "protected resource is present" in result.rationale
 
@@ -365,10 +365,11 @@ def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
                      {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2]}}])
     page = shot["html"]
     assert "<mark>x%27+OR+1%3D1--</mark>" in page and "<mark>x%27+OR+1%3D2--</mark>" in page   # as httpx sends it
-    assert "<mark>1</mark></span>,2,3]}" in page and "<mark>]}</mark>" in page      # where the two answers part
+    assert "<mark>1</mark><span class=note>◀ answer differs</span></span>,2,3]}" in page   # where the answers part
+    assert "<mark>]}</mark>" in page
     assert page.count("<mark>") == 4 and "HTTP/<mark>" not in page             # once, not wherever "1" recurs
     assert page.count("<span class=tag>input ▸</span><mark>x%27+OR+1%3D") == 2       # each mark says what it is
-    assert page.count("<span class=tag>answer differs ▸</span><mark>") == 2
+    assert page.count("<span class=note>◀ answer differs</span>") == 2       # a red note beside the answer's mark
     assert "<b>input, decoded: x&#x27; OR 1=1--</b>" in page
     assert "answered in" not in page                                           # no time: not a timing proof
 
@@ -438,7 +439,7 @@ def test_a_verdict_that_cites_no_step_gets_an_image_that_says_it_proves_nothing(
     result, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
                          [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
     assert "Step 1 · GET as anonymous" in shot["html"]
-    assert "cites no step" in shot["html"] and "proves nothing" in shot["html"]
+    assert "The verdict cites no step, so these requests prove nothing." in shot["html"]
     assert "what the verdict rests on" not in shot["html"]
     assert result.poc["shown"] == [] and not any(s["decisive"] for s in result.poc["steps"])
 
@@ -527,10 +528,11 @@ def test_exchange_image_marks_the_set_cookie_line_of_the_observed_session_cookie
                 "result": {"status": 200, "session_cookies": [cookie]}}
     plan = {"tool": "plan_test", "args": {"kind": "session", "resource": "account"}, "result": {"accepted": True}}
     page, marked = _session_image(cwe, [plan, observed, observed])
-    assert page.count(f"<span class=hit><span class=tag>{label} ▸</span><mark>Set-Cookie: sid=") == 2
+    assert page.count("<span class=hit><mark>Set-Cookie: sid=") == 2
+    assert page.count(f"</mark><span class=note>◀ {label}</span>") == 2
     assert marked == 2 and "<mark>Set-Cookie: lang=" not in page and "s3cr3tvalue" not in page
     assert "[identity customer-a]" in page and "<mark>[identity customer-a]</mark>" not in page  # not decisive here
-    assert "First captured 2026-11-08T10:12:03Z." in page
+    assert "at 2026-11-08T10:12:03Z; nothing sent again." in page
 
 
 def test_exchange_image_marks_no_cookie_without_a_declared_session_plan():
@@ -568,7 +570,8 @@ _EXPERIMENT = {"kind": "boolean", "path": "/search", "method": "GET", "input_loc
 def _injection():
     """A boolean experiment: baseline, true and false condition, baseline again; a target value with markup."""
     queries = {2: "x", 3: "x' OR 1=1--", 4: "x' OR 1=2--", 5: "x"}
-    bodies = {2: '{"items":[{"id":1,"name":"a"}]}', 3: '{"items":[{"id":1,"name":"a"},{"id":2,"name":"<b>z</b>"}]}',
+    bodies = {2: '{"items":[{"id":1,"name":"a"}]}',
+              3: '{"items":[{"id":1,"name":"a"},{"id":2,"name":"<b>z</b>"},{"id":3,"name":"c"}]}',
               4: '{"items":[]}', 5: '{"items":[{"id":1,"name":"a"}]}'}
     history = [_accepted(**_EXPERIMENT), *(_sent("/search", q=q) for q in queries.values())]
     shown = [(n, _exchange("/search?" + urlencode({"q": q}), bodies[n])) for n, q in queries.items()]
@@ -586,14 +589,21 @@ def test_an_injection_image_shows_the_baseline_above_each_condition_and_how_the_
     page, _ = poc.exchange_document(ctx, history, first, "confirmed", "evidence/T-001-poc.har", comparison=shown)
     assert page.index("<span class=role>Normal request</span>baseline input · Step 2") < page.index(
         "<span class=role>Attack</span>true condition · Step 3")
-    assert ("Compared with the normal request in step 2: same status 200; /items has 1 entry there and 2 entries "
-            "here, 1 of them not in the normal answer.") in page
-    assert "<span class=tag>answer differs ▸</span><mark>/items: 2 entries (normal request: 1 entry)</mark>" in page
+    assert ("Compared with the normal request in step 2: same status 200; /items has 1 entry there and 3 entries "
+            "here, 2 of them not in the normal answer.") in page
+    # Below the normal request, the attack's answer is framed in red with a note on why it counts.
+    assert "<mark>/items: 3 entries</mark><span class=note>◀ 3 entries instead of 1</span>" in page
+    assert '<span class="hit sent"><span class=tag>input ▸</span><mark>x%27+OR+1%3D1--</mark>' in page
     assert "+ [1] id 2 · name &quot;&lt;b&gt;z&lt;/b&gt;&quot;" in page and "<b>z</b>" not in page
-    assert "Attack: step 4 · false condition · as anonymous → 200 · /items: 0 entries" in page     # the overview
+    # The new entries in one red frame with its label, the line after it not left blank.
+    assert ('<span class="hit block"><span class=note>▼ 2 entries the normal request does not get</span>'
+            '<mark>+ [1] id 2' in page
+            and '+ [2] id 3 · name &quot;c&quot;</mark></span></pre>' in page)
+    assert ("<span class=k>Result:</span> baseline input: 1 entry · true condition: 3 entries · false condition: "
+            "0 entries. The proof check accepted it.") in page
     page, _ = poc.exchange_document(ctx, history, second, "confirmed", "evidence/T-001-poc.har", comparison=shown)
     assert "Compared with the normal request in step 5: same status 200; /items has 1 entry there and 0 " in page
-    assert "+ not in the normal answer" not in page                                 # no entry is new
+    assert "the normal request does not get" not in page                           # no entry is new
 
 
 def test_steps_outside_the_declared_comparison_get_no_role():
@@ -604,7 +614,7 @@ def test_steps_outside_the_declared_comparison_get_no_role():
     assert poc.step_roles(ctx, [{"tool": "plan_test", "args": _EXPERIMENT, "result": {"error": "no"}},
                                 *history[1:]], shown) == {}
     page, _ = poc.exchange_document(ctx, [{}, *history[1:]], shown[:2], "inconclusive", None)
-    assert "Comparison: step 2: anonymous → 200" in page and "class=role" not in page
+    assert "top: step 2, GET as anonymous → 200; below: step 3" in page and "class=role" not in page
 
 
 def test_an_access_image_puts_the_owners_read_above_the_other_accounts():
@@ -618,6 +628,11 @@ def test_an_access_image_puts_the_owners_read_above_the_other_accounts():
     assert roles == {2: ("normal", "owner creates the record"), 3: ("normal", "owner reads its record"),
                      4: ("control", "without login"), 5: ("attack", "another account reads the owner's record")}
     assert [[n for n, _ in p] for p in poc.panels(shown, roles)] == [[3, 5], [2, 4], [6]]   # nothing left out
+    page, _ = poc.exchange_document(ctx, history, [shown[1], shown[3]], "confirmed", None, comparison=shown)
+    # The owner's UserId in the other account's answer is framed; the owner's own answer is not.
+    assert page.count("<mark>/UserId: 1</mark><span class=note>◀ customer-b gets the same UserId as customer-a"
+                      "</span>") == 1
+    assert page.index("same UserId") > page.index("<span class=role>Attack</span>")
     assert poc.difference(ctx, history, shown[3][1], shown[1]) == (
         "Compared with the normal request in step 3: same status 200, the identical answer.")
 
@@ -656,6 +671,11 @@ def test_a_request_with_the_payload_is_the_attack_and_one_without_it_the_normal_
     roles = poc.step_roles(ctx, history, shown)
     assert roles == {1: ("attack", "carries the payload"), 2: ("normal", "without the payload")}
     assert [n for n, _ in poc.by_role(shown, roles)] == [2, 1]
+
+
+def test_report_excerpts_keep_marks_but_not_the_images_notes():
+    assert poc._code_excerpt("a b c", [("why it counts", "b")]) == "a ⟦b⟧ c"
+    assert poc._code_excerpt("x\ny\nz\nw", lines=[("new", "y"), ("new", "z")]) == "x\n⟦y\nz⟧\nw"   # no line joined
 
 
 def test_screenshots_show_times_to_the_second():
