@@ -1,0 +1,46 @@
+{
+  "finding_id": "T-058",
+  "class": "access-control",
+  "exchanges": [
+    {
+      "step": 11,
+      "method": "GET",
+      "path": "/encryptionkeys/premium.key",
+      "params": {},
+      "json": null,
+      "form": null,
+      "role": "account-1",
+      "status": 200,
+      "length": 50,
+      "body_sha256": null,
+      "elapsed_ms": 8
+    },
+    {
+      "step": 12,
+      "method": "GET",
+      "path": "/encryptionkeys/premium.key",
+      "params": {},
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": 50,
+      "body_sha256": null,
+      "elapsed_ms": 12
+    },
+    {
+      "step": 13,
+      "method": "GET",
+      "path": "/encryptionkeys/vrf6bbb5b086970275e",
+      "params": {},
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 404,
+      "length": 1074,
+      "body_sha256": null,
+      "elapsed_ms": 7
+    }
+  ],
+  "captured": "2026-11-12T12:49:55.430119Z"
+}

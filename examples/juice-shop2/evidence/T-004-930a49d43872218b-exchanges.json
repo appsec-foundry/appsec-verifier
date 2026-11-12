@@ -1,0 +1,187 @@
+{
+  "finding_id": "T-004",
+  "class": "injection",
+  "exchanges": [
+    {
+      "step": 2,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple'"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 500,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 21
+    },
+    {
+      "step": 3,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple''"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 14
+    },
+    {
+      "step": 4,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple\""
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 15
+    },
+    {
+      "step": 5,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple\"\""
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 19
+    },
+    {
+      "step": 6,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple`"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 15
+    },
+    {
+      "step": 7,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple``"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 20
+    },
+    {
+      "step": 8,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple'"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 500,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 15
+    },
+    {
+      "step": 9,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple''"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 14
+    },
+    {
+      "step": 10,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple\""
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 17
+    },
+    {
+      "step": 11,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple\"\""
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 15
+    },
+    {
+      "step": 12,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple`"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 17
+    },
+    {
+      "step": 13,
+      "method": "GET",
+      "path": "/rest/products/search",
+      "params": {
+        "q": "apple``"
+      },
+      "json": null,
+      "form": null,
+      "role": null,
+      "status": 200,
+      "length": null,
+      "body_sha256": null,
+      "elapsed_ms": 15
+    }
+  ],
+  "captured": "2026-11-12T12:42:21.197979Z"
+}

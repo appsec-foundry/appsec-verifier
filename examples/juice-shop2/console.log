@@ -1,0 +1,466 @@
+  [90mSelection  :[0m [1m32 findings[0m
+  [90mTarget     :[0m [95mhttp://127.0.0.1:3000[0m[90m (no scope file: only this host and port)[0m
+  [90mMode       :[0m [32msafe: only GET, HEAD and OPTIONS[0m
+  [90mProfile    :[0m [35mclaude · claude-sonnet-5-5 · Claude CLI 2.1.322[0m[90m (Claude Code) · login[0m
+  [90mLimits     :[0m [1m≤ $30.00 · ≤ 500 model calls · ≤ 2000 requests · ≤ 30 min · 5 requests/s[0m
+  [90mAccounts   :[0m [1maccount-1, account-2, admin-1[0m[90m (privileged, read-only) · sign in at POST /rest/user/login (from the assessment)[0m
+  [90mBrowser    :[0m [1mGoogle Chrome, screenshots of all classes[0m
+  [90mCallback   :[0m [1m127.0.0.1:57553[0m[90m (the target must reach this machine's loopback, not via docker -p)[0m
+  [90mReport     :[0m [95m/tmp/134/verification.md[0m
+
+[1mTest plan[0m     8 of 32 findings will be tested (9 runs with their variants)
+  T-004  [90mcritical[0m  injection       SQL injection in product search — routes/search.ts:23[90m · GET /rest/products/search · 2 variants[0m
+  T-001  [90mhigh    [0m  xss             Angular sanitizer bypass causes XSS in about, search, administration[90m · GET /#/search[0m
+  T-033  [90mhigh    [0m  injection       NoSQL injection in product reviews $where — routes/showProductReviews.ts:36[90m · GET /rest/products…[0m
+  T-034  [90mhigh    [0m  injection       NoSQL injection in order tracking $where predicate — routes/trackOrder.ts:18[90m · GET /rest/track-o…[0m
+  T-058  [90mhigh    [0m  access-control  Encryption keys and logs served without authorization — server.ts:278[90m · ALL /encryptionkeys/:fil…[0m
+  T-060  [90mhigh    [0m  access-control  Any authenticated user can list all user accounts — server.ts:363[90m · GET /api/Users[0m
+  T-069  [90mhigh    [0m  access-control  User list readable by any authenticated user — routes/authenticatedUsers.ts:12[90m · GET /rest/user/…[0m
+  T-039  [90mhigh    [0m  access-control  Unauthenticated key and log file exposure — routes/keyServer.ts:14[90m · no request in the assessment[0m
+
+[1mNot testable[0m  27 findings need what this run does not have (--test-all tries anyway)
+  [33mintrusive mode[0m  T-012, T-011, T-010, T-001, T-002, T-033, T-034, T-037, T-042, T-053, T-025, T-026, T-030, T-035, T-044, T-046,
+                  T-050, T-051, T-052, T-057, T-059, T-061, T-063, T-065, T-064 [90m→ run with --allow-intrusive[0m
+  [33mmarker file   [0m  T-023, T-024 [90m→ a marker_file in a scope file[0m
+  [90mhow to provide each, with lines to copy: appsec-verifier preflight, or docs/cli.md (Scope file)[0m
+
+The same run without questions, e.g. in CI:
+  appsec-verifier verify --assessment /home/mrohr/assessments/juice-shop-std3/security-assessment.yaml --url http://127.0.0.1:3000 --source /home/mrohr/juice-shop --output /tmp/134 --severity critical,high --cost-limit 30.0 --profile claude --console-log color --account jim@juice-sh.op=VERIFIER_JIM_PASS --account bender@juice-sh.op=VERIFIER_BENDER_PASS --admin-account admin@juice-sh.op=VERIFIER_ADMIN_PASS --overwrite --annotate --show-costs --strict-severity --non-interactive --yes
+
+[1mPreflight[0m
+  [32m✓[0m [90mTarget      [0m http://127.0.0.1:3000 answers · HTTP 200
+  [32m✓[0m [90mSource      [0m /home/mrohr/juice-shop: readable source checkout
+  [32m✓[0m [90mLogin fields[0m email/password proposed by the model; email/password worked
+  [32m✓[0m [90maccount-1   [0m form: logged in
+  [32m✓[0m [90maccount-2   [0m form: logged in
+  [32m✓[0m [90madmin-1     [0m form: logged in
+  [32m✓[0m [90mModel test  [0m claude-sonnet-5-5 answered with a valid step · $0.0046
+
+[90;1mTIME      FINDING    EVENT    PROGRESS  ELAPSED    LEFT  DETAIL[0m
+[90m13:41:48[0m  [1m1/8 T-004[0m  [95mstart  [0m  [90m      0%       0s    ≤29m[0m  [1mSQL injection in product search — routes/search.ts:23[0m
+                                                         [31mcritical[0m · injection · variant-001 · GET /rest/products/search
+[90m13:41:48[0m  1/8 T-004  [35magent  [0m  [90m      0%       0s    ≤29m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:42:00[0m  1/8 T-004  [90mplan   [0m  [90m      0%      12s    ≤29m[0m  test plan · /rest/products/search
+[90m13:42:00[0m  1/8 T-004  [90m·      [0m  [90m      0%      12s    ≤29m[0m  step 2 · [35mGET /rest/products/search?q=apple'[0m → 500 · body withheld
+[90m13:42:00[0m  1/8 T-004  [90m·      [0m  [90m      0%      12s    ≤29m[0m  step 3 · [35mGET /rest/products/search?q=apple''[0m → 200 · body withheld
+[90m13:42:00[0m  1/8 T-004  [90m·      [0m  [90m      0%      12s    ≤29m[0m  step 4 · [35mGET /rest/products/search?q=apple"[0m → 200 · body withheld
+[90m13:42:01[0m  1/8 T-004  [90m·      [0m  [90m      0%      12s    ≤29m[0m  step 5 · [35mGET /rest/products/search?q=apple""[0m → 200 · body withheld
+[90m13:42:01[0m  1/8 T-004  [90m·      [0m  [90m      0%      13s    ≤29m[0m  step 6 · [35mGET /rest/products/search?q=apple`[0m → 200 · body withheld
+[90m13:42:01[0m  1/8 T-004  [90m·      [0m  [90m      0%      13s    ≤29m[0m  step 7 · [35mGET /rest/products/search?q=apple``[0m → 200 · body withheld
+[90m13:42:01[0m  1/8 T-004  [90m·      [0m  [90m      0%      13s    ≤29m[0m  step 8 · [35mGET /rest/products/search?q=apple'[0m → 500 · body withheld
+[90m13:42:01[0m  1/8 T-004  [90m·      [0m  [90m      0%      13s    ≤29m[0m  step 9 · [35mGET /rest/products/search?q=apple''[0m → 200 · body withheld
+[90m13:42:02[0m  1/8 T-004  [90m·      [0m  [90m      0%      13s    ≤29m[0m  step 10 · [35mGET /rest/products/search?q=apple"[0m → 200 · body withheld
+[90m13:42:02[0m  1/8 T-004  [90m·      [0m  [90m      0%      14s    ≤29m[0m  step 11 · [35mGET /rest/products/search?q=apple""[0m → 200 · body withheld
+[90m13:42:02[0m  1/8 T-004  [90m·      [0m  [90m      0%      14s    ≤29m[0m  step 12 · [35mGET /rest/products/search?q=apple`[0m → 200 · body withheld
+[90m13:42:02[0m  1/8 T-004  [90m·      [0m  [90m      0%      14s    ≤29m[0m  step 13 · [35mGET /rest/products/search?q=apple``[0m → 200 · body withheld
+[90m13:42:02[0m  1/8 T-004  [90m·      [0m  [90m      0%      14s    ≤29m[0m  step 14 · experiment → done
+[90m13:42:23[0m  1/8 T-004  [35magent  [0m  [90m      0%      35s    ≤29m[0m  [35;1m■ test agent finished[0m · 15 steps · 35s
+[90m13:42:23[0m  1/8 T-004  [32mproof  [0m  [90m      0%      35s    ≤29m[0m  [32;1m✓ proof checked[0m[32m: engine error only for the syntax break[0m · steps 2, 3, 4, 5,
+                                                         6, 7, 8, 9, 10, 11, 12, 13
+[90m13:42:23[0m  [1m1/8 T-004[0m  [32mdone   [0m  [90m      0%      35s    ≤29m[0m  [32;1m✔ confirmed (medium)[0m · 35s · run [95m$0.27[0m of $30.00 at API prices
+                                                         The error-probe control confirmed SQL injection in the q parameter of GET
+                                                         /rest/products/search.
+[90m13:42:23[0m  1/8 T-004  [32mproof  [0m  [90m      0%      35s    ≤29m[0m  screenshot
+                                                         /tmp/134/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-ht
+                                                         tp-1.png
+[90m13:42:23[0m  1/8 T-004  [32mproof  [0m  [90m      0%      35s    ≤29m[0m  screenshot
+                                                         /tmp/134/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-ht
+                                                         tp-2.png
+[90m13:42:23[0m  1/8 T-004  [32mproof  [0m  [90m      0%      35s    ≤29m[0m  screenshot
+                                                         /tmp/134/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-ht
+                                                         tp-3.png
+
+[90m13:42:23[0m  [1m1/8 T-004[0m  [95mstart  [0m  [90m      0%      35s    ≤29m[0m  [1mSQL injection in product search — routes/search.ts:23[0m
+                                                         [31mcritical[0m · injection · variant-002 · GET /rest/products/search
+[90m13:42:23[0m  1/8 T-004  [35magent  [0m  [90m      0%      35s    ≤29m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+[90m13:42:32[0m  1/8 T-004  [35magent  [0m  [90m      0%      44s    ≤29m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 9s · run [95m$0.30[0m
+[90m13:42:32[0m  [1m1/8 T-004[0m  [90mdone   [0m  [90m     12%      44s     ~5m[0m  [90;1mnot attempted[0m · 0s · run [95m$0.30[0m of $30.00 at API prices
+                                                         not tested: another variant of this finding already confirmed it
+
+[90m13:42:32[0m  [1m2/8 T-001[0m  [95mstart  [0m  [90m     12%      44s     ~5m[0m  [1mAngular sanitizer bypass causes XSS in about, search, administration[0m
+                                                         [91mhigh[0m · xss · variant-003 · GET /#/search
+[90m13:42:32[0m  2/8 T-001  [35magent  [0m  [90m     12%      44s     ~5m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:42:49[0m  2/8 T-001  [90m·      [0m  [90m     12%    1m01s     ~7m[0m  step 1 · Confirm q param flows to bypassSecurityTrustHtml sink
+                                                                  source
+                                                                  frontend/src/app/search-result/search-result.component.ts:143 →
+                                                                  done · [90mmodel 17s[0m · run [95m$0.40[0m
+[90m13:43:23[0m  2/8 T-001  [90m·      [0m  [90m     12%    1m35s    ~11m[0m  step 2 · Test search q innerHTML XSS execution via onerror payload
+                                                                  [35mbrowser /#/search?q=<img src=x[0m
+                                                                  [35monerror=alert('vrfff417e61'.concat('4391894e'))>[0m → 200 · [32;1mscript[0m
+                                                                  [32;1mexecuted[0m · [90mmodel 20s[0m · run [95m$0.49[0m
+[90m13:43:37[0m  2/8 T-001  [35magent  [0m  [90m     12%    1m49s    ~12m[0m  [35;1m■ test agent finished[0m · 3 steps · 1m05s
+[90m13:43:37[0m  2/8 T-001  [32mproof  [0m  [90m     12%    1m49s    ~12m[0m  [32;1m✓ proof checked[0m[32m: script executed in the browser[0m · step 2
+[90m13:43:37[0m  [1m2/8 T-001[0m  [32mdone   [0m  [90m     25%    1m49s     ~5m[0m  [32;1m✔ confirmed (high)[0m · 1m05s · run [95m$0.59[0m of $30.00 at API prices
+                                                         The q query parameter in /#/search is passed through
+                                                         sanitizer.bypassSecurityTrustHtml (search-result.component.ts:143) and
+                                                         bound via innerHTML without escapin…
+[90m13:43:37[0m  2/8 T-001  [32mproof  [0m  [90m     25%    1m49s     ~5m[0m  screenshot
+                                                         /tmp/134/evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xs
+                                                         s-in-about-search.png
+[90m13:43:37[0m  2/8 T-001  [32mproof  [0m  [90m     25%    1m49s     ~5m[0m  screenshot
+                                                         /tmp/134/evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xs
+                                                         s-in-about-search-http-1.png
+[90m13:43:37[0m  2/8 T-001  [35magent  [0m  [90m     25%    1m49s     ~5m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text, layout and 1
+                                                         screenshot. · run [95m$0.59[0m
+[90m13:43:41[0m  2/8 T-001  [35magent  [0m  [90m     25%    1m52s     ~5m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; 1 screenshot reviewed. · 4s · run [95m$0.61[0m
+
+[90m13:43:41[0m  [1m3/8 T-033[0m  [95mstart  [0m  [90m     25%    1m52s     ~5m[0m  [1mNoSQL injection in product reviews $where — routes/showProductReviews.ts:36[0m
+                                                         [91mhigh[0m · injection · variant-001 · GET /rest/products/:id/reviews
+[90m13:43:41[0m  3/8 T-033  [35magent  [0m  [90m     25%    1m52s     ~5m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:43:57[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m09s     ~6m[0m  step 1 · Inspect $where predicate construction near line 31-36
+                                                                  source routes/showProductReviews.ts:31 → done · [90mmodel 16s[0m ·
+                                                                  run [95m$0.74[0m
+[90m13:44:10[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m22s     ~7m[0m  step 2 · Testing NoSQL $where boolean injection via id path param.
+                                                                  plan_test → error: invalid plan_test arguments: 'baseline' is a
+                                                                  required property · run [95m$0.86[0m
+[90m13:44:18[0m  3/8 T-033  [90mplan   [0m  [90m     25%    2m30s     ~7m[0m  test plan · /rest/products/:id/reviews · Checks if injected predicate
+                                                         alters returned reviews list vs baseline product 1.
+[90m13:44:19[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m30s     ~7m[0m  step 4 · [35mGET /rest/products/:id/reviews[0m → 200 · 395 B
+[90m13:44:19[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m31s     ~7m[0m  step 5 · [35mGET /rest/products/:id/reviews[0m → 200 · 395 B
+[90m13:44:19[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m31s     ~7m[0m  step 6 · [35mGET /rest/products/:id/reviews[0m → 200 · 30 B
+[90m13:44:19[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m31s     ~7m[0m  step 7 · [35mGET /rest/products/:id/reviews[0m → 200 · 395 B
+[90m13:44:19[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m31s     ~7m[0m  step 8 · [35mGET /rest/products/:id/reviews[0m → 200 · 30 B
+[90m13:44:20[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m31s     ~7m[0m  step 9 · [35mGET /rest/products/:id/reviews[0m → 200 · 395 B
+[90m13:44:20[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m32s     ~7m[0m  step 10 · [35mGET /rest/products/:id/reviews[0m → 200 · 395 B
+[90m13:44:20[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m32s     ~7m[0m  step 11 · [35mGET /rest/products/:id/reviews[0m → 200 · 30 B
+[90m13:44:20[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m32s     ~7m[0m  step 12 · [35mGET /rest/products/:id/reviews[0m → 200 · 395 B
+[90m13:44:20[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m32s     ~7m[0m  step 13 · [35mGET /rest/products/:id/reviews[0m → 200 · 30 B
+[90m13:44:20[0m  3/8 T-033  [90m·      [0m  [90m     25%    2m32s     ~7m[0m  step 14 · experiment → done
+[90m13:44:35[0m  3/8 T-033  [35magent  [0m  [90m     25%    2m47s     ~8m[0m  [35;1m■ test agent finished[0m · 15 steps · 55s
+[90m13:44:35[0m  3/8 T-033  [32mproof  [0m  [90m     25%    2m47s     ~8m[0m  [32;1m✓ proof checked[0m[32m: response follows fresh controls[0m · steps 4, 5, 6, 7, 8, 9,
+                                                         10, 11, 12, 13
+[90m13:44:35[0m  [1m3/8 T-033[0m  [32mdone   [0m  [90m     38%    2m47s     ~4m[0m  [32;1m✔ confirmed (medium)[0m · 55s · run [95m$1.12[0m of $30.00 at API prices
+                                                         The :id path parameter in GET /rest/products/:id/reviews is concatenated
+                                                         unquoted into a MongoDB $where JavaScript predicate ('this.product == ' +
+                                                         id) at route…
+[90m13:44:35[0m  3/8 T-033  [32mproof  [0m  [90m     38%    2m47s     ~4m[0m  screenshot
+                                                         /tmp/134/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews
+                                                         -where-http-1.png
+[90m13:44:35[0m  3/8 T-033  [32mproof  [0m  [90m     38%    2m47s     ~4m[0m  screenshot
+                                                         /tmp/134/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews
+                                                         -where-http-2.png
+[90m13:44:35[0m  3/8 T-033  [32mproof  [0m  [90m     38%    2m47s     ~4m[0m  screenshot
+                                                         /tmp/134/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews
+                                                         -where-http-3.png
+[90m13:44:35[0m  3/8 T-033  [35magent  [0m  [90m     38%    2m47s     ~4m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show. ·
+                                                         run [95m$1.12[0m
+[90m13:44:57[0m  3/8 T-033  [35magent  [0m  [90m     38%    3m09s     ~5m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 22s · run [95m$1.22[0m
+
+[90m13:44:57[0m  [1m4/8 T-034[0m  [95mstart  [0m  [90m     38%    3m09s     ~5m[0m  [1mNoSQL injection in order tracking $where predicate —[0m
+                                                         [1mroutes/trackOrder.ts:18[0m
+                                                         [91mhigh[0m · injection · variant-001 · GET /rest/track-order/:id
+[90m13:44:57[0m  4/8 T-034  [35magent  [0m  [90m     38%    3m09s     ~5m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:45:05[0m  4/8 T-034  [90m·      [0m  [90m     38%    3m16s     ~5m[0m  step 1 · Inspect how id is placed into $where predicate
+                                                                  source routes/trackOrder.ts:15 → done · [90mmodel 7s[0m · run [95m$1.35[0m
+[90m13:45:38[0m  4/8 T-034  [90m·      [0m  [90m     38%    3m50s     ~6m[0m  step 2 · Boolean NoSQL $where injection via path id, container /data
+                                                                  plan_test → error: boolean experiments need sql_template or
+                                                                  explicit positive and negative controls · [90mmodel 34s[0m · run [95m$1.48[0m
+[90m13:46:36[0m  4/8 T-034  [90m·      [0m  [90m     38%    4m48s     ~7m[0m  step 3 · Probe for engine-breaking metacharacters in $where quoted string
+                                                                  plan_test → error: a NoSQL engine-error proof needs a JSON input;
+                                                                  for a value spliced into a server-side JavaScript predicate,
+                                                                  declare a boolean plan with js_predicate_template i… · [90mmodel 58s[0m ·
+                                                                  run [95m$1.62[0m
+[90m13:47:05[0m  4/8 T-034  [90mplan   [0m  [90m     38%    5m17s     ~8m[0m  test plan · /rest/track-order/:id
+[90m13:47:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m17s     ~8m[0m  step 5 · [35mGET /rest/track-order/:id[0m → 200 · 63 B
+[90m13:47:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m18s     ~8m[0m  step 6 · [35mGET /rest/track-order/:id[0m → 200 · 920 B
+[90m13:47:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m18s     ~8m[0m  step 7 · [35mGET /rest/track-order/:id[0m → 200 · 67 B
+[90m13:47:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m18s     ~8m[0m  step 8 · [35mGET /rest/track-order/:id[0m → 200 · 63 B
+[90m13:47:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m18s     ~8m[0m  step 9 · [35mGET /rest/track-order/:id[0m → 200 · 920 B
+[90m13:47:07[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m18s     ~8m[0m  step 10 · [35mGET /rest/track-order/:id[0m → 200 · 67 B
+[90m13:47:07[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m18s     ~8m[0m  step 11 · experiment → done
+[90m13:47:30[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m42s     ~9m[0m  step 12 · Request generated js_predicate controls to confirm $where
+                                                                   injection
+                                                                   plan_test → error: invalid plan_test arguments: 'baseline' is a
+                                                                   required property · run [95m$1.88[0m
+[90m13:47:45[0m  4/8 T-034  [90mplan   [0m  [90m     38%    5m57s     ~9m[0m  plan revised · /rest/track-order/:id
+[90m13:47:45[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m57s     ~9m[0m  step 14 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:47:45[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m57s     ~9m[0m  step 15 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:47:45[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m57s     ~9m[0m  step 16 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:47:46[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m58s     ~9m[0m  step 17 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:47:46[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m58s     ~9m[0m  step 18 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:47:46[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m58s     ~9m[0m  step 19 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:47:46[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m58s     ~9m[0m  step 20 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:47:46[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m58s     ~9m[0m  step 21 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:47:47[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m59s     ~9m[0m  step 22 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:47:47[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m59s     ~9m[0m  step 23 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:47:47[0m  4/8 T-034  [90m·      [0m  [90m     38%    5m59s     ~9m[0m  step 24 · experiment → done
+[90m13:48:05[0m  4/8 T-034  [90mplan   [0m  [90m     38%    6m16s    ~10m[0m  plan revised · /rest/track-order/:id
+[90m13:48:05[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m17s    ~10m[0m  step 26 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:48:05[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m17s    ~10m[0m  step 27 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:48:05[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m17s    ~10m[0m  step 28 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:48:05[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m17s    ~10m[0m  step 29 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:48:05[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m17s    ~10m[0m  step 30 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:48:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m18s    ~10m[0m  step 31 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:48:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m18s    ~10m[0m  step 32 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:48:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m18s    ~10m[0m  step 33 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:48:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m18s    ~10m[0m  step 34 · [35mGET /rest/track-order/:id[0m → 200 · 351 B
+[90m13:48:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m18s    ~10m[0m  step 35 · [35mGET /rest/track-order/:id[0m → 200 · 98 B
+[90m13:48:06[0m  4/8 T-034  [90m·      [0m  [90m     38%    6m18s    ~10m[0m  step 36 · experiment → done
+[90m13:48:24[0m  4/8 T-034  [35magent  [0m  [90m     38%    6m35s    ~10m[0m  [35;1m■ test agent finished[0m · 37 steps · 3m26s
+[90m13:48:24[0m  4/8 T-034  [32mproof  [0m  [90m     38%    6m35s    ~10m[0m  [32;1m✓ proof checked[0m[32m: response follows fresh controls[0m · steps 26, 27, 28, 29,
+                                                         30, 31, 32, 33, 34, 35
+[90m13:48:24[0m  [1m4/8 T-034[0m  [32mdone   [0m  [90m     50%    6m35s     ~6m[0m  [32;1m✔ confirmed (medium)[0m · 3m26s · run [95m$2.47[0m of $30.00 at API prices
+                                                         The id parameter in GET /rest/track-order/:id is spliced unescaped into the
+                                                         server-side $where JS predicate this.orderId === '${id}'.
+[90m13:48:24[0m  4/8 T-034  [32mproof  [0m  [90m     50%    6m35s     ~6m[0m  screenshot
+                                                         /tmp/134/evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-
+                                                         where-predicate-http-1.png
+[90m13:48:24[0m  4/8 T-034  [32mproof  [0m  [90m     50%    6m35s     ~6m[0m  screenshot
+                                                         /tmp/134/evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-
+                                                         where-predicate-http-2.png
+[90m13:48:24[0m  4/8 T-034  [32mproof  [0m  [90m     50%    6m35s     ~6m[0m  screenshot
+                                                         /tmp/134/evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-
+                                                         where-predicate-http-3.png
+[90m13:48:24[0m  4/8 T-034  [35magent  [0m  [90m     50%    6m36s     ~6m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show. ·
+                                                         run [95m$2.47[0m
+[90m13:48:39[0m  4/8 T-034  [35magent  [0m  [90m     50%    6m51s     ~6m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 15s · run [95m$2.61[0m
+
+[90m13:48:39[0m  [1m5/8 T-058[0m  [95mstart  [0m  [90m     50%    6m51s     ~6m[0m  [1mEncryption keys and logs served without authorization — server.ts:278[0m
+                                                         [91mhigh[0m · access-control · ALL /encryptionkeys/:file, ALL /support/logs/:file
+[90m13:48:39[0m  5/8 T-058  [35magent  [0m  [90m     50%    6m51s     ~6m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:48:52[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m04s     ~7m[0m  step 1 · Check architecture for route handler details before testing
+                                                                  read_context → done · [90mmodel 13s[0m · run [95m$2.68[0m
+[90m13:49:01[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m13s     ~7m[0m  step 2 · Check unauthenticated access to encryption key file.
+                                                                  [35mGET /encryptionkeys/jwt.pub[0m → 200 · 248 B · [90mmodel 9s[0m · run [95m$2.75[0m
+[90m13:49:08[0m  5/8 T-058  [90mplan   [0m  [90m     50%    7m20s     ~7m[0m  test plan · /encryptionkeys/jwt.pub
+[90m13:49:08[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m20s     ~7m[0m  step 4 · [35mGET /encryptionkeys/jwt.pub as account-1[0m → 200 · 248 B
+[90m13:49:08[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m20s     ~7m[0m  step 5 · [35mGET /encryptionkeys/jwt.pub[0m → 200 · 248 B
+[90m13:49:08[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m20s     ~7m[0m  step 6 · [35mGET /encryptionkeys/vrf6bbb5b081502e6b2[0m → 404 · 1074 B
+[90m13:49:08[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m20s     ~7m[0m  step 7 · experiment → done
+[90m13:49:19[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m31s     ~7m[0m  step 8 · Technical QA requests a follow-up
+                                                                  qa_feedback → done · run [95m$2.90[0m
+[90m13:49:30[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m42s     ~7m[0m  step 9 · Check if non-public key file is served unauthenticated
+                                                                  [35mGET /encryptionkeys/premium.key[0m → error: request does not match
+                                                                  the accepted test plan · run [95m$3.06[0m
+[90m13:49:46[0m  5/8 T-058  [90mplan   [0m  [90m     50%    7m58s     ~7m[0m  plan revised · /encryptionkeys/premium.key
+[90m13:49:47[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m58s     ~7m[0m  step 11 · [35mGET /encryptionkeys/premium.key as account-1[0m → 200 · 50 B
+[90m13:49:47[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m59s     ~7m[0m  step 12 · [35mGET /encryptionkeys/premium.key[0m → 200 · 50 B
+[90m13:49:47[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m59s     ~7m[0m  step 13 · [35mGET /encryptionkeys/vrf6bbb5b086970275e[0m → 404 · 1074 B
+[90m13:49:47[0m  5/8 T-058  [90m·      [0m  [90m     50%    7m59s     ~7m[0m  step 14 · experiment → done
+[90m13:50:02[0m  5/8 T-058  [90mqa     [0m  [90m     50%    8m14s     ~8m[0m  Technical QA: clear · run [95m$3.34[0m
+[90m13:50:02[0m  5/8 T-058  [35magent  [0m  [90m     50%    8m14s     ~8m[0m  [35;1m■ test agent finished[0m · 15 steps · 1m23s
+[90m13:50:02[0m  5/8 T-058  [32mproof  [0m  [90m     50%    8m14s     ~8m[0m  [32;1m✓ proof checked[0m[32m: same answer without credentials, unlike a random path[0m ·
+                                                         steps 11, 12, 13
+[90m13:50:03[0m  5/8 T-058  [35magent  [0m  [90m     50%    8m14s     ~8m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+[90m13:50:08[0m  5/8 T-058  [90mrevise [0m  [90m     50%    8m20s     ~8m[0m  correction 1/2 · Original test agent: The title and panel header say
+                                                         "Encryption keys and logs served without authorization". · run [95m$3.36[0m
+[90m13:50:13[0m  5/8 T-058  [90mreview [0m  [90m     50%    8m25s     ~8m[0m  correction 1/2 · Checking evidence text and layout metadata; no screenshot
+                                                         shown to the model: no application screenshot to show. · run [95m$3.39[0m
+[90m13:50:21[0m  5/8 T-058  [35magent  [0m  [90m     50%    8m33s     ~8m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 19s · run [95m$3.40[0m
+[90m13:50:21[0m  [1m5/8 T-058[0m  [32mdone   [0m  [90m     62%    8m33s     ~5m[0m  [32;1m✔ confirmed (medium)[0m · 1m23s · run [95m$3.40[0m of $30.00 at API prices
+                                                         Unauthenticated GET /encryptionkeys/premium.key, a non-public key file,
+                                                         returned 200 with 50 bytes, identical to the signed-in account-1 answer.
+[90m13:50:21[0m  5/8 T-058  [32mproof  [0m  [90m     62%    8m33s     ~5m[0m  screenshot
+                                                         /tmp/134/evidence/T-058-encryption-keys-and-logs-served-without-authorizati
+                                                         on-http-1.png
+[90m13:50:21[0m  5/8 T-058  [32mproof  [0m  [90m     62%    8m33s     ~5m[0m  screenshot
+                                                         /tmp/134/evidence/T-058-encryption-keys-and-logs-served-without-authorizati
+                                                         on-http-2.png
+[90m13:50:21[0m  5/8 T-058  [32mproof  [0m  [90m     62%    8m33s     ~5m[0m  screenshot
+                                                         /tmp/134/evidence/T-058-encryption-keys-and-logs-served-without-authorizati
+                                                         on-explanation-1.png
+
+[90m13:50:21[0m  [1m6/8 T-060[0m  [95mstart  [0m  [90m     62%    8m33s     ~5m[0m  [1mAny authenticated user can list all user accounts — server.ts:363[0m
+                                                         [91mhigh[0m · access-control · GET /api/Users (login)
+[90m13:50:21[0m  6/8 T-060  [35magent  [0m  [90m     62%    8m33s     ~5m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:50:27[0m  6/8 T-060  [90mplan   [0m  [90m     62%    8m39s     ~5m[0m  test plan · /api/Users
+[90m13:50:27[0m  6/8 T-060  [90m·      [0m  [90m     62%    8m39s     ~5m[0m  step 2 · [35mGET /api/Users as account-1[0m → 200 · 6911 B
+[90m13:50:27[0m  6/8 T-060  [90m·      [0m  [90m     62%    8m39s     ~5m[0m  step 3 · [35mGET /api/Users[0m → 401 · 972 B
+[90m13:50:28[0m  6/8 T-060  [90m·      [0m  [90m     62%    8m39s     ~5m[0m  step 4 · [35mGET /api/vrff5aa4e6c7a151b9e[0m → 500 · 2448 B
+[90m13:50:28[0m  6/8 T-060  [90m·      [0m  [90m     62%    8m39s     ~5m[0m  step 5 · experiment → done
+[90m13:50:32[0m  6/8 T-060  [90mplan   [0m  [90m     62%    8m44s     ~5m[0m  plan revised · /api/Users
+[90m13:50:36[0m  6/8 T-060  [90m·      [0m  [90m     62%    8m48s     ~5m[0m  step 7 · Reference request as admin for user list
+                                                                  [35mGET /api/Users as admin-1[0m → 200 · 6911 B · run [95m$3.46[0m
+[90m13:50:41[0m  6/8 T-060  [90m·      [0m  [90m     62%    8m53s     ~5m[0m  step 8 · Normal account fetches user list
+                                                                  [35mGET /api/Users as account-1[0m → 200 · 6911 B · run [95m$3.48[0m
+[90m13:50:48[0m  6/8 T-060  [90m·      [0m  [90m     62%    9m00s     ~5m[0m  step 9 · Unauthenticated request for the access-control triple
+                                                                  [35mGET /api/Users[0m → 401 · 972 B · run [95m$3.50[0m
+[90m13:51:05[0m  6/8 T-060  [90mqa     [0m  [90m     62%    9m17s     ~5m[0m  Technical QA: clear · run [95m$3.56[0m
+[90m13:51:05[0m  6/8 T-060  [35magent  [0m  [90m     62%    9m17s     ~5m[0m  [35;1m■ test agent finished[0m · 10 steps · 44s
+[90m13:51:05[0m  6/8 T-060  [32mproof  [0m  [90m     62%    9m17s     ~5m[0m  [32;1m✓ proof checked[0m[32m: normal account got the privileged answer[0m · steps 7, 8, 9
+[90m13:51:05[0m  6/8 T-060  [35magent  [0m  [90m     62%    9m17s     ~5m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+[90m13:51:12[0m  6/8 T-060  [90mrevise [0m  [90m     62%    9m24s     ~5m[0m  correction 1/2 · Original test agent: The finding says admin-only access is
+                                                         the intended restriction, but the checked proof says this comes from the
+                                                         finding, not from the evide… · run [95m$3.59[0m
+[90m13:51:26[0m  6/8 T-060  [90mreview [0m  [90m     62%    9m38s     ~5m[0m  correction 1/2 · Checking evidence text and layout metadata; no screenshot
+                                                         shown to the model: no application screenshot to show. · run [95m$3.63[0m
+[90m13:51:29[0m  6/8 T-060  [35magent  [0m  [90m     62%    9m41s     ~5m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 24s · run [95m$3.66[0m
+[90m13:51:29[0m  [1m6/8 T-060[0m  [32mdone   [0m  [90m     75%    9m41s     ~3m[0m  [32;1m✔ confirmed (medium)[0m · 44s · run [95m$3.66[0m of $30.00 at API prices
+                                                         GET /api/Users returned 200 with the full account list (ids, emails, roles)
+                                                         for admin-1 (step 7).
+[90m13:51:29[0m  6/8 T-060  [32mproof  [0m  [90m     75%    9m41s     ~3m[0m  screenshot
+                                                         /tmp/134/evidence/T-060-any-authenticated-user-can-list-all-user-accounts-h
+                                                         ttp-1.png
+[90m13:51:29[0m  6/8 T-060  [32mproof  [0m  [90m     75%    9m41s     ~3m[0m  screenshot
+                                                         /tmp/134/evidence/T-060-any-authenticated-user-can-list-all-user-accounts-h
+                                                         ttp-2.png
+[90m13:51:29[0m  6/8 T-060  [32mproof  [0m  [90m     75%    9m41s     ~3m[0m  screenshot
+                                                         /tmp/134/evidence/T-060-any-authenticated-user-can-list-all-user-accounts-e
+                                                         xplanation-1.png
+
+[90m13:51:29[0m  [1m7/8 T-069[0m  [95mstart  [0m  [90m     75%    9m41s     ~3m[0m  [1mUser list readable by any authenticated user —[0m
+                                                         [1mroutes/authenticatedUsers.ts:12[0m
+                                                         [91mhigh[0m · access-control · GET /rest/user/authentication-details (login)
+[90m13:51:29[0m  7/8 T-069  [35magent  [0m  [90m     75%    9m41s     ~3m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:51:44[0m  7/8 T-069  [90m·      [0m  [90m     75%    9m56s     ~3m[0m  step 1 · Technical QA requests a follow-up
+                                                                  qa_feedback → done · run [95m$3.73[0m
+[90m13:51:52[0m  7/8 T-069  [90mplan   [0m  [90m     75%   10m03s     ~3m[0m  test plan · /rest/user/authentication-details
+[90m13:51:56[0m  7/8 T-069  [90m·      [0m  [90m     75%   10m08s     ~3m[0m  step 3 · Fetch user list as normal account
+                                                                  [35mGET /rest/user/authentication-details as account-1[0m → 200 · 8953 B
+                                                                  · [90mmodel 5s[0m · run [95m$3.76[0m
+[90m13:52:05[0m  7/8 T-069  [90m·      [0m  [90m     75%   10m17s     ~3m[0m  step 4 · Check whether unauthenticated request also returns full list
+                                                                  (negative control)
+                                                                  [35mGET /rest/user/authentication-details[0m → 401 · 972 B · [90mmodel 8s[0m ·
+                                                                  run [95m$3.81[0m
+[90m13:52:08[0m  7/8 T-069  [90m·      [0m  [90m     75%   10m20s     ~3m[0m  step 5 · Admin reference request for the same endpoint
+                                                                  [35mGET /rest/user/authentication-details as admin-1[0m → 200 · 8953 B ·
+                                                                  [90mmodel 4s[0m · run [95m$3.83[0m
+[90m13:52:29[0m  7/8 T-069  [90mqa     [0m  [90m     75%   10m41s     ~3m[0m  Technical QA: clear · run [95m$3.89[0m
+[90m13:52:29[0m  7/8 T-069  [35magent  [0m  [90m     75%   10m41s     ~3m[0m  [35;1m■ test agent finished[0m · 6 steps · 1m00s
+[90m13:52:29[0m  7/8 T-069  [32mproof  [0m  [90m     75%   10m41s     ~3m[0m  [32;1m✓ proof checked[0m[32m: normal account got the privileged answer[0m · steps 3, 4, 5
+[90m13:52:29[0m  7/8 T-069  [35magent  [0m  [90m     75%   10m41s     ~3m[0m  [35;1m▶ evidence reviewer started[0m · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+[90m13:52:32[0m  7/8 T-069  [35magent  [0m  [90m     75%   10m44s     ~3m[0m  [35;1m■ evidence reviewer finished[0m · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 3s · run [95m$3.92[0m
+[90m13:52:32[0m  [1m7/8 T-069[0m  [32mdone   [0m  [90m     88%   10m44s     ~1m[0m  [32;1m✔ confirmed (medium)[0m · 1m00s · run [95m$3.92[0m of $30.00 at API prices
+                                                         GET /rest/user/authentication-details returned 200 with the full user list
+                                                         (admin and customer records, role, lastLoginIp, lastLoginTime) to normal
+                                                         account-1.
+[90m13:52:32[0m  7/8 T-069  [32mproof  [0m  [90m     88%   10m44s     ~1m[0m  screenshot
+                                                         /tmp/134/evidence/T-069-user-list-readable-by-any-authenticated-user-http-1
+                                                         .png
+[90m13:52:32[0m  7/8 T-069  [32mproof  [0m  [90m     88%   10m44s     ~1m[0m  screenshot
+                                                         /tmp/134/evidence/T-069-user-list-readable-by-any-authenticated-user-http-2
+                                                         .png
+
+[90m13:52:32[0m  [1m8/8 T-039[0m  [95mstart  [0m  [90m     88%   10m44s     ~1m[0m  [1mUnauthenticated key and log file exposure — routes/keyServer.ts:14[0m
+                                                         [91mhigh[0m · access-control
+[90m13:52:32[0m  8/8 T-039  [35magent  [0m  [90m     88%   10m44s     ~1m[0m  [35;1m▶ test agent started[0m · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+[90m13:52:52[0m  8/8 T-039  [90m·      [0m  [90m     88%   11m04s     ~1m[0m  step 1 · Check recorded evidence for keyServer route details
+                                                                  read_context → done · [90mmodel 19s[0m · run [95m$4.03[0m
+[90m13:53:03[0m  8/8 T-039  [90m·      [0m  [90m     88%   11m15s     ~1m[0m  step 2 · Inspect handler to find route pattern and allowed files.
+                                                                  source routes/keyServer.ts:14 → done · [90mmodel 11s[0m · run [95m$4.08[0m
+[90m13:53:09[0m  8/8 T-039  [90m·      [0m  [90m     88%   11m21s     ~1m[0m  step 3 · Unauthenticated comparison for key file exposure
+                                                                  plan_test → error: request may only use the finding's declared
+                                                                  variant inputs: no inputs declared · [90mmodel 6s[0m · run [95m$4.09[0m
+[90m13:53:13[0m  8/8 T-039  [90m·      [0m  [90m     88%   11m25s     ~1m[0m  step 4 · Fetch key file without credentials
+                                                                  [35mGET /encryptionkeys/jwt.pub[0m → error: exposure checks use only the
+                                                                  operator-declared harmless read-only resource; without one,
+                                                                  plan_test with signed_in, whose answers the Verifier compares
+                                                                  without … · [90mmodel 4s[0m · run [95m$4.10[0m
+[90m13:53:18[0m  8/8 T-039  [90m·      [0m  [90m     88%   11m30s     ~1m[0m  step 5 · Retry plan declaring the path input file
+                                                                  plan_test → error: the comparison sends one concrete GET: give
+                                                                  path as /a/b with every placeholder filled in, and query inputs in
+                                                                  fixed.params · [90mmodel 5s[0m · run [95m$4.11[0m
+[90m13:53:18[0m  8/8 T-039  [33m⚠      [0m  [90m     88%   11m30s     ~1m[0m  [33mstep 6[0m[33m · [0m[33mstopped: three actions in a row failed without a usable[0m
+                                                         [33mobservation; the last: plan_test: the comparison sends one concrete GET:[0m
+                                                         [33mgive path as /a/b with every placeholder filled in, and query inputs in[0m
+                                                         [33mfixed.params[0m
+[90m13:53:18[0m  8/8 T-039  [35magent  [0m  [90m     88%   11m30s     ~1m[0m  [35;1m■ test agent finished[0m · 6 steps · 46s
+[90m13:53:18[0m  8/8 T-039  [33mproof  [0m  [90m     88%   11m30s     ~1m[0m  [33;1m✗ no proof[0m[33m: the test agent made no progress and was stopped[0m
+[90m13:53:18[0m  8/8 T-039  [90mquality[0m  [90m     88%   11m30s     ~1m[0m  correction 0/2 · not-reviewed: Review not started: no confirmed variant to
+                                                         present.
+[90m13:53:18[0m  [1m8/8 T-039[0m  [33mdone   [0m  [90m    100%   11m30s        [0m  [33;1m? inconclusive[0m · 46s · run [95m$4.11[0m of $30.00 at API prices
+
+[1mResults[0m
+  [32m✓[0m T-004  critical  injection       [32mconfirmed (medium)  [0m  SQL injection in product search — routes/search.ts:23
+    [90mThe error-probe control confirmed SQL injection in the q parameter of GET /rest/products/search. An unbalanced single quote (ap…[0m
+  [32m✓[0m T-001  high      xss             [32mconfirmed (high)    [0m  Angular sanitizer bypass causes XSS in about, search, administration
+    [90mThe q query parameter in /#/search is passed through sanitizer.bypassSecurityTrustHtml (search-result.component.ts:143) and bou…[0m
+  [32m✓[0m T-033  high      injection       [32mconfirmed (medium)  [0m  NoSQL injection in product reviews $where — routes/showProductReviews.ts…
+    [90mThe :id path parameter in GET /rest/products/:id/reviews is concatenated unquoted into a MongoDB $where JavaScript predicate ('…[0m
+  [32m✓[0m T-034  high      injection       [32mconfirmed (medium)  [0m  NoSQL injection in order tracking $where predicate — routes/trackOrder.t…
+    [90mThe id parameter in GET /rest/track-order/:id is spliced unescaped into the server-side $where JS predicate this.orderId === '$…[0m
+  [32m✓[0m T-058  high      access-control  [32mconfirmed (medium)  [0m  Encryption keys and logs served without authorization — server.ts:278
+    [90mUnauthenticated GET /encryptionkeys/premium.key, a non-public key file, returned 200 with 50 bytes, identical to the signed-in …[0m
+  [32m✓[0m T-060  high      access-control  [32mconfirmed (medium)  [0m  Any authenticated user can list all user accounts — server.ts:363
+    [90mGET /api/Users returned 200 with the full account list (ids, emails, roles) for admin-1 (step 7). The normal account account-1 …[0m
+  [32m✓[0m T-069  high      access-control  [32mconfirmed (medium)  [0m  User list readable by any authenticated user — routes/authenticatedUsers…
+    [90mGET /rest/user/authentication-details returned 200 with the full user list (admin and customer records, role, lastLoginIp, last…[0m
+  [33m?[0m T-039  high      access-control  [33minconclusive        [0m  Unauthenticated key and log file exposure — routes/keyServer.ts:14
+    [90mstopped: three actions in a row failed without a usable observation; the last: plan_test: the comparison sends one concrete GET…[0m
+  [90m·[0m T-012  critical  injection       [90mneeds intrusive mode[0m  Code injection — routes/userProfile.ts:61
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-011  critical  injection       [90mneeds intrusive mode[0m  SQL injection in login credential query — routes/login.ts:34
+    [90mrun with --allow-intrusive · 2 variants[0m
+  [90m·[0m T-010  critical  access-control  [90mneeds intrusive mode[0m  Insecure Direct Object Reference
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-002  high      access-control  [90mneeds intrusive mode[0m  Systemic missing object ownership checks across address, basket, coupon
+    [90mrun with --allow-intrusive · 3 variants[0m
+  [90m·[0m T-037  high      injection       [90mneeds intrusive mode[0m  User-controlled username compiled as Pug template — routes/userProfile.t…
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-042  high      access-control  [90mneeds intrusive mode[0m  Any authenticated user can read other users' records and all complaints
+    [90mrun with --allow-intrusive · 3 variants[0m
+  [90m·[0m T-053  high      access-control  [90mneeds intrusive mode[0m  Recycle records readable by any caller by ID — server.ts:388
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-023  high      path-traversal  [90mneeds marker file   [0m  Arbitrary server file read — routes/dataErasure.ts:104
+    [90ma marker_file in a scope file[0m
+  [90m·[0m T-024  high      path-traversal  [90mneeds marker file   [0m  Zip entry path traversal on complaint upload — routes/fileUpload.ts:34
+    [90ma marker_file in a scope file[0m
+  [90m·[0m T-025  high      injection       [90mneeds intrusive mode[0m  Request body orderLinesData evaluated by notevil in vm — routes/b2bOrder…
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-026  high      access-control  [90mneeds intrusive mode[0m  Unauthenticated modification of products — server.ts:503
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-030  high      access-control  [90mneeds intrusive mode[0m  Basket item update lacks ownership check and field — routes/basketItems.…
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-035  high      injection       [90mneeds intrusive mode[0m  NoSQL operator injection and missing — routes/updateProductReviews.ts:18
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-044  high      ssrf            [90mneeds intrusive mode[0m  Server-side request forgery in profile — routes/profileImageUrlUpload.ts…
+    [90mrun with --allow-intrusive · 2 variants[0m
+  [90m·[0m T-046  high      access-control  [90mneeds intrusive mode[0m  Password reset response returns full user record — routes/resetPassword.…
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-050  high      access-control  [90mneeds intrusive mode[0m  Basket item add checks different BasketId than it — routes/basketItems.t…
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-051  high      access-control  [90mneeds intrusive mode[0m  Review author taken from request body — routes/createProductReviews.ts:26
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-052  high      access-control  [90mneeds intrusive mode[0m  Review update lacks ownership check — routes/updateProductReviews.ts:18
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-057  high      access-control  [90mneeds intrusive mode[0m  Deluxe upgrade skips payment verification — routes/deluxe.ts:43
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-059  high      access-control  [90mneeds intrusive mode[0m  Sensitive Routes Registered Without Authentication Middleware
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-061  high      access-control  [90mneeds intrusive mode[0m  Any authenticated user can create products with chosen prices — server.t…
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-063  high      access-control  [90mneeds intrusive mode[0m  Unauthenticated product update — server.ts:501
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-065  high      access-control  [90mneeds intrusive mode[0m  Chatbot coupon tool lacks server-side authorization — routes/chat.ts:184
+    [90mrun with --allow-intrusive[0m
+  [90m·[0m T-064  high      access-control  [90mneeds intrusive mode[0m  Duplicate JSON key bypasses basket ownership check — routes/basketItems.…
+    [90mrun with --allow-intrusive[0m
+[90m  37 unsupported or incomplete findings not listed (--print lists them)[0m
+
+[1mDone[0m
+  [90mReport           :[0m [1m/tmp/134/verification.md[0m[90m (Markdown)[0m
+  [90mData             :[0m [95m/tmp/134/verification.yaml[0m[90m (YAML, for --resume and export)[0m
+  [90mEvidence         :[0m [1m/tmp/134/evidence/[0m
+  [90mRun              :[0m [1m11m33s · 59 model calls · 100 requests · $4.11 of $30.00 at API prices[0m
+  [90mAction log       :[0m [95m/tmp/134/agent-log.jsonl[0m
+  [90mConsole          :[0m [1m/tmp/134/console.log[0m
+  [90mAnnotated        :[0m [95m/tmp/134/security-assessment.annotated.yaml[0m
+  [90mAnnotated report :[0m [1m/tmp/134/security-assessment.annotated.md[0m[90m (may show target data; review before sharing)[0m
+  [90mVerdicts         :[0m [32m7 confirmed[0m[90m · [0m[33m1 inconclusive[0m[90m · [0m[90m35 not tested[0m[90m · [0m[90m26 unsupported or incomplete[0m

