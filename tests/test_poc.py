@@ -579,32 +579,100 @@ def _injection():
     return _role_ctx("injection"), history, shown
 
 
-def test_an_injection_image_shows_the_baseline_above_each_condition_and_how_the_answer_differs():
-    """VER-035: the normal request on top, the attack below it, the difference spelled out and highlighted."""
-    ctx, history, shown = _injection()
+_SPLIT = {**_EXPERIMENT, "sql_template": "x' AND {{predicate}}--", "positive": "x' AND 7=7--",
+          "negative": "x' AND 7=8--", "positive_other": "x' AND 8<>7--", "negative_other": "x' AND 8<>8--"}
+_ROWS = '{"items":[{"id":1,"name":"a"},{"id":2,"name":"<b>z</b>"},{"id":3,"name":"c"}]}'
+
+
+def _conditions(answers, plan=_SPLIT):
+    """A boolean experiment with complementary forms: the baseline (step 2), the true and false condition (3, 4)
+    and their second forms (5, 6), each answered with `answers(q)`."""
+    queries = {2: plan["baseline"], 3: plan["positive"], 4: plan["negative"], 5: plan["positive_other"],
+               6: plan["negative_other"]}
+    history = [_accepted(**plan), *(_sent("/search", q=q) for q in queries.values())]
+    shown = [(n, _exchange("/search?" + urlencode({"q": q}), answers(q))) for n, q in queries.items()]
+    return _role_ctx("injection"), history, shown
+
+
+def _split(q):
+    """A target the injection reaches: the true condition finds every row, the false one none."""
+    return {"x": '{"items":[{"id":1,"name":"a"}]}'}.get(q, _ROWS if "7=7" in q or "8<>7" in q else '{"items":[]}')
+
+
+def test_a_boolean_image_shows_the_true_condition_below_the_false_one_and_frames_the_split_it_proves():
+    """VER-035, VER-011: the proof compares the true with the false condition, so each form's image shows the true
+    condition below the false one, framed in red with why it counts; a last image shows the baseline above."""
+    ctx, history, shown = _conditions(_split)
     roles = poc.step_roles(ctx, history, shown)
     assert roles == {2: ("normal", "baseline input"), 3: ("attack", "true condition"),
-                     4: ("attack", "false condition"), 5: ("normal", "baseline input")}
-    first, second = poc.panels(shown, roles)
-    assert [n for n, _ in first] == [2, 3] and [n for n, _ in second] == [5, 4]
+                     4: ("attack", "false condition"), 5: ("attack", "true condition, second form"),
+                     6: ("attack", "false condition, second form")}
+    first, second, third = poc.panels(shown, roles, opposite=poc.opposites(history))
+    assert [[n for n, _ in p] for p in (first, second, third)] == [[4, 3], [6, 5], [2, 3]]
     page, _ = poc.exchange_document(ctx, history, first, "confirmed", "evidence/T-001-poc.har", comparison=shown)
-    assert page.index("<span class=role>Normal request</span>baseline input · Step 2") < page.index(
+    assert page.index("<span class=role>Attack</span>false condition · Step 4") < page.index(
         "<span class=role>Attack</span>true condition · Step 3")
-    assert ("Compared with the normal request in step 2: same status 200; /items has 1 entry there and 3 entries "
-            "here, 2 of them not in the normal answer.") in page
-    # Below the normal request, the attack's answer is framed in red with a note on why it counts.
-    assert "<mark>/items: 3 entries</mark><span class=note>◀ 3 entries instead of 1</span>" in page
-    assert '<span class="hit sent"><span class=tag>input ▸</span><mark>x%27+OR+1%3D1--</mark>' in page
-    assert "+ [1] id 2 · name &quot;&lt;b&gt;z&lt;/b&gt;&quot;" in page and "<b>z</b>" not in page
-    # The new entries in one red frame with its label, the line after it not left blank.
-    assert ('<span class="hit block"><span class=note>▼ 2 entries the normal request does not get</span>'
-            '<mark>+ [1] id 2' in page
-            and '+ [2] id 3 · name &quot;c&quot;</mark></span></pre>' in page)
+    assert "top: step 4, the attack (false condition); below: step 3, the attack (true condition)" in page
+    assert ("Compared with the false condition in step 4: same status 200; /items has 0 entries there and 3 entries "
+            "here, 3 of them not in the false condition&#x27;s answer.") in page
+    assert page.count("Compared with") == 1                     # the false condition is the reference
+    assert "<mark>/items: 3 entries</mark><span class=note>◀ 3 entries instead of 0</span>" in page
+    assert "  [1] id 2 · name &quot;&lt;b&gt;z&lt;/b&gt;&quot;" in page and "<b>z</b>" not in page
+    assert "▼" not in page                     # against an empty answer the count already says every entry is new
+    assert "<span class=tag>input ▸</span>" in page
     assert ("<span class=k>Result:</span> baseline input: 1 entry · true condition: 3 entries · false condition: "
             "0 entries. The proof check accepted it.") in page
-    page, _ = poc.exchange_document(ctx, history, second, "confirmed", "evidence/T-001-poc.har", comparison=shown)
-    assert "Compared with the normal request in step 5: same status 200; /items has 1 entry there and 0 " in page
-    assert "the normal request does not get" not in page                           # no entry is new
+    # The baseline gives context; a difference from it is no proof, so it is spelled out but not framed.
+    page, _ = poc.exchange_document(ctx, history, third, "confirmed", "evidence/T-001-poc.har", comparison=shown)
+    assert ("Compared with the normal request in step 2: same status 200; /items has 1 entry there and 3 entries "
+            "here, 2 of them not in the normal answer.") in page
+    assert "◀" not in page and "▼" not in page
+    # Without a confirmed verdict nothing is framed as proof.
+    page, _ = poc.exchange_document(ctx, history, first, "inconclusive", None, comparison=shown)
+    assert "◀" not in page and "▼" not in page
+
+
+def test_a_boolean_image_frames_the_entries_only_the_true_condition_gets():
+    """VER-035: the entries the true condition adds to the false condition's answer share one red frame."""
+    ctx, history, shown = _conditions(
+        lambda q: _ROWS if "7=7" in q or "8<>7" in q else '{"items":[{"id":1,"name":"a"}]}')
+    first = poc.panels(shown, poc.step_roles(ctx, history, shown), opposite=poc.opposites(history))[0]
+    page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown)
+    assert "<mark>/items: 3 entries</mark><span class=note>◀ 3 entries instead of 1</span>" in page
+    assert ('<span class="hit block"><span class=note>▼ 2 entries the false condition does not get</span>'
+            '<mark>+ [1] id 2' in page and '+ [2] id 3 · name &quot;c&quot;</mark></span></pre>' in page)
+
+
+def test_a_boolean_image_frames_no_effect_where_true_and_false_answer_alike():
+    """VER-035: an input the target coerces finds nothing for either condition (a NoSQL $where behind Number()):
+    the image says the true condition answers like the false one and frames nothing, also against the baseline."""
+    ctx, history, shown = _conditions(lambda q: '{"items":[{"id":1},{"id":2}]}' if q == "x" else '{"items":[]}')
+    roles = poc.step_roles(ctx, history, shown)
+    for panel in poc.panels(shown, roles, opposite=poc.opposites(history)):
+        for verdict in ("inconclusive", "confirmed"):
+            page, _ = poc.exchange_document(ctx, history, panel, verdict, None, comparison=shown)
+            assert "◀" not in page and "▼" not in page and "instead of" not in page
+    first = poc.panels(shown, roles, opposite=poc.opposites(history))[0]
+    page, _ = poc.exchange_document(ctx, history, first, "inconclusive", None, comparison=shown)
+    assert "Compared with the false condition in step 4: same status 200, the same /items (0 entries)." in page
+    facts = {n: poc._report_excerpts(ctx, history, n, e, shown, None, None, roles)["facts"] for n, e in shown}
+    assert facts[3][-1] == "Compared with the false condition in step 4: same status 200, the same /items (0 entries)."
+    assert facts[4][-1] == ("Compared with the normal request in step 2: same status 200; /items has 2 entries there "
+                            "and 0 entries here.")
+
+
+def test_a_boolean_image_does_not_frame_a_difference_the_proof_does_not_count():
+    """VER-035, VER-011: an answer that echoes the filtered input differs for every control, the two true forms
+    too, so the proof finds no split; the image spells out the difference and why it does not count, unframed."""
+    plan = {**_SPLIT, "pointer": "/items/0/orderId"}
+    ctx, history, shown = _conditions(
+        lambda q: json.dumps({"items": [{"orderId": re.sub(r"[^\w-]+", "", q)}]}), plan)
+    first = poc.panels(shown, poc.step_roles(ctx, history, shown), opposite=poc.opposites(history))[0]
+    page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown)
+    assert ('Compared with the false condition in step 4: same status 200; /items/0/orderId has &quot;xAND78--&quot; '
+            'there and &quot;xAND77--&quot; here; the proof does not count this difference: the complementary true '
+            'predicates did not produce the same observation.') in page
+    assert "◀" not in page
 
 
 def test_an_injection_image_marks_only_differences_between_its_own_steps():

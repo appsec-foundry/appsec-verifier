@@ -667,25 +667,35 @@ def injection_check(ctx, history, cited):
         except (ValueError, KeyError, IndexError, TypeError):
             return "the expression observation is unavailable"
         return None
-    if (
-        not (plan.get("sql_template") or plan.get("operator_challenge") or plan.get("js_predicate_template"))
-        or not {"positive_other", "negative_other"} <= groups.keys()
-    ):
+    if not complementary(plan) or not {"positive_other", "negative_other"} <= groups.keys():
         return "ordinary input-dependent results are not proof; use fresh complementary SQL predicate challenges"
     if plan.get("text") and any(plan["text"] in sent for sent in sent_texts(plan)):
         return "the selected text is part of a sent value, so its presence may be an echo"      # VER-055
-    observed = {}
     try:
-        for name, group in groups.items():
-            values = [observe(ctx, n, plan) for n, _ in group]
-            encoded = {token(v) for v in values}
-            if len(encoded) != 1:
-                return "the selected observation is unstable across repetitions"
-            if any(str(plan[k]) in token(v) for k in groups if k != "baseline" for v in values):
-                return "the selected observation reflects the test input"
-            observed[name] = values[0]
+        values = {name: [observe(ctx, n, plan) for n, _ in group] for name, group in groups.items()}
     except (ValueError, KeyError, IndexError, TypeError, RecursionError):
         return "the declared observation is missing or incomplete"
+    return boolean_classes(plan, values)
+
+
+def complementary(plan) -> bool:
+    """Whether the Verifier generates the experiment's true and false controls in two complementary forms each,
+    which a boolean injection proof needs (VER-011)."""
+    return bool(plan.get("sql_template") or plan.get("operator_challenge") or plan.get("js_predicate_template"))
+
+
+def boolean_classes(plan, values: dict[str, list]) -> str | None:
+    """Why a boolean experiment's observations, per control group, do not split into the classes its proof needs,
+    or None when they do (VER-011): each group answers alike every time and never with a sent value, the two true
+    forms alike, the two false forms alike, true unlike false, and with a JavaScript predicate the true class
+    repeating the baseline. The proof check and the evidence image (VER-035) read this one comparison."""
+    observed = {}
+    for name, group in values.items():
+        if len({token(v) for v in group}) != 1:
+            return "the selected observation is unstable across repetitions"
+        if any(str(plan[k]) in token(v) for k in values if k != "baseline" for v in group):
+            return "the selected observation reflects the test input"
+        observed[name] = group[0]
     # A text is present for one class and absent for the other, either way round (VER-055).
     if not plan.get("text") and observed["positive"] in (None, "", [], {}):
         return "the true predicates produced an empty observation; choose a signal present when the condition holds"

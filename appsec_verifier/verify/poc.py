@@ -579,12 +579,24 @@ def _closest(test: tuple[int, dict], refs: list[tuple[int, dict]], used: set[int
     return min(refs, key=score)
 
 
-def panels(shown: list[tuple[int, dict]], roles: dict[int, tuple[str, str]], limit: int = 3) -> list[list]:
+def panels(shown: list[tuple[int, dict]], roles: dict[int, tuple[str, str]], limit: int = 3,
+           opposite=None) -> list[list]:
     """The exchange images (VER-035): each attack, one per label, below the normal request it is compared with;
     then the other normal requests, controls and steps without a role. Two exchanges per image; without both
-    kinds, in role order."""
+    kinds, in role order. With `opposite` (a boolean experiment, see `opposites`), per form the true condition
+    below the false one its proof compares it with, then the true condition below the baseline."""
     refs = [s for s in by_role(shown, roles) if roles.get(s[0], ("",))[0] in ("normal", "control")]
     tests = [s for s in by_role(shown, roles) if roles.get(s[0], ("",))[0] in ("attack", "effect")]
+    out = []
+    for label in opposite or ():
+        true = next((s for s in tests if roles[s[0]][1] == label), None)
+        false = compared_with(*true, shown, roles, opposite) if true else None
+        if false is not None and roles[false[0]][1] == opposite[label]:
+            out.append([false, true])
+    if out:
+        if refs and len(out) < limit:
+            out.append([_closest(out[0][1], refs, set(), roles), out[0][1]])
+        return out
     if not refs or not tests:
         ordered = by_role(shown, roles)
         return [ordered[i:i + 2] for i in range(0, min(len(ordered), 2 * limit), 2)]
@@ -601,12 +613,54 @@ def panels(shown: list[tuple[int, dict]], roles: dict[int, tuple[str, str]], lim
     return out
 
 
-def compared_with(n: int, e: dict, shown: list[tuple[int, dict]], roles) -> tuple[int, dict] | None:
-    """The normal request an attack or effect is compared with, or None."""
+def compared_with(n: int, e: dict, shown: list[tuple[int, dict]], roles, opposite=None) -> tuple[int, dict] | None:
+    """The step an attack or effect is compared with, or None: the opposite condition of a boolean experiment
+    when `opposite` names one among `shown`, the nearest such step; else the normal request."""
     if roles.get(n, ("",))[0] not in ("attack", "effect"):
         return None
+    other = (opposite or {}).get(roles[n][1])
+    pair = [s for s in shown if other and roles.get(s[0], ("", ""))[1] == other]
+    if pair:
+        return min(pair, key=lambda s: (abs(s[0] - n), s[0]))
     refs = [s for s in shown if roles.get(s[0], ("",))[0] == "normal"]
     return _closest((n, e), refs, set(), roles) if refs else None
+
+
+# A boolean experiment's proof compares its true condition with the false one of the same form (VER-011), so the
+# image and the report compare the true condition with that, not with the baseline (VER-035).
+_OPPOSITE = {"true condition": "false condition", "true condition, second form": "false condition, second form"}
+_GROUP_OF = {label: group for group, (_, label) in _EXPERIMENT_ROLES.items()}
+# Forms whose proof reads each step's own observation or computed value, not a split between true and false.
+_OWN_OBSERVATION_FORMS = ("expression_template", "sql_marker", "auth_artifact", "error_probe", "error_set")
+
+
+def opposites(history: list[dict]) -> dict[str, str]:
+    """The false condition each true condition is compared with, for a boolean experiment whose proof splits its
+    true from its false condition; else none."""
+    from ..agent.experiments import latest_plan
+
+    plan = latest_plan(history)[1]
+    split = plan.get("kind") == "boolean" and not any(plan.get(k) for k in _OWN_OBSERVATION_FORMS)
+    return _OPPOSITE if split else {}
+
+
+def _split_reason(ctx, history: list[dict], everything: list[tuple[int, dict]], roles) -> str | None:
+    """Why the shown conditions are not the split a boolean proof counts, in the proof check's words (VER-011):
+    None when they are, "" when the experiment has no complementary forms to compare."""
+    from ..agent.experiments import boolean_classes, complementary, latest_plan
+
+    plan = latest_plan(history)[1]
+    values: dict[str, list] = {}
+    for n, e in everything:
+        group = _GROUP_OF.get(roles.get(n, ("", ""))[1])
+        value = (plan["text"] in _text(e)) if plan.get("text") else observed(ctx, history, e)
+        if group is None or value is _MISSING:
+            continue
+        values.setdefault(group, []).append(value)
+    if not complementary(plan) or not {"positive", "negative", "positive_other", "negative_other"} <= values.keys():
+        return ""
+    reason = boolean_classes(plan, values)
+    return reason.split(";")[0] if reason else None
 
 
 def _json(e: dict):
@@ -661,16 +715,17 @@ def _row(item) -> str:
 _VIEW_ROWS = 8
 
 
-def _value_view(pointer: str, value, normal=_MISSING) -> tuple[str, list[tuple[str, str]]]:
+def _value_view(pointer: str, value, normal=_MISSING, other="the normal request") -> tuple[str, list[tuple[str, str]]]:
     """The observed value as lines for the image, and the line to mark: a list as one row per entry, `+` before
-    an entry the normal answer does not contain."""
+    an entry the compared answer (`normal`, the answer of `other`) does not contain."""
     from ..agent.experiments import token
 
     differs = normal is not _MISSING and token(value) != token(normal)
     head = f"{pointer}: {_brief(value)}"          # its label says how the normal request's differs
     lines, new = [head], 0
     if isinstance(value, list):
-        known = {token(v) for v in normal} if differs and isinstance(normal, list) else None
+        # Against an empty answer every entry is new, which the count's label already says.
+        known = {token(v) for v in normal} if differs and isinstance(normal, list) and normal else None
         new = sum(token(v) not in known for v in value) if known is not None else 0
         for i, item in enumerate(value[:_VIEW_ROWS]):
             lines.append(f"{'+' if known is not None and token(item) not in known else ' '} [{i}] {_row(item)}")
@@ -684,7 +739,7 @@ def _value_view(pointer: str, value, normal=_MISSING) -> tuple[str, list[tuple[s
         marks.append((f"{len(value)} entries instead of {len(normal)}" if both
                        else f"{_brief(value)} instead of {_brief(normal)}", head))
     if any(line.startswith("+") for line in lines):
-        marks.append((f"{new} entr{'y' if new == 1 else 'ies'} the normal request does not get", "+ ["))
+        marks.append((f"{new} entr{'y' if new == 1 else 'ies'} {other} does not get", "+ ["))
     return "\n".join(lines), marks
 
 
@@ -718,10 +773,13 @@ def _leaves(value, path="", out=None):
     return out
 
 
-def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict]) -> str:
-    """How an attack's answer compares with the normal request's, in one sentence from the recorded answers."""
+def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict], ref_label: str | None = None,
+               discount: str | None = None) -> str:
+    """How an attack's answer compares with the normal request's, or with the condition `ref_label` names, in one
+    sentence from the recorded answers; `discount` says why the proof does not count a difference in the value."""
     m, r = ref
-    start = f"Compared with the normal request in step {m}: "
+    other = ref_label or "normal request"
+    start = f"Compared with the {other} in step {m}: "
     a, b = e["response"]["status"], r["response"]["status"]
     status = f"status {a} instead of {b}" if a != b else f"same status {a}"
     mine, theirs = observed(ctx, history, e), observed(ctx, history, r)
@@ -735,8 +793,9 @@ def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict]) -> str:
         if isinstance(mine, list) and isinstance(theirs, list):
             known = {token(v) for v in theirs}
             new = sum(token(v) not in known for v in mine)
-            text += f", {new} of them not in the normal answer" if new else ""
-        return start + text + "."
+            whose = "the normal answer" if ref_label is None else f"the {ref_label}'s answer"
+            text += f", {new} of them not in {whose}" if new else ""
+        return start + text + (f"; the proof does not count this difference: {discount}." if discount else ".")
     ce, cr = e["response"]["content"], r["response"]["content"]
     if ce.get("_omitted") or cr.get("_omitted"):      # no text to compare: a binary body only by its hash
         same = ce.get("_sha256") and ce.get("_sha256") == cr.get("_sha256")
@@ -886,12 +945,15 @@ def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path, roles=N
     kept = [line for i, line in enumerate(headers.splitlines())
             if i == 0 or line.lower().startswith(("content-type:", "location:", "www-authenticate:", "set-cookie:"))]
     response = "\n".join(kept) + "\n\n" + _report_body(ctx, entry, body, res)
-    ref = compared_with(n, entry, shown, roles or {})
+    opposite = opposites(history)
+    ref = compared_with(n, entry, shown, roles or {}, opposite)
+    ref_label = roles[ref[0]][1] if ref and roles.get(ref[0], ("",))[0] == "attack" else None
+    reason = _split_reason(ctx, history, shown, roles) if ref_label and opposite else None
     role = {"role": roles[n][0], "role_label": roles[n][1]} if roles and n in roles else {}
     return {**role, "request_excerpt": _code_excerpt(_image_request(entry, req), req),
             "response_excerpt": _code_excerpt(response, res, lines),
             "facts": [fact for fact, decisive in facts if decisive]
-            + ([difference(ctx, history, entry, ref)] if ref else [])}
+            + ([difference(ctx, history, entry, ref, ref_label, reason)] if ref else [])}
 
 
 def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]], highlight,
@@ -1290,7 +1352,7 @@ def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], r
         who = e.get("_role")
         name = (label.replace(", second form", "") + (f" {who}" if who and cls == "access-control" else "")
                 if kind else f"step {n} as {who or 'anonymous'}")
-        value, ref = observed(ctx, history, e), compared_with(n, e, everything, roles)
+        value, ref = observed(ctx, history, e), compared_with(n, e, everything, roles, opposites(history))
         if proof := _proof_observation(ctx, history, n, e):     # what the proof reads, not the status or value
             seen = _OBSERVATIONS[proof[0]][2 if proof[1] else 3]
         elif value is not _MISSING:
@@ -1336,6 +1398,13 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     everything = comparison or shown
     roles = step_roles(ctx, history, everything)
     shown = by_role(shown, roles)[:6]
+    opposite = opposites(history)
+    # Compared with the step of its kind in the same image, else the closest one of the finding. A step another one
+    # in this image is compared with is that one's reference: it stands above it and is compared with nothing.
+    refs = {n: compared_with(n, e, shown, roles, opposite) or compared_with(n, e, everything, roles, opposite)
+            for n, e in shown}
+    referenced = {ref[0] for ref in refs.values() if ref and any(ref[0] == m for m, _ in shown)}
+    shown = [s for s in shown if s[0] in referenced] + [s for s in shown if s[0] not in referenced]
     title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
     test = _test_line(ctx, history)
     if not test and cited and not latest_plan(history)[0]:
@@ -1349,16 +1418,22 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
              f" at {html.escape(shown_time(captured))}; nothing sent again. Excerpts shortened; yellow marks what "
              "a request sent, a red frame what an answer shows.</small>"]
     pointer = latest_plan(history)[1].get("pointer")
+    # VER-011: a boolean experiment's value is framed only where its proof counts the split, never against the
+    # baseline; the line under the true condition says why a difference from the false one does not count.
+    reason = _split_reason(ctx, history, everything, roles) if opposite else ""
+    counts = verdict == "confirmed" and reason is None
     parts, total = [f"<header>{chr(10).join(lines)}</header>"], 0
     for n, e in shown:
         kind, label = roles.get(n, ("", ""))
         req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight, shown)
         facts = [(t, d) for t, d in facts if d or not t.startswith("answered in")]   # a time only where it decides
-        # Compared with the normal request in the same image, else the closest one of the finding.
-        ref = compared_with(n, e, shown, roles) or compared_with(n, e, everything, roles)
+        ref = None if n in referenced else refs[n]
+        ref_label = roles[ref[0]][1] if ref and roles.get(ref[0], ("",))[0] == "attack" else None
         view, value = None, observed(ctx, history, e)
         if value is not _MISSING:
-            view, view_lines = _value_view(pointer, value, observed(ctx, history, ref[1]) if ref else _MISSING)
+            framed = ref and (not opposite or (ref_label is not None and counts))
+            view, view_lines = _value_view(pointer, value, observed(ctx, history, ref[1]) if framed else _MISSING,
+                                           f"the {ref_label}" if ref_label else "the normal request")
             res_marks = [m for m in res_marks if m[0] != "answer differs"]    # the view shows the difference
             res_lines = [*res_lines, *view_lines]
         if ref and cls == "access-control":       # e.g. the owner's UserId in another account's answer
@@ -1370,7 +1445,7 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
         who = html.escape(e.get("_role") or "anonymous")
         banner = (f"<span class=role>{html.escape(ROLE_TITLES[kind])}</span>{html.escape(label)} · "
                   if kind else "")
-        diff = difference(ctx, history, e, ref) if ref else ""
+        diff = difference(ctx, history, e, ref, ref_label, reason if ref_label and opposite else None) if ref else ""
         parts.append(f"<section{' class=' + kind if kind else ''}><h2>{banner}Step {n} · "
                      f"{html.escape(e['request']['method'])} as {who} → "
                      f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"
@@ -1424,7 +1499,7 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
     # replaced by a notice; the image itself keeps the answer for the operator.
     safe = {n: _for_model(e) if n in withheld else e for n, e in shown}
     # Two exchanges per panel preserve the comparison without a long full-page image.
-    for panel in panels(shown, step_roles(ctx, history, shown)):
+    for panel in panels(shown, step_roles(ctx, history, shown), opposite=opposites(history)):
         page, marked = exchange_document(ctx, history, panel, verdict, har_path,
                                          highlight, cited=cited, comparison=shown)
         model_page = page
