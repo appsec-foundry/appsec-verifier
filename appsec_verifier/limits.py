@@ -34,7 +34,13 @@ from .version_info import resource_root
 class LimitExceeded(Exception):
     def __init__(self, kind: str, detail: str):
         super().__init__(detail)
-        self.kind = kind  # "requests" | "cost" | "time" | "attempts" | "calls" | "window" | "finding-cost"
+        # "requests" | "cost" | "time" | "attempts" | "calls" | "window" | "finding-cost" | "stagnation"
+        self.kind = kind
+
+    def rationale(self) -> str:
+        """The result's reason. A test agent that made no progress was stopped, not held at a budget, so its stop
+        is not called a limit (VER-036)."""
+        return f"stopped: {self}" if self.kind == "stagnation" else f"stopped by limit: {self}"
 
 
 class _DeadlineExpired(BaseException):

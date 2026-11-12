@@ -440,7 +440,9 @@ class RunProgress:
                 self._record("proof", _line(head, [("✗ proof not accepted", "warn", "bold"), (f": {reason}", "warn")],
                                             "back to the agent", cost), role="warn")
             elif record.get("stopped"):
-                reason = f"stopped by limit: {_clip(record.get('reason', ''), 160)}"
+                # A test agent that made no progress was stopped; it did not reach a budget (limits.py).
+                stop = "stopped" if record.get("stopped") == "stagnation" else "stopped by limit"
+                reason = f"{stop}: {_clip(record.get('reason', ''), 240)}"
                 self._record("⚠", _line(head, note, action, reason, cost))
             elif record.get("refused"):
                 self._record("↻", _line(head, f"refused: {_clip(record['refused'], 160)}", cost))
@@ -517,6 +519,8 @@ class RunProgress:
             missing = proof.get("missing") if proof.get("checked") is False else None
             if isinstance(missing, list) and missing:
                 why = missing[0]                # what the proof check missed in a claimed confirmation
+            elif result.limits_hit == "stagnation":
+                why = "the test agent made no progress and was stopped"   # the ⚠ entry above says why
             elif result.limits_hit:
                 why = f"stopped by the {result.limits_hit} limit"      # the ⚠ entry above has the detail
             else:

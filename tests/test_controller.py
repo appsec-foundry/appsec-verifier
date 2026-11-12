@@ -809,9 +809,31 @@ def test_5xx_during_an_accepted_injection_experiment_is_an_observation_not_a_fai
     c2 = Controller(context(tmp_path))
     for _ in range(3):
         c2.observe("http_request", {"method": "GET", "path": "/search"}, {"status": 500, "length": 10})
-    with pytest.raises(LimitExceeded, match="three consecutive actions failed") as exc:
+    with pytest.raises(LimitExceeded, match="three actions in a row failed") as exc:
         c2.check()
     assert exc.value.kind == "stagnation"
+    assert str(exc.value).endswith("; the last: http_request: HTTP 500")
+
+
+def test_a_stop_after_failed_actions_names_the_last_one_and_is_not_called_a_limit(tmp_path):
+    """VER-036: three failed actions in a row stop the finding; the stop names the last failure, so the operator
+    sees why, and it reads as a stop, not as a budget the run reached."""
+    c = Controller(context(tmp_path))
+    c.observe("read_source", {"path": "a.ts"}, {"lines": 3})
+    c.refuse("fetch_url", "unknown action 'fetch_url'")
+    c.observe("plan_test", {"kind": "boolean"}, {"error": "path input needs exactly one placeholder"})
+    c.observe("plan_test", {"kind": "boolean"}, {"error": "path input needs exactly one\nplaceholder " + "x" * 300})
+    with pytest.raises(LimitExceeded) as exc:
+        c.check()
+    detail = str(exc.value)
+    assert detail.startswith("three actions in a row failed without a usable observation; the last: plan_test: "
+                             "path input needs exactly one placeholder xx")
+    assert detail.endswith("…") and "\n" not in detail and len(detail) < 300
+    assert exc.value.rationale() == "stopped: " + detail
+    assert LimitExceeded("requests", "request cap reached").rationale() == "stopped by limit: request cap reached"
+    c.observe("http_request", {"path": "/a"}, {"status": 200})          # a usable observation resets it
+    c.refuse("fetch_url", "unknown action 'fetch_url'")
+    assert c.failures == 1 and c.last_failure == "fetch_url refused: unknown action 'fetch_url'"
 
 
 def test_plan_test_accepts_the_query_alias_for_params(tmp_path):

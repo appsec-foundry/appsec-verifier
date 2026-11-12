@@ -251,6 +251,23 @@ def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_don
     assert rows[4].endswith("? inconclusive · 0s")
 
 
+def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_failure():
+    """A stop after failed actions is no budget: the ⚠ row says stopped and names the last failure, the proof
+    row says the agent made no progress (VER-036)."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    reason = "three actions in a row failed without a usable observation; the last: plan_test: no placeholder"
+    progress.step({"step": 8, "stopped": "stagnation", "reason": reason})
+    result = ProbeResult(verdict="inconclusive", rationale="stopped: " + reason, limits_hit="stagnation")
+    progress.agent_finished(_plan(), result)
+    progress.finished(_plan(), result)
+    rows = [" ".join(row.split()) for row in _rows(out)[4:]]
+    assert rows[0].endswith("step 8 · stopped: " + reason) and "by limit" not in rows[0]
+    assert rows[2].endswith("✗ no proof: the test agent made no progress and was stopped")
+
+
 def test_an_inconclusive_finding_says_why_when_nothing_above_did():
     out = io.StringIO()
     progress = RunProgress(out, clock=Clock(), env={})

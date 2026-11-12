@@ -44,11 +44,18 @@ def _route_list(routes) -> str:
     return ", ".join(out) if out else "no route in this finding"
 
 
+def _clip(text: str, limit: int = 200) -> str:
+    """A failed action's reason on one line and bounded, for the message that stops a finding."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 class Controller:
     def __init__(self, ctx):
         self.ctx = ctx
         self.repetitions = Counter()
         self.failures = 0
+        self.last_failure = None  # the last failed action and why, named when failures stop the finding
         self.plan = None
         self.source_routes = []
         self.deviations = []  # preparation routes the owner used outside the finding's own (VER-008, VER-043)
@@ -65,7 +72,8 @@ class Controller:
         self.ctx.guard.check_window()
         self.ctx.budget.check_time()
         if self.failures >= 3:
-            raise LimitExceeded("stagnation", "three consecutive actions failed without a usable observation")
+            last = f"; the last: {self.last_failure}" if self.last_failure else ""
+            raise LimitExceeded("stagnation", f"three actions in a row failed without a usable observation{last}")
 
     def before_model(self):
         self.check()
@@ -344,10 +352,11 @@ class Controller:
         self.repetitions[key] += 1
         self._counted = key
 
-    def refuse(self):
+    def refuse(self, name=None, error=None):
         """A tool call the step contract refused (steps.py): nothing ran, and it counts as a failed action."""
         self._counted = None
         self.failures += 1
+        self.last_failure = _clip(f"{name or 'step'} refused: {error or 'not a valid step'}")
 
     def observe(self, name, args, result):
         if self._preparing and type(result.get("status")) is int and self._preparing not in self.deviations:
@@ -366,6 +375,7 @@ class Controller:
         failed = bool(result.get("error")) or (server_error and not experiment_probe)
         if failed:
             self.failures += 1
+            self.last_failure = _clip(f"{name}: {result.get('error') or f'HTTP {status}'}")
             if name == "plan_test" and self._counted is not None:
                 # A rejected plan executed nothing, and its key leaves out the strategy it was rejected for:
                 # the corrected plan keeps the allowance. Repeated rejections still stop after three failures.
@@ -376,6 +386,7 @@ class Controller:
                 self._experiment_shape = None   # a fresh plan pins its own shape on the next probe
         else:
             self.failures = 0
+            self.last_failure = None
             # Only the nearest preceding literal route at the evidenced source location.
             # Source text narrows the operator's scope; model prose never supplies a route.
             if name == "read_source" and args.get("path") == (self.ctx.plan.instance or "").rsplit(":", 1)[0]:

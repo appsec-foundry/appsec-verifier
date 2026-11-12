@@ -114,7 +114,7 @@ def _log(ctx, step: int | None, **record) -> None:
 
 def _stopped(ctx, step: int, exc: LimitExceeded, **record) -> ProbeResult:
     _log(ctx, step, **record, stopped=exc.kind, reason=str(exc))
-    return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
+    return ProbeResult(verdict="inconclusive", rationale=exc.rationale(), limits_hit=exc.kind)
 
 
 def _finish(ctx, step: int, result: ProbeResult) -> ProbeResult:
@@ -298,7 +298,7 @@ class AgentProbe:
             action = check_action(proposal)  # VER-019: no unchecked arguments
             if "refused" in action:
                 # VER-017: refused and logged, nothing runs; counted like a failed action (VER-036)
-                controller.refuse()
+                controller.refuse(action["refused"], action["error"])
                 args = action["args"] if isinstance(action["args"], dict) else {}   # None: not one JSON object
                 call = {"tool": action["refused"], "args": args,
                         **({"note": action["note"]} if action.get("note") else {})}

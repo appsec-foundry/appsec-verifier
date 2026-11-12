@@ -116,7 +116,7 @@ def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory, log=Non
     try:
         res = probe.run(ctx_factory(plan))
     except LimitExceeded as exc:
-        return ProbeResult(verdict="inconclusive", rationale=f"stopped by limit: {exc}", limits_hit=exc.kind)
+        return ProbeResult(verdict="inconclusive", rationale=exc.rationale(), limits_hit=exc.kind)
     except Exception as exc:  # noqa: BLE001 - one failed probe must not lose the run; only the type is reported
         if log is not None:     # the message can carry target data or credentials; type and place cannot
             log({"finding": plan.id, "step": None, "probe_failed": type(exc).__name__, "at": _failure_site(exc)})

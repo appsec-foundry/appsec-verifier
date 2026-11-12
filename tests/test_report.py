@@ -397,3 +397,11 @@ def test_an_unchecked_or_unconfirmed_result_shows_nothing_and_a_one_account_test
     tested = {**doc, "verdict": "inconclusive", "proof": None}
     assert report_module._shown(tested) is None
     assert report_module._why_not(tested) == "only u-a sent requests; the comparison with another account is missing"
+
+
+@pytest.mark.parametrize("rationale, kind", [("stopped by limit: request cap reached", "requests"),
+                                             ("stopped: request cap reached", "stagnation")])
+def test_a_stopped_finding_says_stopped_once_in_the_report(rationale, kind):
+    """A budget's stop and a test agent that made no progress (limits.LimitExceeded.rationale) read alike."""
+    stopped = {"verdict": "inconclusive", "rationale": rationale, "limits_hit": kind}
+    assert report_module._why_not(stopped) == "stopped: request cap reached"

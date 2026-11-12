@@ -430,7 +430,7 @@ def _why_not(r: dict) -> str | None:
     if proof.get("missing"):
         return "; ".join(str(m) for m in proof["missing"])
     if r.get("limits_hit"):
-        stopped = re.sub(r"^stopped by limit: ", "", str(r.get("rationale") or ""))
+        stopped = re.sub(r"^stopped(?: by limit)?: ", "", str(r.get("rationale") or ""))
         return f"stopped: {stopped}" if stopped else f"stopped by the {r['limits_hit']} limit"
     lowered = _LOWERED.match(r.get("rationale") or "")
     if lowered:
