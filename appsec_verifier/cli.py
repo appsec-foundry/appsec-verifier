@@ -975,11 +975,12 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         extra.append(("Action log", str(action_log.path)))
     if console is not None:
         extra.append(("Console", str(console.path)))
-    if args.annotate:
+    if args.annotate and source is None:    # the results above are written; only the copies are missing
+        extra.append(("Annotated", f"not written: {assessment.name} could not be read again"))
+    elif args.annotate:
         from .verify.annotated_report import write_annotated_report
 
-        annotated = annotate_assessment(source or _load_yaml(assessment), doc,
-                                        verification_report=str(paths["yaml"]))
+        annotated = annotate_assessment(source, doc, verification_report=str(paths["yaml"]))
         dest = out_dir / "security-assessment.annotated.yaml"
         write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
         extra.append(("Annotated", str(dest)))

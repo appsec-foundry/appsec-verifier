@@ -556,6 +556,18 @@ def test_in_place_is_gone_and_stops_before_anything_is_contacted(tmp_path, monke
     assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": THREATS}
 
 
+def test_an_assessment_that_cannot_be_read_again_gets_no_copy_but_the_run_finishes(tmp_path, monkeypatch, capsys):
+    class Unreadable:
+        def next_step(self, ctx, history):
+            (tmp_path / "a.yaml").write_text("threats: [", encoding="utf-8")       # changed during the run
+            return {"verdict": {"verdict": "not-attempted", "rationale": "checked"}}
+
+    assert _verify(tmp_path, monkeypatch, Unreadable, "--annotate")[0] == cli.EXIT_OK
+    out = tmp_path / "out"
+    assert (out / "verification.yaml").exists() and not (out / "security-assessment.annotated.yaml").exists()
+    assert "not written: a.yaml could not be read again" in capsys.readouterr().out
+
+
 def test_annotate_writes_copies_and_leaves_the_analyzers_files_alone(tmp_path, monkeypatch):
     block = {"finding_ids": ["TCF-001"], "test_case_ids": ["TC-IDOR-01"]}   # AppSec Analyzer REQ-040
     threats = [dict(t, verification=block) for t in THREATS]

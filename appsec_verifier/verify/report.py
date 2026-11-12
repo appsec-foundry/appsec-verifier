@@ -959,7 +959,9 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
         t["dynamic_verification"] = {
             "verdict": verdict,
             "confidence": lead.get("confidence"),
-            "verified_at": doc["meta"].get("generated"),
+            # When the result was tested, also for one kept from an earlier run (VER-037).
+            "verified_at": ((lead.get("timing") or {}).get("finished") or lead.get("source_generated")
+                            or doc["meta"].get("generated")),
             "verifier_version": doc["meta"].get("verifier_version"),
             "result_ref": lead.get("result_id"),
             "tested_scope": _tested_scope(lead),

@@ -232,6 +232,15 @@ def test_annotation_points_to_the_proof_but_carries_none_of_it():
     assert "poc" not in block and "evidence" not in block
 
 
+def test_a_result_kept_from_an_earlier_run_states_when_it_was_tested():
+    """VER-037: after --resume each annotated finding keeps the time its own result was tested."""
+    doc = _confirmed_doc()
+    doc["results"][0]["timing"] = {"started": "2026-11-01T10:00:00Z", "finished": "2026-11-01T10:05:00Z"}
+    block = annotate_assessment({"threats": [_analyzer_threat()]}, doc,
+                                verification_report="v.yaml")["threats"][0]["dynamic_verification"]
+    assert block["verified_at"] == "2026-11-01T10:05:00Z" != doc["meta"]["generated"]
+
+
 def test_annotation_carries_the_rating_after_verification():
     block = annotate_assessment({"threats": [_analyzer_threat()]}, _confirmed_doc(),
                                 verification_report="v.yaml")["threats"][0]["dynamic_verification"]

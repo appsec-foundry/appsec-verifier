@@ -158,9 +158,9 @@ def test_the_summary_precedes_the_findings():
     assert copy.index("## Table of Contents") < copy.index("## Dynamic verification\n")
     assert "3 findings tested: 2 confirmed · 1 blocked by control · 1 not tested." in summary
     assert "may show target data; review before sharing" in summary
-    assert "| [T-001](#t-001) Stored XSS | confirmed (high) | High | Critical (changed) |" in summary
-    assert "| [T-002](#t-002) SQL \\| injection | blocked by control (high) | High | Medium (changed) |" in summary
-    assert "| T-004 Not in the report | confirmed (high) | Low | Low |" in summary         # not placed, no link
+    assert "| [F-001](#t-001) Stored XSS | confirmed (high) | High | Critical (changed) |" in summary
+    assert "| [F-002](#t-002) SQL \\| injection | blocked by control (high) | High | Medium (changed) |" in summary
+    assert "| F-004 Not in the report | confirmed (high) | Low | Low |" in summary         # not placed, no link
     assert "2 of 3 ratings changed." in summary
 
 
@@ -183,13 +183,13 @@ def test_a_finding_without_a_unique_anchor_is_listed_at_the_end():
     copy = _copy(report=REPORT.replace("Text 3.", 'Text 3.\n\n<a id="t-002"></a>'))     # T-002 twice
     register, tail = copy.split("## Dynamic verification: findings not placed")
     assert register.count("##### Dynamic verification") == 1                          # T-001 only
-    assert "#### T-002 · SQL | injection" in tail and "#### T-004 · Not in the report" in tail
+    assert "#### F-002 · SQL | injection" in tail and "#### F-004 · Not in the report" in tail
     assert tail.count("##### Dynamic verification") == 2
 
 
 def test_an_anchor_inside_a_code_block_does_not_count():
     fenced = REPORT.replace("The end.", '```\n<a id="t-004"></a>\n```')
-    assert "#### T-004 · Not in the report" in _copy(report=fenced)
+    assert "#### F-004 · Not in the report" in _copy(report=fenced)
 
 
 def test_the_copy_is_written_next_to_the_report_and_the_original_stays(tmp_path):

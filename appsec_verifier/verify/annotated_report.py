@@ -26,7 +26,15 @@ import secrets
 from pathlib import Path
 
 from .poc import TARGET_DATA_NOTE
-from .report import _VERDICT_LABEL, _fenced, _poc_markdown, _review_markdown, _when, write_text_atomically
+from .report import (
+    _VERDICT_LABEL,
+    _display_id,
+    _fenced,
+    _poc_markdown,
+    _review_markdown,
+    _when,
+    write_text_atomically,
+)
 
 ANNOTATED_REPORT = "security-assessment.annotated.md"
 MAX_REPORT_BYTES = 32 * 1024 * 1024
@@ -88,7 +96,8 @@ def annotate_report(markdown: str, annotated: dict, doc: dict) -> str:
                   "These tested findings have no unique anchor in the Analyzer's report, so their results stand here.",
                   ""]
         for t in unplaced:
-            lines += [f"#### {_one_line(t.get('id'))} · {_one_line(t.get('title'))}", "", *_section(t, results), ""]
+            lines += [f"#### {_one_line(_display_id(t.get('id')))} · {_one_line(t.get('title'))}", "",
+                      *_section(t, results), ""]
     return "\n".join(lines) + "\n"
 
 
@@ -288,7 +297,7 @@ def _summary(annotated: dict, doc: dict, tested: list[dict], placed: set, *, not
     changed = 0
     for t in tested:
         block, rating = t["dynamic_verification"], t["dynamic_verification"]["rating"]
-        tid = _cell(t.get("id"))
+        tid = _cell(_display_id(t.get("id")))          # the id the Analyzer's report shows, F-NNN for T-NNN
         link = f"[{tid}](#{str(t.get('id')).lower()})" if t.get("id") in placed else tid
         after = _cell(rating["after_verification"]["severity"]) + (" (changed)" if rating["changed"] else "")
         changed += rating["changed"]
