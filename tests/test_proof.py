@@ -559,3 +559,20 @@ def test_the_evidence_record_is_the_codes_redacted_and_owner_only(tmp_path):
     assert [e["path"] for e in res.evidence] == ["evidence/T-1-exchanges.json"]   # the model's evidence is replaced
     assert "s3cret-value" not in path.read_text() and (path.stat().st_mode & 0o777) == 0o600
     assert json.loads(path.read_text())["exchanges"][1]["role"] == "bob"
+
+
+def test_every_proof_form_the_check_records_is_described_and_every_description_is_reachable():
+    """The console and report describe a confirmation by the form the check accepted (verify/probes.py); a form
+    without a description would fall back to its class's sentence, which for the comparison without credentials
+    says the opposite of what it showed (T-058, run 133)."""
+    from appsec_verifier.agent.proof import proof_form
+    from appsec_verifier.verify.probes import DEFAULT_FORMS, PROOF_FORMS
+
+    plans = {"injection": [{"oob_template": "x"}, {"auth_artifact": True}, {"error_set": [{"name": "'"}]},
+                           {"markers": {"positive": "a"}}, {"expression_template": "x"}],
+             "access-control": [{"signed_in": "a"}, {"change": {"method": "PUT"}, "owner": "a"}, {"owner": "a"},
+                                {"reference": "b"}]}
+    forms = {proof_form(cls, plan) for cls, listed in plans.items() for plan in listed}
+    forms |= {proof_form(cls, {}) for cls in DEFAULT_FORMS} | {"archive-marker"}     # set by check_proof itself
+    assert forms == set(PROOF_FORMS)
+    assert proof_form("access-control", {"change": {"method": "PUT"}, "owner": "a"}) == "record-change"

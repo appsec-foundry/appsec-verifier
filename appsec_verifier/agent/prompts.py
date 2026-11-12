@@ -400,7 +400,7 @@ def _injection_rules() -> str:
         "that fits the finding: a response field, or for a list or collection the container itself (its "
         "presence or emptiness), or a count. The true and false controls must split the recorded responses "
         "into two stable classes; the true class need not match the uninjected baseline, and for a result set "
-        "that empties on the false condition point at the container, not an element that then disappears. "
+        "that empties on the false condition point at the container, or at a field only the true answers have. "
         "For a page answer use text, a literal a recorded answer shows but no sent value holds, not pointer. "
         "Reflection, timestamps, error pages and ordinary input-dependent results are not proof. "
         "Command, code-evaluation, template and XPath injection can use expression_template with one "

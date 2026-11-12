@@ -761,7 +761,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             evidence_id(p): need
             for p in probed
             if (need := _blocker(p, identities=identities, browser=browser, listener=listener, scope=scope, safe=safe,
-                                 source=source is not None))
+                                 source=source))
         }
     )
     from .budget_prompt import can_prompt
@@ -1442,15 +1442,16 @@ def _run_hints(doc: dict, target: str, browser_missing: str | None) -> dict[str,
     return {"identity": identity, **({"browser": [browser_missing]} if browser_missing else {})}
 
 
-def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) -> tuple[str, str] | None:
+def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -> tuple[str, str] | None:
     """What this run lacks to confirm `plan` (a _NEEDS key and the reason for the
     report), or None when it can try: first what its class's proof needs (VER-009
     to VER-012; injection also a read request, since its proof repeats controls; access control without a test
     resource a read request and, for a resource an account creates, a write request),
     then the requests the assessment names (endpoints.py), when all of them write
     in safe mode or all need a login and there is no test identity.
-    A finding that names no request is tried only with `source`, where a literal
-    route near its location can supply one (agent/controller.py)."""
+    A finding that names no request is tried only with `source`, the run's SourceReader, where a literal
+    route near its location can supply one (agent/controller.py); in safe mode not when every route the source
+    registers for its handlers writes (VER-008), the routes its test agent would start from (agent/loop.py)."""
     from .agent.experiments import RECORD_CWES, access_methods
     from .endpoints import WRITE_METHODS
     from .verification_context import missing_capabilities, record_segment
@@ -1540,6 +1541,14 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         return "identity", "no test identity; every request the assessment names requires a login"
     declared = any(r["finding_id"] == plan.id for key in ("test_resources", "injection_inputs", "session_checks")
                    for r in scope.get(key, []))
+    if safe and hasattr(source, "read_all") and not (variants or plan.endpoints or declared):
+        from types import SimpleNamespace
+
+        from .agent.derivation import source_registrations
+
+        registered = source_registrations(SimpleNamespace(source=source, plan=plan, scope=scope))
+        if registered and all(r["method"] in WRITE_METHODS for r in registered):
+            return "intrusive", "safe mode; every request the source registers for its handlers writes"
     if not (variants or plan.endpoints or declared or source):
         return "route", "the assessment names no request for this finding, and without --source none can be read"
     return None
@@ -1770,6 +1779,16 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
             return f"needs {_NEEDS[need(r)][0]}"
         return _VERDICT_LABEL[r["verdict"]] + (f" ({printable(r['confidence'])})" if r.get("confidence") else "")
 
+    if not full:
+        # A finding one variant confirmed needs nothing more: its untested variants are not listed with what they
+        # would need. Variants alike in finding, result and reason share one line that counts them.
+        confirmed = {r["finding_ref"].get("id") for r in rows if r["verdict"] == "confirmed"}
+        rows = [r for r in rows if r["verdict"] != "not-attempted" or r["finding_ref"].get("id") not in confirmed]
+    alike: dict[tuple, list[dict]] = {}
+    for r in rows:
+        alike.setdefault((r["finding_ref"].get("id"), r["verdict"], need(r) or r.get("rationale")), []).append(r)
+    rows = [group[0] for group in alike.values()] if not full else rows
+    variants = {id(group[0]): len(group) for group in alike.values()} if not full else {}
     room = columns() - 1 if st.enabled else 10_000
     id_width = max(len(printable(r["finding_ref"].get("id"))) for r in rows)
     result_width = max(len(result(r)) for r in rows)
@@ -1786,6 +1805,8 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
                      + _fit(title, room - used))
         # Under a finding the run could not test, how to provide what it needs, e.g. "run with --allow-intrusive".
         reason = _NEEDS[need(r)][1] if need(r) else " ".join(printable(r.get("rationale") or "").split())
+        if variants.get(id(r), 1) > 1:
+            reason = f"{reason} · {variants[id(r)]} variants" if reason else f"{variants[id(r)]} variants"
         if reason:
             pieces = (textwrap.wrap(reason, max(room - indent, 30)) if full else [_fit(reason, room - indent)])
             lines += [" " * indent + st(piece, "muted") for piece in pieces]

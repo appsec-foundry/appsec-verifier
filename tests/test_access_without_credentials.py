@@ -247,7 +247,7 @@ def test_only_the_comparison_reaches_the_random_path(tmp_path):
 
 # ── through the loop ──────────────────────────────────────────────────────────
 
-def _run(tmp_path, transport, verdict_steps=(2, 3, 4)):
+def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None):
     sent = []
 
     def recording(m, u, h, **k):
@@ -275,6 +275,7 @@ def _run(tmp_path, transport, verdict_steps=(2, 3, 4)):
     ctx.plan = replace(ctx.plan, cwe="CWE-306", endpoints=(Endpoint("GET", PATH, None),))
     ctx.marker = MARKER
     ctx.evidence_dir = tmp_path / "evidence"
+    ctx.browser = browser
     result = AgentProbe("access-control", factory).run(ctx)
     return result, sent, planners[0].seen
 
@@ -319,3 +320,121 @@ def test_the_prompt_offers_the_comparison_to_access_control_only(tmp_path):
     assert "signed_in" in _offered_schema(plan_test, ctx)["properties"]
     injection = SimpleNamespace(plan=SimpleNamespace(cls="injection", cwe="CWE-89"))
     assert "signed_in" not in _offered_schema(plan_test, injection)["properties"]
+
+
+def test_a_confirmed_comparison_reads_as_the_same_answer_on_the_console_in_the_report_and_image(tmp_path):
+    """T-058 (run 133): the comparison's answers are compared in code, so every place that shows the proof says the
+    answer without credentials was the same as the account's, never a different one or one not recorded."""
+    from appsec_verifier.verify.probes import proof_shown
+    from appsec_verifier.verify.report import _shown
+
+    pages = []
+    browser = SimpleNamespace(screenshots=("access-control",),
+                              render_exchanges=lambda html, name, marked: pages.append(html) or [])
+
+    def target(m, path, h):
+        return Resp(200, SECRET) if path == PATH else Resp(404, "<h1>Not found</h1>")
+
+    result, _, _ = _run(tmp_path, target, browser=browser)
+    assert result.verdict == "confirmed" and result.proof["form"] == "comparison-without-credentials"
+    assert proof_shown(result.proof, "access-control")[0] == "same answer without credentials, unlike a random path"
+    facts = [f for s in result.poc["shown"] for f in s["facts"]]
+    assert any("same status 200, the identical answer, compared in code over the whole body" in f for f in facts)
+    page = "".join(pages)
+    assert "without login, and without login to a random path next to it" in page           # the Test line
+    assert "without login: 200, the same answer" in page                                    # the Result line
+    assert "a different answer" not in page and "not recorded to compare" not in page
+    shown = _shown({"verdict": "confirmed", "class": "access-control", "proof": result.proof, "poc": result.poc})
+    assert shown.startswith("Without a login the same answer as account-1, compared in code") and "404" in shown
+
+
+def test_a_comparison_whose_answers_differ_says_so_and_one_without_digests_is_not_called_different():
+    from appsec_verifier.verify import poc
+
+    entry = {"_step": 3, "response": {"status": 200, "content": {"_omitted": True}}}
+    ref = (2, {"_step": 2, "response": {"status": 200, "content": {"_omitted": True}}})
+    ctx = SimpleNamespace(plan=SimpleNamespace(cls="access-control"),
+                          responses={2: {"digest": "a"}, 3: {"digest": "b"}})
+    assert poc.difference(ctx, [], entry, ref).endswith("a different answer, compared in code over the whole body, "
+                                                        "which is not kept.")
+    ctx.responses = {}
+    assert poc.difference(ctx, [], entry, ref).endswith("the answers are not recorded to compare.")
+
+
+# ── technical QA's one follow-up on a resource meant to be public (VER-046) ─────
+
+KEYS = "/keys/:file"
+PUBLIC_RESOURCE = {"code": "public-resource", "detail": "public.pub is a public key; the finding names secret keys",
+                   "question": "Is /keys/secret.key served without a login?"}
+INTENDED = {"code": "interpretation", "detail": "the key may be shared on purpose", "question": "Is it?"}
+
+
+def _qa_run(tmp_path, *, secret_exposed, replies, second_verdict="inconclusive"):
+    from test_technical_review import scripted_factory
+
+    def target(method, url, headers, **kwargs):
+        path, signed = urlsplit(url).path, headers.get("Authorization") == "Bearer token-account-1"
+        if path == "/keys/public.pub":
+            return Resp(200, "-----BEGIN PUBLIC KEY-----")
+        if path == "/keys/secret.key":
+            return Resp(200, "secret-key-bytes") if signed or secret_exposed else Resp(401, "unauthorized")
+        return Resp(404, "<h1>Not found</h1>")
+
+    def plan(path):
+        return {"tool": "plan_test", "args": {**_args(), "path": path, "hypothesis": "keys are served without login"}}
+
+    def verdict(kind):
+        return {"verdict": {"verdict": kind, "rationale": f"{kind} on the comparison", "proof_steps": []}}
+
+    actions = [plan("/keys/public.pub"), verdict("confirmed"), plan("/keys/secret.key"), verdict(second_verdict)]
+    factory, host, _, histories = scripted_factory(actions, replies)
+    ctx = _ctx(tmp_path, target, env=ENV, idents=IDENTITIES)
+    ctx.plan = replace(ctx.plan, cwe="CWE-306", endpoints=(Endpoint("GET", KEYS, None),))
+    ctx.marker = MARKER
+    return AgentProbe("access-control", factory).run(ctx), host, histories, actions
+
+
+def _review(*issues):
+    return {"action": "review", "status": "needs-attention" if issues else "clear", "issues": list(issues),
+            "steps": [], "pointer": None, "offset": 0}
+
+
+def test_qa_sends_a_public_resource_objection_back_once_and_a_checked_confirmation_replaces_the_first(tmp_path):
+    """T-058 (run 133): QA holds jwt.pub public while the finding names secret keys. That objection alone returns to
+    the test agent; the comparison on the protected resource confirms, and that confirmation is the result."""
+    result, host, histories, _ = _qa_run(tmp_path, secret_exposed=True, second_verdict="confirmed",
+                                         replies=[_review(PUBLIC_RESOURCE, INTENDED), _review()])
+    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/secret.key"
+    feedback = [h for h in histories[-1] if h["tool"] == "qa_feedback"]
+    assert len(feedback) == 1 and feedback[0]["result"]["issues"] == [PUBLIC_RESOURCE]   # only that objection
+    assert [call[1]["public_resource_follow_up"] for call in host.calls] == [True, False]
+    assert result.technical_review["status"] == "clear" and result.technical_review["rounds"] == 1
+
+
+def test_a_follow_up_without_a_checked_confirmation_leaves_the_first_one_and_its_objection(tmp_path):
+    """The protected resource is refused without a login: the agent's inconclusive follow-up does not change the
+    code-checked verdict; the objection stays beside it and the follow-up's outcome is recorded."""
+    result, _, _, _ = _qa_run(tmp_path, secret_exposed=False, replies=[_review(PUBLIC_RESOURCE)])
+    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/public.pub"
+    assert result.technical_review["status"] == "needs-attention"
+    assert result.technical_review["issues"] == [PUBLIC_RESOURCE]
+    assert any(o.startswith("Technical QA follow-up on a protected resource ended without a checked confirmation")
+               for o in result.observations)
+    import yaml
+    from jsonschema import Draft202012Validator
+
+    schema = yaml.safe_load(Path("schemas/verification.schema.yaml").read_text())
+    Draft202012Validator(schema["$defs"]["technical_review"]).validate(result.technical_review)
+
+
+def test_no_other_objection_and_no_second_public_resource_objection_starts_a_test(tmp_path):
+    """Refused cases: an objection that the access is intended stays beside the verdict without a test, and a
+    public-resource objection to the follow-up's own confirmation is not sent back a second time."""
+    result, _, histories, actions = _qa_run(tmp_path, secret_exposed=True, replies=[_review(INTENDED)])
+    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/public.pub"
+    assert result.technical_review["rounds"] == 0 and len(actions) == 2          # the follow-up never ran
+    assert not any(h["tool"] == "qa_feedback" for h in histories[-1])
+    result, _, _, _ = _qa_run(tmp_path, secret_exposed=True, second_verdict="confirmed",
+                              replies=[_review(PUBLIC_RESOURCE), _review(PUBLIC_RESOURCE)])
+    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/secret.key"
+    assert result.technical_review["rounds"] == 1 and result.technical_review["status"] == "needs-attention"

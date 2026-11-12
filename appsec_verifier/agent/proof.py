@@ -80,7 +80,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..planning import evidence_id
 from ..verification_context import planned_route
-from ..verify.probes import ProbeResult
+from ..verify.probes import DEFAULT_FORMS, ProbeResult
 from .experiments import (
     access_check,
     callback_injection_check,
@@ -184,7 +184,7 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
 
         view = plan_view(history, cited)
         error = session_check(ctx, view, cited)
-        return _downgrade(result, error) if error else _checked(result, view, cited)
+        return _downgrade(result, error) if error else _checked(result, view, cited, ctx)
 
     if cls == "xss":
         executed = [
@@ -192,14 +192,14 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
             for n, h in enumerate(history, 1)
             if h.get("tool") == "browser_check" and h.get("result", {}).get("executed") is True
         ]
-        return _checked(_xss(ctx, history, result), history, executed)
+        return _checked(_xss(ctx, history, result), history, executed, ctx)
     if cls == "ssrf":
         hits = [
             n
             for n, h in enumerate(history, 1)
             if h.get("tool") == "http_request" and h.get("result", {}).get("callback_hit") is True
         ]
-        return _checked(_ssrf(ctx, result, history), history, hits)
+        return _checked(_ssrf(ctx, result, history), history, hits, ctx)
     if cls == "path-traversal" and any(
         r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", [])
     ):
@@ -211,6 +211,7 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
             return _downgrade(result, "archive traversal needs a fresh escaped-marker readback after its upload")
         result = _checked(result, history, selected, ctx)
         result.proof["archive"] = proof
+        result.proof["form"] = "archive-marker"
         return result
     if cls == "injection" and latest_plan(plan_view(history, cited))[1].get("oob_template"):
         view = plan_view(history, cited)
@@ -266,6 +267,17 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     return _checked(result, view, cited, ctx)
 
 
+def proof_form(cls, plan) -> str | None:
+    """The proof form a confirmation of class `cls` rests on under `plan`, a key of PROOF_FORMS (verify/probes.py),
+    so the console and report say what this form showed rather than what the class usually shows."""
+    forms = {"injection": (("oob_template", "out-of-band"), ("auth_artifact", "auth-artifact"),
+                           ("error_set", "engine-error"), ("markers", "returned-marker"),
+                           ("expression_template", "computed-expression")),
+             "access-control": (("signed_in", "comparison-without-credentials"), ("change", "record-change"),
+                                ("owner", "record-marker"), ("reference", "privileged-comparison"))}
+    return next((form for key, form in forms.get(cls, ()) if plan.get(key)), DEFAULT_FORMS.get(cls or ""))
+
+
 def _checked(result, history, cited, ctx=None):
     if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
         return result
@@ -300,6 +312,7 @@ def _checked(result, history, cited, ctx=None):
         "contract": 3,
         "steps": cited or [],
         "kind": plan.get("kind", "marker"),
+        "form": proof_form(getattr(getattr(ctx, "plan", None), "cls", None), plan),
         "tested_path": plan.get("path"),
         "variant": plan.get("variant"),
         "hypothesis": plan.get("hypothesis"),

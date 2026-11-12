@@ -10,7 +10,9 @@ candidate must stay on the target origin and the original resource's route famil
 derived routes cannot become anchors for exploring another resource. When the
 assessment names no route, a route another file registers for a handler of the
 finding's file can anchor one (`registration_routes`), but only through a literal
-import of that file and a handler name the agent read in it. With a source
+import of that file and a handler name the agent read in it; a mount (`use`, `all`)
+only for the function that holds the evidenced line, since middleware is mounted
+the same way. With a source
 checkout the Verifier resolves such routes itself before the agent starts, by the
 same rule applied to whole files (`source_registrations`). For a page script
 without either, a page its file path names can supply it: the file itself, or a
@@ -31,9 +33,12 @@ from ..verification_context import planned_route
 
 MAX_DERIVED = 8
 _PLACEHOLDER = re.compile(r":\w+|\{\w+\}|<\w+>|\d+|[0-9a-fA-F-]{36}")
+# A registration in another file: a method call on app, router or blueprint (Express, Flask), a mount of a handler on
+# app or router for every method below its path (use, all), or a Django path() in a URL configuration.
 _ROUTE = re.compile(
-    r"(?im)^\s*@?(?:(?:app|router|blueprint)\.)?(get|post|put|patch|head|options)"
-    r"\(\s*['\"](/[^'\"\s]{0,500})['\"]"
+    r"(?im)^\s*(?:@?(?:(?:app|router|blueprint)\.)?(?P<verb>get|post|put|patch|head|options)"
+    r"|(?:app|router)\.(?P<mount>use|all))\(\s*['\"](?P<path>/[^'\"\s]{0,500})['\"]"
+    r"|^\s*path\(\s*['\"](?P<relative>[^'\"\s]{0,500})['\"]"
 )
 _IMPORT = re.compile(r"(?:from\s*|require\(\s*|import\s*)['\"](\.[^'\"\s]{1,200})['\"]")
 # A route declaration, whatever the framework: the route literal is the first argument of a call or annotation that
@@ -76,9 +81,16 @@ _NAMED_IMPORT = re.compile(
     r"""(?:import\s*\{([^}]{1,2000})\}\s*from|(?:const|let|var)\s*\{([^}]{1,2000})\}\s*=\s*require\()"""
     r"""\s*['"](\.[^'"\s]{1,200})['"]"""
 )
+# Python imports: of a module, `from pkg import views [as v]`, `from . import views`, `import pkg.views as v`; or of
+# names from it, `from pkg.views import detail [as d]`, `from .views import (a, b)`.
+_PY_FROM = re.compile(r"(?m)^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(?:\(([^()]{1,2000})\)|([^\n#()]{1,2000}))")
+_PY_IMPORT_AS = re.compile(r"(?m)^[ \t]*import[ \t]+([\w.]{1,200})[ \t]+as[ \t]+(\w+)")
+# A named function definition: `function f(`, `const f = (…) =>`, `const f = async function`, `def f(`.
+_FUNCTION = re.compile(r"\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+                       r"(?:async\s+)?(?:function\b|\([^()]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)|\bdef\s+([A-Za-z_]\w*)\s*\(")
 _IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
 # Where a registration's handler list ends: the next call on app, router or blueprint, of any method, including
-# those never derived (delete, use), so a route is not credited with the next registration's handler.
+# those never derived (delete), so a route is not credited with the next registration's handler.
 _NEXT_CALL = re.compile(r"(?im)^\s*@?(?:app|router|blueprint)\.\w+\(")
 MAX_REGISTERED = 4   # routes resolved from the source before the agent starts, within MAX_DERIVED
 _ROUTES_PER_TEXT = 1000   # registrations examined per text; a whole file is at most 1 MiB (source_reader)
@@ -167,6 +179,30 @@ def _source_roots(ctx, history):
     return paths
 
 
+def _py_module(reg_file, module: str) -> str | None:
+    """The repository path, without suffix, of the Python module `module` names in `reg_file`: `pkg.sub` from the
+    repository root, `.sub` or `..sub` from the importing file's package; None where it leaves the repository."""
+    dots = len(module) - len(module.lstrip("."))
+    rest = module[dots:].replace(".", "/")
+    if not dots:
+        return rest or None
+    base = PurePosixPath(reg_file).parent
+    for _ in range(dots - 1):
+        base = base.parent
+    target = posixpath.normpath(str(base / rest) if rest else str(base))
+    return None if target == ".." or target.startswith(("../", "/")) else target
+
+
+def _py_names(names: str) -> list[tuple[str, str]]:
+    """The (original, local) pairs of a Python import list: `a, b as c`."""
+    pairs = []
+    for entry in names.split(","):
+        parts = re.split(r"\s+as\s+", entry.strip(), maxsplit=1)
+        if _IDENT.fullmatch(parts[0]) and _IDENT.fullmatch(parts[-1]):
+            pairs.append((parts[0], parts[-1]))
+    return pairs
+
+
 def _imports_finding_file(reg_file, text, finding_file):
     """The aliases in `reg_file` that import `finding_file`, so `alias.handler` can be tied to the finding's
     file (VER-008). Resolution is literal and repository-relative; an import that escapes the repo is ignored."""
@@ -180,15 +216,24 @@ def _imports_finding_file(reg_file, text, finding_file):
             continue
         if PurePosixPath(target) == stem or target == finding_file:
             aliases.add(alias)
+    for m in _PY_FROM.finditer(text):           # from pkg import views [as v]
+        module = _py_module(reg_file, m.group(1))
+        if module is not None:
+            aliases.update(local for original, local in _py_names(m.group(2) or m.group(3))
+                           if PurePosixPath(posixpath.normpath(f"{module}/{original}")) == stem)
+    for m in _PY_IMPORT_AS.finditer(text):      # import pkg.views as v
+        if (module := _py_module(reg_file, m.group(1))) is not None and PurePosixPath(module) == stem:
+            aliases.add(m.group(2))
     return aliases
 
 
-def _named_handlers(reg_file, text, finding_file, finding_text):
+def _named_handlers(reg_file, text, finding_file, finding_text) -> dict[str, str]:
     """The local names `reg_file` binds by a named import of `finding_file` to a name that appears in the
-    finding's file (VER-008). Resolution is literal and repository-relative, as for _imports_finding_file."""
+    finding's file (VER-008), each with the name it has there. Resolution is literal and repository-relative, as
+    for _imports_finding_file."""
     parent = PurePosixPath(reg_file).parent
     stem = PurePosixPath(finding_file).with_suffix("")
-    names = set()
+    pairs = []
     for m in _NAMED_IMPORT.finditer(text):
         target = posixpath.normpath(str(parent / m.group(3)))
         if target == ".." or target.startswith(("../", "/")) or (PurePosixPath(target) != stem
@@ -196,11 +241,43 @@ def _named_handlers(reg_file, text, finding_file, finding_text):
             continue
         for entry in (m.group(1) or m.group(2)).split(","):
             parts = re.split(r"\s+as\s+|\s*:\s*", entry.strip(), maxsplit=1)   # `a as b` or `a: b`
-            original, local = parts[0], parts[-1]
-            if (_IDENT.fullmatch(original) and _IDENT.fullmatch(local)
-                    and re.search(rf"\b{re.escape(original)}\b", finding_text)):
-                names.add(local)
+            pairs.append((parts[0], parts[-1]))
+    for m in _PY_FROM.finditer(text):           # from pkg.views import detail [as d]
+        module = _py_module(reg_file, m.group(1))
+        if module is not None and PurePosixPath(module) == stem:
+            pairs += _py_names(m.group(2) or m.group(3))
+    return {local: original for original, local in pairs
+            if _IDENT.fullmatch(original) and _IDENT.fullmatch(local)
+            and re.search(rf"\b{re.escape(original)}\b", finding_text)}
+
+
+def _enclosing(text: str, start_line: int, line: int) -> set[str]:
+    """The functions the finding's evidence line belongs to, in `text`, a source window starting at `start_line`: a
+    named definition on that line and each one above it whose indentation encloses it, up to the outermost."""
+    lines = text.split("\n")
+    i = line - start_line
+    if not 0 <= i < len(lines):
+        return set()
+
+    def depth(row):
+        return len(row) - len(row.lstrip())
+
+    names, indent = set(), depth(lines[i])
+    for j in range(i, -1, -1):
+        row = lines[j]
+        if j < i and (not row.strip() or row.strip()[0] in ")]}" or depth(row) >= indent):
+            continue            # inside the block, empty, or the end of an earlier one
+        indent = depth(row)
+        if m := _FUNCTION.search(row):
+            names.add(next(g for g in m.groups() if g))
+        if indent == 0:
+            break
     return names
+
+
+def _evidence_line(ctx) -> int | None:
+    line = (ctx.plan.instance or "").rpartition(":")[2]
+    return int(line) if line.isdigit() else None
 
 
 def registration_routes(ctx, history):
@@ -211,10 +288,14 @@ def registration_routes(ctx, history):
     finding_file = (ctx.plan.instance or "").rsplit(":", 1)[0]
     if not finding_file:
         return []
-    finding_text = "".join(h.get("result", {}).get("text", "") for h in history
-                           if h.get("tool") == "read_source" and h.get("args", {}).get("path") == finding_file)
+    windows = [h.get("result", {}) for h in history
+               if h.get("tool") == "read_source" and h.get("args", {}).get("path") == finding_file]
+    finding_text = "".join(w.get("text", "") for w in windows)
     if not finding_text:
         return []
+    line = _evidence_line(ctx)
+    enclosing = set().union(*(_enclosing(w.get("text", ""), w.get("start_line", 1), line) for w in windows)) \
+        if line is not None else set()
     routes, seen = [], set()
     for h in history:
         if h.get("tool") != "read_source":
@@ -224,18 +305,21 @@ def registration_routes(ctx, history):
         if not reg_file or reg_file == finding_file:
             continue
         for route in _registered(reg_file, result.get("text", ""), result.get("start_line", 1), finding_file,
-                                 finding_text):
+                                 finding_text, enclosing):
+            route.pop("own")
             if (route["method"], route["path"]) not in seen:
                 seen.add((route["method"], route["path"]))
                 routes.append(route)
     return routes
 
 
-def _registered(reg_file, text, start_line, finding_file, finding_text):
+def _registered(reg_file, text, start_line, finding_file, finding_text, enclosing=frozenset()):
     """The routes `text` of `reg_file` registers for a handler of the finding's file (VER-008): the registering
     call names `alias.handler`, `alias` imports the finding's file in this text, and `handler` appears in the
-    finding's file; or it names a handler this text imports by name from the finding's file. The route's own
-    path string is not searched for names."""
+    finding's file; or it names a handler this text imports by name from the finding's file. A mount (use, all)
+    answers every method below its path, middleware included, so it counts only when the handler it names is one
+    of `enclosing`, the functions that hold the finding's evidence line; it stands for every method (ALL). The
+    route's own path string is not searched for names. `own` marks a route whose handler holds the evidence line."""
     aliases = _imports_finding_file(reg_file, text, finding_file)
     named = _named_handlers(reg_file, text, finding_file, finding_text)
     if not aliases and not named:
@@ -245,11 +329,15 @@ def _registered(reg_file, text, start_line, finding_file, finding_text):
         ends = [n.start() for n in (_ROUTE.search(text, m.end()), _NEXT_CALL.search(text, m.end())) if n]
         body = text[m.start():min(ends, default=len(text))]
         handlers = text[m.end():min(ends, default=len(text))]
-        if any(a in aliases and handler in finding_text
-               for a, handler in (ref.groups() for ref in _HANDLER_REF.finditer(body))) or any(
-                name in named for name in _IDENT.findall(handlers)):
-            routes.append({"method": m[1].upper(), "path": m[2], "inputs": [], "source_file": reg_file,
-                           "source_line": start_line + text[:m.start()].count("\n")})
+        referenced = [handler for a, handler in (ref.groups() for ref in _HANDLER_REF.finditer(body))
+                      if a in aliases]
+        referenced += [named[name] for name in _IDENT.findall(handlers) if name in named]
+        own = bool(enclosing & set(referenced))
+        if own if m["mount"] else any(handler in finding_text for handler in referenced):
+            method = "ALL" if m["mount"] else (m["verb"] or "GET").upper()    # path(): a routing function, GET
+            literal = m["path"] if m["path"] is not None else m["relative"]
+            routes.append({"method": method, "path": _normalise(literal), "inputs": [], "source_file": reg_file,
+                           "source_line": start_line + text[:m.start()].count("\n"), "own": own})
     return routes
 
 
@@ -257,8 +345,9 @@ def source_registrations(ctx) -> list[dict]:
     """With a source checkout and no route in the assessment, the routes other files register for a handler of
     the finding's file, resolved in code before the agent starts (VER-008): the rule of registration_routes
     applied to whole files, so an import far above its registration counts. Candidate files are those whose lines
-    end an import of the finding's module name (`/payment'`); reading stays under the source reader's confinement,
-    and only the routes reach the model."""
+    end an import of the finding's module name (`/payment'`), or for a Python module import it (`import views`,
+    `views import`, `.views as`); reading stays under the source reader's confinement, and only the routes reach the
+    model."""
     reader = getattr(ctx, "source", None)
     finding_file = (ctx.plan.instance or "").rsplit(":", 1)[0]
     if reader is None or not finding_file or original_routes(ctx):
@@ -268,9 +357,13 @@ def source_registrations(ctx) -> list[dict]:
     stem = PurePosixPath(finding_file).stem
     try:
         finding_text = reader.read_all(finding_file)
-        hits = [h for quote in ("'", '"') for h in reader.search(f"/{stem}{quote}", limit=40)["matches"]]
+        python = (f"import {stem}", f"{stem} import", f".{stem} as ") if finding_file.endswith(".py") else ()
+        needles = [f"/{stem}'", f'/{stem}"', *python]
+        hits = [h for needle in needles for h in reader.search(needle, limit=40)["matches"]]
     except SourceAccessError:
         return []
+    line = _evidence_line(ctx)
+    enclosing = _enclosing(finding_text, 1, line) if line is not None else set()
     routes, seen = [], set()
     for reg_file in dict.fromkeys(h["path"].replace("\\", "/") for h in hits):
         if reg_file == finding_file:
@@ -279,13 +372,15 @@ def source_registrations(ctx) -> list[dict]:
             text = reader.read_all(reg_file)
         except SourceAccessError:
             continue
-        for route in _registered(reg_file, text, 1, finding_file, finding_text):
+        for route in _registered(reg_file, text, 1, finding_file, finding_text, enclosing):
             if (route["method"], route["path"]) not in seen:
                 seen.add((route["method"], route["path"]))
                 routes.append({**route, "evidence_step": None,
                                "reason": f"{reg_file}:{route['source_line']} registers it for a handler of "
                                          f"{finding_file}"})
-    return routes[:MAX_REGISTERED]
+    # The registrations of the function that holds the evidence line first, then the file's other handlers.
+    routes.sort(key=lambda r: not r["own"])
+    return [{k: v for k, v in r.items() if k != "own"} for r in routes[:MAX_REGISTERED]]
 
 
 def _normalise(literal: str) -> str:
@@ -485,12 +580,12 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         # Or a route another file registers for a handler of the finding's file (VER-008).
         if not roots:
             roots = [r for r in registration_routes(ctx, history)
-                     if r["method"] == method and planned_route(resolve(ctx, r["path"]), url)]
+                     if r["method"] in (method, "ALL") and planned_route(resolve(ctx, r["path"]), url)]
     elif not roots:
         # Or, for a page script, a recorded answer of a page its file path gives (VER-056).
         roots, extra = _page_roots(ctx, h, candidates)
         candidates = [*candidates, *extra]
-    matching = [r for r in candidates if r["method"] == method
+    matching = [r for r in candidates if r["method"] in (method, "ALL")
                 and planned_route(resolve(ctx, r["path"]), url)
                 and all(_offers(r, i) for i in inputs)]
     if not matching or not any(related(resolve(ctx, r["path"]), url) for r in roots):

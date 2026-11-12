@@ -537,10 +537,11 @@ def _resolved(ctx):
 def test_the_verifier_resolves_a_registration_far_below_its_import(tmp_path):
     """T-010: the import is at the top of server.ts and the registrations hundreds of lines below. A PUT whose own
     handler list names none of the finding's handlers is not credited with the next line's DELETE handler, and
-    DELETE and a POST without the finding's handler are never resolved."""
+    DELETE and a POST without the finding's handler are never resolved. The route of the handler that holds the
+    evidenced line (getPaymentMethodById) comes first."""
     ctx = _registration_ctx(tmp_path, [])
     _far_repo(tmp_path)
-    assert _resolved(ctx) == [("GET", "/api/Cards", "server.ts", 453), ("GET", "/api/Cards/:id", "server.ts", 456)]
+    assert _resolved(ctx) == [("GET", "/api/Cards/:id", "server.ts", 456), ("GET", "/api/Cards", "server.ts", 453)]
 
 
 def test_a_named_import_binds_the_handler_but_not_a_word_of_the_route(tmp_path):
@@ -588,3 +589,81 @@ def test_a_resolved_route_is_testable_from_the_first_step_and_nothing_else_is(tm
     assert "GET /api/Cards/:id (server.ts:456)" in _seed(ctx)
     assert any("resolved from the source before the test" in o and "server.ts:456" in o
                for o in result.observations)
+
+
+# ── mounts, Django URL configurations and readiness without a route (VER-008) ──
+
+KEY_SERVER = ("import path from 'node:path'\n"
+              "export function serveKeyFiles () {\n"
+              "  return ({ params }, res, next) => {\n"
+              "    const file = params.file\n"
+              "    res.sendFile(path.resolve('encryptionkeys/', file))\n"
+              "  }\n"
+              "}\n"
+              "export const isAuthorized = () => (req, res, next) => next()\n")
+
+
+@pytest.mark.parametrize("line,expected", [
+    (5, [("ALL", "/encryptionkeys/:file", "server.ts", 453)]),   # inside serveKeyFiles: its mount, for every method
+    (8, [("ALL", "/encryptionkeys", "server.ts", 452)]),         # the middleware itself: where it is mounted
+    (1, []),                                                     # in no function: a mount is no one's route
+])
+def test_a_mount_counts_only_for_the_function_that_holds_the_evidence(tmp_path, line, expected):
+    """T-039 (run 133): `app.use` mounts the key server's handler. A mount answers every method below its path,
+    middleware included, so it supplies the route only of the function the evidenced line is in."""
+    ctx = _registration_ctx(tmp_path, [])
+    ctx.plan = replace(ctx.plan, instance=f"routes/keyServer.ts:{line}")
+    (tmp_path / "routes" / "keyServer.ts").write_text(KEY_SERVER)
+    (tmp_path / "server.ts").write_text(
+        "import { serveKeyFiles, isAuthorized } from './routes/keyServer'\n" + FILLER
+        + "app.use('/encryptionkeys', isAuthorized())\n"
+        "app.use('/encryptionkeys/:file', serveKeyFiles())\n")
+    assert _resolved(ctx) == expected
+
+
+VIEWS = ("def home(request):\n"
+         "    return render(request, 'home.html')\n"
+         "\n"
+         "\n"
+         "def order_detail(request, order_id):\n"
+         "    order = Order.objects.raw(f'SELECT * FROM orders WHERE id = {order_id}')\n"
+         "    return render(request, 'order.html', {'order': order})\n")
+
+
+@pytest.mark.parametrize("import_line,resolved", [
+    ("from shop import views", True), ("from . import views", True), ("import shop.views as views", True),
+    ("from other import views", False),                            # a module of the same name in another package
+])
+def test_a_django_url_configuration_supplies_the_view_that_holds_the_evidence_first(tmp_path, import_line,
+                                                                                    resolved):
+    (tmp_path / "shop").mkdir()
+    (tmp_path / "shop" / "views.py").write_text(VIEWS)
+    (tmp_path / "shop" / "urls.py").write_text(
+        f"from django.urls import path\n\n{import_line}\n\nurlpatterns = [\n"
+        "    path('', views.home, name='home'),\n"
+        "    path('orders/<int:order_id>', views.order_detail, name='order_detail'),\n"
+        "]\n")
+    ctx = _registration_ctx(tmp_path, [])
+    ctx.plan = replace(ctx.plan, instance="shop/views.py:6")
+    expected = [("GET", "/orders/<order_id>", "shop/urls.py", 7), ("GET", "/", "shop/urls.py", 6)]
+    assert _resolved(ctx) == (expected if resolved else [])
+
+
+def test_safe_mode_does_not_start_a_finding_whose_registered_routes_all_write(tmp_path):
+    """T-064 (run 133): the assessment names no route and the source registers only writes for the finding's
+    handlers, so safe mode lists it as needing intrusive mode instead of starting its agent. Intrusive mode, a
+    registered read or a run without a source checkout leave it to the other rules."""
+    ctx = _registration_ctx(tmp_path, [])
+    plan = replace(ctx.plan, cls="injection", cwe="CWE-89")
+    (tmp_path / "routes" / "payment.ts").write_text(PAYMENT)
+    writes = ("import * as payment from './routes/payment'\n"
+              "app.post('/api/Cards', payment.getPaymentMethods())\n"
+              "app.put('/api/Cards/:id', payment.getPaymentMethodById())\n")
+    (tmp_path / "server.ts").write_text(writes)
+    args = {"identities": [], "browser": None, "listener": None, "scope": {}}
+    assert _blocker(plan, safe=True, source=ctx.source, **args) == (
+        "intrusive", "safe mode; every request the source registers for its handlers writes")
+    assert _blocker(plan, safe=False, source=ctx.source, **args) is None
+    assert _blocker(plan, safe=True, source=True, **args) is None
+    (tmp_path / "server.ts").write_text(writes + "app.get('/api/Cards', payment.getPaymentMethods())\n")
+    assert _blocker(plan, safe=True, source=ctx.source, **args) is None

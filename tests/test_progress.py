@@ -89,6 +89,26 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert "\x1b" not in out.getvalue()
 
 
+def test_the_proof_line_names_the_form_and_a_qa_objection_has_its_own_line():
+    """T-058 (run 133): the comparison without credentials is not "access differs between identities", and the
+    technical QA's record, which has no step number, shows its first objection instead of "step None"."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.step({"step": None, "tool": "technical_review", "note": "Technical QA: needs-attention",
+                   "result": {"status": "needs-attention", "issues": [
+                       {"code": "interpretation", "detail": "jwt.pub is a public key.", "question": "?"}]}})
+    result = ProbeResult(verdict="confirmed", confidence="medium", rationale="served",
+                         proof={"checked": True, "steps": [4, 5, 6], "form": "comparison-without-credentials"})
+    progress.agent_finished(_plan(), result)
+    progress.close()
+    text = "\n".join(_rows(out))
+    assert "step None" not in text
+    assert "Technical QA: needs-attention · jwt.pub is a public key." in text
+    assert "✓ proof checked: same answer without credentials, unlike a random path · steps 4, 5, 6" in text
+
+
 def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_the_finding(monkeypatch):
     from appsec_verifier.endpoints import Endpoint
 

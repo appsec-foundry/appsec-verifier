@@ -5,7 +5,9 @@ responses or return questions to the original loop. Three judgments, two evidenc
 selections and two correction rounds are shared by all variants of a finding.
 Neither QA nor its feedback changes authorization, proof checks or run limits.
 An access-control confirmation whose proof check passed is judged only for
-whether the access is intended, without follow-up (`follow_up=False`).
+whether the access is intended (`intent=True`); its one follow-up, once per finding,
+is an objection that the tested resource is meant to be public while the finding
+names a protected one (`public-resource`).
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ QA_SCHEMA = {
         "status": {"enum": ["clear", "needs-attention"]},
         "issues": {"type": "array", "maxItems": 4, "items": {
             "type": "object", "additionalProperties": False, "required": ["code", "detail", "question"],
-            "properties": {"code": {"enum": ["coverage", "prerequisite", "counterexample", "interpretation", "proof"]},
+            "properties": {"code": {"enum": ["coverage", "prerequisite", "counterexample", "interpretation", "proof",
+                                             "public-resource"]},
                            "detail": _TEXT, "question": _TEXT}}},
         "steps": {"type": "array", "maxItems": 2, "uniqueItems": True,
                   "items": {"type": "integer", "minimum": 1}},
@@ -61,9 +64,12 @@ are shared by all variants. Your feedback never grants permission and never conf
 QA_INTENT = """This access-control finding's code-checked proof passed: an identity received what the proof
 requires. Judge only whether that observed access contradicts the application's intended authorization, from
 the finding, source excerpts and recorded responses; for example, a resource or function the application
-deliberately shares with these identities does not. No further tests run and no question reaches the test
-agent: an objection and its question are shown to the operator beside the verdict, which stays unchanged.
-Return clear when nothing recorded indicates that the access is intended.
+deliberately shares with these identities does not. An objection and its question are shown to the operator
+beside the verdict, which stays unchanged. One objection alone may reach the test agent, once per finding and
+only while public_resource_follow_up is true: code public-resource, when the tested resource is meant to be
+public (such as a public key or a public page) while the finding names a protected one; its question names the
+protected resource to test instead. No other question reaches the test agent. Return clear when nothing
+recorded indicates that the access is intended.
 """
 
 
@@ -116,9 +122,15 @@ class TechnicalReview:
         self.state = {"status": "not-reviewed", "rounds": 0, "reviews": 0, "inspected_steps": [],
                       "reason": "No proposed conclusion was reviewed.", "issues": []}
 
-    def consider(self, history, result, tools, controller, remaining, *, follow_up=True):
-        """Return questions for the existing loop, or None; never return a verdict. Without `follow_up`, QA judges
-        whether a checked access-control confirmation shows intended access and returns no questions."""
+    def _public_follow_up_open(self, remaining) -> bool:
+        """Whether the one public-resource follow-up of a checked access-control confirmation is still available:
+        once per finding, within the shared correction rounds and the test steps left (VER-046)."""
+        return not self.shared.get("public_resource") and self.shared.get("rounds", 0) < 2 and remaining > 0
+
+    def consider(self, history, result, tools, controller, remaining, *, intent=False):
+        """Return questions for the existing loop, or None; never return a verdict. With `intent`, QA judges
+        whether a checked access-control confirmation shows intended access; it returns a question only for a
+        public-resource objection, once per finding, within the shared correction rounds (VER-046)."""
         ctx = self.ctx
         try:
             if not callable(getattr(self.original, "structured", None)):
@@ -146,7 +158,8 @@ class TechnicalReview:
                 "capabilities": {"source": ctx.source is not None, "browser": ctx.browser is not None,
                                  "callback": ctx.listener is not None},
                 "remaining_test_steps": remaining,
-                "remaining_correction_rounds": 2 - self.shared.get("rounds", 0) if follow_up else 0,
+                "remaining_correction_rounds": 0 if intent else 2 - self.shared.get("rounds", 0),
+                **({"public_resource_follow_up": self._public_follow_up_open(remaining)} if intent else {}),
                 "proposed": {"verdict": result.verdict, "rationale": result.rationale, "proof": result.proof},
                 "steps": [{"step": n, "tool": h.get("tool"), "args": bounded(clean(ctx, h.get("args"))),
                            "result": bounded(clean(ctx, h.get("result")))} for n, h in enumerate(history, 1)][-64:],
@@ -164,7 +177,7 @@ class TechnicalReview:
                 payload["remaining_evidence_selections"] = 2 - self.shared.get("reads", 0)
                 self.shared["calls"] = self.shared.get("calls", 0) + 1
                 reply = controller.run(lambda: self.reviewer.structured(
-                    ctx, QA_SYSTEM + ("" if follow_up else QA_INTENT), json.dumps(clean(ctx, payload)), QA_SCHEMA))
+                    ctx, QA_SYSTEM + (QA_INTENT if intent else ""), json.dumps(clean(ctx, payload)), QA_SCHEMA))
                 reply = strict_json(reply) if isinstance(reply, str) else reply
                 if not Draft202012Validator(QA_SCHEMA).is_valid(reply):
                     raise ValueError("invalid technical QA response")
@@ -190,23 +203,29 @@ class TechnicalReview:
                 if not reply["issues"]:
                     self.state["reason"] = "No unresolved technical objections in the reviewed attempts."
                     return None
-                if not follow_up:
-                    self.state["reason"] = ("The objections stand beside the code-checked access-control verdict; "
-                                            "this review starts no further tests.")
-                    return None
+                issues = reply["issues"]
+                if intent:
+                    issues = [i for i in issues if i["code"] == "public-resource"]
+                    if not issues or not self._public_follow_up_open(remaining):
+                        self.state["reason"] = ("The objections stand beside the code-checked access-control "
+                                                "verdict; this review starts no further tests.")
+                        return None
+                    self.shared["public_resource"] = 1
                 if self.shared.get("rounds", 0) >= 2 or remaining <= 0:
                     self.state["reason"] = "Technical objections remain; correction rounds or test steps are exhausted."
                     return None
                 self.shared["rounds"] = self.shared.get("rounds", 0) + 1
                 self.state["rounds"] += 1
                 self.state["reason"] = "Questions returned to the test agent within the existing limits."
-                return {"issues": reply["issues"], "remaining_steps": remaining,
+                return {"issues": issues, "remaining_steps": remaining,
                         "reviewed_verdict": result.verdict, "proof_checked": bool((result.proof or {}).get("checked")),
                         "round": self.shared["rounds"], "authority": "questions only; existing controls apply"}
         except LimitExceeded as exc:
             self.state.update(status="stopped", reason=f"Technical QA stopped by the {exc.kind} limit.")
             result.limits_hit = exc.kind
-        except (ValueError, ToolError, HostCallError):
+        except HostCallError as exc:   # the host's fixed reason (agent/hosts.py), as the planner reports it
+            self.state.update(status="stopped", reason=f"Technical QA stopped: {str(exc)[:200]}.")
+        except (ValueError, ToolError):
             self.state.update(status="stopped",
                               reason="Technical QA stopped: invalid, unavailable or refused response.")
         return None

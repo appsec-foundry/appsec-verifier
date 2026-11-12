@@ -691,10 +691,22 @@ def injection_check(ctx, history, cited):
     if plan.get("text") and any(plan["text"] in sent for sent in sent_texts(plan)):
         return "the selected text is part of a sent value, so its presence may be an echo"      # VER-055
     try:
-        values = {name: [observe(ctx, n, plan) for n, _ in group] for name, group in groups.items()}
+        values = {name: [_observe_or_absent(ctx, n, plan) for n, _ in group] for name, group in groups.items()}
     except (ValueError, KeyError, IndexError, TypeError, RecursionError):
         return "the declared observation is missing or incomplete"
     return boolean_classes(plan, values)
+
+
+def _observe_or_absent(ctx, step, plan):
+    """`observe`, with a field a complete JSON answer lacks read as no value (None) rather than a failure (VER-011):
+    the presence of a result is an observation, as a text that does not occur is (VER-055). Every control already
+    answered with the same successful status, and the true class must still show a value (boolean_classes)."""
+    try:
+        return observe(ctx, step, plan)
+    except (KeyError, IndexError):
+        if plan.get("pointer"):
+            return None
+        raise
 
 
 def complementary(plan) -> bool:

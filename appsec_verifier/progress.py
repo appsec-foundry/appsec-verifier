@@ -56,6 +56,7 @@ from contextlib import contextmanager
 
 from .preflight import printable
 from .term_style import Style, columns
+from .verify.probes import proof_shown
 from .verify.report import _VERDICT_LABEL, _first_sentence
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -65,11 +66,6 @@ _VERDICT_ROLES = {"confirmed": "ok", "not-reproducible": "critical", "blocked-by
                   "inconclusive": "warn", "not-attempted": "muted"}
 _VERDICT_MARKS = {"confirmed": "✔", "not-reproducible": "✘", "blocked-by-control": "✘", "inconclusive": "?"}
 _EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
-# What a checked proof showed, by class (agent/proof.py).
-_PROVEN = {"xss": "script executed in the browser", "ssrf": "the target called the Verifier's listener",
-           "open-redirect": "redirect to the marker host", "path-traversal": "marker file read",
-           "access-control": "access differs between identities", "injection": "response follows fresh controls",
-           "session": "cookie attribute missing in repeated responses"}
 _SEVERITIES = ("critical", "high", "medium", "low")
 _NBSP = "\xa0"       # keeps the run's spend and the model time whole across a wrap, as in AppSec Analyzer
 # A redraw begins a synchronized update and hides the cursor, then shows it again; terminals without
@@ -446,6 +442,14 @@ class RunProgress:
                 self._record("⚠", _line(head, note, action, reason, cost))
             elif record.get("refused"):
                 self._record("↻", _line(head, f"refused: {_clip(record['refused'], 160)}", cost))
+            elif record.get("tool") == "technical_review":
+                # The technical QA's outcome after the agent, no step of its own (agent/loop.py); with an objection
+                # it stands beside the verdict, so its first one is shown (VER-046).
+                result = record.get("result") if isinstance(record.get("result"), dict) else {}
+                issues = [i for i in result.get("issues") or [] if isinstance(i, dict)]
+                detail = _clip(str(issues[0].get("detail") or ""), 240) if issues else ""
+                self._record("qa", _line(f"Technical QA: {_clip(str(result.get('status') or ''), 40)}", detail,
+                                         cost))
             elif action:
                 # The request tested against the target in its own colour, on its own row under the note when
                 # there is one.
@@ -512,7 +516,7 @@ class RunProgress:
             if result.verdict == "confirmed" and proof.get("checked") is True:
                 cited = [n for n in proof.get("steps") or [] if isinstance(n, int)]
                 where = f"step{'s' if len(cited) > 1 else ''} {', '.join(map(str, cited))}" if cited else ""
-                shown = _PROVEN.get(plan.cls)
+                shown = (proof_shown(proof, plan.cls) or (None,))[0]
                 self._record("proof", _line([("✓ proof checked", "ok", "bold"),
                                              *([(f": {shown}", "ok")] if shown else [])], where), role="ok")
                 return

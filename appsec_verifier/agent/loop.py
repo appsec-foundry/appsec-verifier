@@ -183,6 +183,7 @@ class AgentProbe:
         last_cited = None
         repairs = 0
         qa_candidate = None
+        intent_candidate = None     # a checked access-control confirmation QA sent back to test another resource
 
         def attach_stopped(stopped):
             # A follow-up cannot erase an already checked observation when its budget ends.
@@ -337,18 +338,29 @@ class AgentProbe:
                 # VER-046: a confirmed verdict whose proof check passed is not reviewed; QA stays for negative
                 # and unproven conclusions, where it can point at a missing attempt. If QA already engaged this
                 # finding on an earlier conclusion, it still runs so it can close out that objection. An
-                # access-control confirmation is judged for intended access only, with no follow-up.
+                # access-control confirmation is judged for intended access only; its one follow-up tests a
+                # protected resource where QA holds the tested one public, and the confirmation stands unless a
+                # checked confirmation replaces it.
                 feedback = None
                 confirmed_checked = result.verdict == "confirmed" and (result.proof or {}).get("checked") is True
                 intent_only = confirmed_checked and self.cls == "access-control"
-                if confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
+                if intent_candidate is not None and not confirmed_checked:
+                    followed = " ".join(str(result.rationale or "").split())[:300]
+                    result, verdict = intent_candidate
+                    result.observations = [*result.observations, "Technical QA follow-up on a protected resource "
+                                           f"ended without a checked confirmation: {followed}"]
+                    qa.state["reason"] = ("The follow-up found no checked confirmation on a protected resource; the "
+                                          "objection stands beside the earlier verdict.")
+                elif confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
                     qa.state["reason"] = "A confirmed verdict whose proof check passed is not reviewed (VER-046)."
                 else:
                     feedback = qa.consider(history, result, tools, controller, self._max_steps - decision,
-                                           follow_up=not intent_only)
+                                           intent=intent_only)
                 if feedback is not None:
                     if (result.proof or {}).get("checked") is True:
                         qa_candidate = (result, verdict.get("proof_steps"))
+                    if intent_only:
+                        intent_candidate = (result, verdict)
                     _log(ctx, step, tool="qa_feedback", note="Technical QA requests a follow-up", result=feedback)
                     history.append({"tool": "qa_feedback", "args": {}, "result": feedback})
                     continue

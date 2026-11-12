@@ -289,6 +289,21 @@ def test_technical_issues_are_schema_valid_and_visible_without_a_presentation_re
     assert "| Technical QA |" in card and "needs-attention" in card
 
 
+def test_an_objection_beside_a_confirmed_result_is_named_where_the_result_is():
+    """T-058 (run 133): QA's objection to a confirmed result stood only in the details; the result's summary names
+    it. An inconclusive result or a clear review adds nothing there."""
+    review = {"status": "needs-attention", "rounds": 0, "reviews": 1, "inspected_steps": [], "reason": "beside it",
+              "issues": [{"code": "interpretation", "detail": "jwt.pub is a public key", "question": "?"}]}
+
+    def card(verdict, review):
+        result = ProbeResult(verdict, technical_review=review, proof={"checked": True, "steps": []})
+        return "\n".join(_entry({**asdict(result), "result_id": "T-1"}, None, first=True, details=False))
+
+    assert "- **Technical QA objection:** jwt.pub is a public key." in card("confirmed", review)
+    assert "Technical QA objection" not in card("inconclusive", review)
+    assert "Technical QA objection" not in card("confirmed", {**review, "status": "clear", "issues": []})
+
+
 def test_qa_schema_is_compatible_with_strict_model_output():
     def check(value):
         if isinstance(value, dict):
@@ -302,3 +317,10 @@ def test_qa_schema_is_compatible_with_strict_model_output():
                 check(child)
 
     check(QA_SCHEMA)
+
+
+def test_a_failed_host_call_names_its_fixed_reason_in_the_qa_status(tmp_path):
+    ctx = context(tmp_path)
+    qa, host = reviewer(ctx, [HostReply(error="rate_limit (exit 1)", usd=0.01)])
+    assert consider(ctx, qa) is None
+    assert qa.state["reason"] == "Technical QA stopped: offline fake call failed: rate_limit (exit 1)."

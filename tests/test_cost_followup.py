@@ -494,6 +494,25 @@ def test_a_javascript_predicate_confirms_the_where_injection_without_more_than_t
     assert "true predicates produced an empty observation" in _feedback(coerced.history)[0]["reason"]
 
 
+def test_a_field_only_the_true_answers_contain_is_an_observation_too(tmp_path):
+    """T-034 (run 133): the false predicates empty the result, so a field of its first record is missing there. That
+    absence is the false class's observation (VER-011), as an absent text is (VER-055). A field no answer has, or
+    one the predicates never bring back (a target that converts the id), confirms nothing."""
+    def plan_at(pointer):
+        plan = _js_plan()
+        plan["args"]["pointer"] = pointer
+        return plan
+
+    script = Script([plan_at("/data/0/message"), _confirm])
+    result = AgentProbe("injection", lambda: script).run(_reviews_ctx(tmp_path, [], vulnerable=True))
+    assert result.verdict == "confirmed" and result.proof["checked"], result.rationale
+    for pointer, vulnerable in (("/data/0/nope", True), ("/data/0/message", False)):
+        refused = Script([plan_at(pointer), _confirm])
+        result = AgentProbe("injection", lambda s=refused: s).run(_reviews_ctx(tmp_path, [], vulnerable=vulnerable))
+        assert result.verdict == "inconclusive"
+        assert "true predicates produced an empty observation" in _feedback(refused.history)[0]["reason"]
+
+
 def test_own_read_controls_name_the_form_that_could_confirm(tmp_path):
     sent = []
     ctx = _reviews_ctx(tmp_path, sent)

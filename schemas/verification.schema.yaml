@@ -272,6 +272,7 @@ properties:
             tested_path:    { type: [string, "null"] }
             hypothesis:     { type: [string, "null"] }
             observation_pointer: { type: [string, "null"] }
+            form:           { type: [string, "null"], description: "The proof form the check accepted, which the console and report describe (agent/proof.py, verify/probes.py)." }
             observation_text: { type: [string, "null"], description: "The text an injection proof observed in a page or text answer (VER-055)." }
             scope:          { type: string }
             missing:
@@ -451,7 +452,7 @@ $defs:
           required: [code, detail, question]
           properties:
             code:
-              enum: [coverage, prerequisite, counterexample, interpretation, proof]
+              enum: [coverage, prerequisite, counterexample, interpretation, proof, public-resource]
             detail: {type: string, minLength: 1, maxLength: 600}
             question: {type: string, minLength: 1, maxLength: 600}
   evidence_review:

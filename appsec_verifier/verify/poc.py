@@ -664,6 +664,8 @@ def _split_reason(ctx, history: list[dict], everything: list[tuple[int, dict]], 
     for n, e in everything:
         group = _GROUP_OF.get(roles.get(n, ("", ""))[1])
         value = (plan["text"] in _text(e)) if plan.get("text") else observed(ctx, history, e)
+        if value is _MISSING and plan.get("pointer") and _json(e) is not _MISSING:
+            value = None        # a field the answer lacks, as the proof check reads it (agent/experiments.py)
         if group is None or value is _MISSING:
             continue
         values.setdefault(group, []).append(value)
@@ -783,8 +785,17 @@ def _leaves(value, path="", out=None):
     return out
 
 
+def _same_in_code(ctx, a, b) -> bool | None:
+    """Whether the answers of steps `a` and `b` were the same bytes, by the digest the Verifier keeps in memory for
+    the finding (agent/tools.py, VER-057); None where either step has none."""
+    responses = getattr(ctx, "responses", None)
+    responses = responses if isinstance(responses, dict) else {}
+    x, y = ((responses.get(n) or {}).get("digest") for n in (a, b))
+    return None if not x or not y else x == y
+
+
 def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict], ref_label: str | None = None,
-               discount: str | None = None) -> str:
+               discount: str | None = None, *, step: int | None = None) -> str:
     """How an attack's answer compares with the normal request's, or with the condition `ref_label` names, in one
     sentence from the recorded answers; `discount` says why the proof does not count a difference in the value."""
     m, r = ref
@@ -807,10 +818,17 @@ def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict], ref_lab
             text += f", {new} of them not in {whose}" if new else ""
         return start + text + (f"; the proof does not count this difference: {discount}." if discount else ".")
     ce, cr = e["response"]["content"], r["response"]["content"]
-    if ce.get("_omitted") or cr.get("_omitted"):      # no text to compare: a binary body only by its hash
-        same = ce.get("_sha256") and ce.get("_sha256") == cr.get("_sha256")
-        return start + f"{status}, " + ("the identical answer." if same else "the answers are not recorded to compare.")
+    in_code = _same_in_code(ctx, e.get("_step") if step is None else step, m)
+    if ce.get("_omitted") or cr.get("_omitted"):      # no text to compare: by the digest or a binary body's hash
+        same = in_code if in_code is not None else (ce.get("_sha256") == cr.get("_sha256")
+                                                    if ce.get("_sha256") and cr.get("_sha256") else None)
+        if same is None:
+            return start + f"{status}, the answers are not recorded to compare."
+        same = "the identical" if same else "a different"
+        return start + f"{status}, {same} answer, compared in code over the whole body, which is not kept."
     if _text(e) == _text(r):
+        if in_code:
+            return start + f"{status}, the identical answer, compared in code over the whole body."
         cut = ce.get("_truncated") or cr.get("_truncated")
         return start + f"{status}, the identical answer" + (" as far as recorded." if cut else ".")
     mine, theirs = _json(e), _json(r)
@@ -963,7 +981,7 @@ def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path, roles=N
     return {**role, "request_excerpt": _code_excerpt(_image_request(entry, req), req),
             "response_excerpt": _code_excerpt(response, res, lines),
             "facts": [fact for fact, decisive in facts if decisive]
-            + ([difference(ctx, history, entry, ref, ref_label, reason)] if ref else [])}
+            + ([difference(ctx, history, entry, ref, ref_label, reason, step=n)] if ref else [])}
 
 
 def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple[int, dict]], highlight,
@@ -1326,6 +1344,9 @@ def _test_line(ctx, history: list[dict]) -> str:
                     "account read it")
         if plan.get("reference"):
             return f"{target} as the privileged account {plan['reference']}, without login and as a normal account"
+        if plan.get("signed_in"):        # VER-057
+            return (f"{target} as {plan['signed_in']}, without login, and without login to a random path next to it; "
+                    "compared in code: whether the answers are identical")
     if cls == "xss":
         return "the page opened with a payload that calls alert() with the finding's marker; proof: the marker runs"
     if cls == "open-redirect" and (host := redirect_host(marker)):
@@ -1372,9 +1393,12 @@ def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], r
         elif ref is None:
             seen = str(e["response"]["status"])
         else:
-            same = _text(e) == _text(ref[1]) and not (e["response"]["content"].get("_omitted")
-                                                       or ref[1]["response"]["content"].get("_omitted"))
-            seen = f"{e['response']['status']}, {'the same' if same else 'a different'} answer"
+            same = _same_in_code(ctx, n, ref[0])
+            if same is None and not (e["response"]["content"].get("_omitted")
+                                     or ref[1]["response"]["content"].get("_omitted")):
+                same = _text(e) == _text(ref[1])
+            seen = f"{e['response']['status']}, " + ("an answer not recorded to compare" if same is None
+                                                     else f"{'the same' if same else 'a different'} answer")
         if seen not in rows.setdefault(name, []):
             rows[name].append(seen)
     shown = [f"{name}: {', '.join(seen[:3])}" for name, seen in list(rows.items())[:5]]
@@ -1455,7 +1479,8 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
         who = html.escape(e.get("_role") or "anonymous")
         banner = (f"<span class=role>{html.escape(ROLE_TITLES[kind])}</span>{html.escape(label)} · "
                   if kind else "")
-        diff = difference(ctx, history, e, ref, ref_label, reason if ref_label and opposite else None) if ref else ""
+        diff = (difference(ctx, history, e, ref, ref_label, reason if ref_label and opposite else None, step=n)
+                if ref else "")
         parts.append(f"<section{' class=' + kind if kind else ''}><h2>{banner}Step {n} · "
                      f"{html.escape(e['request']['method'])} as {who} → "
                      f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"

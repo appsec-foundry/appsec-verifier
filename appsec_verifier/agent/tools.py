@@ -447,7 +447,8 @@ class AgentTools:
                 raise ToolError("the engine-error proof applies to boolean SQL, XPath, NoSQL, template or "
                                 "code-evaluation injection (" + ", ".join(ENGINE_ERROR_CWES) + ")")
             if cwe == "CWE-943" and plan.get("input_location") != "json":
-                raise ToolError("a NoSQL engine-error proof needs a JSON input")
+                raise ToolError("a NoSQL engine-error proof needs a JSON input; for a value spliced into a server-side "
+                                "JavaScript predicate, declare a boolean plan with js_predicate_template instead")
             if cwe != "CWE-943" and not isinstance(plan.get("baseline"), str | int | float):
                 raise ToolError("the engine-error proof needs a baseline value to append the break metacharacter to")
             try:

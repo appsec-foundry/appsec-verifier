@@ -6,7 +6,8 @@ target (VER-008) and returns a ProbeResult. No probe is implemented yet, so
 `not-attempted` (VER-024). Probes run through the injected, scope-confined HTTP
 client and must honour `ProbeContext.safe` (VER-030) and `read_only` (VER-014).
 Technical QA state is separate from proof, with correction allowances shared
-across a finding's variants (VER-046).
+across a finding's variants (VER-046). `PROOF_FORMS` says what each checked proof
+form showed, for the console and the report (VER-013).
 """
 
 from __future__ import annotations
@@ -34,6 +35,54 @@ class ProbeResult:
     planning: list[dict] = field(default_factory=list)
     evidence_review: dict | None = None  # presentation quality, never a technical verdict (VER-042)
     technical_review: dict | None = None  # independent technical objections, never proof (VER-046)
+
+
+# What a checked proof showed, per proof form the check accepts (agent/proof.py, proof_form): a phrase for the
+# console and a sentence for the report. One table, so that a new form is described wherever a proof is shown.
+PROOF_FORMS = {
+    "script-executed": ("script executed in the browser", "The injected script ran in the browser"),
+    "listener-hit": ("the target called the Verifier's listener", "The target called the Verifier's listener"),
+    "marker-redirect": ("redirect to the marker host", "The target redirected to the Verifier's marker host"),
+    "marker-file": ("marker file read", "The response contained the content of the marker file"),
+    "archive-marker": ("escaped archive entry read back",
+                       "An entry of the uploaded archive escaped its directory and was read back with its marker"),
+    "cookie-attribute": ("cookie attribute missing in repeated responses",
+                         "The cookie attribute was missing in repeated responses"),
+    "predicate": ("response follows fresh controls",
+                  "The response followed the Verifier's fresh control values for the declared input"),
+    "engine-error": ("engine error only for the syntax break",
+                     "A syntax break in the declared input raised a backend engine error that its balanced "
+                     "counterpart did not"),
+    "returned-marker": ("the Verifier's marker returned for one control only",
+                        "The answer returned the Verifier's marker for one control and not for its complement"),
+    "computed-expression": ("fresh computed results returned",
+                            "Each control's freshly computed result appeared in its own answer"),
+    "out-of-band": ("the target sent the control's nonce to the listener",
+                    "The target sent the control's nonce to the Verifier's listener, and not the complementary "
+                    "control's"),
+    "auth-artifact": ("true controls yielded an authenticated artifact",
+                      "The true-predicate controls yielded an authenticated artifact; the false ones and the baseline "
+                      "did not"),
+    "identity-contrast": ("access differs between identities", "Access differed between the identities"),
+    "record-marker": ("another account read the owner's marked record",
+                      "Another account read the record the owner created, with its marker"),
+    "record-change": ("another account changed the owner's record",
+                      "Another account changed the record the owner created"),
+    "privileged-comparison": ("normal account got the privileged answer",
+                              "A normal account got the same answer as the privileged account"),
+    "comparison-without-credentials": ("same answer without credentials, unlike a random path",
+                                       "Without credentials the request got the same answer as the signed-in "
+                                       "account, unlike a random path next to it"),
+}
+# The form a result saved without one stands for: its class's usual proof.
+DEFAULT_FORMS = {"xss": "script-executed", "ssrf": "listener-hit", "open-redirect": "marker-redirect",
+                 "path-traversal": "marker-file", "session": "cookie-attribute", "injection": "predicate",
+                 "access-control": "identity-contrast"}
+
+
+def proof_shown(proof: dict | None, cls: str | None) -> tuple[str, str] | None:
+    """What a checked proof showed, as (console phrase, report sentence), by the form the check accepted."""
+    return PROOF_FORMS.get((proof or {}).get("form") or DEFAULT_FORMS.get(cls or "", ""))
 
 
 @dataclass

@@ -488,8 +488,8 @@ def review_finding(group, *, stop=None):
         reason = str(exc) if str(exc) in known else "invalid structured response"
         state.update(status="stopped", reason=f"Evidence review stopped: {reason}.")
         return None
-    except HostCallError:
-        state.update(status="stopped", reason="Evidence review stopped: model host call failed.")
+    except HostCallError as exc:   # the host's fixed reason (agent/hosts.py), as the planner reports it
+        state.update(status="stopped", reason=f"Evidence review stopped: {str(exc)[:200]}.")
         return None
     except Exception:  # noqa: BLE001 - do not lose the technical result or expose provider/target data
         state.update(status="stopped", reason="Evidence review could not complete; technical result retained.")

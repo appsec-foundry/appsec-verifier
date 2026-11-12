@@ -39,6 +39,7 @@ import yaml
 
 from ..version_info import resource_root
 from .poc import ROLE_TITLES, TARGET_DATA_NOTE
+from .probes import proof_shown
 
 _VERDICT_LABEL = {
     "confirmed": "confirmed",
@@ -205,13 +206,6 @@ _LEGEND = ("🟥 confirmed · 🟩 not reproducible or blocked by control · �
            "in the assessment: 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low.")
 _CLASS = {"xss": "XSS", "ssrf": "SSRF", "access-control": "access control", "open-redirect": "open redirect",
           "path-traversal": "path traversal"}
-# What a confirmed proof of a class showed, where its steps do not tell more (_shown).
-_SHOWN = {"xss": "The injected script ran in the browser", "ssrf": "The target called the Verifier's listener",
-          "open-redirect": "The target redirected to the Verifier's marker host",
-          "path-traversal": "The response contained the content of the marker file",
-          "injection": "The response followed the Verifier's fresh control values for the declared input",
-          "access-control": "Access differed between the identities",
-          "session": "The cookie attribute was missing in repeated responses"}
 _MAX_STEP_ROWS = 15
 # A verdict the proof check lowered names its reason before the agent's claim (agent/proof.py, _downgrade).
 _LOWERED = re.compile(r"indicative, not (?:proven|executed): (.*?)\. Agent's claim:", re.S)
@@ -231,6 +225,8 @@ _NOT_TESTED = (
     (r"no test identity.*", "needs test accounts: --identities"),
     (r"safe mode; without a declared test resource.*",
      "needs --allow-intrusive: the Verifier would create its own test record"),
+    (r"safe mode; every request the source registers for its handlers writes",
+     "needs --allow-intrusive: every request the source registers for its handlers writes"),
     (r"safe mode;.*", "needs --allow-intrusive: every request it names writes"),
     (r"no declared test resource, and neither.*",
      "needs a test resource (test_resources), two test accounts with --allow-intrusive, or a privileged account"),
@@ -396,6 +392,16 @@ def _shown(r: dict, *, detail: bool = True) -> str | None:
                 if anonymous:
                     text += f"; without a login the marker did not show{at(anonymous, request=False)}"
                 return text + "."
+        elif proof.get("form") == "comparison-without-credentials":     # VER-057
+            signed = next((s for s in reads if s["role"] != "anonymous"), None)
+            same = next((s for s in reads if s["role"] == "anonymous" and s["path"] == proof.get("tested_path")), None)
+            control = next((s for s in reads if s["role"] == "anonymous" and s["path"] != proof.get("tested_path")),
+                           None)
+            if signed and same:
+                text = f"Without a login the same answer as {who(signed)}, compared in code{at(same, signed)}"
+                if control and control["status"]:
+                    text += f"; a random path next to it: {control['status']}{at(control)}"
+                return text + "."
         elif reference:
             privileged = next((s for s in reads if s["role"] == reference.group(1)), None)
             normal = next((s for s in reads if s["role"] not in (reference.group(1), "anonymous")), None)
@@ -404,7 +410,7 @@ def _shown(r: dict, *, detail: bool = True) -> str | None:
                 if anonymous and anonymous["status"]:
                     text += f"; without a login: {anonymous['status']}{at(anonymous, request=False)}"
                 return text + "."
-    shown = _SHOWN.get(r.get("class"))
+    shown = (proof_shown(proof, r.get("class")) or (None, None))[1]
     if not shown:
         return None
     first = next((s for s in cited if s["tool"] == "browser_check"), None) if r.get("class") == "xss" else None
@@ -627,6 +633,10 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
         notes.append(f"**Limits:** {_sentence(limits[:1].upper() + limits[1:])}")
     if rating and rating["changed"]:
         notes.append(f"**Rating changed:** {_sentence(rating['reason'])}")
+    review = r.get("technical_review") or {}
+    if r["verdict"] == "confirmed" and review.get("status") == "needs-attention" and review.get("issues"):
+        # VER-046: an objection QA kept beside a checked proof is named where the result is, not only below.
+        notes.append(f"**Technical QA objection:** {_sentence(review['issues'][0].get('detail'))}")
     deviations = [*([r["deviation"]] if r.get("deviation") else []),
                   *(o for o in r.get("observations") or [] if o.startswith("Deviation:"))]
     notes += [f"**Deviation:** {_sentence(re.sub(r'^Deviation:[ ]*', '', d))}" for d in deviations]
@@ -636,7 +646,7 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
         unavailable = [o for o in r.get("observations") or [] if o.startswith("Application screenshot unavailable:")]
         if unavailable:
             reason = re.sub(r"^Application screenshot unavailable:\s*", "", unavailable[0]).split(";")[0]
-            notes.append(f"**Screenshot:** none, {_sentence(reason)}")
+            notes.append(f"**Application screenshot:** none, {_sentence(reason)}")
     out += ["", *(f"- {note}" for note in notes)] if notes else []
     table = _step_table(r)
     if table:

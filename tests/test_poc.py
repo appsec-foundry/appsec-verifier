@@ -207,7 +207,7 @@ def test_confirmed_idor_writes_the_cited_exchanges_owner_only_and_hides_them_fro
     assert [(s["step"], s["role"]) for s in result.poc["shown"]] == [(3, "normal"), (2, "attack")]
     assert result.poc["shown"][1]["role_label"] == "denied identity"
     assert result.poc["shown"][1]["facts"] == ["Compared with the normal request in step 3: same status 200, "
-                                               "the identical answer."]
+                                               "the identical answer, compared in code over the whole body."]
     assert result.poc["shown"][0]["request"].startswith("GET /rest/basket/2 HTTP/1.1\nHost: shop.example.com\n")
     assert "HTTP/1.1 200 OK" in result.poc["shown"][0]["response"]
     assert all("_step" not in seen and "headers" not in seen for seen in planner.seen)   # history stays as it was
@@ -917,7 +917,8 @@ def test_a_comparison_claims_no_identical_answer_it_did_not_record():
         e["response"]["content"] = {"size": 9, "mimeType": "application/json", "_omitted": "finding body limit"}
     assert poc.difference(ctx, history, a, (1, b)).endswith("the answers are not recorded to compare.")
     a["response"]["content"]["_sha256"] = b["response"]["content"]["_sha256"] = "ab" * 32
-    assert poc.difference(ctx, history, a, (1, b)).endswith("the identical answer.")
+    assert poc.difference(ctx, history, a, (1, b)).endswith(
+        "the identical answer, compared in code over the whole body, which is not kept.")
     assert poc.difference(ctx, history, _exchange("/x", status=403), (1, b)).startswith(
         "Compared with the normal request in step 1: status 403 instead of 200")
 
@@ -979,7 +980,8 @@ def test_report_shows_the_proof_of_concept_as_raw_http_that_target_content_canno
     # The normal request first, then the attack with how its answer compares (VER-035).
     assert (md.index("**Normal request · step 3** (allowed identity)")
             < md.index("**Attack · step 2** (denied identity)"))
-    assert "Compared with the normal request in step 3: same status 200, the identical answer." in md
+    assert ("Compared with the normal request in step 3: same status 200, the identical answer, compared in code "
+            "over the whole body." in md)
 
 
 _NOTES = json.dumps({"data": [{"id": i, "role": "customer", "note": "n" * 40} for i in range(30)]})

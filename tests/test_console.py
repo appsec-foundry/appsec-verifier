@@ -121,6 +121,26 @@ def test_results_name_what_an_untested_variant_needs_and_how_to_provide_it():
     assert lines[at + 1] == "no proof"
 
 
+def test_results_list_no_needs_of_a_confirmed_finding_and_count_alike_variants():
+    """Run 133: T-001 was confirmed, so its variants that would need --allow-intrusive are not listed; T-002's three
+    untested variants with one need share a line that counts them. --print still lists each one."""
+    def row(fid, digest, verdict, rationale=""):
+        return {"finding_ref": {"id": fid, "title": fid.lower(), "variant_digest": digest}, "class": "xss",
+                "verdict": verdict, "rationale": rationale, "eligibility": {"status": "dynamic"}}
+
+    rows = [row("T-1", "a" * 64, "confirmed", "script ran"), row("T-1", "b" * 64, "not-attempted"),
+            row("T-1", "c" * 64, "not-attempted", "not tested: another variant of this finding already confirmed it"),
+            *(row("T-2", d * 64, "not-attempted") for d in "def")]
+    blocked = {f"T-{n}-{d * 16}": ("intrusive", "safe mode") for n, d in (("1", "b"), ("2", "d"), ("2", "e"),
+                                                                           ("2", "f"))}
+    lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], blocked)]
+    assert [line for line in lines if line.startswith(("✓", "·"))] == [
+        "✓ T-1 xss confirmed t-1", "· T-2 xss needs intrusive mode t-2"]
+    assert lines[lines.index("· T-2 xss needs intrusive mode t-2") + 1] == "run with --allow-intrusive · 3 variants"
+    full = cli._results(Style(False), {"results": rows}, [], blocked, full=True)
+    assert sum("needs intrusive mode" in line for line in full) == 4
+
+
 def test_facts_strip_escapes_and_colour_by_role():
     lines = cli._facts(Style(True), [("Target", f"http://a{HOSTILE} (will contact)"), ("Mode", "safe", "ok"),
                                      ("Verdicts", [("1 confirmed", "critical"), (f"0 blocked{HOSTILE}", "muted")])])
