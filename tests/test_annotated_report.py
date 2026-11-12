@@ -123,8 +123,28 @@ def test_the_section_shows_verdict_rating_rationale_and_proof():
     # Request and response share one fence, longer than the target's backticks, so its content stays fenced.
     assert "````http\nGET /about?q=x HTTP/1.1\n\nHTTP/1.1 200 OK\n\n```<b>x</b>\n````" in first
     assert "![Application screenshot evidence/T-001-xss-1.png](evidence/T-001-xss-1.png)" in first
-    assert "> the marker ran\n> ## not a section" in first                     # the model's words stay quoted
-    assert "\n## not a section" not in first
+    # The model's words stay text, as in verification.md.
+    assert "**Test agent's explanation** (not proof)\n\n```text\nthe marker ran\n## not a section\n```" in first
+
+
+def test_the_agents_explanation_never_renders_as_markup():
+    """VER-005: the model's words can carry the target's markup; the fence outlasts any backticks in them."""
+    rationale = "ran <img src=x onerror=alert(1)>\n```\n![t](https://a.example/p.png)"
+    doc = {**DOC, "results": [_result(1, "confirmed", rationale=rationale)]}
+    copy = annotate_report(REPORT, annotate_assessment({"threats": THREATS[:1]}, doc, verification_report="v"), doc)
+    first = _between(copy, '<a id="t-001">', '<a id="t-002">')
+    assert f"````text\n{rationale}\n````" in first
+    assert first.count("<img") == 1
+
+
+def test_a_finding_none_of_whose_variants_was_tested_gets_no_section():
+    rows = [{**_result(1, "not-attempted"), "result_id": f"VF-00{i}",
+             "finding_ref": {"id": "T-001", "variant": f"v{i}"}} for i in (1, 2)]
+    doc = {**DOC, "results": rows}
+    threats = [{**THREATS[0], "verification_context": {"variants": [{"id": "v1"}, {"id": "v2"}]}}]
+    copy = annotate_report(REPORT, annotate_assessment({"threats": threats}, doc, verification_report="v"), doc)
+    assert "##### Dynamic verification" not in copy
+    assert "0 findings tested: none · 1 not tested." in copy
 
 
 def test_a_block_is_shown_as_a_lowered_rating():

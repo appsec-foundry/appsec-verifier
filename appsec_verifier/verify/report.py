@@ -863,7 +863,8 @@ ANNOTATION_SCHEMA_VERSION = 1
 
 def _rating_input(rows: list[dict], coverage: str | None) -> tuple[str | None, bool]:
     """The verdict a threat's rating after verification rests on (VER-039), and whether its proof was checked.
-    Of several variants, one confirmed variant counts; a block counts only when every variant was blocked."""
+    Of several variants, one confirmed variant counts; a block counts only when every variant was blocked;
+    otherwise the variants' verdict as verification.md gives it."""
     def checked(row):
         return (row.get("proof") or {}).get("checked") is True
 
@@ -872,7 +873,7 @@ def _rating_input(rows: list[dict], coverage: str | None) -> tuple[str | None, b
     if coverage in (None, "complete") and rows and all(
             row["verdict"] == "blocked-by-control" and checked(row) for row in rows):
         return "blocked-by-control", True
-    return (rows[0]["verdict"] if len(rows) == 1 else "inconclusive"), False
+    return _overall(rows), False
 
 
 def _coverage(threat: dict, variants: list[dict]) -> str | None:
@@ -893,6 +894,15 @@ def rating_after_verification(threat: dict, rows: list[dict]) -> dict:
 
     coverage = _coverage(threat, rows)
     return rate(threat, *_rating_input(rows if coverage else rows[:1], coverage))
+
+
+_TESTED_SCOPE = ("checked", "contract", "variant", "tested_path", "scope")
+
+
+def _tested_scope(row: dict) -> dict:
+    """What a result's checked proof covers (VER-013); never what it observed in the target's answers."""
+    proof = row.get("proof") or {}
+    return {k: proof[k] for k in _TESTED_SCOPE if k in proof}
 
 
 def _pointers(rows: list[dict]) -> dict:
@@ -940,25 +950,25 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
         r = by_id.get(t.get("id")) or by_key.get(match_key(t) or "")
         if not r:
             continue
-        t["dynamic_verification"] = {
-            "verdict": r["verdict"],
-            "confidence": r.get("confidence"),
-            "verified_at": doc["meta"].get("generated"),
-            "verifier_version": doc["meta"].get("verifier_version"),
-            "result_ref": r.get("result_id"),
-            "tested_scope": {k: (r.get("proof") or {})[k]
-                             for k in ("checked", "contract", "variant", "tested_path", "scope")
-                             if k in (r.get("proof") or {})},
-        }
         variants = [row for row in doc["results"] if row["finding_ref"].get("id") == t.get("id")]
         coverage = _coverage(t, variants)
         rows = variants if coverage else [r]
+        # One verdict for all variants, as verification.md gives it; the head cites the result that carries it.
+        verdict = _overall(rows)
+        lead = next((row for row in rows if row["verdict"] == verdict), {})
+        t["dynamic_verification"] = {
+            "verdict": verdict,
+            "confidence": lead.get("confidence"),
+            "verified_at": doc["meta"].get("generated"),
+            "verifier_version": doc["meta"].get("verifier_version"),
+            "result_ref": lead.get("result_id"),
+            "tested_scope": _tested_scope(lead),
+        }
         if coverage:
             t["dynamic_verification"].update({
-                "verdict": "confirmed" if any(row["verdict"] == "confirmed" for row in variants) else "inconclusive",
                 "coverage": coverage,
                 "variants": [{"variant": row["finding_ref"].get("variant"), "verdict": row["verdict"],
-                              "result_ref": row["result_id"], "tested_scope": row.get("proof")}
+                              "result_ref": row["result_id"], "tested_scope": _tested_scope(row)}
                              for row in variants],
             })
         t["dynamic_verification"]["rating"] = rate(t, *_rating_input(rows, coverage))

@@ -262,6 +262,49 @@ def test_a_block_lowers_the_rating_only_when_every_variant_was_blocked():
     assert both["changed"] is True and both["after_verification"]["severity"] == "Medium"
 
 
+def _variant_block(*verdicts):
+    doc = _variant_doc(*verdicts)
+    for row in doc["results"]:
+        untested = row["verdict"] == "not-attempted"
+        row.update(confidence="low" if untested else "high", **({"proof": None} if untested else {}))
+    threat = _analyzer_threat(verification_context={"variants": [{"id": "v1"}, {"id": "v2"}]})
+    return annotate_assessment({"threats": [threat]}, doc, verification_report="v.yaml")["threats"][0][
+        "dynamic_verification"]
+
+
+def test_a_finding_with_variants_gets_the_verdict_the_report_gives_it():
+    """VER-027: the verdict is the one verification.md gives the finding, and agrees with the rating's reason."""
+    blocked = _variant_block("blocked-by-control", "blocked-by-control")
+    assert blocked["verdict"] == "blocked-by-control" and blocked["rating"]["changed"] is True
+    assert _variant_block("not-reproducible", "not-reproducible")["verdict"] == "not-reproducible"
+    assert _variant_block("blocked-by-control", "not-attempted")["verdict"] == "inconclusive"
+    untested = _variant_block("not-attempted", "not-attempted")
+    assert untested["verdict"] == "not-attempted"
+    assert untested["rating"]["reason"] == "the verdict not-attempted does not change the rating"
+
+
+def test_the_head_of_a_variant_block_cites_the_result_that_carries_its_verdict():
+    confirmed = _variant_block("confirmed", "not-attempted")
+    assert confirmed["verdict"] == "confirmed" and confirmed["coverage"] == "partial"
+    assert confirmed["result_ref"] == "VF-001" and confirmed["confidence"] == "high"
+    assert confirmed["tested_scope"] == {"checked": True, "variant": "v1"}
+
+
+def test_a_variant_carries_what_its_proof_covers_but_nothing_it_observed():
+    """VER-027: pointers and scope only; text the proof observed in the target's answers stays in the report."""
+    doc = _variant_doc("confirmed", "not-reproducible")
+    doc["results"][0]["proof"].update(contract=3, scope="cited requests only", steps=[3, 4],
+                                      observation_text="admin@example.test", hypothesis="the model's guess")
+    threat = _analyzer_threat(verification_context={"variants": [{"id": "v1"}, {"id": "v2"}]})
+    block = annotate_assessment({"threats": [threat]}, doc, verification_report="v.yaml")["threats"][0][
+        "dynamic_verification"]
+    assert [v["tested_scope"] for v in block["variants"]] == [
+        {"checked": True, "contract": 3, "variant": "v1", "scope": "cited requests only"},
+        {"checked": True, "variant": "v2"}]
+    dumped = yaml.safe_dump(block)
+    assert "admin@example.test" not in dumped and "the model's guess" not in dumped
+
+
 # ── verification.md: overview, entry, not tested, appendix (VER-020, VER-024, VER-039) ──
 
 DEVIATION = ("Deviation: the owner created its own test resource with POST /items, a route the assessment names "
