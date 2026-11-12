@@ -10,6 +10,8 @@ closes; any other request is answered 404 or 400 and does not end the wait. The
 code is exchanged with the PKCE verifier (RFC 7636, S256) through the
 GuardedHttpClient. The device-code flow (RFC 8628) shows the verification URL
 and user code and polls the token endpoint at the interval the provider sets.
+It sends a PKCE challenge too: a provider that enforces PKCE for the client
+(Keycloak) refuses the device request without one, and others ignore it.
 
 `prompt=login` is sent by default, so a second identity is not silently signed
 in as the first one; the pre-flight check also compares the accounts (VER-032).
@@ -196,7 +198,9 @@ def device_code(http, auth: dict, endpoints: dict, client: tuple[dict, dict], ui
     if not endpoints.get("device") or not endpoints.get("token"):
         raise AuthError("oidc-device-code needs a device_url and a token_url, or an issuer that names both")
     fields, headers = client
-    data = {**fields, **{key: auth[key] for key in ("scope", "audience", "resource") if auth.get(key)}}
+    verifier = secrets.token_urlsafe(64)
+    data = {**fields, **{key: auth[key] for key in ("scope", "audience", "resource") if auth.get(key)},
+            "code_challenge": s256(verifier), "code_challenge_method": "S256"}
     resp = http.request("POST", endpoints["device"], {"Accept": "application/json", **headers},
                         purpose="auth", data=data)
     body = _json(resp)
@@ -208,7 +212,8 @@ def device_code(http, auth: dict, endpoints: dict, client: tuple[dict, dict], ui
     interval = _seconds(body.get("interval"), 5)
     deadline = clock() + min(_seconds(body.get("expires_in"), DEVICE_WAIT_S), DEVICE_WAIT_S)
     ui.say(f"Sign in as {_plain(role)}: open {_plain(verify_url)} and enter the code {_plain(user_code)}")
-    grant = {**fields, "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": device}
+    grant = {**fields, "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": device,
+             "code_verifier": verifier}
     while clock() < deadline:
         sleep(interval)
         resp = http.request("POST", endpoints["token"], {"Accept": "application/json", **headers},

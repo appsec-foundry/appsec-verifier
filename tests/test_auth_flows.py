@@ -419,9 +419,13 @@ def test_the_device_flow_shows_the_code_and_polls_at_the_providers_pace():
     assert sessions.headers_for("d") == {"Authorization": "Bearer AT-D"}
     assert said == [f"Sign in as d: open {ISSUER}/device and enter the code WDJB-MJHT"]
     assert slept == [2, 2, 7]                                  # slow_down adds 5 s
-    assert transport.calls[0][3]["data"] == {"client_id": "cli", "scope": "openid"}
-    assert transport.calls[1][3]["data"] == {"client_id": "cli", "device_code": "DEV-SECRET-1",
-                                             "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}
+    # PKCE as in the code flow: a provider that enforces it for the client (Keycloak) refuses the request without it.
+    device, polls = transport.calls[0][3]["data"], [call[3]["data"] for call in transport.calls[1:]]
+    verifier = polls[0]["code_verifier"]
+    assert device == {"client_id": "cli", "scope": "openid", "code_challenge": s256(verifier),
+                      "code_challenge_method": "S256"}
+    assert polls == 3 * [{"client_id": "cli", "device_code": "DEV-SECRET-1", "code_verifier": verifier,
+                          "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}]
     assert sessions.redact("DEV-SECRET-1") == "[redacted]"
 
 
