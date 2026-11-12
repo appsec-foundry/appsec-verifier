@@ -172,7 +172,7 @@ def preparation_endpoints(threat: dict, surface, endpoints) -> tuple[Endpoint, .
     No URL guessing: a collection the attack surface does not list as a POST gets none. These are preparation
     candidates, never permission to send a request.
     """
-    if threat.get("cwe") not in ("CWE-639", "CWE-862", "CWE-863"):
+    if threat.get("cwe") not in ("CWE-639", "CWE-862", "CWE-863", "CWE-285"):
         return ()
     collections = []
     for endpoint in endpoints:

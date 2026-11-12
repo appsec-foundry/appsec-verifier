@@ -73,17 +73,14 @@ optional hardening.
   is reported as unsupported, not as proof that a finding is static-only.
   Unsupported findings have a short reason and are not marked unconfirmed. Version 1 supports:
   - **Cross-site scripting** (CWE-79): reflected, stored, and DOM-based.
-  - **Broken access control / IDOR** (CWE-639, CWE-862, CWE-863): missing object-
-    and function-level authorisation.
-  - **Injection** (CWE-89 SQL, CWE-943 NoSQL, CWE-78 command, CWE-1336
-    template, CWE-643 XPath, CWE-90 LDAP): mechanism-specific harmless controls.
+  - **Broken access control / IDOR** (CWE-639, CWE-862, CWE-863, CWE-285): missing object- and function-level authorisation.
+  - **Injection** (CWE-89 SQL, CWE-943 NoSQL, CWE-78 command, CWE-94 and CWE-95 code evaluation, CWE-1336 template, CWE-643 XPath, CWE-90 LDAP): mechanism-specific harmless controls.
     NoSQL uses JSON operator controls, also as bracket notation in a query parameter (`q[$eq]=…`), or, where the input is spliced into a server-side JavaScript predicate such as `$where`, complementary predicate controls; LDAP uses complementary filter predicates.
   - **Authentication and exposure** (CWE-306, CWE-200): operator-declared
     harmless protected resources with an independent allowed/denied contrast.
   - **Session-cookie attributes** (CWE-614, CWE-1004, CWE-1275): repeated
     observations of an operator-identified session cookie, without cookie values.
-  - **Path traversal, open redirect, SSRF** (CWE-22, CWE-601, CWE-918):
-    confirmed through harmless marker files or operator-controlled callbacks.
+  - **Path traversal, open redirect, SSRF** (CWE-22, CWE-23, CWE-73, CWE-601, CWE-918): confirmed through harmless marker files or operator-controlled callbacks.
 
 - **VER-007: Preserve the link to the finding.** Each verification result carries
   the finding's identifier and a cross-run stable key, so a result can be traced

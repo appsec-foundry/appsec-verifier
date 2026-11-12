@@ -185,6 +185,27 @@ def test_plans_carry_the_endpoints_and_the_brief():
     assert plan.endpoints == (Endpoint("GET", "/rest/products/search", None),) and plan.brief.startswith("GET /rest")
 
 
+@pytest.mark.parametrize(("cwe", "cls"), [("CWE-285", "access-control"), ("CWE-23", "path-traversal"),
+                                          ("CWE-73", "path-traversal"), ("CWE-77", None), ("CWE-917", None)])
+def test_cwes_the_analyzer_gives_the_same_weaknesses_take_their_class(cwe, cls):
+    """VER-006: the Analyzer labels one weakness 285 or 862, 73 or 22 in different runs; each gets its class and
+    proof. A CWE without a runtime proof here stays unsupported."""
+    doc = {"threats": [{"id": "T-1", "cwe": cwe, "severity": "high", "title": "t",
+                        "evidence": {"file": "routes/x.ts", "line": 3}}]}
+    plan = plans_from(doc)[0]
+    assert (plan.status, plan.cls) == (("dynamic", cls) if cls else ("unsupported", None))
+
+
+def test_improper_authorization_gets_the_owner_s_preparation_like_idor():
+    from appsec_verifier.endpoints import preparation_endpoints
+
+    surface = [{"entry_point": "PUT /api/Products/:id"}, {"entry_point": "POST /api/Products"}]
+    threat = {"cwe": "CWE-285", "scenario": "PUT /api/Products/:id changes another user's product."}
+    endpoints = finding_endpoints(threat, surface)
+    assert preparation_endpoints(threat, surface, endpoints) == (Endpoint("POST", "/api/Products", None),)
+    assert preparation_endpoints({**threat, "cwe": "CWE-306"}, surface, endpoints) == ()
+
+
 # ── what a run needs to test a finding ───────────────────────────────────────
 
 def _plan(cls, *endpoints):

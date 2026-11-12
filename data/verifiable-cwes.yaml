@@ -52,6 +52,13 @@ verifiable_cwes:
     technique: authz-bypass
     proof_method: cross-identity-contrast
     may_require_state_change: false
+  - cwe: CWE-285
+    name: Improper Authorization
+    class: access-control
+    technique: authz-bypass
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: The parent of 862 and 863; the Analyzer gives it to the same weaknesses in some runs.
 
   # --- Injection --------------------------------------------------------
   - cwe: CWE-306
@@ -91,6 +98,19 @@ verifiable_cwes:
     proof_method: marker-file
     may_require_state_change: false
     notes: Read a pre-placed, non-sensitive marker file; never system files.
+  - cwe: CWE-23
+    name: Relative Path Traversal
+    class: path-traversal
+    technique: path-traversal
+    proof_method: marker-file
+    may_require_state_change: false
+  - cwe: CWE-73
+    name: External Control of File Name or Path
+    class: path-traversal
+    technique: path-traversal
+    proof_method: marker-file
+    may_require_state_change: false
+    notes: Confirmed only as a read of the marker file; a write-only finding stays inconclusive.
   - cwe: CWE-601
     name: Open Redirect
     class: open-redirect
