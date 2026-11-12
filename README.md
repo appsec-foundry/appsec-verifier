@@ -157,6 +157,8 @@ python3 -m venv .venv
 .venv/bin/pip install --no-deps --no-build-isolation .
 ```
 
+The [Dockerfile](Dockerfile) builds an image that runs one command with Docker, with the API profiles and Claude CLI but without the proof browser. See [Run the Verifier in a container](docs/container.md).
+
 ## Limitations
 
 - A confirmed finding shows that the tested step works, not that a complete attack chain does.

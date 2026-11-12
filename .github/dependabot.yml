@@ -1,0 +1,14 @@
+# Weekly update pull requests for the container image's base image. The image's
+# Python packages keep the versions of requirements.lock, which are raised by hand
+# (AGENTS.md). Debian packages and Claude CLI have no Dependabot source; the
+# "Check pinned versions" job in .github/workflows/container.yml reports them.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # container/requirements.txt pins CPython 3.12 wheels.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

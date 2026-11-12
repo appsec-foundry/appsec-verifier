@@ -1,0 +1,18 @@
+# Keep local caches, build output, run results, and local credentials out of the build context.
+# Exclude only untracked files: the build reads .git, and a missing tracked file
+# would mark the image version as "+local changes".
+**/__pycache__
+**/*.py[co]
+.pytest_cache
+.ruff_cache
+.coverage*
+.venv
+build
+dist
+*.egg-info
+.claude
+docs/security
+verification*
+**/.env
+**/*.env
+**/.env.*

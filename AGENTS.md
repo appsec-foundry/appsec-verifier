@@ -34,7 +34,7 @@ Before the first edit to a tracked file for a change, ask whether to work on a f
 
 ## Dependencies
 
-`requirements.lock` (runtime: base, `[agent]`, `[browser]`) and `requirements-dev.lock` (plus `[dev]`) pin every package, build tools included, with hashes. They were generated for Python 3.10 with pip-tools 7.6.2; the command is in each file's header.
+`requirements.lock` (runtime: base, `[agent]`, `[browser]`) and `requirements-dev.lock` (plus `[dev]`) pin every package, build tools included, with hashes. They were generated for Python 3.10 with pip-tools 7.6.2; the command is in each file's header. The container image (Python 3.12, without `[browser]`) installs from `container/requirements.txt` and `container/build-requirements.txt`, with the versions and hashes of `requirements.lock`; a version raised there is raised in both, and `tests/test_container_image.py` checks that they agree.
 
 Versions are never raised automatically. Do not run `pip-compile --upgrade`, do not merge bot or tool updates unreviewed, and do not install from the version ranges in `setup.py` where the lockfiles apply. Regenerating a lockfile after a change to `setup.py` keeps the existing pins; check the diff, and revert any pin that moved without a reason. Raising a version is a change of its own: name the packages, read their changelog, check them for known vulnerabilities (OSV), run the tests with the new lockfile, and give the reason in the commit. `anthropic` stays below 1 (1.x moved to httpx2; `host_anthropic.py` is written against 0.x) until that migration is done.
 
@@ -63,6 +63,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 | `verify/` | runner (injectable, offline-testable), probes, proof of concept per finding (`poc.py`), report/export/annotate |
 | `schemas/`, `data/` | JSON schemas (YAML) and defaults (`limits.yaml`, `verifiable-cwes.yaml`, `model-catalog.yaml`, `anthropic-model-catalog.yaml`) |
 | `examples/` | sample scope and identities files |
+| `Dockerfile`, `container/` | container image without the proof browser (`docs/container.md`); `container/check_pins.py` reports newer Debian packages and Claude CLI |
 
 ## Relation to AppSec Analyzer
 
@@ -78,6 +79,7 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 | `--profile` selection, cost limit and cost display in `cli.py` | `appsec_analyzer/cli.py` |
 | `term_style.py`, `progress.py` | `scripts/renderers/term_style.py`, `appsec_analyzer/assessment/console.py` |
 | `budget_prompt.py` | `scripts/runtime/interactive_budget.py` |
+| `Dockerfile`, `container/`, `docs/container.md` | `Dockerfile`, `container/`, `docs/container.md`: same base image, Claude CLI pin and hardening |
 | `export`, `schemas/analyzer-annotations.schema.yaml` (VER-021) | no reader yet |
 | `verify/report.py` `annotate_assessment`, `schemas/annotated-assessment.schema.yaml` (VER-027) | `threats[]` and the root of `schemas/threat-model.output.schema.yaml` must keep accepting additional fields; `threats[].verification` is the Analyzer's |
 | `verify/annotated_report.py` (VER-038) | one `<a id="t-…"></a>` line per finding from `scripts/renderers/compose_threat_model.py`, the `## Changelog` table from `templates/fragments/changelog-table.md.j2` |
