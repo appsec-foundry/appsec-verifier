@@ -393,7 +393,8 @@ def _injection_negative(ctx, history, result, cited):
     experiments: dict[int, list[int]] = {}
     for n in sorted(cited):
         if history[n - 1].get("tool") != "http_request":
-            return _downgrade(result, f"step {n} is not an answered request; cite only the experiments' requests")
+            return _downgrade(result, f"step {n} is not an answered request; cite only the experiments' requests "
+                              f"({_answered_steps(history, after_plan=True)})")
         start, _ = latest_plan(history[:n - 1])
         if not start:
             return _downgrade(result, f"step {n} precedes every plan; cite the controls of declared experiments")
@@ -551,6 +552,21 @@ def _location_host(ctx, location) -> str | None:
     return host.rstrip(".") if host else None
 
 
+def _answered_steps(history: list[dict], *, after_plan: bool = False) -> str:
+    """The answered requests a verdict can cite, such as `steps 4-13, 19-28`, so a rejected citation names what
+    to cite instead (VER-043); with `after_plan` only those sent after an accepted test plan."""
+    steps = [n for n, h in enumerate(history, 1)
+             if h.get("tool") == "http_request" and type((h.get("result") or {}).get("status")) is int
+             and (not after_plan or latest_plan(history[:n - 1])[0])]
+    spans = []
+    for n in steps:
+        if spans and spans[-1][1] == n - 1:
+            spans[-1][1] = n
+        else:
+            spans.append([n, n])
+    return "steps " + ", ".join(f"{a}-{b}" if a < b else str(a) for a, b in spans) if spans else "none yet"
+
+
 def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[list[dict], str | None]:
     if not isinstance(cited, list) or len(cited) < minimum:
         steps = "two steps" if minimum == 2 else "one step"
@@ -564,7 +580,8 @@ def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[lis
         step = history[n - 1]
         res, args = step.get("result") or {}, step.get("args") or {}
         if step.get("tool") != "http_request" or not isinstance(res.get("status"), int):
-            return [], f"proof step {n} is not an answered http_request"
+            return [], f"proof step {n} is not an answered http_request; the answered requests are " + (
+                _answered_steps(history))
         exchange = {
             "step": n, "method": str(args.get("method") or "GET").upper(), "path": args.get("path"),
             "params": args.get("params") or {}, "json": args.get("json"), "form": args.get("form"),

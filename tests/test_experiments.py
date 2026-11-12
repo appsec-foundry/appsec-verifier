@@ -296,6 +296,27 @@ def test_a_negative_names_cited_steps_outside_its_experiments_and_other_inputs()
     assert "cite experiments on one input" in check(other, verdict="not-reproducible").rationale
 
 
+def test_a_cited_source_read_is_refused_with_the_requests_to_cite_instead():
+    """VER-043: a source read is no proof step; the refusal names the answered requests the verdict can cite,
+    for a negative the experiments' requests after their plans."""
+    from appsec_verifier.agent.proof import _cited_exchanges
+
+    history = boolean_history()
+    for h in history[1:]:
+        h["_body"] = '{"result":"fixture-record"}'
+    read = {"tool": "read_source", "args": {"path": "routes/search.ts", "line": 1}, "result": {"lines": 40}}
+    steps = [read, req(), *second_context(history)]        # source read, a request before any plan, two experiments
+    cited = [n for n, h in enumerate(steps, 1) if h["tool"] != "plan_test" and n != 2]
+    result = check(steps, cited, "not-reproducible")
+    assert result.verdict == "inconclusive"
+    assert ("step 1 is not an answered request; cite only the experiments' requests (steps 4-9, 11-16)"
+            in result.rationale)
+    _, error = _cited_exchanges(context(steps), steps, [1, 4], 2)
+    assert error == "proof step 1 is not an answered http_request; the answered requests are steps 2, 4-9, 11-16"
+    _, error = _cited_exchanges(context([read]), [read, read], [1, 2], 2)
+    assert error == "proof step 1 is not an answered http_request; the answered requests are none yet"
+
+
 def _unchanged_history(plan_path="/search?q=<test>"):
     history = boolean_history()
     history[0]["args"]["path"] = plan_path
