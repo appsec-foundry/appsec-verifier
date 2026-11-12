@@ -1,5 +1,5 @@
 """The evidence the code requires before a finding counts as confirmed
-(VER-009 to VER-013, VER-022, VER-043, VER-053).
+(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055).
 
 The model's verdict alone never confirms a finding. A confirmed verdict cites
 its proof in `proof_steps`: step numbers of the loop's history, counted from 1
@@ -32,7 +32,9 @@ contexts on one input (VER-013):
   JSON value reproduces the nonempty baseline only for the true condition.
   Timing needs alternating controls and two 2–5 s separations with identical
   response bodies. Error codes, body hashes and reflections alone are no proof
-  for this form. Two further declared forms exist (VER-053): a Verifier-built
+  for this form. A page or text answer is observed through a selected text,
+  or for arithmetic through each control's own result in the answer
+  (VER-055). Two further declared forms exist (VER-053): a Verifier-built
   UNION whose own marker constant returns through the query channel, and a
   syntax-breaking versus balanced pair whose break alone raises a backend
   engine error (its class, not the error text, decides). All are checked in
@@ -82,8 +84,9 @@ from .experiments import (
     experiment_groups,
     injection_proof,
     latest_plan,
-    observation,
+    observe,
     plan_view,
+    sent_texts,
     token,
 )
 from .tools import _decoded
@@ -286,6 +289,7 @@ def _checked(result, history, cited, ctx=None):
         "variant": plan.get("variant"),
         "hypothesis": plan.get("hypothesis"),
         "observation_pointer": plan.get("pointer"),
+        **({"observation_text": plan["text"]} if plan.get("text") else {}),     # VER-055
         "scope": scope,
     }
     result.identities_used = sorted(
@@ -447,11 +451,18 @@ def _no_split(ctx, plan, groups, verdict) -> str | None:
     if not tests or len(set(statuses)) != 1 or not 200 <= statuses[0] < 300:
         return "the baseline does not answer 2xx the same way each time"
     try:
-        values = [observation(ctx, n, plan["pointer"]) for n, _ in baseline]
+        values = [observe(ctx, n, plan) for n, _ in baseline]
     except (ValueError, KeyError, TypeError, IndexError, RecursionError):
         return "the planned response observation cannot be compared"
     if len({token(v) for v in values}) != 1 or values[0] in (None, "", [], {}):
         return "the baseline does not answer with the same content each time"
+    if plan.get("text"):
+        # VER-055: the text must show a result, not the page: in every baseline answer, in no control answer, and
+        # not part of a sent value.
+        if any(plan["text"] in sent for sent in sent_texts(plan)):
+            return "the selected text is part of a sent value"
+        if values[0] is not True:
+            return "the selected text is missing from the baseline's answer; choose a text its result shows"
     answers = [r["status"] for _, r in tests]
     if verdict == "blocked-by-control":
         if len(set(answers)) != 1 or answers[0] not in _REJECTIONS:
@@ -460,11 +471,14 @@ def _no_split(ctx, plan, groups, verdict) -> str | None:
     if len(set(answers)) != 1 or not 200 <= answers[0] < 300:
         return "the true and false controls do not answer 2xx alike"
     try:
-        values = [observation(ctx, n, plan["pointer"]) for n, _ in tests]
+        values = [observe(ctx, n, plan) for n, _ in tests]
     except (ValueError, KeyError, TypeError, IndexError, RecursionError):
         return "the planned response observation cannot be compared"
     if len({token(v) for v in values}) != 1:
         return "the true and false controls answer differently, so this is no negative result"
+    if plan.get("text") and values[0] is not False:
+        return ("the selected text appears in the controls' answers too, so it shows the page rather than a result "
+                "(VER-055)")
     if any(str(plan[k]) in token(v) for k in ("positive", "negative") if plan.get(k) for v in values):
         return "the controls' answer carries the sent value"
     return None

@@ -989,6 +989,9 @@ _OBSERVATIONS = {
     "engine_error": (("injection",), "engine error", "engine error", "no engine error"),
     "marker_returned": (("injection",), "its generated marker returned", "its marker returned",
                         "its marker absent"),
+    "text_present": (("injection",), "the selected text in the answer", "text present", "text absent"),
+    "result_returned": (("injection",), "its computed result in the answer", "its result returned",
+                        "its result absent"),
 }
 
 
@@ -1007,6 +1010,24 @@ def _proof_observation(ctx, history: list[dict], n: int, e: dict) -> tuple[str, 
         yes = res[key] is True
         return key, yes, _engine_error(e) if key == "engine_error" and yes else None
     _, plan = latest_plan(history)
+    if cls == "injection" and plan.get("kind") == "boolean" and not plan.get("pointer"):
+        # VER-055: a page or text answer, observed through the selected text or the step's own computed result.
+        if isinstance(plan.get("text"), str) and plan["text"]:
+            yes = plan["text"] in _text(e)
+            return "text_present", yes, ("body", "", plan["text"]) if yes else None
+        if plan.get("expression_template"):
+            sent = _sink(plan, step.get("args") or {})
+            own = next((value for group, value in (plan.get("expected_values") or {}).items()
+                        if sent is not _MISSING and group in plan and token(sent) == token(plan[group])), None)
+            if own is None:
+                return None
+            body = _text(e)
+            found = re.search(rf"(?<!\d){re.escape(str(own))}(?!\d)", body)     # as the proof check reads it
+            if found is None:
+                return "result_returned", False, None
+            before = body[found.start() - 1] if found.start() else ""
+            # The character before the whole number locates it, so a longer number holding its digits is not framed.
+            return "result_returned", True, ("body", before if before not in "<>" else "", str(own))
     if cls != "injection" or not plan.get("sql_marker"):
         return None
     sent = _sink(plan, step.get("args") or {})
@@ -1215,9 +1236,11 @@ def _test_line(ctx, history: list[dict]) -> str:
         normal = f"{target} with {plan['input_name']} = {_quoted(plan.get('baseline'))} as the normal input, then"
         if plan["kind"] == "timing":
             return f"{normal} with a condition that delays the answer; compared: the answer time"
+        compared = (plan.get("pointer") or (f"the text {_quoted(plan['text'])}" if plan.get("text") else None)
+                    or "each result in the answer")     # VER-055: a page or text answer
         if plan.get("expression_template"):
-            return f"{normal} with computed expressions; compared: {plan.get('pointer')}"
-        return f"{normal} with injected conditions that are true and false; compared: {plan.get('pointer')}"
+            return f"{normal} with computed expressions; compared: {compared}"
+        return f"{normal} with injected conditions that are true and false; compared: {compared}"
     if cls == "access-control" and plan.get("kind") == "access-control":
         resource, owner = _declared_resource(ctx, plan), plan.get("owner")
         if resource is not None:

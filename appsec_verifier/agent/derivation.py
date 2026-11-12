@@ -1,14 +1,21 @@
-"""Evidence-backed request derivation inside a finding (VER-005, VER-008, VER-043).
+"""Evidence-backed request derivation inside a finding (VER-005, VER-008, VER-043, VER-056).
 
 Source declarations and recorded links/forms supply candidates, never authority. A
+source declaration is recognised by its form, not its framework: a route literal as
+the first argument of a call or annotation that names an HTTP method or a routing
+function, joined, where the model asks for it, to a route prefix declared above it
+in the same file (a class-level mapping, a prefix argument, a route group). Its
+inputs are names its handler's lines contain, or placeholders of its route. A
 candidate must stay on the target origin and the original resource's route family;
 derived routes cannot become anchors for exploring another resource. When the
 assessment names no route, a route another file registers for a handler of the
 finding's file can anchor one (`registration_routes`), but only through a literal
 import of that file and a handler name the agent read in it. With a source
 checkout the Verifier resolves such routes itself before the agent starts, by the
-same rule applied to whole files (`source_registrations`). Unknown framework
-syntax or relationships stay unresolved. No request is sent here.
+same rule applied to whole files (`source_registrations`). For a page script
+without either, a page its file path names can supply it: the file itself, or a
+form or link there that carries an input the file names (VER-056). Unknown
+framework syntax or relationships stay unresolved. No request is sent here.
 """
 
 from __future__ import annotations
@@ -28,9 +35,34 @@ _ROUTE = re.compile(
     r"(?im)^\s*@?(?:(?:app|router|blueprint)\.)?(get|post|put|patch|head|options)"
     r"\(\s*['\"](/[^'\"\s]{0,500})['\"]"
 )
-_MAPPING = re.compile(r"@(Get|Post|Put|Patch)Mapping\(\s*(?:value\s*=\s*)?['\"](/[^'\"\s]{0,500})['\"]")
 _IMPORT = re.compile(r"(?:from\s*|require\(\s*|import\s*)['\"](\.[^'\"\s]{1,200})['\"]")
-_INPUT = re.compile(r"(?:req|request)\.(query|body|params)(?:\.([A-Za-z_]\w*)|\[['\"]([^'\"]+)['\"]\])")
+# A route declaration, whatever the framework: the route literal is the first argument of a call or annotation that
+# names an HTTP method or a routing function, e.g. router.get('/x', …), r.GET("/x", …), Route::get('/x', …),
+# get '/x' (Rails), @GetMapping("/x"), @RequestMapping(value = "/x", method = …), [HttpGet("x")],
+# @app.route('/x', methods=[…]), path('x/', …) (Django), HandleFunc("/x", …) (Go).
+_SEGMENT = r"(?:[A-Za-z0-9_.~-]+|:\w+|\{\w+(?::[^{}/'\"]*)?\??\}|<(?:\w+:)?\w+>)"
+_ROUTE_TEXT = rf"/?{_SEGMENT}(?:/{_SEGMENT})*/?|/"
+_VERBS = "get|post|put|patch|head|options"
+_DECLARATION = re.compile(
+    rf"""(?:(?<![\w@])(?P<verb>(?i:{_VERBS}))
+          |@(?P<annotation>Get|Post|Put|Patch|Request)Mapping
+          |\[Http(?P<attribute>Get|Post|Put|Patch|Head|Options)
+          |(?P<routing>\.route|(?<![.\w])(?:re_)?path|HandleFunc|\.Handle))
+        \s*\(?\s*(?:(?:value|path)\s*=\s*)?(?P<q>['"])(?P<route>{_ROUTE_TEXT})(?P=q)""", re.X)
+# A route prefix above a declaration in the same file: a class-level @RequestMapping or [Route(…)], a prefix= or
+# prefix(…) argument (url_prefix=, APIRouter(prefix=), Route::prefix(…)), a route Group("…").
+_PREFIX = re.compile(rf"""(?:@(?P<mapping>RequestMapping)|\[(?P<attribute>Route)|prefix\s*[(=]|\b[Gg]roup\()
+        \s*\(?\s*(?:(?:value|path)\s*=\s*)?(?P<q>['"])(?P<route>{_ROUTE_TEXT})(?P=q)""", re.X)
+_METHOD_ARG = re.compile(rf"RequestMethod\.({_VERBS.upper()})\b|methods\s*=\s*[\[(]([^\])]*)[\])]")
+_NAME = re.compile(r"""['"]([A-Za-z_][\w-]{0,127})['"]|\b([A-Za-z_]\w{0,127})\b""")
+_PLACEHOLDER_NAME = re.compile(r":(\w+)|\{(\w+)\}|<(\w+)>")
+MAX_DECLARATIONS = 64   # declarations examined per recorded source window
+# VER-056: directly served scripts and pages, whose URL path is their file path below the web root, and the usual
+# names of a web root inside a repository.
+_PAGE_SUFFIXES = (".php", ".phtml", ".jsp", ".jspx", ".asp", ".aspx", ".ashx", ".cfm", ".cgi", ".pl", ".html", ".htm")
+_WEB_ROOTS = ("public", "public_html", "htdocs", "html", "www", "wwwroot", "web", "webroot", "WebContent", "webapp")
+_INDEX = re.compile(r"(?i)(?:index|default)\.\w{2,5}")
+_LITERAL = re.compile(r"""['"]([A-Za-z_][\w\[\]-]{0,127})['"]""")
 # An alias bound to a module import, e.g. `import * as payment from './routes/payment'` or
 # `const payment = require('./routes/payment')`, so a handler reference alias.handler can be resolved to a file.
 _ALIAS_IMPORT = re.compile(
@@ -256,29 +288,163 @@ def source_registrations(ctx) -> list[dict]:
     return routes[:MAX_REGISTERED]
 
 
+def _normalise(literal: str) -> str:
+    """A route literal in the placeholder spellings route matching knows (`<int:pk>` → `<pk>`, `{id:int}` and
+    `{id?}` → `{id}`), with a leading slash."""
+    literal = re.sub(r"<\w+:(\w+)>", r"<\1>", literal)
+    literal = re.sub(r"\{(\w+)(?::[^{}/]*)?\??\}", r"{\1}", literal)
+    return literal if literal.startswith("/") else "/" + literal
+
+
+def _join(prefix: str, route: str) -> str:
+    return prefix if route == "/" else prefix.rstrip("/") + "/" + route.lstrip("/")
+
+
+def _methods(m, line: str) -> list[str]:
+    """The methods a declaration names; a routing function or @RequestMapping without one stands for GET."""
+    if m["verb"]:
+        return [m["verb"].upper()]
+    if m["annotation"] and m["annotation"] != "Request":
+        return [m["annotation"].upper()]
+    if m["attribute"]:
+        return [m["attribute"].upper()]
+    named = set()
+    for arg in _METHOD_ARG.finditer(line[m.end():]):
+        named |= {arg[1]} if arg[1] else {v.upper() for v in re.findall(rf"(?i)\b({_VERBS})\b", arg[2])}
+    return sorted(named) or ["GET"]
+
+
+def _declarations(text: str, start_line: int) -> list[dict]:
+    """The route declarations of a source window, one per method. A bare method call such as `x.get('…')` counts
+    only with a slash in its literal, so a lookup such as config.get('key') is not taken for a route."""
+    found = []
+    for i, line in enumerate(text.split("\n")):
+        m = _DECLARATION.search(line)
+        if not m or (m["verb"] and "/" not in m["route"]):
+            continue
+        found += [{"method": method, "literal": m["route"], "line": start_line + i} for method in _methods(m, line)]
+        if len(found) >= MAX_DECLARATIONS:
+            break
+    return found
+
+
+def _prefixes(history, path) -> list[tuple[int, str]]:
+    """(line, literal) of the route prefixes the recorded reads of `path` show. A class-level mapping counts only
+    with its class declaration within the next three lines; a dotted name without a slash, such as a
+    configuration prefix, is no route."""
+    found = set()
+    for h in history:
+        result = h.get("result") or {}
+        if h.get("tool") != "read_source" or h.get("args", {}).get("path") != path or result.get("error"):
+            continue
+        lines = str(result.get("text", "")).split("\n")
+        for i, line in enumerate(lines):
+            m = _PREFIX.search(line)
+            if not m or ("." in m["route"] and "/" not in m["route"]):
+                continue
+            if (m["mapping"] or m["attribute"]) and not any(re.search(r"\bclass\b", lines[j])
+                                                             for j in range(i + 1, min(len(lines), i + 4))):
+                continue
+            found.add((result.get("start_line", 1) + i, m["route"]))
+    return sorted(found)
+
+
+def _declared(history, path, text, start_line) -> list[dict]:
+    """Each declaration of a recorded source window, alone and joined to every prefix declared above it in the same
+    file. Its inputs are the names its handler's lines contain, up to the next declaration, and the placeholders of
+    its route."""
+    prefixes = _prefixes(history, path)
+    lines = text.split("\n")
+    declarations = _declarations(text, start_line)
+    candidates = []
+    for n, d in enumerate(declarations):
+        following = next((e["line"] for e in declarations[n + 1:] if e["line"] > d["line"]), start_line + len(lines))
+        names = {a or b for a, b in _NAME.findall("\n".join(lines[d["line"] - start_line:following - start_line]))}
+        route = _normalise(d["literal"])
+        for composed in dict.fromkeys([route] + [_join(_normalise(p), route) for line, p in prefixes
+                                                 if line < d["line"]]):
+            candidates.append({"method": d["method"], "path": composed, "inputs": [], "names": names,
+                               "placeholders": {a or b or c for a, b, c in _PLACEHOLDER_NAME.findall(composed)},
+                               "source_file": path, "source_line": d["line"]})
+    return candidates
+
+
+def _offers(candidate, item) -> bool:
+    """Whether a candidate evidences an input: one it lists, a placeholder of its route for a path input, or a
+    name its handler's lines contain for any other input."""
+    if item in candidate.get("inputs", []):
+        return True
+    if item.get("location") == "path":
+        return item.get("name") in candidate.get("placeholders", ())
+    return item.get("name") in candidate.get("names", ())
+
+
+def page_candidates(instance) -> list[str]:
+    """VER-056: for a finding in a directly served script or page, the URL paths its file path gives below the web
+    root: the file itself and up to two directories above it, never the bare root. [] for any other file."""
+    file = (instance or "").rsplit(":", 1)[0].replace("\\", "/")
+    parts = [p for p in PurePosixPath(file).parts if p not in ("", ".", "/")]
+    if not file.lower().endswith(_PAGE_SUFFIXES) or ".." in parts:
+        return []
+    root = next((i for i, p in enumerate(parts[:-1]) if p in _WEB_ROOTS), None)
+    parts = parts[root + 1:] if root is not None else parts
+    return ["/" + "/".join(parts)] + ["/" + "/".join(parts[:-depth]) + "/" for depth in (1, 2)
+                                      if len(parts) > depth]
+
+
+def page_source(ctx) -> str | None:
+    """VER-056: the evidence file's text where its file path may give the finding's request: a page script, read
+    from the source checkout, with no route declaration up to 80 lines before its evidence location; else None."""
+    reader, instance = getattr(ctx, "source", None), getattr(ctx.plan, "instance", None)
+    file, _, line = (instance or "").rpartition(":")
+    if reader is None or not line.isdigit() or not page_candidates(instance):
+        return None
+    from .source_reader import SourceAccessError
+
+    try:
+        text = reader.read_all(file)
+    except SourceAccessError:
+        return None
+    if any(0 <= int(line) - d["line"] <= 80 for d in _declarations(text, 1)):
+        return None
+    return text
+
+
+def _page_roots(ctx, h, forms) -> tuple[list[dict], list[dict]]:
+    """VER-056: (roots, extra candidates) a recorded GET of one of the finding's page candidates supplies: the
+    evidence file itself, with the names it contains as its inputs; or the forms and links of a page above it that
+    point into the page's own directory and carry an input the evidence file names as a literal."""
+    text = page_source(ctx)
+    if text is None or (h.get("args", {}).get("method") or "GET").upper() != "GET":
+        return [], []
+    pages = page_candidates(ctx.plan.instance)
+    sent = urlsplit(resolve(ctx, h.get("args", {}).get("path") or "/")).path
+
+    def requested(page):
+        path = urlsplit(resolve(ctx, page)).path
+        return sent == path or (page.endswith("/") and posixpath.dirname(sent) + "/" == path
+                                and bool(_INDEX.fullmatch(posixpath.basename(sent))))
+
+    page = next((p for p in pages if requested(p)), None)
+    if page is None:
+        return [], []
+    literals = set(_LITERAL.findall(text))
+    if page == pages[0]:
+        own = {"method": "GET", "path": page, "inputs": [], "names": literals, "placeholders": set()}
+        return [own], [own]
+    directory = urlsplit(resolve(ctx, page)).path
+    return [r for r in forms if same_origin(r["path"], ctx.target_base)
+            and urlsplit(r["path"]).path.startswith(directory)
+            and any(i["name"] in literals for i in r.get("inputs", []))], []
+
+
 def _source_candidates(ctx, history, h):
     path = h.get("args", {}).get("path")
     registrations = [r for r in registration_routes(ctx, history) if r["source_file"] == path]
     if path not in _source_roots(ctx, history) and not registrations:
         raise ValueError("the source is not the finding's evidence or a recorded local import from it")
     result = h.get("result", {})
-    text = result.get("text", "")
-    candidates = list(registrations)
-    for pattern in (_ROUTE, _MAPPING):
-        for m in list(pattern.finditer(text))[:32]:
-            line = result.get("start_line", 1) + text[:m.start()].count("\n")
-            # Input declarations belong to this handler, not to an unrelated later route.
-            following = pattern.search(text, m.end())
-            body = text[m.start():following.start() if following else len(text)]
-            inputs = []
-            for match in _INPUT.finditer(body):
-                location = {"query": "query", "body": "json", "params": "path"}[match[1]]
-                inputs.append({"location": location, "name": match[2] or match[3]})
-                if location == "json":
-                    inputs.append({"location": "form", "name": match[2] or match[3]})
-            candidates.append({"method": m[1].upper(), "path": m[2], "inputs": inputs,
-                               "source_file": path, "source_line": line})
-    return candidates
+    return list(registrations) + _declared(history, path, result.get("text", ""), result.get("start_line", 1))
 
 
 def derive(ctx, *, evidence_step, method, path, inputs, reason):
@@ -314,14 +480,19 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         file, _, line = (ctx.plan.instance or "").rpartition(":")
         near = [r for r in candidates if r.get("source_file") == file and line.isdigit()
                 and 0 <= int(line) - r["source_line"] <= 80]
-        roots = near[-1:]
+        # The nearest declaration, with each method it names and each prefix it may carry.
+        roots = [r for r in near if r["source_line"] == max(n["source_line"] for n in near)]
         # Or a route another file registers for a handler of the finding's file (VER-008).
         if not roots:
             roots = [r for r in registration_routes(ctx, history)
                      if r["method"] == method and planned_route(resolve(ctx, r["path"]), url)]
+    elif not roots:
+        # Or, for a page script, a recorded answer of a page its file path gives (VER-056).
+        roots, extra = _page_roots(ctx, h, candidates)
+        candidates = [*candidates, *extra]
     matching = [r for r in candidates if r["method"] == method
                 and planned_route(resolve(ctx, r["path"]), url)
-                and all(i in r.get("inputs", []) for i in inputs)]
+                and all(_offers(r, i) for i in inputs)]
     if not matching or not any(related(resolve(ctx, r["path"]), url) for r in roots):
         raise ValueError("request or inputs lack recorded evidence for the finding's original resource")
     if source:

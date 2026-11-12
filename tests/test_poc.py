@@ -781,6 +781,34 @@ def test_a_returned_marker_image_frames_each_steps_own_marker():
     assert "true condition: its marker returned · false condition: its marker absent." in page
 
 
+def test_a_text_observation_image_frames_the_selected_text_its_proof_reads():
+    """VER-055: a page answer is shown by whether it holds the selected text, not by how the pages differ."""
+    plan = {**{k: v for k, v in _EXPERIMENT.items() if k != "pointer"}, "text": "Item number 2"}
+    history = [_accepted(**plan), _sent("/search", q=plan["positive"]), _sent("/search", q=plan["negative"])]
+    shown = [(2, _probe_exchange(plan["positive"], 200, "<ul><li>Item number 2</li></ul>", "text/html")),
+             (3, _probe_exchange(plan["negative"], 200, "<ul></ul>", "text/html"))]
+    page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "confirmed", None)
+    assert page.count("◀ the selected text in the answer") == 1 and "<mark>Item number 2</mark>" in page
+    assert "<b>the selected text in the answer: yes</b>" in page
+    assert "<b>the selected text in the answer: no</b>" in page
+    assert "true condition: text present · false condition: text absent." in page
+    assert "compared: the text &quot;Item number 2&quot;" in page
+
+
+def test_an_arithmetic_image_frames_each_controls_own_result_not_a_longer_number():
+    """VER-055: each control's own computed result is framed where it stands as a whole number."""
+    plan = {**{k: v for k, v in _EXPERIMENT.items() if k != "pointer"}, "expression_template": "{{ {{expression}} }}",
+            "positive": "{{ 1234*5678 }}", "negative": "{{ 1234+5678 }}",
+            "expected_values": {"positive": 7006652, "negative": 6912}}
+    history = [_accepted(**plan), _sent("/search", q=plan["positive"]), _sent("/search", q=plan["negative"])]
+    shown = [(2, _probe_exchange(plan["positive"], 200, "<p>Id 17006652</p> <p>Hello 7006652</p>", "text/html")),
+             (3, _probe_exchange(plan["negative"], 200, "<p>Hello 1234+5678</p>", "text/html"))]
+    page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "confirmed", None)
+    assert "<mark>7006652</mark>" in page and "1<mark>" not in page
+    assert "<b>its computed result in the answer: yes</b>" in page
+    assert "<b>its computed result in the answer: no</b>" in page
+
+
 def test_steps_outside_the_declared_comparison_get_no_role():
     """Nothing is guessed: another resource, an unknown control value or no accepted plan leaves a step unnamed."""
     ctx, history, shown = _injection()

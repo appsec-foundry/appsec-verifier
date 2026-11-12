@@ -12,8 +12,9 @@ from test_agent_tools import Resp, _ctx
 from test_experiments import STRATEGY
 
 from appsec_verifier.agent.controller import Controller
-from appsec_verifier.agent.derivation import MAX_DERIVED
+from appsec_verifier.agent.derivation import MAX_DERIVED, page_candidates
 from appsec_verifier.agent.loop import AgentProbe
+from appsec_verifier.agent.source_reader import SourceReader
 from appsec_verifier.agent.steps import parse_step
 from appsec_verifier.agent.tools import AgentTools, ToolError
 from appsec_verifier.cli import _blocker
@@ -220,6 +221,206 @@ def test_source_can_supply_a_missing_route_without_guessing(tmp_path):
     assert derive(ctx, "/go", inputs=[{"location": "query", "name": "q"}])["accepted"]
     with pytest.raises(ToolError):
         derive(ctx, "/invented")
+
+
+SPRING = """package example;
+
+@RestController
+@RequestMapping("/api/files")
+public class FileReadController {
+
+    @GetMapping("/read")
+    public Map<String, String> read(@RequestParam String name) throws IOException {
+        Path path = Path.of("runtime/documents/" + name);
+        return Map.of("content", Files.readString(path));
+    }
+
+    @GetMapping(path = "/list")
+    public List<String> list(@RequestParam String dir) { return List.of(); }
+}"""
+
+
+def routeless(tmp_path, instance, *, safe=True):
+    ctx = context(tmp_path, safe=safe)
+    ctx.plan = replace(ctx.plan, cls="path-traversal", cwe="CWE-22", endpoints=(), instance=instance)
+    return ctx
+
+
+def test_a_spring_route_takes_its_class_prefix_and_its_handler_s_parameter(tmp_path):
+    ctx = routeless(tmp_path, "src/FileReadController.java:9")
+    source(ctx, SPRING, path="src/FileReadController.java")
+    assert derive(ctx, "/api/files/read", inputs=[{"location": "query", "name": "name"}])["accepted"]
+    assert ctx.derived_requests[0]["source_line"] == 7
+
+
+@pytest.mark.parametrize(("path", "inputs"), [
+    ("/api/files/list", []),                                         # another handler of the same controller
+    ("/api/files/read", [{"location": "query", "name": "dir"}]),     # an input only another handler reads
+    ("/api/files/read", [{"location": "path", "name": "name"}]),     # a path input the route has no placeholder for
+    ("/runtime/documents/read", []),                                 # a literal that is no route prefix
+])
+def test_a_spring_declaration_evidences_only_its_own_route_and_inputs(tmp_path, path, inputs):
+    ctx = routeless(tmp_path, "src/FileReadController.java:9")
+    source(ctx, SPRING, path="src/FileReadController.java")
+    with pytest.raises(ToolError):
+        derive(ctx, path, inputs=inputs)
+    assert not getattr(ctx, "derived_requests", [])
+
+
+@pytest.mark.parametrize(("head_path", "accepted"), [("src/FileReadController.java", True),
+                                                     ("src/OtherController.java", False)])
+def test_a_prefix_counts_from_another_read_of_the_same_file_only(tmp_path, head_path, accepted):
+    ctx = routeless(tmp_path, "src/FileReadController.java:9")
+    lines = SPRING.split("\n")
+    ctx.agent_history = [
+        {"tool": "read_source", "args": {"path": head_path}, "result": {"text": "\n".join(lines[:5]), "start_line": 1}},
+        {"tool": "read_source", "args": {"path": "src/FileReadController.java"},
+         "result": {"text": "\n".join(lines[6:]), "start_line": 7}}]
+    if accepted:
+        assert derive(ctx, "/api/files/read", evidence_step=2)["accepted"]
+    else:
+        with pytest.raises(ToolError):
+            derive(ctx, "/api/files/read", evidence_step=2)
+        assert derive(ctx, "/read", evidence_step=2)["accepted"]
+
+
+def test_a_flask_route_carries_only_the_methods_it_declares(tmp_path):
+    ctx = routeless(tmp_path, "app/views.py:3", safe=False)
+    source(ctx, "@app.route('/search', methods=['POST'])\ndef search():\n    term = request.form['term']\n",
+           path="app/views.py")
+    with pytest.raises(ToolError):
+        derive(ctx, "/search")
+    assert derive(ctx, "/search", method="POST", inputs=[{"location": "form", "name": "term"}])["accepted"]
+
+
+def test_a_route_placeholder_evidences_a_path_input(tmp_path):
+    ctx = routeless(tmp_path, "app/api.py:2")
+    source(ctx, '@api.get("/api/orders/{order_id}")\ndef order(order_id: int):\n    return db.order(order_id)\n',
+           path="app/api.py")
+    with pytest.raises(ToolError):
+        derive(ctx, "/api/orders/7", inputs=[{"location": "path", "name": "user_id"}])
+    assert derive(ctx, "/api/orders/7", inputs=[{"location": "path", "name": "order_id"}])["accepted"]
+
+
+@pytest.mark.parametrize("text", [
+    'home = os.environ.get("HOME_DIR", "/etc")\nmapping = config.get(\'ctf.countryMapping\')\nread(home)',
+    '@ConfigurationProperties(prefix = "etc.passwd")\npublic class Mailer {\n  @GetMapping("/mail")\n'
+    '  public String mail(@RequestParam String to) { return to; }\n}',
+])
+def test_a_lookup_or_a_configuration_prefix_is_not_taken_for_a_route(tmp_path, text):
+    ctx = routeless(tmp_path, "src/Mailer.java:4")
+    source(ctx, text, path="src/Mailer.java")
+    for path in ("/etc", "/etc.passwd/mail", "/ctf.countryMapping"):
+        with pytest.raises(ToolError):
+            derive(ctx, path)
+
+
+SQLI = ("<?php\nif (isset($_REQUEST['Submit'])) {\n  $id = $_REQUEST['id'];\n"
+        "  query(\"SELECT * WHERE id = '$id'\");\n}\n")
+PAGE = ('<form action="#" method="GET"><input type="text" name="id"><input type="submit" name="Submit"></form>'
+        '<a href="/vulnerabilities/brute/?id=7">elsewhere</a><a href="?admin=1">admin</a>')
+
+
+def page_script(tmp_path, file="vulnerabilities/sqli/source/low.php", text=SQLI, line=3, transport=None):
+    ctx = context(tmp_path, transport) if transport else context(tmp_path)
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", endpoints=(), instance=f"{file}:{line}")
+    (tmp_path / file).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / file).write_text(text)
+    ctx.source = SourceReader(tmp_path)
+    return ctx
+
+
+@pytest.mark.parametrize(("instance", "pages"), [
+    ("vulnerabilities/sqli/source/low.php:3",
+     ["/vulnerabilities/sqli/source/low.php", "/vulnerabilities/sqli/source/", "/vulnerabilities/sqli/"]),
+    ("src/main/webapp/admin/users.jsp:9", ["/admin/users.jsp", "/admin/"]),     # below the web root
+    ("public/index.php:1", ["/index.php"]),                                    # never the bare root
+    ("routes/search.ts:4", []),                                                # not a page script
+    ("../outside/x.php:1", []),
+])
+def test_a_page_script_s_file_path_gives_its_candidate_pages(instance, pages):
+    assert page_candidates(instance) == pages
+
+
+def test_a_form_of_the_page_above_a_script_supplies_its_request(tmp_path):
+    """VER-056: the sqli page's form carries `id`, which the script reads, so it names the finding's request."""
+    ctx = page_script(tmp_path)
+    response(ctx, PAGE, path="/vulnerabilities/sqli/")
+    assert derive(ctx, "/vulnerabilities/sqli/", inputs=[{"location": "query", "name": "id"}])["accepted"]
+    Controller(ctx).before("http_request", {"path": "/vulnerabilities/sqli/", "params": {"id": "1' AND 1=1"}})
+
+
+@pytest.mark.parametrize(("page", "body", "path", "name"), [
+    ("/vulnerabilities/sqli/", '<a href="/vulnerabilities/brute/?id=7">x</a>', "/vulnerabilities/brute/", "id"),
+    ("/vulnerabilities/sqli/", '<form action="#"><input name="admin"></form>', "/vulnerabilities/sqli/", "admin"),
+    ("/vulnerabilities/", PAGE, "/vulnerabilities/sqli/", "id"),     # a page the file path does not give
+])
+def test_a_page_ties_only_its_own_directory_and_the_script_s_inputs(tmp_path, page, body, path, name):
+    """Refused: a link out of the page's directory, a form whose input the script never names, another page."""
+    ctx = page_script(tmp_path)
+    response(ctx, body, path=page)
+    with pytest.raises(ToolError):
+        derive(ctx, path, inputs=[{"location": "query", "name": name}])
+    assert not getattr(ctx, "derived_requests", [])
+
+
+@pytest.mark.parametrize("change", ["no source", "declared route", "write evidence"])
+def test_the_file_path_rule_needs_the_source_and_no_declared_route(tmp_path, change):
+    text = SQLI if change != "declared route" else "<?php\nRoute::get('/search', 'find');\n" + SQLI
+    ctx = page_script(tmp_path, text=text, line=5 if change == "declared route" else 3)
+    response(ctx, PAGE, path="/vulnerabilities/sqli/")
+    if change == "no source":
+        ctx.source = None
+    if change == "write evidence":
+        ctx.agent_history[0]["args"]["method"] = "POST"
+    with pytest.raises(ToolError):
+        derive(ctx, "/vulnerabilities/sqli/", inputs=[{"location": "query", "name": "id"}])
+
+
+def test_the_script_itself_supplies_its_request_with_the_names_it_contains(tmp_path):
+    ctx = page_script(tmp_path, "vulnerabilities/view_help.php", "<?php\n$id = $_GET['id'];\n$at = $_GET['locale'];\n",
+                      line=2)
+    response(ctx, "<p>help</p>", path="/vulnerabilities/view_help.php")
+    with pytest.raises(ToolError):
+        derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "admin"}])
+    ctx.agent_history[0]["result"] = {"status": 500}
+    with pytest.raises(ToolError):
+        derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "id"}])
+    ctx.agent_history[0]["result"] = {"status": 200}
+    assert derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "id"}])["accepted"]
+
+
+def test_a_routeless_page_script_reaches_its_request_through_a_read_and_a_derivation(tmp_path):
+    """VER-056 with VER-047: the agent reads a candidate page, derives its form, and sends the finding's request."""
+    sent = []
+
+    def target(method, url, headers, **kwargs):
+        sent.append((method, url, kwargs.get("params")))
+        return Resp(200, PAGE)
+
+    ctx = page_script(tmp_path, transport=target)
+    actions = [
+        {"tool": "http_request", "args": {"path": "/vulnerabilities/sqli/", "prerequisite": True}},
+        {"tool": "derive_request", "args": {"evidence_step": 1, "method": "GET", "path": "/vulnerabilities/sqli/",
+         "inputs": [{"location": "query", "name": "id"}], "reason": "The page's form carries the script's id input"}},
+        {"tool": "http_request", "args": {"path": "/vulnerabilities/sqli/", "params": {"id": "1"}}},
+        {"verdict": {"verdict": "inconclusive", "rationale": "reached the request"}},
+    ]
+    AgentProbe("injection", lambda: ScriptedPlanner(actions)).run(ctx)
+    assert [(m, u.removeprefix(ctx.target_base), p) for m, u, p in sent] == [
+        ("GET", "/vulnerabilities/sqli/", None), ("GET", "/vulnerabilities/sqli/", {"id": "1"})]
+
+
+def test_the_agent_and_the_test_plan_learn_the_candidate_pages(tmp_path):
+    from appsec_verifier import cli
+    from appsec_verifier.agent.prompts import _seed
+
+    ctx = page_script(tmp_path)
+    assert "/vulnerabilities/sqli/source/low.php, /vulnerabilities/sqli/source/, /vulnerabilities/sqli/" in _seed(ctx)
+    assert "its file path may name one" in cli._test_cases(cli.Style(False), [ctx.plan], {})[-1]
+    named = replace(ctx.plan, endpoints=(Endpoint("GET", "/vulnerabilities/sqli/", None),))
+    ctx.plan = named
+    assert "file path may name one" not in _seed(ctx)
 
 
 def test_sibling_source_import_is_related_but_repository_escape_is_not(tmp_path):

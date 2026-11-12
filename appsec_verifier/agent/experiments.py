@@ -1,5 +1,5 @@
 """Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
-VER-053)."""
+VER-053, VER-055)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ _ENGINE_ERROR = re.compile(
     r"you have an error in your SQL syntax|SQL syntax|syntax error at or near|"
     r"unterminated quoted string|quoted string not properly terminated|ORA-\d{5}|SQLSTATE\[|"
     r"PG::|psycopg|sqlalchemy|SQLException|MySQL|MariaDB|PostgreSQL|"
+    # Microsoft SQL Server, H2 and Db2 name a syntax error in words of their own.
+    r"Unclosed quotation mark|Incorrect syntax near|Syntax error in SQL statement|DB2 SQL error|SQLCODE=-?\d+|"
     r"XPathException|Invalid XPath|xmlXPathEval|XPST\d{4}|XPTY\d{4}|Saxon|"
     r"MongoError|BSONError|E11000|\$regex|Regular expression is invalid|"
     r"unknown (?:top level )?operator \$|"
@@ -70,6 +72,8 @@ PLAN_SCHEMA = {
         "positive": SCALAR,
         "negative": SCALAR,
         "pointer": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^/"},
+        # VER-055: for a page or text answer, a literal text whose presence the experiment observes.
+        "text": {"type": "string", "minLength": 3, "maxLength": 200},
         "resource": {"type": "string", "maxLength": 80},
         "owner": {"type": "string", "minLength": 1, "maxLength": 80},
         # The finding's request that changes a record, for a write proof on the owner's resource (VER-010).
@@ -130,7 +134,8 @@ PLAN_SCHEMA = {
             "if": {"properties": {"kind": {"const": "boolean"}},
                    "not": {"anyOf": [{"required": ["oob_template"]}, {"required": ["sql_marker"]},
                                      {"required": ["error_probe"]}]}},
-            "then": {"required": ["input_location", "input_name", "baseline", "pointer"]},
+            # The observation, a pointer or a text (VER-055), is checked in AgentTools.plan_test.
+            "then": {"required": ["input_location", "input_name", "baseline"]},
         },
         {
             "if": {"required": ["oob_template"]},
@@ -487,6 +492,28 @@ def body_of(ctx, step) -> str:
     return response["body"]
 
 
+def observe(ctx, step, plan):
+    """What the plan observes in a step's recorded answer: the JSON value at its pointer (VER-011), or whether its
+    text occurs in the answer (VER-055). ValueError when the answer cannot show it."""
+    if plan.get("pointer"):
+        return observation(ctx, step, plan["pointer"])
+    if plan.get("text"):
+        return plan["text"] in body_of(ctx, step)
+    raise ValueError("the plan declares no observation")
+
+
+def sent_texts(plan) -> list[str]:
+    """Every value an experiment sends for its inputs, as text: the controls, the baseline and the fixed values."""
+    values = [*control_values(plan).values()]
+    values += [v for inputs in (plan.get("fixed") or {}).values() for v in (inputs or {}).values()]
+    return [v if isinstance(v, str) else json.dumps(v) for v in values]
+
+
+def shows_number(body: str, value) -> bool:
+    """VER-055: whether a computed result stands in an answer as a whole number, not inside a longer one."""
+    return re.search(rf"(?<!\d){re.escape(str(value))}(?!\d)", body) is not None
+
+
 def experiment_groups(history, cited):
     start, plan = latest_plan(history)
     if not start:
@@ -613,6 +640,18 @@ def injection_check(ctx, history, cited):
             expected = plan["expected_values"]
             if any(str(value) in plan[name] for name, value in expected.items()):
                 return "computed answers must not appear in the supplied expression"
+            if not plan.get("pointer"):
+                # VER-055: in a page or text answer, each control's own result stands as a whole number, and no
+                # other control's result, nor any in the baseline's answer.
+                for name, group in groups.items():
+                    for n, _ in group:
+                        body = body_of(ctx, n)
+                        if name in expected and not shows_number(body, expected[name]):
+                            return "fresh arithmetic results were not returned in the controls' answers"
+                        if any(shows_number(body, v) for k, v in expected.items() if k != name):
+                            return ("a computed result also appears in the baseline's or another control's answer, "
+                                    "so the answer does not show the evaluation")
+                return None
             for name, group in groups.items():
                 if name == "baseline":
                     continue
@@ -628,10 +667,12 @@ def injection_check(ctx, history, cited):
         or not {"positive_other", "negative_other"} <= groups.keys()
     ):
         return "ordinary input-dependent results are not proof; use fresh complementary SQL predicate challenges"
+    if plan.get("text") and any(plan["text"] in sent for sent in sent_texts(plan)):
+        return "the selected text is part of a sent value, so its presence may be an echo"      # VER-055
     observed = {}
     try:
         for name, group in groups.items():
-            values = [observation(ctx, n, plan["pointer"]) for n, _ in group]
+            values = [observe(ctx, n, plan) for n, _ in group]
             encoded = {token(v) for v in values}
             if len(encoded) != 1:
                 return "the selected observation is unstable across repetitions"
@@ -639,8 +680,9 @@ def injection_check(ctx, history, cited):
                 return "the selected observation reflects the test input"
             observed[name] = values[0]
     except (ValueError, KeyError, IndexError, TypeError, RecursionError):
-        return "the declared JSON observation is missing or incomplete"
-    if observed["positive"] in (None, "", [], {}):
+        return "the declared observation is missing or incomplete"
+    # A text is present for one class and absent for the other, either way round (VER-055).
+    if not plan.get("text") and observed["positive"] in (None, "", [], {}):
         return "the true predicates produced an empty observation; choose a signal present when the condition holds"
     if token(observed["positive"]) != token(observed["positive_other"]):
         return "the complementary true predicates did not produce the same observation"

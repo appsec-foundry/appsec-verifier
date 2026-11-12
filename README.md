@@ -40,13 +40,13 @@ To try it on a deliberately vulnerable application, run OWASP Juice Shop locally
 
 ## What it verifies
 
-A finding counts as `confirmed` only with the proof in the last column; the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml). Request details the assessment leaves open the agent takes from the source code and from forms and links on the target, within the finding and the scope ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) follows one XSS finding through the agent's steps, its prompt and the proof check.
+A finding counts as `confirmed` only with the proof in the last column; the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml). Request details the assessment leaves open the agent takes from the source code (route declarations in the finding's file or, for a page script such as a `.php` file, its file path) and from forms and links on the target, within the finding and the scope ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) follows one XSS finding through the agent's steps, its prompt and the proof check.
 
 | Class | CWEs | Needs | Confirmed when |
 | --- | --- | --- | --- |
 | Cross-site scripting | 79 | the proof browser | a marker script runs in the browser; reflected text does not count |
 | Access control | 639, 862, 863, 306, 200 | a test resource in the scope (`test_resources`); for 639, 862 and 863 alternatively two accounts and `--allow-intrusive`, or an `--account` and an `--admin-account` | an account gets a resource it must not get: the declared test resource, a record another account created, or the admin's answer |
-| SQL, NoSQL and LDAP injection | 89, 943, 90 | an input the finding's evidence names, or one named in the scope (`injection_inputs`) | a field in the response changes with true and false conditions the Verifier generates; its injected marker comes back (SQL); or a malformed input makes the database report an error a valid one does not. A delay alone never counts. For a login bypass, the true condition logs in and the false one does not |
+| SQL, NoSQL and LDAP injection | 89, 943, 90 | an input the finding's evidence names, or one named in the scope (`injection_inputs`) | a field in the response, or a text of a page answer, changes with true and false conditions the Verifier generates; its injected marker comes back (SQL); or a malformed input makes the database report an error a valid one does not. A delay alone never counts. For a login bypass, the true condition logs in and the false one does not |
 | Command, template and XPath injection | 78, 1336, 643 | as for SQL injection | the target returns the results of arithmetic the Verifier generates; for XPath and template injection, a malformed input makes the engine report an error a valid one does not |
 | Blind code and template injection | 94, 95, 1336 | a callback listener the target can reach, as for SSRF | the injected payload makes the target call the listener; the same URL sent as plain data does not |
 | Path traversal | 22 | a marker file named in the scope, or a disposable upload location for archives (`archive_checks`) and `--allow-intrusive` | the target returns the marker file, or a file from an uploaded ZIP can be read outside the directory it is unpacked to |
@@ -167,7 +167,7 @@ Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form log
 
 ## Limitations
 
-- Boolean injection checks need a stable JSON field in the response. Custom request headers and browser interactions such as clicks are not supported; findings whose variants need them are shown as untestable.
+- Boolean injection checks need a stable JSON field in the response or, in a page or text answer, a text the controls split; very large pages can exceed the recording limit and stay inconclusive. Custom request headers and browser interactions such as clicks are not supported; findings whose variants need them are shown as untestable.
 - How well the agent chooses its tests has been tried with a live model only against a local OWASP Juice Shop, with the `claude` profile. The proof browser has only been tested against a local fake target, and the `codex-cli` and `copilot-cli` profiles only with simulated answers.
 - The path-traversal and SSRF checks decode percent-encoding, but no other encodings a target might accept.
 - A sign-in in the browser works for applications whose API accepts the identity provider's token. An application that keeps its own session cookie after the SSO sign-in needs a copied session or a login program. Sessions copied from the browser are not renewed during the run.

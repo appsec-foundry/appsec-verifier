@@ -467,6 +467,10 @@ def test_results_are_structured_and_measurements_survive_excerpt_bounding():
     "You have an error in your SQL syntax near '...'",          # MySQL
     "syntax error at or near \"'\"",                            # PostgreSQL
     "ORA-00933: SQL command not properly ended",               # Oracle
+    "Unclosed quotation mark after the character string 'abc'.",   # Microsoft SQL Server
+    "Incorrect syntax near 'abc'.",                             # Microsoft SQL Server
+    'Syntax error in SQL statement "SELECT * FROM USERS WHERE NAME=\'[*]A\'"',   # H2
+    "DB2 SQL Error: SQLCODE=-104, SQLSTATE=42601",              # Db2
     '{"errmsg":"Regular expression is invalid: missing )"}',    # MongoDB $regex
     "net.sf.saxon.trans.XPathException: Invalid XPath",         # XPath / Saxon
     "jinja2.exceptions.TemplateSyntaxError: unexpected end of template",   # Jinja2
@@ -484,6 +488,7 @@ def test_engine_error_signature_catches_each_engine(body):
     "Internal Server Error",                                    # a generic 500
     "Bad Request",                                              # input validation
     '{"error":"Invalid email or password."}',                  # an ordinary application error
+    "Incorrect password. Unclosed account requests: 2",         # words of the SQL Server tokens, not the phrases
     "",                                                        # no body
     '{"data":[1,2,3]}',                                         # a normal success body
     '{"data":[{"name":"Velocity Runner"},{"name":"Twig Basket"}]}',   # engine names as ordinary words

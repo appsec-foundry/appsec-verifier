@@ -140,6 +140,28 @@ def test_multiple_explicit_routes_keep_their_scope_without_location_additions():
                                                Endpoint("GET", "/redirect", None))
 
 
+def test_a_url_with_a_query_named_without_a_method_is_its_get():
+    threat = {"scenario": "An attacker sends a victim a link such as /vulnerabilities/xss_r/?name=<script>.",
+              "attack_steps": ["The caller requests /rest/basket/7?fields=all and reads it."]}
+    assert finding_endpoints(threat, SURFACE) == (Endpoint("GET", "/vulnerabilities/xss_r/", None),
+                                                  Endpoint("GET", "/rest/basket/:id", True))
+
+
+@pytest.mark.parametrize("text", [
+    "The victim follows https://evil.example/steal?c=1 and //evil.example/x?c=2.",   # another host's path
+    "A crafted /#/search?q=<img> link runs in the browser.",                        # a browser route's query
+    "The handler reads vulnerabilities/xss_r/source/low.php and /etc/passwd.",       # paths without a query
+])
+def test_a_path_that_is_not_the_targets_request_is_not_taken_for_one(text):
+    endpoints = finding_endpoints({"scenario": text}, SURFACE)
+    assert all(e.method == "PAGE" for e in endpoints)
+
+
+def test_a_url_named_without_a_method_does_not_widen_a_resolved_request():
+    threat = {"scenario": "GET /rest/products/search?q=x leaks data; a link to /redirect?to=x helps."}
+    assert finding_endpoints(threat, SURFACE) == (Endpoint("GET", "/rest/products/search", None),)
+
+
 def test_odd_input_yields_nothing_and_the_list_is_bounded():
     assert finding_endpoints({"scenario": 7, "attack_steps": "GET /a", "instances": "x"}, "not a list") == ()
     many = {"scenario": " ".join(f"GET /p{n}" for n in range(10))}

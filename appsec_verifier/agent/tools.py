@@ -331,6 +331,16 @@ class AgentTools:
                 problems.append("an experiment sends every control twice; a write needs --allow-intrusive")
             elif is_write and asking:
                 needs_writes.append(f"{plan.get('method')} {plan.get('path')}, each control twice")
+        if plan["kind"] == "boolean" and not any(plan.get(k) for k in ("oob_template", "sql_marker", "error_probe")):
+            # VER-011, VER-055: one observation, a JSON field or a text of a page answer; arithmetic may read its
+            # results from the answer itself, and a login bypass observes its artifact's field.
+            if plan.get("pointer") and plan.get("text"):
+                problems.append("observe either a JSON field (pointer) or a text of the answer (text), not both")
+            elif plan.get("auth_artifact") and not plan.get("pointer"):
+                problems.append("an auth-artifact proof needs pointer at the token or session field")
+            elif not (plan.get("pointer") or plan.get("text") or plan.get("expression_template")):
+                problems.append("declare the observation: pointer for a JSON field, or text for a literal text a "
+                                "recorded page or text answer shows")
         if problems:
             raise ToolError("; ".join(problems))
         from .experiments import (

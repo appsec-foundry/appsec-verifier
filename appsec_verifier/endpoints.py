@@ -12,6 +12,8 @@ route (`/#/search`) for client-side findings.
 
 Handler and registration locations are used only when explicit requests and route
 references resolve no request. Shared generator locations cannot widen a resolved finding.
+Then, and only then, a URL path with a query that the text names without a method
+(`a link to /search?q=…`) counts as a GET.
 
 The result is a hint from the input file. It is shown to the operator, decides
 whether the run can test a finding at all (a login without a test identity,
@@ -35,6 +37,10 @@ _METHOD = r"(?:GET|POST|PUT|PATCH|DELETE)"
 _REQUEST = re.compile(rf"\b({_METHOD}(?:(?:\s*[,/]\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+){_METHOD}){{0,4}})\s+"
                       r"(/(?:[A-Za-z0-9_\-.:~%/]|<[^<>\s]{1,40}>|\{[^{}\s]{1,40}\})*)")
 _PAGE = re.compile(r"/#/[A-Za-z0-9_\-/]+")
+# A URL path with a query the text names without a method ("a link to /search?q=…"): the path, without its query. A
+# path that follows a host, a slash or a dot (https://evil.example/x?c=, //evil/x?c=) is not the target's, and one
+# after # is a browser route (/#/search?q=) whose query never reaches the server.
+_LINK = re.compile(r"(?<![\w/.:%~#-])(/(?:[A-Za-z0-9_\-.~%]+/)*[A-Za-z0-9_\-.~%]*)\?[A-Za-z_][\w\-\[\]]*=")
 _HANDLER = re.compile(r"handler:\s*([^\s;,]+:\d+)")
 _REGISTERED = re.compile(r"registered:\s*([^\s;,]+:\d+)")
 _ROUTE_ID = re.compile(r"R-[0-9]{3,5}")
@@ -144,6 +150,14 @@ def finding_endpoints(threat: dict, surface) -> tuple[Endpoint, ...]:
         for entry in entries:
             if entry.handler in locations or entry.registered in locations:
                 add(Endpoint(entry.method, entry.template, entry.login))
+    # A URL with a query the text names without a method is the GET a browser sends for it; like the source
+    # locations, only when nothing above resolved a request.
+    if not found:
+        for text in texts:
+            for match in _LINK.finditer(text):
+                path = match.group(1)
+                entry = next((e for e in entries if e.method in ("GET", "ALL") and _fits(e.template, path)), None)
+                add(Endpoint("GET", entry.template, entry.login) if entry else Endpoint("GET", path, None))
     for text in texts:
         for match in _PAGE.finditer(text):
             add(Endpoint("PAGE", match.group(0), None))

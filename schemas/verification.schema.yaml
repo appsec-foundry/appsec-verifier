@@ -272,6 +272,7 @@ properties:
             tested_path:    { type: [string, "null"] }
             hypothesis:     { type: [string, "null"] }
             observation_pointer: { type: [string, "null"] }
+            observation_text: { type: [string, "null"], description: "The text an injection proof observed in a page or text answer (VER-055)." }
             scope:          { type: string }
             missing:
               type: array

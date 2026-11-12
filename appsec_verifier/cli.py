@@ -1557,6 +1557,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     and a pointer to `preflight`, which shows the how-tos."""
     if not plans:
         return []
+    from .agent.derivation import page_candidates
     from .planning import evidence_id
 
     tested = [p for p in plans if evidence_id(p) not in blocked]
@@ -1612,7 +1613,8 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
             named = list(map(request, p.endpoints[:2]))
         requests = ", ".join([*named, *(request(e) + " (prepares)" for e in getattr(p, "preparation", ()))])
         tail_parts = [requests, f"{len(group)} variants"] if len(group) > 1 and not distinct else [requests]
-        tail = " · ".join(x for x in tail_parts if x) or ("" if distinct else "no request in the assessment")
+        tail = " · ".join(x for x in tail_parts if x) or ("" if distinct else "no request in the assessment" + (
+            "; its file path may name one" if page_candidates(p.instance) else ""))       # VER-056
         text = title + ((" · " + tail) if tail else "")
         if st.enabled and not full:
             text = _fit(text, max(columns() - 1 - width, 20))

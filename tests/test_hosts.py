@@ -248,8 +248,9 @@ def test_a_finding_prompt_carries_only_its_own_class():
     text = system_prompt(xss)
     assert '"name": "browser_check"' in text and '"name": "plan_test"' not in text and "sql_template" not in text
     assert "sql_template with exactly one" in injection
-    # Fixed bounds, so the prompts cannot silently grow back (characters, not tokens).
-    assert len(text) < 16_000 and len(injection) < 21_000
+    # Fixed bounds, so the prompts cannot silently grow back (characters, not tokens). The injection bound grew by
+    # 250 for the text observation of page answers (VER-055).
+    assert len(text) < 16_000 and len(injection) < 21_250
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():
