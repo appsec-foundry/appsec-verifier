@@ -427,7 +427,8 @@ def _injection_negative(ctx, history, result, cited):
     if len(contexts) < 2:
         return _downgrade(result, "a negative verdict needs true and false controls that answer alike in at least "
                           "two declared contexts on the same input, such as a numeric and a quoted one; declare "
-                          "another plan for the second and cite both experiments")
+                          "another plan for the second, another template or your own positive and negative values, "
+                          "and cite both experiments")
     exchanges, error = _cited_exchanges(ctx, history, cited, 2)
     if error:
         return _downgrade(result, error)

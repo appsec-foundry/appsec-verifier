@@ -551,6 +551,21 @@ def test_a_javascript_predicate_template_joins_the_baseline_with_and_only(templa
     assert reason in str(refused.value)
 
 
+def test_a_refused_quoted_javascript_template_points_to_a_control_pair_for_the_second_context():
+    """VER-043, VER-013: run 132's T-033 tried a quoted template as a negative verdict's second context; the
+    refusal names what counts instead, the agent's own positive and negative values."""
+    from appsec_verifier.agent.experiments import js_controls
+
+    with pytest.raises(ValueError) as refused:
+        js_controls({"baseline": "1", "js_predicate_template": "abc' && {{predicate}} && 'x'=='x"})
+    assert "second context, declare your own positive and negative values without a template" in str(refused.value)
+    history = boolean_history()
+    for h in history[1:]:
+        h["_body"] = '{"result":"fixture-record"}'
+    assert "another template or your own positive and negative values" in check(
+        history, verdict="not-reproducible").rationale
+
+
 def test_javascript_predicate_controls_are_fresh_and_complementary():
     from appsec_verifier.agent.experiments import js_controls
 

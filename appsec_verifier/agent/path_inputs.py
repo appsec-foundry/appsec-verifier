@@ -17,7 +17,9 @@ def validate_path_input(path, name):
     if (parsed.scheme or parsed.netloc or parsed.query or parsed.fragment or not path.startswith("/")
             or len(placeholders) != 1 or placeholders[0] not in (":" + name, "{" + name + "}", "<" + name + ">")
             or placeholders[0] not in parsed.path.split("/")):
-        raise ToolError("path input needs exactly one whole-segment placeholder with the declared input name")
+        # VER-043: name the accepted forms; a model that learned {{predicate}} templates tends to write {{id}}.
+        raise ToolError(f"path input needs exactly one whole-segment placeholder with the declared input name, "
+                        f"written :{name}, {{{name}}} or <{name}>, e.g. /items/:{name}")
     return placeholders[0]
 
 

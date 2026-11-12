@@ -368,7 +368,9 @@ def js_controls(plan):
     if template.count("{{predicate}}") != 1:
         raise ValueError("a JavaScript predicate proof needs a template with exactly one {{predicate}} placeholder")
     if "||" in template or not baseline or not template.startswith(baseline):
-        raise ValueError("the template starts with the baseline that finds a record and contains no ||")
+        raise ValueError("the template starts with the baseline that finds a record and contains no ||; for a "
+                         "negative verdict's second context, declare your own positive and negative values "
+                         "without a template")
     before, after = (part.strip() for part in template.split("{{predicate}}"))
     if not (before.endswith("&&") or after.startswith("&&")):
         raise ValueError("join {{predicate}} to the baseline with &&, for example 1 && {{predicate}}")

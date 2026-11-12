@@ -94,6 +94,15 @@ def test_ambiguous_path_binding_is_rejected_at_declaration(tmp_path, path):
         tools.plan_test(**plan(path=path, input_location="path", input_name="id")["args"])
 
 
+def test_a_template_style_placeholder_is_refused_with_the_forms_that_work(tmp_path):
+    """VER-043: run 132's T-034 wrote /rest/track-order/{{id}}, as the {{predicate}} templates read, twice; the
+    refusal names the accepted forms."""
+    tools = tools_for(tmp_path, lambda *a, **k: Resp())
+    with pytest.raises(ToolError) as refused:
+        tools.plan_test(**plan(path="/items/{{id}}", input_location="path", input_name="id")["args"])
+    assert "written :id, {id} or <id>, e.g. /items/:id" in str(refused.value)
+
+
 @pytest.mark.parametrize("parameterized", [False, True])
 def test_path_sql_controls_exercise_real_query_behavior(tmp_path, parameterized):
     db = sqlite3.connect(":memory:")
