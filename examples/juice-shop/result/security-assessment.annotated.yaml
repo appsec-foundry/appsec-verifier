@@ -5557,37 +5557,35 @@ threats:
   verified_chain_ids: []
   dynamic_verification:
     verdict: confirmed
-    confidence: null
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    confidence: high
+    verified_at: '2026-11-12T12:43:37.334667Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-015
-    tested_scope: {}
+    result_ref: VF-013
+    tested_scope:
+      checked: true
+      contract: 3
+      variant: null
+      tested_path: null
+      scope: cited requests only
     coverage: partial
     variants:
     - variant: variant-003
       verdict: confirmed
       result_ref: VF-013
       tested_scope:
-        executed: true
         checked: true
         contract: 3
-        steps:
-        - 2
-        kind: marker
-        form: script-executed
-        tested_path: null
         variant: null
-        hypothesis: null
-        observation_pointer: null
+        tested_path: null
         scope: cited requests only
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-014
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-015
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: Medium
@@ -6002,26 +6000,26 @@ threats:
   severity_rationale: verified attack-chain keystone in AC-B-001 (User reads or changes
     data of another user or tenant); see §9
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-018
+    result_ref: VF-016
     tested_scope: {}
     coverage: partial
     variants:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-016
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-017
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-003
       verdict: not-attempted
       result_ref: VF-018
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -6032,7 +6030,7 @@ threats:
         impact: Medium
         severity: High
       changed: false
-      reason: the verdict inconclusive does not change the rating
+      reason: the verdict not-attempted does not change the rating
     proof_of_concept: []
     screenshots: []
 - actor_ids:
@@ -6444,11 +6442,16 @@ threats:
   verified_chain_ids: []
   dynamic_verification:
     verdict: confirmed
-    confidence: null
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    confidence: medium
+    verified_at: '2026-11-12T12:42:23.779276Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-002
-    tested_scope: {}
+    result_ref: VF-001
+    tested_scope:
+      checked: true
+      contract: 3
+      variant: variant-001
+      tested_path: /rest/products/search
+      scope: cited requests only
     coverage: partial
     variants:
     - variant: variant-001
@@ -6457,32 +6460,13 @@ threats:
       tested_scope:
         checked: true
         contract: 3
-        steps:
-        - 2
-        - 3
-        - 4
-        - 5
-        - 6
-        - 7
-        - 8
-        - 9
-        - 10
-        - 11
-        - 12
-        - 13
-        kind: boolean
-        form: engine-error
-        tested_path: /rest/products/search
         variant: variant-001
-        hypothesis: q is concatenated unescaped into a raw SQL LIKE clause; a quote-breaking
-          payload alters query structure causing a detectable backend error vs a balanced-quote
-          counterpart.
-        observation_pointer: null
+        tested_path: /rest/products/search
         scope: cited requests only
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-002
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -6863,22 +6847,22 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-005
+    result_ref: VF-004
     tested_scope: {}
     coverage: partial
     variants:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-004
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-005
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -6889,7 +6873,7 @@ threats:
         impact: Critical
         severity: Critical
       changed: false
-      reason: the verdict inconclusive does not change the rating
+      reason: the verdict not-attempted does not change the rating
     proof_of_concept: []
     screenshots: []
 - actor_ids:
@@ -7081,7 +7065,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -7092,7 +7076,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-003
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -7251,7 +7235,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -7262,7 +7246,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-019
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: Medium
@@ -8070,7 +8054,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -8081,7 +8065,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-033
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -8239,7 +8223,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -8250,7 +8234,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-034
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: Medium
@@ -8432,7 +8416,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -8443,7 +8427,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-035
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: Medium
@@ -8531,7 +8515,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -8542,7 +8526,7 @@ threats:
     - variant: v1
       verdict: not-attempted
       result_ref: VF-036
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -8641,7 +8625,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -8652,7 +8636,7 @@ threats:
     - variant: v1
       verdict: not-attempted
       result_ref: VF-037
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -9000,7 +8984,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -9011,7 +8995,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-038
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -9234,11 +9218,16 @@ threats:
   verified_chain_ids: []
   dynamic_verification:
     verdict: confirmed
-    confidence: null
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    confidence: medium
+    verified_at: '2026-11-12T12:44:35.840401Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-021
-    tested_scope: {}
+    result_ref: VF-020
+    tested_scope:
+      checked: true
+      contract: 3
+      variant: variant-001
+      tested_path: /rest/products/:id/reviews
+      scope: cited requests only
     coverage: partial
     variants:
     - variant: variant-001
@@ -9247,30 +9236,13 @@ threats:
       tested_scope:
         checked: true
         contract: 3
-        steps:
-        - 4
-        - 5
-        - 6
-        - 7
-        - 8
-        - 9
-        - 10
-        - 11
-        - 12
-        - 13
-        kind: boolean
-        form: predicate
-        tested_path: /rest/products/:id/reviews
         variant: variant-001
-        hypothesis: The :id path param is concatenated unquoted into a MongoDB $where
-          clause 'this.product == ' + id, allowing boolean predicate injection that
-          changes which reviews are returned.
-        observation_pointer: /data
+        tested_path: /rest/products/:id/reviews
         scope: cited requests only
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-021
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -9498,11 +9470,16 @@ threats:
   verified_chain_ids: []
   dynamic_verification:
     verdict: confirmed
-    confidence: null
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    confidence: medium
+    verified_at: '2026-11-12T12:48:24.079642Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-023
-    tested_scope: {}
+    result_ref: VF-022
+    tested_scope:
+      checked: true
+      contract: 3
+      variant: variant-001
+      tested_path: /rest/track-order/:id
+      scope: cited requests only
     coverage: partial
     variants:
     - variant: variant-001
@@ -9511,32 +9488,13 @@ threats:
       tested_scope:
         checked: true
         contract: 3
-        steps:
-        - 26
-        - 27
-        - 28
-        - 29
-        - 30
-        - 31
-        - 32
-        - 33
-        - 34
-        - 35
-        kind: boolean
-        form: predicate
-        tested_path: /rest/track-order/:id
         variant: variant-001
-        hypothesis: id is spliced unescaped into the server-side JS $where predicate
-          this.orderId === '${id}'; appending a closing quote plus && {{predicate}}
-          && 'x'=='x after a known valid orderId lets the injected predicate decide
-          whether that real order document (with its email field) is returned, versus
-          the synthetic fallback object lacking an email field.
-        observation_pointer: /data/0/email
+        tested_path: /rest/track-order/:id
         scope: cited requests only
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-023
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -9701,7 +9659,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -9712,7 +9670,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-039
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -9807,7 +9765,7 @@ threats:
   severity_rationale: verified attack-chain keystone in AC-B-005 (User exceeds a limit
     or a one-time entitlement); see §9
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -9818,7 +9776,7 @@ threats:
     - variant: v1
       verdict: not-attempted
       result_ref: VF-040
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -9972,7 +9930,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -9983,7 +9941,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-024
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -10123,7 +10081,7 @@ threats:
   severity_rationale: verified attack-chain keystone in AC-T-007 (Privileged Action
     via Prompt Injection into a Tool-Calling Model); see §9
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -10134,7 +10092,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-041
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -10207,7 +10165,7 @@ threats:
   dynamic_verification:
     verdict: inconclusive
     confidence: null
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    verified_at: '2026-11-12T12:53:18.179769Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
     result_ref: VF-065
     tested_scope: {}
@@ -10394,7 +10352,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -10405,7 +10363,7 @@ threats:
     - variant: v1
       verdict: not-attempted
       result_ref: VF-042
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -10646,26 +10604,26 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-027
+    result_ref: VF-025
     tested_scope: {}
     coverage: partial
     variants:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-025
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-026
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-003
       verdict: not-attempted
       result_ref: VF-027
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -10676,7 +10634,7 @@ threats:
         impact: Medium
         severity: High
       changed: false
-      reason: the verdict inconclusive does not change the rating
+      reason: the verdict not-attempted does not change the rating
     proof_of_concept: []
     screenshots: []
 - actor_ids:
@@ -10979,22 +10937,22 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-044
+    result_ref: VF-043
     tested_scope: {}
     coverage: partial
     variants:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-043
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-044
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -11005,7 +10963,7 @@ threats:
         impact: High
         severity: High
       changed: false
-      reason: the verdict inconclusive does not change the rating
+      reason: the verdict not-attempted does not change the rating
     proof_of_concept: []
     screenshots: []
 - affected_files:
@@ -11238,7 +11196,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -11249,7 +11207,7 @@ threats:
     - variant: reset-response
       verdict: not-attempted
       result_ref: VF-045
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: Medium
@@ -11798,7 +11756,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -11809,7 +11767,7 @@ threats:
     - variant: v1
       verdict: not-attempted
       result_ref: VF-049
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -12074,7 +12032,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -12085,7 +12043,7 @@ threats:
     - variant: v-1
       verdict: not-attempted
       result_ref: VF-051
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -12166,7 +12124,7 @@ threats:
   dynamic_verification:
     verdict: confirmed
     confidence: medium
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    verified_at: '2026-11-12T12:50:02.998028Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
     result_ref: VF-029
     tested_scope:
@@ -12368,7 +12326,7 @@ threats:
   dynamic_verification:
     verdict: confirmed
     confidence: medium
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    verified_at: '2026-11-12T12:51:05.831718Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
     result_ref: VF-030
     tested_scope:
@@ -12800,7 +12758,7 @@ threats:
   compound_chain_ids: []
   verified_chain_ids: []
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -12811,7 +12769,7 @@ threats:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-055
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -12915,7 +12873,7 @@ threats:
   severity_rationale: 'elevated to Critical: reaches a privileged operation on an
     unauthenticated endpoint'
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -12926,7 +12884,7 @@ threats:
     - variant: v1
       verdict: not-attempted
       result_ref: VF-006
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: Medium
@@ -13117,22 +13075,22 @@ threats:
     elevated to Critical as a verified attack-chain keystone in AC-T-004 (Privilege
     Escalation via Mass-Assignment on Registration); see §9
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
-    result_ref: VF-008
+    result_ref: VF-007
     tested_scope: {}
     coverage: partial
     variants:
     - variant: variant-001
       verdict: not-attempted
       result_ref: VF-007
-      tested_scope: null
+      tested_scope: {}
     - variant: variant-002
       verdict: not-attempted
       result_ref: VF-008
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -13143,7 +13101,7 @@ threats:
         impact: High
         severity: Critical
       changed: false
-      reason: the verdict inconclusive does not change the rating
+      reason: the verdict not-attempted does not change the rating
     proof_of_concept: []
     screenshots: []
 - actor_ids:
@@ -13235,7 +13193,7 @@ threats:
     elevated to Critical as a verified attack-chain keystone in AC-B-002 (User gains
     more rights than intended); see §9
   dynamic_verification:
-    verdict: inconclusive
+    verdict: not-attempted
     confidence: null
     verified_at: '2026-11-12T12:41:48.624267Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
@@ -13246,7 +13204,7 @@ threats:
     - variant: v-1
       verdict: not-attempted
       result_ref: VF-009
-      tested_scope: null
+      tested_scope: {}
     rating:
       analyzer:
         likelihood: High
@@ -13328,7 +13286,7 @@ threats:
   dynamic_verification:
     verdict: confirmed
     confidence: medium
-    verified_at: '2026-11-12T12:41:48.624267Z'
+    verified_at: '2026-11-12T12:52:29.397214Z'
     verifier_version: 0.1.0a1 (41af96b1, 2026-11-12)
     result_ref: VF-031
     tested_scope:
