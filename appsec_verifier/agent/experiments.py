@@ -1,5 +1,5 @@
 """Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
-VER-053, VER-055)."""
+VER-053, VER-055, VER-057)."""
 
 from __future__ import annotations
 
@@ -85,6 +85,9 @@ PLAN_SCHEMA = {
                            "path": {"type": "string", "minLength": 1, "maxLength": 2000}},
         },
         "reference": {"type": "string", "minLength": 1, "maxLength": 80},
+        # VER-057: the account whose answer a request without credentials must receive; the Verifier sends both and
+        # a random path next to the finding's, and compares the answers in code.
+        "signed_in": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
         # One template, or up to three candidates the Verifier tries in turn on a server error (VER-011).
         "expression_template": _candidates({"type": "string", "minLength": 5, "maxLength": 3000}),
@@ -151,7 +154,8 @@ PLAN_SCHEMA = {
         },
         {
             "if": {"properties": {"kind": {"const": "access-control"}}},
-            "then": {"oneOf": [{"required": ["resource"]}, {"required": ["owner"]}, {"required": ["reference"]}]},
+            "then": {"oneOf": [{"required": ["resource"]}, {"required": ["owner"]}, {"required": ["reference"]},
+                               {"required": ["signed_in"]}]},
         },
         {"if": {"required": ["change"]}, "then": {"required": ["owner"]}},
     ],
@@ -185,8 +189,10 @@ def confirming_form(cwe, location) -> str | None:
     return "predicate_template" if cwe == "CWE-90" else None
 
 
-# Exposure and missing authentication are proven only with an operator-declared resource (verifiable-cwes.yaml).
-_RESOURCE_ONLY_CWES = ("CWE-200", "CWE-306")
+# Missing authentication and exposure: proven with an operator-declared resource, or the comparison without
+# credentials whose answers no model sees (VER-057, verifiable-cwes.yaml); the agent's own requests reach only a
+# declared resource (agent/tools.py).
+EXPOSURE_CWES = ("CWE-200", "CWE-306", "CWE-497", "CWE-530", "CWE-538", "CWE-548", "CWE-552")
 # An IDOR concerns another account's record, never a privileged function, so the privileged comparison cannot
 # prove it (VER-010): without a declared resource only a record an account creates can.
 RECORD_CWES = ("CWE-639",)
@@ -204,15 +210,26 @@ def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[
     """How this run can prove an access-control finding (VER-010): `resource`, the operator's test resource,
     which takes precedence; else `owner`, a resource a normal account creates (two normal accounts and writes),
     and, except for an IDOR, `reference`, a comparison with a privileged account for a privileged function
-    (VER-041). The test plan, plan_test, the prompt and technical QA all read this, so a finding no method fits is
-    not tested (VER-008)."""
+    (VER-041), and `signed_in`, a request without credentials that gets an account's answer (VER-057); missing
+    authentication and exposure only the last. The test plan, plan_test, the prompt and technical QA all read
+    this, so a finding no method fits is not tested (VER-008)."""
     if any(r["finding_id"] == finding_id for r in (scope or {}).get("test_resources", [])):
         return ["resource"]
-    if cwe in _RESOURCE_ONLY_CWES:
-        return []
+    signed_in = bool(normal_roles(identities) or privileged_roles(identities)) and cwe not in RECORD_CWES
+    if cwe in EXPOSURE_CWES:
+        return ["signed_in"] if signed_in else []
     normal = normal_roles(identities)
     reference = bool(normal and privileged_roles(identities)) and cwe not in RECORD_CWES
-    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("reference", reference)) if ok]
+    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("reference", reference),
+                            ("signed_in", signed_in)) if ok]
+
+
+def comparison_path(path: str, segment: str) -> str:
+    """The random path next to `path` a comparison without credentials also requests (VER-057): `segment` in place
+    of its last segment, keeping a trailing slash, so a target that answers every path alike is seen."""
+    trailing = path.endswith("/") and path != "/"
+    parent = path.rstrip("/").rsplit("/", 1)[0]
+    return f"{parent}/{segment}" + ("/" if trailing else "")
 
 
 def sql_controls(plan):
@@ -1006,7 +1023,8 @@ def changed_check(ctx, history, cited, *, negative=False, blocked=False):
 
 
 REFERENCE_ANONYMOUS = ("a request without a role got a 2xx answer, so the privileged-function comparison cannot "
-                       "confirm this finding; missing authentication is proven only with a configured test_resource")
+                       "confirm this finding; missing authentication is proven by the comparison without "
+                       "credentials (signed_in) or a configured test_resource")
 
 
 def reference_unavailable(ctx, history: list[dict]) -> dict | None:
@@ -1024,8 +1042,8 @@ def reference_unavailable(ctx, history: list[dict]) -> dict | None:
             and isinstance(res.get("status"), int) and 200 <= res["status"] < 300 and res.get("length")
             and planned_route(plan.get("path") or "", args.get("path") or "")):
         return {"reason": REFERENCE_ANONYMOUS,
-                "next": "submit_verdict inconclusive naming the missing test_resource, or plan another path of "
-                        "this finding where a request without a role is refused"}
+                "next": "plan_test with signed_in set to an account of this run and the same path, or plan another "
+                        "path of this finding where a request without a role is refused"}
     return None
 
 
@@ -1065,8 +1083,67 @@ def privileged_check(ctx, history, cited, *, negative=False, blocked=False):
     return "no independent normal account received the identical answer"
 
 
+def signed_in_check(ctx, history, cited, *, negative=False, blocked=False):
+    """A request without credentials that gets an account's answer (VER-057), from the comparison the Verifier sent
+    itself: the account's GET answered 2xx with content, the same GET without credentials answered 2xx with the
+    identical bytes (the recorded digest) from another session, and the random path next to it, also without
+    credentials, not answered 2xx with those bytes, so a target that answers every path alike confirms nothing.
+    The comparison only confirms: a refusal without credentials shows no control the finding is about."""
+    if negative:
+        return ("the comparison without credentials only confirms; a different or refused answer does not show "
+                "that the function is protected")
+    _, plan = latest_plan(history)
+    account, path, control = plan.get("signed_in"), plan.get("path"), plan.get("control_path")
+    if not control:
+        return "the plan has no random path of the Verifier to compare with"
+    reads = []
+    for n in cited if isinstance(cited, list) else []:
+        h = history[n - 1] if type(n) is int and 1 <= n <= len(history) else {}
+        args, res = h.get("args") or {}, h.get("result") or {}
+        if (h.get("tool") != "http_request" or args.get("comparison") is not True
+                or (args.get("method") or "GET").upper() != "GET" or type(res.get("status")) is not int):
+            return f"cite only the comparison the Verifier sent for the plan; step {n} is not part of it"
+        response = getattr(ctx, "responses", {}).get(n) or {}
+        reads.append((args.get("role") or None, args.get("path"), res["status"], res.get("length"),
+                      response.get("identity"), response.get("digest")))
+    signed = [(i, d) for role, p, status, length, i, d in reads
+              if role == account and p == path and 200 <= status < 300 and length and d]
+    if not signed:
+        return f"the request as {account} was not answered with content"
+    ids, digests = {i for i, _ in signed}, {d for _, d in signed}
+    anonymous = [(status, i, d) for role, p, status, _, i, d in reads if role is None and p == path]
+    if not anonymous:
+        return "cite the request without credentials"
+    if not any(200 <= status < 300 and d in digests and i not in ids for status, i, d in anonymous):
+        return (f"the request without credentials did not receive the identical answer {account} received; an "
+                "answer that changes between requests or names the signed-in user is never identical")
+    controls = [(status, d) for role, p, status, _, _, d in reads if role is None and p == control]
+    if not controls:
+        return "cite the request to the random path next to the finding's"
+    if any(200 <= status < 300 and d in digests for status, d in controls):
+        return ("the random path next to the finding's received the same answer, so the target answers every path "
+                "alike")
+    return None
+
+
+def comparison_ready(ctx, history, steps):
+    """Whether the comparison the Verifier just sent meets VER-057, reported to the agent so its next step is the
+    verdict. Pure: proof.py re-checks the cited steps."""
+    problem = signed_in_check(ctx, history, steps)
+    if problem is None:
+        return {"proof": "holds", "steps": sorted(steps),
+                "next": "submit_verdict confirmed and cite these steps in proof_steps"}
+    return {"proof": "missing", "reason": problem, "steps": sorted(steps),
+            "next": "plan another read of this finding, or submit_verdict inconclusive with this reason; the "
+                    "comparison supports no negative verdict"}
+
+
 def access_check(ctx, history, cited, *, negative=False, blocked=False):
     _, plan = latest_plan(history)
+    if plan.get("kind") == "access-control" and plan.get("signed_in"):
+        if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
+            return "the operator-declared test resource takes precedence"
+        return signed_in_check(ctx, history, cited, negative=negative, blocked=blocked)
     if plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")):
         if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
             return "the operator-declared test resource takes precedence"

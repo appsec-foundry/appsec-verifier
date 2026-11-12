@@ -1,5 +1,5 @@
 """Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036,
-VER-043, VER-047).
+VER-043, VER-047, VER-057).
 
 ScopeGuard remains the connection authority. Assessment routes and independently
 checked request derivations narrow that scope; model plans alone add nothing.
@@ -14,7 +14,8 @@ normal account may send that change to the record the owner's write created
 and its read showed with the marker (ctx.owned), and a GET on the change's path
 may read what the creating answer returned (ctx.created) when the finding names
 no read. Both come from the target's answers (agent/tools.py), never from the
-model.
+model. A comparison without credentials (VER-057) may also read the random path
+next to the finding's that plan_test generated, without credentials.
 """
 
 from __future__ import annotations
@@ -153,6 +154,14 @@ class Controller:
                 if len(self.prerequisites) >= 3:
                     raise ToolError("the prerequisite-read allowance for this finding is exhausted (VER-047)")
                 self.prerequisites.append(key)
+            return
+        # VER-057: the comparison without credentials also requests the random path next to the finding's that
+        # plan_test generated; in scope and on the target origin (checked above), a GET without credentials, and it
+        # authorises no route. The other two requests of the comparison pass the checks below like any read.
+        plan = self.plan or {}
+        if name == "http_request" and args.get("comparison") and plan.get("control_path") == path:
+            if method != "GET" or args.get("role") or not plan.get("signed_in"):
+                raise ToolError("the random path of a comparison is read once without credentials (VER-057)")
             return
         route_path = path
         change = args.get("change") if name == "plan_test" else (self.plan or {}).get("change")

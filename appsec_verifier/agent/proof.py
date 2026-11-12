@@ -1,5 +1,5 @@
 """The evidence the code requires before a finding counts as confirmed
-(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055).
+(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055, VER-057).
 
 The model's verdict alone never confirms a finding. A confirmed verdict cites
 its proof in `proof_steps`: step numbers of the loop's history, counted from 1
@@ -26,7 +26,10 @@ contexts on one input (VER-013):
   the finding's marker, which its owner reads back, a request without a role
   does not see, and another normal account sees; or a privileged function
   whose answer a normal account receives identically to a privileged account
-  while a request without a role is refused (VER-041).
+  while a request without a role is refused (VER-041); or, from the comparison
+  the Verifier sent itself, a request without credentials that receives the
+  identical answer an account of the run received while a random path next to
+  it does not (VER-057). That comparison supports no negative verdict.
 - injection (VER-011): a declared experiment repeats baseline and true/false
   conditions twice, holding every other input and identity fixed. A selected
   JSON value reproduces the nonempty baseline only for the true condition.
@@ -243,6 +246,13 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     }.get(cls, (None, 0))
     if check is None and cls != "access-control":
         return _downgrade(result, f"there is no proof check for class {cls!r}")
+    if cls == "access-control" and latest_plan(plan_view(history, cited))[1].get("signed_in"):
+        # VER-057: the comparison is sent by the Verifier, so, as for an injection experiment, the steps whose
+        # feedback reported the proof holds stand in for a wrong citation once they are re-checked here.
+        holding = _holding_experiment_steps(history)
+        if holding and access_check(ctx, plan_view(history, holding), holding) is None and (
+                not isinstance(cited, list) or access_check(ctx, plan_view(history, cited), cited) is not None):
+            cited = holding
     view = plan_view(history, cited)
     exchanges, problem = _cited_exchanges(ctx, view, cited, minimum)
     if problem is None:
@@ -260,7 +270,8 @@ def _checked(result, history, cited, ctx=None):
     if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
         return result
     _, plan = latest_plan(history)
-    own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference"))
+    own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")
+                                                    or plan.get("signed_in"))
     result.confidence = (
         "high" if result.verdict == "confirmed" and plan.get("kind") not in ("boolean", "timing") and not own
         else "medium"
@@ -279,6 +290,10 @@ def _checked(result, history, cited, ctx=None):
     elif plan.get("reference"):
         scope = (f"cited requests only; the same answer as for {plan['reference']} does not show that the "
                  "function is meant for privileged accounts only; that restriction is taken from the finding")
+    elif plan.get("signed_in"):
+        scope = (f"cited requests only; the same answer without credentials as for {plan['signed_in']} does not "
+                 "show that the function is meant for signed-in accounts only; that restriction is taken from the "
+                 "finding; the answers were compared in code and are not kept")
     result.proof = {
         **events,
         "checked": True,
@@ -355,7 +370,7 @@ def _negative(ctx, history, result, cited):
                                   "its plan")
     # An own-resource proof also cites the owner's write, and its plan path may hold a placeholder: access_check
     # matches those paths itself.
-    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference"))
+    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference") or plan.get("signed_in"))
     if any(
         h.get("tool") != "http_request"
         or (not own and not planned_route(plan.get("path") or "", h.get("args", {}).get("path") or ""))

@@ -1460,7 +1460,8 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
     if plan.cls == "access-control" and not identities:
         return "identity", "no test identity; the proof compares two identities"
     if plan.cls == "access-control":
-        # VER-010: the operator's test resource first; else one a normal account creates, or a privileged reference
+        # VER-010: the operator's test resource first; else one a normal account creates, a privileged reference,
+        # or the comparison without credentials (VER-057)
         methods = access_methods(plan.id, plan.cwe, scope, identities, writes=not safe)
         if not methods and access_methods(plan.id, plan.cwe, scope, identities, writes=True):
             return "intrusive", "safe mode; without a declared test resource the Verifier creates one, which writes"
@@ -1491,7 +1492,8 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         creates = any(record_segment(p) is None for p in writes)
         changes = any(record_segment(p) is not None for p in writes)
         if named and not source and "resource" not in methods and not (
-                ("reference" in methods and reads) or ("owner" in methods and creates and (reads or changes))):
+                (("reference" in methods or "signed_in" in methods) and reads)
+                or ("owner" in methods and creates and (reads or changes))):
             if "owner" in methods and not creates:
                 return "access", "no write request that creates a record, one without an identifier in its path"
             return "access", "no GET request to read with" + (

@@ -229,7 +229,8 @@ def test_the_privileged_comparison_names_what_it_cannot_prove():
     ctx.identities = [{"role": "account-1"}, {"role": "admin-1", "privileged": True}]
     text = system_prompt(ctx)
     assert "fits only a finding that identifies a function as privileged" in text
-    assert "proof_unavailable" in text and "missing authentication is proven only with a configured" in text
+    assert "proof_unavailable" in text
+    assert "missing authentication, proven by the comparison without credentials" in text
     assert "another account's record, not a privileged function, cannot be confirmed in this run" in text
     assert "None of these proofs needs an account's user id" in text
 

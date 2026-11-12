@@ -90,7 +90,7 @@ def test_qa_gets_the_proof_contract_its_follow_ups_must_fit(tmp_path):
     qa, host = reviewer(ctx, [CLEAR])
     assert consider(ctx, qa) is None
     contract = host.calls[0][1]["proof_contract"]
-    assert contract["access_proofs"] == ["reference"] and "one experiment" in contract["citations"]
+    assert contract["access_proofs"] == ["reference", "signed_in"] and "one experiment" in contract["citations"]
     assert "user id" in contract["identities"] and contract["routes"]
     ctx.plan = replace(ctx.plan, cwe="CWE-639")          # an IDOR: the privileged comparison is no proof (VER-010)
     qa, host = reviewer(ctx, [CLEAR])

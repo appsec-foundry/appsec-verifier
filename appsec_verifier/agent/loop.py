@@ -1,8 +1,9 @@
 """The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
-VER-043, VER-046, VER-047, VER-053).
+VER-043, VER-046, VER-047, VER-053, VER-057).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
-when a control meets a server error; a write plan's controls run only when the agent asks with send_controls.
+when a control meets a server error; a write plan's controls run only when the agent asks with send_controls. An
+accepted comparison without credentials sends its three reads at once the same way (VER-057).
 Each model call's cost and token counts go on the next action-log record.
 
 A ``Planner`` (the model, injected) is asked for the next step given the finding
@@ -56,7 +57,8 @@ def _control_failed(tools, result: dict) -> bool:
     class."""
     status = result.get("status", 0)
     experiment = getattr(tools, "_experiment", None) or {}
-    if experiment.get("error_probe"):
+    if experiment.get("error_probe") or experiment.get("signed_in"):
+        # A comparison without credentials (VER-057) expects a refusal or a 404 for some of its requests.
         return bool(result.get("error"))
     if result.get("error") or not isinstance(status, int) or status >= 500:
         return True
@@ -246,10 +248,11 @@ class AgentProbe:
             return sent_steps, None
 
         def report_experiment(sent_steps):
-            """Append the experiment's own feedback step and return it (VER-011, VER-043)."""
-            from .experiments import injection_ready
+            """Append the experiment's own feedback step and return it (VER-011, VER-043, VER-057)."""
+            from .experiments import comparison_ready, injection_ready
 
-            feedback = injection_ready(ctx, history, sent_steps)
+            comparison = (getattr(tools, "_experiment", None) or {}).get("signed_in")
+            feedback = (comparison_ready if comparison else injection_ready)(ctx, history, sent_steps)
             _log(ctx, len(history) + 1, tool="experiment", result=feedback)
             history.append({"tool": "experiment", "args": {}, "result": feedback})
             return feedback

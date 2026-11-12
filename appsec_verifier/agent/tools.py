@@ -20,8 +20,13 @@ every other method are never sent (VER-014). A privileged account (--admin-accou
 mode (VER-041). An access-control plan without an operator test resource is
 accepted only when the run allows its proof: a resource a normal account
 creates (two normal accounts, intrusive mode), for which plan_test returns the
-finding's marker, or a comparison with a privileged account (VER-010). A
-failing identity or transport ends the call as a tool
+finding's marker, a comparison with a privileged account (VER-010), or a
+comparison without credentials with any account of the run, which the
+Verifier sends itself with a random path next to the finding's (VER-057).
+For missing authentication and exposure the agent's own requests reach only an
+operator-declared resource; the comparison's answers are compared in code by
+their digest, and their bodies reach neither the model, the recorded body nor
+the proof of concept. A failing identity or transport ends the call as a tool
 error for the agent, never as an exception past the loop. A response body is
 redacted of every credential value before it is cut to the excerpt (VER-016).
 The agent's path is appended to the target base URL as written, without
@@ -62,16 +67,18 @@ from jsonschema import Draft202012Validator
 from ..auth.sessions import AuthError
 from ..planning import evidence_name
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
-from ..verification_context import missing_capabilities, path_values, planned_route, record_segments
+from ..verification_context import _PLACEHOLDER, missing_capabilities, path_values, planned_route, record_segments
 from ..verify import poc
 from .experiments import (
     ENGINE_ERROR_CWES,
+    EXPOSURE_CWES,
     PLAN_SCHEMA,
     RECORD_CWES,
     access_methods,
     agent_controls,
     bracket_params,
     brackets,
+    comparison_path,
     control_values,
     engine_error_signature,
     generates_controls,
@@ -90,6 +97,8 @@ _HIDDEN = "[marker-file]"
 _AUTH_ARTIFACT_NOTICE = "[auth-artifact probe: body withheld; the token value never reaches the model or logs]"
 _ERROR_NOTICE = ("[engine-error probe: body withheld; the error text is kept only in the owner-only proof of "
                  "concept (VER-053)]")
+# VER-057: a comparison's answers are compared in code by their digest; their content is not kept anywhere.
+_COMPARISON_NOTICE = "[comparison without credentials: body withheld; compared in code only (VER-057)]"
 _CALLBACK_WAIT_S = 1.0
 _DRIVE = re.compile(r"^[A-Za-z]:")
 
@@ -467,7 +476,8 @@ class AgentTools:
             # of an authenticated artifact at the (schema-required) pointer instead of a response field.
             raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
                             "(sql_template for CWE-89 or operator_challenge for CWE-943)")
-        if plan.get("fixed"):
+        if plan.get("fixed") and not (plan["kind"] == "access-control" and plan.get("signed_in")):
+            # A comparison without credentials (VER-057) takes its query inputs from fixed; checked below.
             if not generates_controls(plan):
                 raise ToolError("fixed gives values to the controls the Verifier generates; this plan has none")
             if plan["input_name"] in (plan["fixed"].get(plan.get("input_location")) or {}):
@@ -594,7 +604,26 @@ class AgentTools:
                     while second == marker:
                         second = self.ctx.marker[0] + secrets.token_hex(4)
                     plan = {**plan, "second_marker": second}
+            elif plan.get("signed_in"):
+                # VER-057: the Verifier sends the comparison itself once the plan is accepted.
+                if "signed_in" not in methods:
+                    raise ToolError("a comparison without credentials needs an account of this run and a finding "
+                                    "other than an IDOR (VER-057)")
+                if plan["signed_in"] not in {i.get("role") for i in self.ctx.identities or []}:
+                    raise ToolError("signed_in must be an account of this run")
+                path = plan["path"]
+                if (not path.startswith("/") or "?" in path or "#" in path
+                        or any(_PLACEHOLDER.fullmatch(s) for s in path.split("/"))):
+                    raise ToolError("the comparison sends one concrete GET: give path as /a/b with every placeholder "
+                                    "filled in, and query inputs in fixed.params")
+                if any(k != "params" for k in plan.get("fixed") or {}):
+                    raise ToolError("the comparison is a GET; fixed may give params only")
+                part = (getattr(self.ctx, "marker", None) or ("",))[0] or "verifier-"
+                plan = {**plan, "control_path": comparison_path(path, part + secrets.token_hex(4))}
             else:
+                if getattr(self.ctx.plan, "cwe", None) in EXPOSURE_CWES:
+                    raise ToolError("missing authentication and exposure are proven with signed_in, the comparison "
+                                    "without credentials (VER-057), or a configured test_resource")
                 if "reference" not in methods and getattr(self.ctx.plan, "cwe", None) in RECORD_CWES:
                     raise ToolError("an IDOR concerns another account's record, which a privileged comparison cannot "
                                     "show; it needs a test_resource or two normal accounts with --allow-intrusive "
@@ -668,6 +697,15 @@ class AgentTools:
         mode (`write` True), and only once per plan. Each control is sent twice, an auth-artifact control once,
         because that proof needs no repetition (VER-049)."""
         plan = getattr(self, "_experiment", {})
+        if plan.get("kind") == "access-control" and plan.get("signed_in"):
+            # VER-057: the account's GET, the same GET without credentials, and the random path next to it.
+            if write:
+                raise ToolError("the comparison already ran when the plan was accepted")
+            params = dict((plan.get("fixed") or {}).get("params") or {})
+            base = {"method": "GET", "comparison": True, **({"params": params} if params else {})}
+            return [{**base, "path": plan["path"], "role": plan["signed_in"]},
+                    {**base, "path": plan["path"]},
+                    {**base, "path": plan["control_path"]}]
         # A read plan's own controls, values the agent chose, run the same way; never a write's (VER-011).
         if not generates_controls(plan) and (write or not agent_controls(plan)):
             raise ToolError("the accepted plan is not a challenge whose controls the Verifier generates and sends")
@@ -768,9 +806,10 @@ class AgentTools:
         return out
 
     def _record(
-        self, raw: dict, role: str | None, identity: dict, *, keep_body: bool = True, navigation: bool = False
+        self, raw: dict, role: str | None, identity: dict, *, keep_body: bool = True, navigation: bool = False,
+        omit: str | None = None,
     ) -> None:
-        omit = None if keep_body else "body not kept for this resource type"
+        omit = omit or (None if keep_body else "body not kept for this resource type")
         if omit is None and self._kept >= poc.MAX_FINDING_BODY_CHARS:
             omit = "body not kept: the finding's proof of concept reached its size limit"
         sessions = self.ctx.sessions
@@ -945,10 +984,20 @@ class AgentTools:
         form: dict | None = None,
         path_inputs: dict | None = None,
         prerequisite: bool = False,
+        comparison: bool = False,
     ) -> dict:
         # `prerequisite` (VER-047) is read by the controller to authorise a harmless read the finding's own
         # request needs but the assessment never names; the request itself is sent and recorded normally.
+        # `comparison` (VER-057) marks a request of the comparison without credentials, which only the Verifier
+        # sends (experiment_requests): the agent's tool schema has no such argument.
         m = (method or "GET").upper()
+        if comparison:
+            plan = getattr(self, "_experiment", None) or {}
+            if not (plan.get("kind") == "access-control" and plan.get("signed_in") and m == "GET"
+                    and json is None and form is None and path_inputs is None
+                    and (path, role or None) in ((plan["path"], plan["signed_in"]), (plan["path"], None),
+                                                 (plan.get("control_path"), None))):
+                raise ToolError("a comparison request must be one the accepted comparison sends (VER-057)")
         original_path = path
         if path_inputs is not None:
             self._check_steering(None, path_inputs)
@@ -977,7 +1026,7 @@ class AgentTools:
             for r in self.ctx.scope.get("session_checks", [])
         ):
             raise ToolError("session checks use only the operator-declared read-only cookie observation")
-        if getattr(self.ctx.plan, "cwe", "") in ("CWE-200", "CWE-306"):
+        if getattr(self.ctx.plan, "cwe", "") in EXPOSURE_CWES and not comparison:
             resources = self.ctx.scope.get("test_resources", [])
             if not any(
                 r["finding_id"] == self.ctx.plan.id
@@ -987,7 +1036,9 @@ class AgentTools:
                 and all((r.get(k) or {}) == (v or {}) for k, v in (("params", params), ("json", json), ("form", form)))
                 for r in resources
             ):
-                raise ToolError("exposure checks use only the operator-declared harmless read-only resource")
+                raise ToolError("exposure checks use only the operator-declared harmless read-only resource; "
+                                "without one, plan_test with signed_in, whose answers the Verifier compares "
+                                "without showing them (VER-057)")
         if m not in ALLOWED_METHODS:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
         if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only) and self._ask_writes() is None:
@@ -1050,7 +1101,8 @@ class AgentTools:
             from .session_proof import cookie_observations
 
             session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
-            self._record(self._sent(resp, m, url, headers, params, json, form), role, headers)
+            omit = "body not kept: compared in code only (VER-057)" if comparison else None
+            self._record(self._sent(resp, m, url, headers, params, json, form), role, headers, omit=omit)
             sessions = self.ctx.sessions if role else None
             if sessions is not None:
                 sessions.answered(role, getattr(resp, "status_code", None))
@@ -1062,7 +1114,7 @@ class AgentTools:
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json, form)
                 session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
-                self._record(self._sent(resp, m, url, headers, params, json, form), role, headers)
+                self._record(self._sent(resp, m, url, headers, params, json, form), role, headers, omit=omit)
                 sessions.answered(role, getattr(resp, "status_code", None))
         except ScopeViolation as exc:
             raise ToolError(f"request refused — out of scope: {exc}") from exc
@@ -1087,23 +1139,30 @@ class AgentTools:
             # owner-only proof of concept (captured by _record above), never in the recorded body, the excerpt,
             # the hash or read_response.
             text = redacted = _ERROR_NOTICE
+        compared = text
+        if comparison:
+            # VER-057: only the digest and the size of the answer are kept; the body stands down everywhere it could
+            # be read: the recorded body (read_response), the excerpt the model sees, and the proof of concept.
+            text = redacted = _COMPARISON_NOTICE
         identity_key = tuple(sorted(headers.items()))
         identity = self._identities.setdefault(identity_key, len(self._identities))
         cap = min(64000, max(0, 256000 - self._response_chars))
         # Whether two answers are the same, also where redaction made them look alike (each naming its own user):
         # keyed with this finding's random key, held in memory only, so it is no hash of a credential.
-        digest = hmac.new(self._digest_key, text.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
+        digest = hmac.new(self._digest_key, compared.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
         self._last_response = {"body": redacted[:cap], "complete": len(redacted) <= cap, "identity": identity,
                                "digest": digest}
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
-        withheld = bool(error_probe or auth_artifact_probe)
+        withheld = bool(error_probe or auth_artifact_probe or comparison)
         out = {
             "role": role,
             "status": status,
             # In bytes of the whole body, the unit of the report's step lines, not of the excerpt. A body withheld
-            # from the model has neither size nor hash here: the notice's would read as the answer's (VER-053).
-            "length": None if withheld else len(text.encode("utf-8", "replace")),
+            # from the model has neither size nor hash here: the notice's would read as the answer's (VER-053); a
+            # comparison's keeps its own size, which the proof needs (VER-057).
+            "length": len(compared.encode("utf-8", "replace")) if comparison
+            else None if withheld else len(text.encode("utf-8", "replace")),
             # of the redacted body, so no hash of a credential exists; lets the proof check compare answers
             "body_sha256": None if withheld else hashlib.sha256(redacted.encode("utf-8", "replace")).hexdigest(),
             "body_excerpt": redacted[:_BODY_EXCERPT],  # redacted before the cut: no partial token (VER-016)

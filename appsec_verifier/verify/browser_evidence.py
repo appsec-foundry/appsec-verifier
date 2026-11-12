@@ -1,4 +1,4 @@
-"""Application screenshots tied to an already checked proof (VER-035).
+"""Application screenshots tied to an already checked proof (VER-035, VER-057).
 
 Where a page of the application can show the exploit or its effect (access
 control, injection), the test agent picks that page, the test identity, up to
@@ -9,7 +9,8 @@ resource, or another response with a value that carries the finding's marker
 (a list or search showing the marked record), and show it. The agent never
 supplies a script or a new
 proof. XSS keeps the page where its marker executed; the explanation is
-attached to whichever application screenshot leads the report.
+attached to whichever application screenshot leads the report. A comparison
+without credentials gets none: its answers are never shown (VER-057).
 """
 
 from __future__ import annotations
@@ -24,7 +25,17 @@ PAGE_CLASSES = ("access-control", "injection")
 
 
 def capture_application(ctx, tools, history, sent, result, proposal, cited):
-    if result.verdict != "confirmed" or not proposal:
+    if result.verdict != "confirmed":
+        return
+    from ..agent.experiments import latest_plan, plan_view
+
+    if latest_plan(plan_view(history, cited))[1].get("signed_in"):
+        # VER-057: the answers of a comparison without credentials are compared in code and never shown.
+        note = "Application screenshot unavailable: the compared answers are not shown (VER-057)."
+        if note not in result.observations:
+            result.observations.append(note)
+        return
+    if not proposal:
         return
     if ctx.plan.cls not in PAGE_CLASSES:
         if not any(e.get("presentation") == "application" for e in result.evidence or []):   # e.g. XSS has one

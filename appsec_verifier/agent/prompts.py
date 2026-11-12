@@ -1,5 +1,5 @@
 """The action schemas and prompts every model host shares (VER-011, VER-017, VER-019, VER-043, VER-046, VER-047,
-VER-050, VER-055, VER-056).
+VER-050, VER-055, VER-056, VER-057).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, find_source, search_source, browser_check,
@@ -18,7 +18,7 @@ import json
 from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
 from ..verification_context import missing_capabilities
 from .derivation import page_candidates, page_source
-from .experiments import PLAN_SCHEMA, access_methods
+from .experiments import EXPOSURE_CWES, PLAN_SCHEMA, access_methods
 from .proof import redirect_host
 
 _RESULT_CAP = 4000  # bound tool-result text fed back to the model (tokens/cost)
@@ -58,7 +58,7 @@ def _tool_defs() -> list[dict]:
             "controls the target answers without a server error is used. fixed gives the request's other inputs, "
             "such as a login's password, values every generated control carries unchanged. Timing uses two "
             "baseline and two positive inputs, alternating. Access-control uses exactly one of resource (the id of an "
-            "operator-supplied test resource), owner or reference, as the access-control proof instructions say; "
+            "operator-supplied test resource), owner, reference or signed_in, as its proof instructions say; "
             "change goes only with owner. "
             "If the finding lists variants, set variant to the one you test.",
             "input_schema": PLAN_SCHEMA,
@@ -448,7 +448,8 @@ def _injection_rules() -> str:
 
 
 def _access_hint(ctx) -> str:
-    """The access-control proofs this run allows (VER-010); the marker itself comes with an accepted owner plan."""
+    """The access-control proofs this run allows (VER-010, VER-057); the marker itself comes with an accepted owner
+    plan."""
     plan = ctx.plan
     methods = access_methods(getattr(plan, "id", None), getattr(plan, "cwe", None), getattr(ctx, "scope", None),
                              getattr(ctx, "identities", None),
@@ -458,7 +459,7 @@ def _access_hint(ctx) -> str:
                 "both an allowed and a denied independent identity.")
     if not methods:
         return ("\nAccess-control cannot be confirmed in this run: there is no configured test_resource and no "
-                "pair of accounts this finding's proof can use. Report the missing prerequisite.")
+                "accounts this finding's proof can use. Report the missing prerequisite.")
     hint = ""
     if "owner" in methods:
         hint += (
@@ -491,13 +492,33 @@ def _access_hint(ctx) -> str:
             "403 without a role, and the identical answer for the normal account; an answer that names the "
             "signed-in user is never identical. Cite the three requests. This proof fits only a finding that "
             "identifies a function as privileged. Where the request without a role already gets the content, it "
-            "cannot confirm: missing authentication is proven only with a configured test_resource. A tool result "
-            "then reports proof_unavailable with the next step; follow it rather than repeating the plan."
+            "cannot confirm: that is missing authentication, proven by the comparison without credentials below. "
+            "A tool result then reports proof_unavailable with the next step; follow it rather than repeating the "
+            "plan."
         )
         if "owner" not in methods:
             hint += ("\nA finding about another account's record, not a privileged function, cannot be confirmed in "
                      "this run: it needs a configured test_resource or two normal accounts with --allow-intrusive. "
                      "Report that missing prerequisite instead of trying other plans.")
+    if "signed_in" in methods:
+        hint += (
+            "\nComparison without credentials, for a finding whose function a request without credentials reaches: "
+            "call plan_test with kind access-control, signed_in set to an account of this run and path the "
+            "finding's GET as one concrete path (every placeholder filled in, query inputs in fixed.params). When "
+            "the plan is accepted the Verifier sends that GET as the account, without credentials, and without "
+            "credentials to a random path next to it, compares the answers in code and reports whether the proof "
+            "holds. You do not see these answers. Confirmed needs a 2xx with content for the account, the identical "
+            "answer without credentials, and not that answer for the random path; an answer that changes between "
+            "requests or names the signed-in user is never identical. The intended restriction comes from the "
+            "finding. The comparison supports no negative verdict."
+        )
+        if "owner" not in methods and "reference" not in methods and getattr(plan, "cwe", None) not in EXPOSURE_CWES:
+            hint += ("\nA finding about another account's record or a privileged function needs a configured "
+                     "test_resource, two normal accounts with --allow-intrusive, or a privileged and a normal account; "
+                     "if a request without credentials is refused, report that missing prerequisite.")
+        if getattr(plan, "cwe", None) in EXPOSURE_CWES:
+            hint += ("\nFor this finding's CWE your own requests reach only a configured test_resource; use the "
+                     "comparison.")
     return hint + ("\nNone of these proofs needs an account's user id or record id beforehand; reads that only "
                    "look one up, such as a whoami route, are not part of the finding.")
 

@@ -520,6 +520,16 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
                     roles[n] = ("attack", "denied identity")
                 elif role[n] is None:
                     roles[n] = ("control", "without login")
+        elif plan.get("signed_in"):         # VER-057: the comparison the Verifier sent
+            for n, _ in shown:
+                if args[n].get("path") == plan.get("control_path"):
+                    roles[n] = ("control", "random path next to it, without login")
+                elif args[n].get("path") != plan.get("path"):
+                    continue
+                elif role[n] == plan["signed_in"]:
+                    roles[n] = ("normal", "signed-in account")
+                elif role[n] is None:
+                    roles[n] = ("attack", "without login")
         elif plan.get("owner") or plan.get("reference"):
             owner = plan.get("owner") or plan.get("reference")
             normal = set(normal_roles(getattr(ctx, "identities", None))) - {owner}

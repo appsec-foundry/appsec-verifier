@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -227,7 +228,8 @@ CONTRACT = {"injection_inputs": [{"finding_id": "T-1", "path": "/a", "input_loca
 
 def test_a_class_without_its_proof_prerequisite_is_not_tested():
     assert _blocker(_plan("access-control")) == ("identity", "no test identity; the proof compares two identities")
-    assert _blocker(_plan("access-control"), identities=ALICE)[0] == "resource"
+    assert _blocker(_plan("access-control"), identities=ALICE) is None     # the comparison without credentials
+    assert _blocker(replace(_plan("access-control"), cwe="CWE-639"), identities=ALICE)[0] == "resource"
     assert _blocker(_plan("xss"))[0] == "browser"
     assert _blocker(_plan("xss"), browser=object()) is None
     assert _blocker(_plan("path-traversal")) == ("marker", "no marker_file in the scope")

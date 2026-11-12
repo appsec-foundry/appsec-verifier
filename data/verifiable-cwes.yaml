@@ -8,7 +8,8 @@
 #   browser-execution       marker payload actually executes in a real headless
 #                           browser; a merely reflected payload is NOT confirmed (VER-009)
 #   cross-identity-contrast identity A reaches/alters what belongs to identity B,
-#                           using an operator-declared resource and independent credentials (VER-010)
+#                           using an operator-declared resource and independent credentials (VER-010),
+#                           or a request without credentials gets an account's answer (VER-057)
 #   behavioural-difference  declared, repeated semantic controls or alternating timing controls,
 #                           never exfiltrated data (VER-011)
 #   marker-file             a pre-placed, non-sensitive marker file is read back (VER-012)
@@ -67,14 +68,49 @@ verifiable_cwes:
     technique: missing-authn
     proof_method: cross-identity-contrast
     may_require_state_change: false
-    notes: Requires an operator-declared harmless protected resource and an allowed/anonymous contrast.
+    notes: An operator-declared harmless protected resource, or for a read the comparison without credentials (VER-057).
   - cwe: CWE-200
     name: Exposure of Sensitive Information to an Unauthorized Actor
     class: access-control
     technique: information-exposure
     proof_method: cross-identity-contrast
     may_require_state_change: false
-    notes: Only declared harmless protected resources; never retrieve dumps or real secrets.
+    notes: Only declared harmless protected resources, or the comparison without credentials whose answers are compared in code and never shown (VER-057); never retrieve dumps or real secrets into the model or the evidence.
+  - cwe: CWE-497
+    name: Exposure of Sensitive System Information to an Unauthorized Control Sphere
+    class: access-control
+    technique: information-exposure
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: As CWE-200.
+  - cwe: CWE-530
+    name: Exposure of Backup File to an Unauthorized Control Sphere
+    class: access-control
+    technique: information-exposure
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: As CWE-200.
+  - cwe: CWE-538
+    name: Insertion of Sensitive Information into Externally-Accessible File or Directory
+    class: access-control
+    technique: information-exposure
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: As CWE-200.
+  - cwe: CWE-548
+    name: Exposure of Information Through Directory Listing
+    class: access-control
+    technique: information-exposure
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: As CWE-200.
+  - cwe: CWE-552
+    name: Files or Directories Accessible to External Parties
+    class: access-control
+    technique: information-exposure
+    proof_method: cross-identity-contrast
+    may_require_state_change: false
+    notes: As CWE-200.
 
   - cwe: CWE-89
     name: SQL Injection

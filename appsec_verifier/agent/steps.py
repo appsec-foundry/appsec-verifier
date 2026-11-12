@@ -70,12 +70,15 @@ def offered(ctx, name: str) -> bool:
 
 def _offered_schema(tool: dict, ctx=None) -> dict:
     """The schema shown to the model. A plan's optional strategy (VER-043) is accepted but not offered, so the
-    model is not prompted to write one; the JavaScript predicate form is offered to a NoSQL finding only."""
+    model is not prompted to write one; the JavaScript predicate form is offered to a NoSQL finding only, the
+    comparison without credentials to an access-control finding only."""
     schema = tool["input_schema"]
     if tool["name"] == "plan_test":
         hidden = {"strategy"}
         if getattr(getattr(ctx, "plan", None), "cwe", None) != "CWE-943":
             hidden.add("js_predicate_template")
+        if getattr(getattr(ctx, "plan", None), "cls", None) != "access-control":
+            hidden.add("signed_in")      # the comparison without credentials (VER-057) is access control's alone
         schema = {**schema, "properties": {k: v for k, v in schema.get("properties", {}).items() if k not in hidden}}
     return schema
 

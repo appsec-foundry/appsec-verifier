@@ -155,7 +155,7 @@ def test_the_identical_answer_for_a_normal_account_confirms_at_medium():
 
 
 @pytest.mark.parametrize("history, reason", [
-    (privileged(anonymous_status=200), "missing authentication is proven only with a configured test_resource"),
+    (privileged(anonymous_status=200), "proven by the comparison without credentials (signed_in)"),
     (privileged(anonymous_status=500), "refused with 401 or 403"),
     (privileged(normal='{"config":{"name":"other"}}'), "identical answer"),
     (_change(privileged(), 3, identity="admin-1"), "identical answer"),                          # same session
@@ -183,8 +183,8 @@ def test_an_anonymous_answer_with_content_tells_the_agent_the_privileged_plan_ca
     """VER-010: as soon as the request without a role gets the content, the accepted privileged-function plan can
     no longer confirm; the agent hears why at once, and the proof check gives the same reason."""
     signal = _unavailable(privileged(anonymous_status=200)[:3])
-    assert "missing authentication is proven only with a configured test_resource" in signal["reason"]
-    assert "inconclusive" in signal["next"]
+    assert "proven by the comparison without credentials (signed_in)" in signal["reason"]
+    assert "plan_test with signed_in" in signal["next"]
     assert _unavailable(privileged()[:3]) is None                                    # refused: the plan holds
     assert _unavailable(privileged(anonymous_status=200)[:2]) is None                # the reference request
     probe = privileged(anonymous_status=200)[:3]
@@ -690,11 +690,15 @@ def test_the_record_a_path_names(template, path, expected):
 def test_the_test_plan_follows_the_accounts_and_the_mode():
     normal, admin = [{"role": "account-1"}, {"role": "account-2"}], [{"role": "admin-1", "privileged": True}]
     plan = _plan("access-control")
-    assert _blocker(plan, identities=normal)[0] == "intrusive"
+    # VER-057: any account allows the comparison without credentials, also in safe mode
+    assert _blocker(plan, identities=normal) is None
     assert _blocker(plan, identities=normal, safe=False) is None
     assert _blocker(plan, identities=normal[:1] + admin) is None
-    assert _blocker(plan, identities=normal[:1], safe=False)[0] == "resource"
-    assert _blocker(replace(plan, cwe="CWE-306"), identities=normal + admin, safe=False)[0] == "resource"
+    assert _blocker(plan, identities=normal[:1]) is None
+    assert _blocker(plan, identities=admin) is None
+    for cwe in ("CWE-306", "CWE-200", "CWE-548", "CWE-552"):
+        assert _blocker(replace(plan, cwe=cwe), identities=normal[:1]) is None
+        assert _blocker(replace(plan, cwe=cwe), identities=[])[0] == "identity"
     assert _blocker(plan, identities=normal, scope={"test_resources": [RESOURCE]}) is None
     assert _blocker(plan, identities=normal[1:], scope={"test_resources": [RESOURCE]})[0] == "resource"
     # VER-008, VER-010: an IDOR is another account's record; a privileged account cannot prove it, so it is not
@@ -718,10 +722,14 @@ def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
         assert _blocker(plan, identities=two, safe=False, source=False, scope={"test_resources": [RESOURCE]}) is None
     post = Endpoint("POST", "/api/Items", True)
     assert _blocker(_plan("access-control", post, get), identities=two, safe=False, source=False) is None
-    # a write that names an existing record never creates one (VER-014); the comparison still can read
-    assert _blocker(_plan("access-control", put, get), identities=two, safe=False, source=False)[0] == "access"
+    # a write that names an existing record never creates one (VER-014); a comparison still can read, the one
+    # without credentials with any account (VER-057)
+    assert _blocker(_plan("access-control", put, get), identities=two, safe=False, source=False) is None
     assert _blocker(_plan("access-control", put, get), identities=two + admin, safe=False, source=False) is None
-    assert _blocker(_plan("access-control", get), identities=two, safe=False, source=False)[0] == "access"
+    assert _blocker(_plan("access-control", get), identities=two, safe=False, source=False) is None
+    assert _blocker(_plan("access-control", put), identities=two, safe=False, source=False)[0] == "access"
+    idor = replace(_plan("access-control", put, get), cwe="CWE-639")
+    assert _blocker(idor, identities=two, safe=False, source=False)[0] == "access"
     # a write proof creates, changes by identifier and reads the changed path (VER-010)
     assert _blocker(_plan("access-control", post, put), identities=two, safe=False, source=False) is None
     assert _blocker(_plan("access-control", post), identities=two, safe=False, source=False)[1].startswith("no GET")
