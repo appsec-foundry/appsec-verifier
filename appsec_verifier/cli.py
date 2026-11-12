@@ -1741,8 +1741,9 @@ _VERDICT_ORDER = ("confirmed", "not-reproducible", "blocked-by-control", "inconc
 
 def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full: bool = False) -> list[str]:
     """The overview at the end (VER-013): per finding its id, severity, class, result and title, and
-    under it the reason, confirmed first. A finding this run could not test shows what it needs as
-    its result. Only findings testable against the app, unless `full` (--print) lists every finding
+    under it the reason, confirmed first. A finding or variant this run could not test shows what it
+    needs as its result and how to provide it as its reason. Only findings testable against the app, unless
+    `full` (--print) lists every finding
     with its whole reason. Text from the assessment and the model passes `printable` before it is
     coloured (VER-005); on a terminal a line is cut to fit."""
     from .loader import _SEVERITY_RANK
@@ -1755,10 +1756,16 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
     rows.sort(key=lambda r: (_VERDICT_ORDER.index(r["verdict"]),
                              -_SEVERITY_RANK.get(severity.get(r["finding_ref"].get("id"), ""), 0)))
 
+    def need(r) -> str | None:
+        """What the run lacked for a finding or variant it did not test, keyed as the test plan keys it
+        (planning.evidence_id: the finding id, with a variant's digest)."""
+        fr = r["finding_ref"]
+        key = str(fr.get("id")) + ("-" + fr["variant_digest"][:16] if fr.get("variant_digest") else "")
+        return blocked[key][0] if r["verdict"] == "not-attempted" and key in blocked else None
+
     def result(r) -> str:
-        fid = r["finding_ref"].get("id")
-        if r["verdict"] == "not-attempted" and fid in blocked:
-            return f"needs {_NEEDS[blocked[fid][0]][0]}"
+        if need(r):
+            return f"needs {_NEEDS[need(r)][0]}"
         return _VERDICT_LABEL[r["verdict"]] + (f" ({printable(r['confidence'])})" if r.get("confidence") else "")
 
     room = columns() - 1 if st.enabled else 10_000
@@ -1775,8 +1782,9 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
         used = 4 + len(cells) + result_width + 2
         lines.append(f"  {st(mark, role)} {cells}{st(f'{result(r):<{result_width}}', role)}  "
                      + _fit(title, room - used))
-        reason = " ".join(printable(r.get("rationale") or "").split())
-        if reason and fr.get("id") not in blocked:
+        # Under a finding the run could not test, how to provide what it needs, e.g. "run with --allow-intrusive".
+        reason = _NEEDS[need(r)][1] if need(r) else " ".join(printable(r.get("rationale") or "").split())
+        if reason:
             pieces = (textwrap.wrap(reason, max(room - indent, 30)) if full else [_fit(reason, room - indent)])
             lines += [" " * indent + st(piece, "muted") for piece in pieces]
     hidden = len(doc["results"]) - len(rows)

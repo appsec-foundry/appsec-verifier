@@ -99,6 +99,28 @@ def test_results_strip_escapes_from_assessment_and_model_text(capsys):
         assert "confirmed" in plain and "ran]0;pwned[2J" in plain
 
 
+def test_results_name_what_an_untested_variant_needs_and_how_to_provide_it():
+    """docs/cli.md (Results): a finding or variant the run could not test shows what it needs, keyed as the test
+    plan keys it (the variant's digest), and under it how to provide it; a tested variant keeps its reason."""
+    digest = "ab" * 32
+    rows = [{"finding_ref": {"id": "T-2", "title": "idor", "variant": "variant-002", "variant_digest": digest},
+             "class": "access-control", "verdict": "not-attempted",
+             "rationale": "not tested: safe mode; every declared variant needs a state change"},
+            {"finding_ref": {"id": "T-2", "title": "idor", "variant": "variant-001", "variant_digest": "cd" * 32},
+             "class": "access-control", "verdict": "inconclusive", "rationale": "no proof"},
+            {"finding_ref": {"id": "T-3", "title": "sqli"}, "class": "injection", "verdict": "not-attempted",
+             "rationale": "not tested: safe mode"}]
+    rows = [{**row, "eligibility": {"status": "dynamic"}} for row in rows]
+    blocked = {"T-2-" + digest[:16]: ("intrusive", "safe mode"), "T-3": ("marker", "no marker_file")}
+    lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], blocked)]
+    at = lines.index("· T-2 access-control needs intrusive mode idor")
+    assert lines[at + 1] == "run with --allow-intrusive"
+    at = lines.index("· T-3 injection needs marker file sqli")
+    assert lines[at + 1] == "a marker_file in a scope file"
+    at = lines.index("? T-2 access-control inconclusive idor")
+    assert lines[at + 1] == "no proof"
+
+
 def test_facts_strip_escapes_and_colour_by_role():
     lines = cli._facts(Style(True), [("Target", f"http://a{HOSTILE} (will contact)"), ("Mode", "safe", "ok"),
                                      ("Verdicts", [("1 confirmed", "critical"), (f"0 blocked{HOSTILE}", "muted")])])

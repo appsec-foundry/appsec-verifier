@@ -384,8 +384,10 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     listed = out[out.index("\nResults\n"):]
     assert "T-1  critical  injection       not attempted (low)" in listed
     assert "no answered target request" in listed
-    assert "· T-2 high injection needs intrusive mode sqli in login" in " ".join(listed.split())
-    assert "· T-3 high access-control needs test identity idor" in " ".join(listed.split())
+    assert "· T-2 high injection needs intrusive mode sqli in login run with --allow-intrusive" in " ".join(
+        listed.split())
+    assert ("· T-3 high access-control needs test identity idor test accounts: --account, or --identities FILE"
+            in " ".join(listed.split()))
     assert "Verdicts   : 3 not tested\n" in out
     assert results["T-1"][0] == "not-attempted"
     assert results["T-2"] == ("not-attempted", "not tested: safe mode; every request the finding names writes, "
