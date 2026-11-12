@@ -127,7 +127,7 @@ Before it contacts the target, `verify` shows the test plan: the findings it wil
 - `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on, as raw HTTP with the decisive part of the response, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
-- `console.log`, with `--console-log`: what the run printed, in colour or with `--console-log plain` without.
+- `console.log`, with `--console-log`: what the run printed, without colour or with `--console-log color` in colour.
 - `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots.
 
 Two further model reviews run within the run's limits: one checks negative and unproven results for missing tests and whether a confirmed access-control result shows access the application intends, the other checks that the evidence of a confirmed finding is understandable ([technical QA](docs/cli.md#technical-qa-ver-046), [presentation review](docs/cli.md#evidence-presentation-review)).

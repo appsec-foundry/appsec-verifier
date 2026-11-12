@@ -2181,11 +2181,11 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     out.add_argument(
         "--console-log",
         nargs="?",
-        const="color",
-        choices=("color", "plain"),
+        const="plain",
+        choices=("plain", "color"),
         default=None,
         help="also save the console output as console.log in the output directory, without the status line; "
-        "color keeps the console's colour (default), plain leaves out the colour codes",
+        "plain leaves out the colour codes (default), color keeps the console's colour",
     )
     out.add_argument(
         "--annotate",

@@ -39,7 +39,7 @@ assessment, the model or the target passes the run's redaction and `printable` b
 credential value, line break or escape sequence from it reaches the console.
 
 With ``--console-log``, `console_log` copies what `verify` prints to standard output and standard error to
-``console.log`` in the output directory, with the console's colour or, ``plain``, without colour codes; the
+``console.log`` in the output directory, without colour codes or, ``color``, with the console's colour; the
 status line is left out.
 """
 

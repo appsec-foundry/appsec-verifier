@@ -267,15 +267,15 @@ def test_the_console_log_is_written_only_with_console_log(tmp_path, monkeypatch,
     assert log.index("Assessment :") < log.index("Preflight") < log.index("Done") < log.index(f"Console    : {out}/")
 
 
-def test_the_console_log_keeps_the_colour_unless_plain(tmp_path, monkeypatch, capsys):
+def test_the_console_log_is_plain_unless_color(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FORCE_COLOR", "1")
     _verify(tmp_path, monkeypatch, "--url", URL, "--console-log")
-    assert SGR.search(capsys.readouterr().out) and SGR.search((tmp_path / "out" / "console.log").read_text())
-
-    _verify(tmp_path, monkeypatch, "--url", URL, "--console-log", "plain", "--overwrite")
     assert SGR.search(capsys.readouterr().out)          # the console keeps its colour
     log = (tmp_path / "out" / "console.log").read_text()
     assert "\x1b" not in log and "Done" in log
+
+    _verify(tmp_path, monkeypatch, "--url", URL, "--console-log", "color", "--overwrite")
+    assert SGR.search(capsys.readouterr().out) and SGR.search((tmp_path / "out" / "console.log").read_text())
 
 
 def test_a_blocked_run_writes_no_console_log(tmp_path, monkeypatch):
