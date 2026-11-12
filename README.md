@@ -1,58 +1,51 @@
 # AppSec Verifier
 
-AppSec Verifier tests whether the findings of a static security assessment can be reproduced in the running application. It reads the `security-assessment.yaml` written by [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer), tests the selected findings against a target you are authorised to test, and reports for each finding whether the weakness is real.
+[![Version](https://img.shields.io/badge/version-0.1.0a1-orange.svg)](appsec_verifier/version_info.py)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#limitations)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](setup.py)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-An AI agent plans each test step. The Verifier sends every request itself, only inside the scope you define, and counts a finding as confirmed only when the proof passes a check in code. It does not repeat the static analysis and does not change severities. This is an early version; see [Limitations](#limitations).
+AppSec Verifier tests whether the findings of a static security assessment hold up in the running application. It reads the `security-assessment.yaml` written by [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer), tests the selected findings against a target you are authorised to test, and reports for each finding whether the weakness can be reproduced.
+
+An AI agent plans the test steps. The Verifier sends every request itself, only within the scope you define, and counts a finding as confirmed only when the proof passes a check in code. It tests only the findings it is given: it does not search for new weaknesses, chain exploits or extract data. This is an early version; see [Limitations](#limitations).
+
+[![Console output of a run against OWASP Juice Shop: the test agent tests a NoSQL injection finding, the proof check passes and the finding is confirmed](examples/juice-shop/result/console-T-033.png)](examples/juice-shop/result/console.log.md)
+
+A run against OWASP Juice Shop: [console log](examples/juice-shop/result/console.log.md), [report](examples/juice-shop/result/verification.md).
 
 ## Quick start
 
 You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an assessment from AppSec Analyzer, and the Claude CLI (`claude`), installed and logged in. Other models are listed under [Model profiles](#model-profiles).
 
-1. Install the Verifier. XSS findings also need the proof browser; see [Install](#install).
+```sh
+pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
+appsec-verifier ./out/security-assessment.yaml
+```
 
-   ```sh
-   pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-   ```
+The guided run asks for the target URL, shows which findings it can test and what the others still need, and starts after your confirmation. By default it tests findings of severity high and above with the `claude` profile. The report is written to `./verification/verification.md`.
 
-2. Optional: write a scope file. Without one, the guided run asks for the target URL (or takes it from `--target`) and tests only its host and port, read-only. A scope file can allow more, such as several hosts or a proxy, and records the test period and who is responsible:
-
-   ```yaml
-   # scope.yaml
-   schema_version: 1
-   base_url: http://localhost:3000
-   window: {from: "2026-11-01T00:00:00Z", until: "2026-11-30T23:59:59Z"}  # your test period
-   owner: {name: Your Name}   # who is responsible for the test
-   ```
-
-3. Optional: add test accounts. Access-control findings need two. For a login that answers a JSON POST with a token, name them on the command line, for example `--account jim@juice-sh.op --account bender@juice-sh.op`; the Verifier asks for the passwords with hidden input. Other logins, SSO included, go into an `identities.yaml` that names environment variables, never the passwords themselves ([example](examples/juice-shop/identities.yaml), [details](docs/cli.md#identities-file--identitiesyaml-sessions-ver-016028040)).
-
-4. Start the guided run:
-
-   ```sh
-   appsec-verifier ./out/security-assessment.yaml
-   ```
-
-   It shows which findings it can test and what the others need, and tests findings of severity high and above with the `claude` profile (`--min-severity` and `--profile` change that).
-
-5. Read the report in `./verification/verification.md`.
-
-To try it on a deliberately vulnerable application, run OWASP Juice Shop locally (`docker run --rm -p 3000:3000 bkimminich/juice-shop`) and use the files in [`examples/juice-shop/`](examples/juice-shop/).
+XSS findings also need the proof browser ([Install](#install)), access-control findings need test accounts ([Scope and test accounts](#scope-and-test-accounts)). To try the Verifier, run OWASP Juice Shop locally (`docker run --rm -p 3000:3000 bkimminich/juice-shop`) and use the files in [`examples/juice-shop/`](examples/juice-shop/).
 
 ## What it verifies
 
-A finding counts as `confirmed` only with the proof in the last column; the exact rules are under [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml). Request details the assessment leaves open the agent takes from the source code (route declarations in the finding's file or, for a page script such as a `.php` file, its file path) and from forms and links on the target, within the finding and the scope ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) follows one XSS finding through the agent's steps, its prompt and the proof check.
+The agent takes request details the assessment leaves open from the source code and from forms and links on the target ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). A finding counts as `confirmed` only with the proof below; the model's verdict alone never suffices. [How verification works](docs/how-verification-works.md) follows one finding through every step.
 
-| Class | CWEs | Needs | Confirmed when |
-| --- | --- | --- | --- |
-| Cross-site scripting | 79 | the proof browser | a marker script runs in the browser; reflected text does not count |
-| Access control | 639, 862, 863, 285, 306, 200, 497, 530, 538, 548, 552 | a test resource in the scope (`test_resources`); for 639, 862, 863 and 285 alternatively two accounts and `--allow-intrusive`, for 862, 863 and 285 also an `--account` and an `--admin-account`; for every CWE except 639 also any one account | an account gets a resource it must not get: the declared test resource, a record another account created, or the admin's answer; or a request without login gets exactly the account's answer, which no model sees, and a random path next to it does not |
-| SQL, NoSQL and LDAP injection | 89, 943, 90 | an input the finding's evidence names, or one named in the scope (`injection_inputs`) | a field in the response, or a text of a page answer, changes with true and false conditions the Verifier generates; its injected marker comes back (SQL); or a malformed input makes the database report an error a valid one does not. A delay alone never counts. For a login bypass, the true condition logs in and the false one does not |
-| Command, code, template and XPath injection | 78, 94, 95, 1336, 643 | as for SQL injection | the target returns the results of arithmetic the Verifier generates; for XPath, code and template injection, a malformed input makes the engine report an error a valid one does not |
-| Blind code and template injection | 94, 95, 1336 | a callback listener the target can reach, as for SSRF | the injected payload makes the target call the listener; the same URL sent as plain data does not |
-| Path traversal | 22, 23, 73 | a marker file named in the scope, or a disposable upload location for archives (`archive_checks`) and `--allow-intrusive` | the target returns the marker file, or a file from an uploaded ZIP can be read outside the directory it is unpacked to |
-| Open redirect | 601 | nothing | the target redirects to a random host under `.invalid`; the redirect is not followed |
-| SSRF | 918 | a listener the target can reach: started by the Verifier for a `localhost` target, otherwise named in the scope (`callback`) | the target calls the listener |
-| Session cookie | 614, 1004, 1275 | the cookie named in the scope (`session_checks`) | the cookie repeatedly lacks Secure, HttpOnly, or SameSite Lax or Strict |
+| Weakness | Confirmed when |
+| --- | --- |
+| Cross-site scripting | a marker script runs in the proof browser; reflected text does not count |
+| Access control: IDOR, missing authorisation or authentication, exposed information and files | an account gets a resource it must not get, or a request without login gets exactly the answer a logged-in account gets |
+| SQL, NoSQL and LDAP injection | the response follows true and false conditions the Verifier generates (a field, a page text or a login), an injected marker comes back (SQL), or a malformed input provokes a database error (SQL, NoSQL); a delay alone never counts |
+| Command, code, template and XPath injection | the target returns the result of arithmetic the Verifier generates, a malformed input provokes an engine error (not for commands), or, for code and template injection, the payload makes the target call a callback listener |
+| Path traversal | the target returns the scope's marker file, or a file from an uploaded ZIP can be read outside the directory it is unpacked to |
+| Open redirect | the target redirects to a random host under `.invalid` |
+| SSRF | the target calls a callback listener |
+| Session cookie without Secure, HttpOnly or SameSite | the session cookie repeatedly lacks the attribute (SameSite: Lax or Strict) |
+
+Some classes need preparation: XSS the proof browser, access control test accounts or a test resource in the scope, SSRF and blind injection a listener the target can reach (started automatically for a `localhost` target), path traversal a marker file, session cookies the cookie's name in the scope. The guided run and `preflight` say what a finding still needs. The exact rules are in [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs of each class in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
+
+The report shows the requests each verdict rests on. The evidence image of the NoSQL injection above:
+
+![Evidence image of the NoSQL injection finding: the false condition returns 0 review entries, the true condition 2](examples/juice-shop/result/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-1.png)
 
 Each finding ends with one of these verdicts. A negative verdict covers only the request and variant that were tested.
 
@@ -62,19 +55,34 @@ Each finding ends with one of these verdicts. A negative verdict covers only the
 | `not-reproducible` | Tested, but the weakness did not show. |
 | `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
 | `inconclusive` | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
-| `not-attempted` | Not testable against a running system (such as a weak random number generator or a hard-coded secret), or not reached because a limit was hit or the run was interrupted. |
+| `not-attempted` | Not testable against a running system (such as a hard-coded secret), or not reached because of a limit or an interruption. |
 
 ## Safety
 
-`verify` is an active security test. These rules are enforced in code, outside the model:
+`verify` sends attack requests to a running system. These rules are enforced in code, not left to the model:
 
-- Only the hosts, ports, paths and schemes in the scope are contacted, and only within its time window. Private and loopback addresses must be listed in the scope (`networks`), unless the scope names the host as `localhost` or as an IP address. Cloud metadata addresses are never contacted.
-- The Verifier shows the plan and asks before the first request. In CI, `--yes` gives this confirmation.
-- By default it sends only GET, HEAD and OPTIONS. Write requests (POST, PUT, PATCH), needed for stored XSS and some access-control tests, require `--allow-intrusive` or, in a terminal, your yes when the test agent asks for one during a test, and a scope can forbid them with `allow_state_change: false`. Use them only against a test instance you can reset; records the Verifier creates stay on the target. DELETE is never sent.
-- Requests, request rate, model calls, model cost and run time are capped; the defaults are in [`data/limits.yaml`](data/limits.yaml). A limit that is reached stops the finding or the run it applies to; in a terminal the run first asks whether to raise the cost limit. Ctrl-C stops the run and still writes the report.
-- Passwords and tokens come from environment variables or hidden input and are not stored. They are kept out of the model's input, the logs and the report; the model knows the accounts by role name only. An `--admin-account` sends only GET, HEAD and OPTIONS.
-- The model sees the target's responses and, for the evidence review, application screenshots. Both can contain target data such as account names. The error text a malformed input provokes and the token of a login bypass stay in the owner-only evidence; no model sees them.
-- The agent proposes one step at a time, and the Verifier checks each step before it runs it. The agent has no shell and no file access. With `--source` it can read the target's source code, but not `.env` files, keys or `.git/`.
+- Only the hosts, ports, paths and schemes in the scope are contacted, only within its test period, and never cloud metadata addresses.
+- The run shows its test plan and waits for your confirmation before the first request.
+- Only GET, HEAD and OPTIONS by default. Write requests, needed for stored XSS and some access-control tests, require `--allow-intrusive` or your yes in the terminal; DELETE is never sent. Records the Verifier creates stay on the target, so allow writes only on an instance you can reset.
+- Requests, request rate, model calls, cost and run time are capped ([defaults](data/limits.yaml)).
+- Passwords and tokens come from environment variables or hidden input. They are not stored and never reach the model, the logs or the report.
+- The agent proposes one step at a time, and the Verifier checks each step before it runs it. The agent has no shell and cannot write files; with `--source` it reads the target's source code, but not `.env` files, keys or `.git/`. It sees the target's responses and screenshots, which can contain target data.
+
+## Scope and test accounts
+
+Without a scope file the Verifier tests only the scheme, host and port of the target URL, read-only. A scope file allows more, such as several hosts, private networks or a proxy, and records the test period and who is responsible. The guided run uses a `scope.yaml` next to the assessment or in the working directory; `--scope` names another.
+
+```yaml
+# scope.yaml
+schema_version: 1
+base_url: http://localhost:3000
+window: {from: "2026-11-01T00:00:00Z", until: "2026-11-30T23:59:59Z"}
+owner: {name: Your Name}
+```
+
+For a login that answers a JSON POST with a token, name the accounts on the command line, for example `--account jim@juice-sh.op --account bender@juice-sh.op`; the Verifier asks for the passwords with hidden input. Other logins go into an `identities.yaml` that names environment variables, never the passwords themselves: bearer token, basic, form login, headers copied from the browser, OIDC (sign-in in your browser, device code, client credentials, password grant) or a login program.
+
+Reference: [scope file](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001), [identities file](docs/cli.md#identities-file--identitiesyaml-sessions-ver-016028040), [accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041). Examples: [`juice-shop/`](examples/juice-shop/) (local target, form login), [`sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, SSO sign-in in the browser), [`login-program/`](examples/login-program/) (form with a CSRF token).
 
 ## Model profiles
 
@@ -90,7 +98,7 @@ Choose the model with `--profile`, as in AppSec Analyzer.
 
 The CLIs run without tools, MCP servers, settings or session history. Using a subscription is subject to the provider's terms for that plan.
 
-The console shows model costs only with API billing: `codex`, `anthropic-api`, and `claude` with `ANTHROPIC_API_KEY` or a login that bills the API. With a Claude subscription, `--show-costs` shows what the calls would cost at API prices; `codex-cli` and `copilot-cli` report no cost. Whether costs are shown does not change the cost limit.
+The console shows model costs with API billing. With a Claude subscription, `--show-costs` shows what the calls would cost at API prices; this does not change the cost limit. Prices: [`data/model-catalog.yaml`](data/model-catalog.yaml) (OpenAI), [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml) (Anthropic API).
 
 ## Commands
 
@@ -103,11 +111,11 @@ The console shows model costs only with API billing: `codex`, `anthropic-api`, a
 | `export` | Converts a `verification.yaml` into a file for AppSec Analyzer. The Analyzer does not read this file. |
 | `update` | Updates a pipx installation after you confirm. |
 
-Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also tests XSS and SQL or NoSQL injection findings of other severities when the assessment names a read request for them ([details](docs/cli.md#select-what-to-verify-ver-026)); `--strict-severity` leaves them out. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
+Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also tests some findings below it, such as XSS and SQL injection findings that are cheap to confirm ([details](docs/cli.md#select-what-to-verify-ver-026)); `--strict-severity` leaves them out. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
 
-## Run without questions (CI)
+### Run without questions (CI)
 
-The guided run prints the matching `verify` command before it asks for confirmation. With `--non-interactive`, or without a terminal, nothing is asked: `--yes` gives the confirmation and `--profile` is required.
+The guided run prints the matching `verify` command before it asks for confirmation. With `--non-interactive`, or without a terminal, nothing is asked: `--yes` gives the confirmation and `--profile` is required. Run `preflight` with the same files first to check them.
 
 ```sh
 appsec-verifier verify --non-interactive --yes --profile claude \
@@ -116,27 +124,17 @@ appsec-verifier verify --non-interactive --yes --profile claude \
   --min-severity high --cost-limit 5 --output ./verification
 ```
 
-Run `appsec-verifier preflight` with the same files first to check them without testing a finding.
-
 ## Output
-
-Before it contacts the target, `verify` shows the test plan: the findings it will test, and the findings it cannot test in this run with what they need. Those are skipped unless you add `--test-all`. During the run it prints each agent step with the request and its result, and each verdict with its reason ([console output](docs/cli.md#console-output)). At the end it lists every finding with its result.
-
-[![Console output of the Juice Shop example: the test agent tests a NoSQL injection finding, the proof check passes and the finding is confirmed](examples/juice-shop/result/console-T-033.png)](examples/juice-shop/result/console.log.md)
 
 `verify` writes to `--output` (default `./verification`):
 
-- `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on, as raw HTTP with the decisive part of the response, and for UI findings a screenshot of the exploit or its effect.
+- `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on as raw HTTP, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
-- `console.log`, with `--console-log`: what the run printed, without colour or with `--console-log color` in colour.
-- `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and screenshots of the application and of the requests the verdict rests on, such as the one below; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots.
+- `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data, so check them before sharing.
+- `console.log`, with `--console-log`: what the run printed ([console output](docs/cli.md#console-output)).
 
-![Evidence image of the same NoSQL injection finding: the false condition returns 0 review entries, the true condition 2](examples/juice-shop/result/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-1.png)
-
-Two further model reviews run within the run's limits: one checks negative and unproven results for missing tests and whether a confirmed access-control result shows access the application intends, the other checks that the evidence of a confirmed finding is understandable ([technical QA](docs/cli.md#technical-qa-ver-046), [presentation review](docs/cli.md#evidence-presentation-review)).
-
-`--resume` continues a run that did not finish: findings with a verdict keep it, the others are tested. A report already in `--output` is replaced only with `--overwrite`. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding; the originals stay unchanged.
+Ctrl-C stops the run and still writes the report. `--resume` continues a run that did not finish, and a report already in `--output` is replaced only with `--overwrite`. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding.
 
 ## Install
 
@@ -146,13 +144,9 @@ pipx inject appsec-verifier playwright==1.64.1    # proof browser, needed for XS
 pipx inject appsec-verifier 'anthropic>=0.87,<1'   # only for --profile anthropic-api
 ```
 
-The proof browser uses the installed Google Chrome and starts it without network access, which needs Linux with `unshare` (util-linux) and unprivileged user namespaces. Elsewhere XSS findings cannot be confirmed.
+The proof browser uses the installed Google Chrome and starts it without network access, which needs Linux with `unshare` (util-linux) and unprivileged user namespaces. Elsewhere XSS findings cannot be confirmed. For the CLI profiles, install the CLI and log in (`claude`, `codex login`, `copilot login`).
 
-For the CLI profiles, install the CLI and log in (`claude`, `codex login`, `copilot login`).
-
-`appsec-verifier update` shows the installed version and asks before it reinstalls from the source you installed from. Like a new install, it takes the newest dependency versions allowed ([details](docs/cli.md#update--update-the-installed-verifier-ver-033)).
-
-To install from a checkout with every package pinned and hash-checked in [`requirements.lock`](requirements.lock), the proof browser and the `anthropic` SDK included:
+`appsec-verifier update` reinstalls from the source you installed from after you confirm. Like a new install, it takes the newest dependency versions allowed ([details](docs/cli.md#update--update-the-installed-verifier-ver-033)). To install from a checkout with every package pinned and hash-checked in [`requirements.lock`](requirements.lock), the proof browser and the `anthropic` SDK included:
 
 ```sh
 python3 -m venv .venv
@@ -160,27 +154,19 @@ python3 -m venv .venv
 .venv/bin/pip install --no-deps --no-build-isolation .
 ```
 
-## Configuration
-
-- Scope file: [`schemas/scope.schema.yaml`](schemas/scope.schema.yaml), explained in [Scope file](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001)
-- Test accounts: [`schemas/identities.schema.yaml`](schemas/identities.schema.yaml): a bearer token, basic, form login, headers copied from the browser, an OIDC flow (sign-in in your browser, device code, client credentials, password grant) or a login program; see [Identities file](docs/cli.md#identities-file--identitiesyaml-sessions-ver-016028040) and [Test accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041)
-- Default limits: [`data/limits.yaml`](data/limits.yaml)
-- Models and prices: [`data/model-catalog.yaml`](data/model-catalog.yaml) (OpenAI), [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml) (Anthropic API)
-
-Examples: [`examples/juice-shop/`](examples/juice-shop/) (local target, form login), [`examples/sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, SSO sign-in in the browser) and [`examples/login-program/`](examples/login-program/) (a login program for a form with a CSRF token).
-
 ## Limitations
 
-- Boolean injection checks need a stable JSON field in the response or, in a page or text answer, a text the controls split; very large pages can exceed the recording limit and stay inconclusive. Custom request headers and browser interactions such as clicks are not supported; findings whose variants need them are shown as untestable.
-- How well the agent chooses its tests has been tried with a live model only against a local OWASP Juice Shop, with the `claude` profile. The proof browser has only been tested against a local fake target, and the `codex-cli` and `copilot-cli` profiles only with simulated answers.
-- The path-traversal and SSRF checks decode percent-encoding, but no other encodings a target might accept.
-- A sign-in in the browser works for applications whose API accepts the identity provider's token. An application that keeps its own session cookie after the SSO sign-in needs a copied session or a login program. Sessions copied from the browser are not renewed during the run.
 - A confirmed finding shows that the tested step works, not that a complete attack chain does.
-
-## Non-goals
-
-The Verifier is not a scanner and not a pentest agent. It does not search for new weaknesses, chain exploits, extract real data or escalate privileges. It only tests the findings it is given.
+- Live runs, the proof browser included, have been made only against a local OWASP Juice Shop with the `claude` profile. The `codex-cli` and `copilot-cli` profiles have been tested only with simulated answers.
+- Boolean injection checks need a response field or page text that differs between the true and false condition; very large pages can exceed the recording limit and stay inconclusive.
+- Custom request headers and browser interactions such as clicks are not supported; findings that need them are shown as untestable.
+- Path-traversal and SSRF checks decode percent-encoding, but no other encodings.
+- A sign-in in the browser works when the application's API accepts the identity provider's token. An application that keeps its own session cookie after SSO needs a copied session or a login program. Copied sessions are not renewed during a run.
 
 ## Development
 
 Setup, checks and repository layout: [`AGENTS.md`](AGENTS.md). Requirements and their VER-IDs: [`requirements.md`](requirements.md).
+
+## License
+
+AppSec Verifier is distributed under the [Apache 2.0 license](LICENSE).
