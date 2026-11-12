@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppSec Verifier console.log</title>
+<style>
+  body { margin: 0; background: #16181d; color: #d7dae0; }
+  pre { margin: 0; padding: 16px; font: 13px/1.45 ui-monospace, "SFMono-Regular", Menlo, Consolas, "DejaVu Sans Mono", monospace; white-space: pre; overflow-x: auto; }
+</style>
+</head>
+<body>
+<pre>  <span style="color:#6d7686">Selection  :</span> <span style="font-weight:bold">32 findings</span>
+  <span style="color:#6d7686">Target     :</span> <span style="color:#ee96ac">http://127.0.0.1:3000</span><span style="color:#6d7686"> (no scope file: only this host and port)</span>
+  <span style="color:#6d7686">Mode       :</span> <span style="color:#8fd19e">safe: only GET, HEAD and OPTIONS</span>
+  <span style="color:#6d7686">Profile    :</span> <span style="color:#ce96d6">claude · claude-sonnet-5-5 · Claude CLI 2.1.322</span><span style="color:#6d7686"> (Claude Code) · login</span>
+  <span style="color:#6d7686">Limits     :</span> <span style="font-weight:bold">≤ $30.00 · ≤ 500 model calls · ≤ 2000 requests · ≤ 30 min · 5 requests/s</span>
+  <span style="color:#6d7686">Accounts   :</span> <span style="font-weight:bold">account-1, account-2, admin-1</span><span style="color:#6d7686"> (privileged, read-only) · sign in at POST /rest/user/login (from the assessment)</span>
+  <span style="color:#6d7686">Browser    :</span> <span style="font-weight:bold">Google Chrome, screenshots of all classes</span>
+  <span style="color:#6d7686">Callback   :</span> <span style="font-weight:bold">127.0.0.1:57553</span><span style="color:#6d7686"> (the target must reach this machine&#x27;s loopback, not via docker -p)</span>
+  <span style="color:#6d7686">Report     :</span> <span style="color:#ee96ac">/tmp/134/verification.md</span>
+
+<span style="font-weight:bold">Test plan</span>     8 of 32 findings will be tested (9 runs with their variants)
+  T-004  <span style="color:#6d7686">critical</span>  injection       SQL injection in product search — routes/search.ts:23<span style="color:#6d7686"> · GET /rest/products/search · 2 variants</span>
+  T-001  <span style="color:#6d7686">high    </span>  xss             Angular sanitizer bypass causes XSS in about, search, administration<span style="color:#6d7686"> · GET /#/search</span>
+  T-033  <span style="color:#6d7686">high    </span>  injection       NoSQL injection in product reviews $where — routes/showProductReviews.ts:36<span style="color:#6d7686"> · GET /rest/products…</span>
+  T-034  <span style="color:#6d7686">high    </span>  injection       NoSQL injection in order tracking $where predicate — routes/trackOrder.ts:18<span style="color:#6d7686"> · GET /rest/track-o…</span>
+  T-058  <span style="color:#6d7686">high    </span>  access-control  Encryption keys and logs served without authorization — server.ts:278<span style="color:#6d7686"> · ALL /encryptionkeys/:fil…</span>
+  T-060  <span style="color:#6d7686">high    </span>  access-control  Any authenticated user can list all user accounts — server.ts:363<span style="color:#6d7686"> · GET /api/Users</span>
+  T-069  <span style="color:#6d7686">high    </span>  access-control  User list readable by any authenticated user — routes/authenticatedUsers.ts:12<span style="color:#6d7686"> · GET /rest/user/…</span>
+  T-039  <span style="color:#6d7686">high    </span>  access-control  Unauthenticated key and log file exposure — routes/keyServer.ts:14<span style="color:#6d7686"> · no request in the assessment</span>
+
+<span style="font-weight:bold">Not testable</span>  27 findings need what this run does not have (--test-all tries anyway)
+  <span style="color:#f0c66e">intrusive mode</span>  T-012, T-011, T-010, T-001, T-002, T-033, T-034, T-037, T-042, T-053, T-025, T-026, T-030, T-035, T-044, T-046,
+                  T-050, T-051, T-052, T-057, T-059, T-061, T-063, T-065, T-064 <span style="color:#6d7686">→ run with --allow-intrusive</span>
+  <span style="color:#f0c66e">marker file   </span>  T-023, T-024 <span style="color:#6d7686">→ a marker_file in a scope file</span>
+  <span style="color:#6d7686">how to provide each, with lines to copy: appsec-verifier preflight, or docs/cli.md (Scope file)</span>
+
+The same run without questions, e.g. in CI:
+  appsec-verifier verify --assessment /home/mrohr/assessments/juice-shop-std3/security-assessment.yaml --url http://127.0.0.1:3000 --source /home/mrohr/juice-shop --output /tmp/134 --severity critical,high --cost-limit 30.0 --profile claude --console-log color --account jim@juice-sh.op=VERIFIER_JIM_PASS --account bender@juice-sh.op=VERIFIER_BENDER_PASS --admin-account admin@juice-sh.op=VERIFIER_ADMIN_PASS --overwrite --annotate --show-costs --strict-severity --non-interactive --yes
+
+<span style="font-weight:bold">Preflight</span>
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">Target      </span> http://127.0.0.1:3000 answers · HTTP 200
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">Source      </span> /home/mrohr/juice-shop: readable source checkout
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">Login fields</span> email/password proposed by the model; email/password worked
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">account-1   </span> form: logged in
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">account-2   </span> form: logged in
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">admin-1     </span> form: logged in
+  <span style="color:#8fd19e">✓</span> <span style="color:#6d7686">Model test  </span> claude-sonnet-5-5 answered with a valid step · $0.0046
+
+<span style="color:#6d7686;font-weight:bold">TIME      FINDING    EVENT    PROGRESS  ELAPSED    LEFT  DETAIL</span>
+<span style="color:#6d7686">13:41:48</span>  <span style="font-weight:bold">1/8 T-004</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">      0%       0s    ≤29m</span>  <span style="font-weight:bold">SQL injection in product search — routes/search.ts:23</span>
+                                                         <span style="color:#ec6d76">critical</span> · injection · variant-001 · GET /rest/products/search
+<span style="color:#6d7686">13:41:48</span>  1/8 T-004  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">      0%       0s    ≤29m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:42:00</span>  1/8 T-004  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">      0%      12s    ≤29m</span>  test plan · /rest/products/search
+<span style="color:#6d7686">13:42:00</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      12s    ≤29m</span>  step 2 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&#x27;</span> → 500 · body withheld
+<span style="color:#6d7686">13:42:00</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      12s    ≤29m</span>  step 3 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&#x27;&#x27;</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:00</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      12s    ≤29m</span>  step 4 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&quot;</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:01</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      12s    ≤29m</span>  step 5 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&quot;&quot;</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:01</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      13s    ≤29m</span>  step 6 · <span style="color:#ce96d6">GET /rest/products/search?q=apple`</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:01</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      13s    ≤29m</span>  step 7 · <span style="color:#ce96d6">GET /rest/products/search?q=apple``</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:01</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      13s    ≤29m</span>  step 8 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&#x27;</span> → 500 · body withheld
+<span style="color:#6d7686">13:42:01</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      13s    ≤29m</span>  step 9 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&#x27;&#x27;</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:02</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      13s    ≤29m</span>  step 10 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&quot;</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:02</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      14s    ≤29m</span>  step 11 · <span style="color:#ce96d6">GET /rest/products/search?q=apple&quot;&quot;</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:02</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      14s    ≤29m</span>  step 12 · <span style="color:#ce96d6">GET /rest/products/search?q=apple`</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:02</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      14s    ≤29m</span>  step 13 · <span style="color:#ce96d6">GET /rest/products/search?q=apple``</span> → 200 · body withheld
+<span style="color:#6d7686">13:42:02</span>  1/8 T-004  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">      0%      14s    ≤29m</span>  step 14 · experiment → done
+<span style="color:#6d7686">13:42:23</span>  1/8 T-004  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 15 steps · 35s
+<span style="color:#6d7686">13:42:23</span>  1/8 T-004  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: engine error only for the syntax break</span> · steps 2, 3, 4, 5,
+                                                         6, 7, 8, 9, 10, 11, 12, 13
+<span style="color:#6d7686">13:42:23</span>  <span style="font-weight:bold">1/8 T-004</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (medium)</span> · 35s · run <span style="color:#ee96ac">$0.27</span> of $30.00 at API prices
+                                                         The error-probe control confirmed SQL injection in the q parameter of GET
+                                                         /rest/products/search.
+<span style="color:#6d7686">13:42:23</span>  1/8 T-004  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  screenshot
+                                                         /tmp/134/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-ht
+                                                         tp-1.png
+<span style="color:#6d7686">13:42:23</span>  1/8 T-004  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  screenshot
+                                                         /tmp/134/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-ht
+                                                         tp-2.png
+<span style="color:#6d7686">13:42:23</span>  1/8 T-004  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  screenshot
+                                                         /tmp/134/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-ht
+                                                         tp-3.png
+
+<span style="color:#6d7686">13:42:23</span>  <span style="font-weight:bold">1/8 T-004</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  <span style="font-weight:bold">SQL injection in product search — routes/search.ts:23</span>
+                                                         <span style="color:#ec6d76">critical</span> · injection · variant-002 · GET /rest/products/search
+<span style="color:#6d7686">13:42:23</span>  1/8 T-004  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">      0%      35s    ≤29m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+<span style="color:#6d7686">13:42:32</span>  1/8 T-004  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">      0%      44s    ≤29m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 9s · run <span style="color:#ee96ac">$0.30</span>
+<span style="color:#6d7686">13:42:32</span>  <span style="font-weight:bold">1/8 T-004</span>  <span style="color:#6d7686">done   </span>  <span style="color:#6d7686">     12%      44s     ~5m</span>  <span style="color:#6d7686;font-weight:bold">not attempted</span> · 0s · run <span style="color:#ee96ac">$0.30</span> of $30.00 at API prices
+                                                         not tested: another variant of this finding already confirmed it
+
+<span style="color:#6d7686">13:42:32</span>  <span style="font-weight:bold">2/8 T-001</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     12%      44s     ~5m</span>  <span style="font-weight:bold">Angular sanitizer bypass causes XSS in about, search, administration</span>
+                                                         <span style="color:#ef966d">high</span> · xss · variant-003 · GET /#/search
+<span style="color:#6d7686">13:42:32</span>  2/8 T-001  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     12%      44s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:42:49</span>  2/8 T-001  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     12%    1m01s     ~7m</span>  step 1 · Confirm q param flows to bypassSecurityTrustHtml sink
+                                                                  source
+                                                                  frontend/src/app/search-result/search-result.component.ts:143 →
+                                                                  done · <span style="color:#6d7686">model 17s</span> · run <span style="color:#ee96ac">$0.40</span>
+<span style="color:#6d7686">13:43:23</span>  2/8 T-001  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     12%    1m35s    ~11m</span>  step 2 · Test search q innerHTML XSS execution via onerror payload
+                                                                  <span style="color:#ce96d6">browser /#/search?q=&lt;img src=x</span>
+                                                                  <span style="color:#ce96d6">onerror=alert(&#x27;vrfff417e61&#x27;.concat(&#x27;4391894e&#x27;))&gt;</span> → 200 · <span style="color:#8fd19e;font-weight:bold">script</span>
+                                                                  <span style="color:#8fd19e;font-weight:bold">executed</span> · <span style="color:#6d7686">model 20s</span> · run <span style="color:#ee96ac">$0.49</span>
+<span style="color:#6d7686">13:43:37</span>  2/8 T-001  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     12%    1m49s    ~12m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 3 steps · 1m05s
+<span style="color:#6d7686">13:43:37</span>  2/8 T-001  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     12%    1m49s    ~12m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: script executed in the browser</span> · step 2
+<span style="color:#6d7686">13:43:37</span>  <span style="font-weight:bold">2/8 T-001</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">     25%    1m49s     ~5m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (high)</span> · 1m05s · run <span style="color:#ee96ac">$0.59</span> of $30.00 at API prices
+                                                         The q query parameter in /#/search is passed through
+                                                         sanitizer.bypassSecurityTrustHtml (search-result.component.ts:143) and
+                                                         bound via innerHTML without escapin…
+<span style="color:#6d7686">13:43:37</span>  2/8 T-001  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     25%    1m49s     ~5m</span>  screenshot
+                                                         /tmp/134/evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xs
+                                                         s-in-about-search.png
+<span style="color:#6d7686">13:43:37</span>  2/8 T-001  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     25%    1m49s     ~5m</span>  screenshot
+                                                         /tmp/134/evidence/T-001-cb9ffdc3b619b488-angular-sanitizer-bypass-causes-xs
+                                                         s-in-about-search-http-1.png
+<span style="color:#6d7686">13:43:37</span>  2/8 T-001  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     25%    1m49s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text, layout and 1
+                                                         screenshot. · run <span style="color:#ee96ac">$0.59</span>
+<span style="color:#6d7686">13:43:41</span>  2/8 T-001  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     25%    1m52s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; 1 screenshot reviewed. · 4s · run <span style="color:#ee96ac">$0.61</span>
+
+<span style="color:#6d7686">13:43:41</span>  <span style="font-weight:bold">3/8 T-033</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     25%    1m52s     ~5m</span>  <span style="font-weight:bold">NoSQL injection in product reviews $where — routes/showProductReviews.ts:36</span>
+                                                         <span style="color:#ef966d">high</span> · injection · variant-001 · GET /rest/products/:id/reviews
+<span style="color:#6d7686">13:43:41</span>  3/8 T-033  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     25%    1m52s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:43:57</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m09s     ~6m</span>  step 1 · Inspect $where predicate construction near line 31-36
+                                                                  source routes/showProductReviews.ts:31 → done · <span style="color:#6d7686">model 16s</span> ·
+                                                                  run <span style="color:#ee96ac">$0.74</span>
+<span style="color:#6d7686">13:44:10</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m22s     ~7m</span>  step 2 · Testing NoSQL $where boolean injection via id path param.
+                                                                  plan_test → error: invalid plan_test arguments: &#x27;baseline&#x27; is a
+                                                                  required property · run <span style="color:#ee96ac">$0.86</span>
+<span style="color:#6d7686">13:44:18</span>  3/8 T-033  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     25%    2m30s     ~7m</span>  test plan · /rest/products/:id/reviews · Checks if injected predicate
+                                                         alters returned reviews list vs baseline product 1.
+<span style="color:#6d7686">13:44:19</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m30s     ~7m</span>  step 4 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 395 B
+<span style="color:#6d7686">13:44:19</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m31s     ~7m</span>  step 5 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 395 B
+<span style="color:#6d7686">13:44:19</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m31s     ~7m</span>  step 6 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 30 B
+<span style="color:#6d7686">13:44:19</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m31s     ~7m</span>  step 7 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 395 B
+<span style="color:#6d7686">13:44:19</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m31s     ~7m</span>  step 8 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 30 B
+<span style="color:#6d7686">13:44:20</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m31s     ~7m</span>  step 9 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 395 B
+<span style="color:#6d7686">13:44:20</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m32s     ~7m</span>  step 10 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 395 B
+<span style="color:#6d7686">13:44:20</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m32s     ~7m</span>  step 11 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 30 B
+<span style="color:#6d7686">13:44:20</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m32s     ~7m</span>  step 12 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 395 B
+<span style="color:#6d7686">13:44:20</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m32s     ~7m</span>  step 13 · <span style="color:#ce96d6">GET /rest/products/:id/reviews</span> → 200 · 30 B
+<span style="color:#6d7686">13:44:20</span>  3/8 T-033  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     25%    2m32s     ~7m</span>  step 14 · experiment → done
+<span style="color:#6d7686">13:44:35</span>  3/8 T-033  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     25%    2m47s     ~8m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 15 steps · 55s
+<span style="color:#6d7686">13:44:35</span>  3/8 T-033  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     25%    2m47s     ~8m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: response follows fresh controls</span> · steps 4, 5, 6, 7, 8, 9,
+                                                         10, 11, 12, 13
+<span style="color:#6d7686">13:44:35</span>  <span style="font-weight:bold">3/8 T-033</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">     38%    2m47s     ~4m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (medium)</span> · 55s · run <span style="color:#ee96ac">$1.12</span> of $30.00 at API prices
+                                                         The :id path parameter in GET /rest/products/:id/reviews is concatenated
+                                                         unquoted into a MongoDB $where JavaScript predicate (&#x27;this.product == &#x27; +
+                                                         id) at route…
+<span style="color:#6d7686">13:44:35</span>  3/8 T-033  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     38%    2m47s     ~4m</span>  screenshot
+                                                         /tmp/134/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews
+                                                         -where-http-1.png
+<span style="color:#6d7686">13:44:35</span>  3/8 T-033  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     38%    2m47s     ~4m</span>  screenshot
+                                                         /tmp/134/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews
+                                                         -where-http-2.png
+<span style="color:#6d7686">13:44:35</span>  3/8 T-033  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     38%    2m47s     ~4m</span>  screenshot
+                                                         /tmp/134/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews
+                                                         -where-http-3.png
+<span style="color:#6d7686">13:44:35</span>  3/8 T-033  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     38%    2m47s     ~4m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show. ·
+                                                         run <span style="color:#ee96ac">$1.12</span>
+<span style="color:#6d7686">13:44:57</span>  3/8 T-033  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     38%    3m09s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 22s · run <span style="color:#ee96ac">$1.22</span>
+
+<span style="color:#6d7686">13:44:57</span>  <span style="font-weight:bold">4/8 T-034</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     38%    3m09s     ~5m</span>  <span style="font-weight:bold">NoSQL injection in order tracking $where predicate —</span>
+                                                         <span style="font-weight:bold">routes/trackOrder.ts:18</span>
+                                                         <span style="color:#ef966d">high</span> · injection · variant-001 · GET /rest/track-order/:id
+<span style="color:#6d7686">13:44:57</span>  4/8 T-034  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     38%    3m09s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:45:05</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    3m16s     ~5m</span>  step 1 · Inspect how id is placed into $where predicate
+                                                                  source routes/trackOrder.ts:15 → done · <span style="color:#6d7686">model 7s</span> · run <span style="color:#ee96ac">$1.35</span>
+<span style="color:#6d7686">13:45:38</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    3m50s     ~6m</span>  step 2 · Boolean NoSQL $where injection via path id, container /data
+                                                                  plan_test → error: boolean experiments need sql_template or
+                                                                  explicit positive and negative controls · <span style="color:#6d7686">model 34s</span> · run <span style="color:#ee96ac">$1.48</span>
+<span style="color:#6d7686">13:46:36</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    4m48s     ~7m</span>  step 3 · Probe for engine-breaking metacharacters in $where quoted string
+                                                                  plan_test → error: a NoSQL engine-error proof needs a JSON input;
+                                                                  for a value spliced into a server-side JavaScript predicate,
+                                                                  declare a boolean plan with js_predicate_template i… · <span style="color:#6d7686">model 58s</span> ·
+                                                                  run <span style="color:#ee96ac">$1.62</span>
+<span style="color:#6d7686">13:47:05</span>  4/8 T-034  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     38%    5m17s     ~8m</span>  test plan · /rest/track-order/:id
+<span style="color:#6d7686">13:47:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m17s     ~8m</span>  step 5 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 63 B
+<span style="color:#6d7686">13:47:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m18s     ~8m</span>  step 6 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 920 B
+<span style="color:#6d7686">13:47:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m18s     ~8m</span>  step 7 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 67 B
+<span style="color:#6d7686">13:47:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m18s     ~8m</span>  step 8 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 63 B
+<span style="color:#6d7686">13:47:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m18s     ~8m</span>  step 9 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 920 B
+<span style="color:#6d7686">13:47:07</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m18s     ~8m</span>  step 10 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 67 B
+<span style="color:#6d7686">13:47:07</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m18s     ~8m</span>  step 11 · experiment → done
+<span style="color:#6d7686">13:47:30</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m42s     ~9m</span>  step 12 · Request generated js_predicate controls to confirm $where
+                                                                   injection
+                                                                   plan_test → error: invalid plan_test arguments: &#x27;baseline&#x27; is a
+                                                                   required property · run <span style="color:#ee96ac">$1.88</span>
+<span style="color:#6d7686">13:47:45</span>  4/8 T-034  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     38%    5m57s     ~9m</span>  plan revised · /rest/track-order/:id
+<span style="color:#6d7686">13:47:45</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m57s     ~9m</span>  step 14 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:47:45</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m57s     ~9m</span>  step 15 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:47:45</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m57s     ~9m</span>  step 16 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:47:46</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m58s     ~9m</span>  step 17 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:47:46</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m58s     ~9m</span>  step 18 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:47:46</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m58s     ~9m</span>  step 19 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:47:46</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m58s     ~9m</span>  step 20 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:47:46</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m58s     ~9m</span>  step 21 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:47:47</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m59s     ~9m</span>  step 22 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:47:47</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m59s     ~9m</span>  step 23 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:47:47</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    5m59s     ~9m</span>  step 24 · experiment → done
+<span style="color:#6d7686">13:48:05</span>  4/8 T-034  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     38%    6m16s    ~10m</span>  plan revised · /rest/track-order/:id
+<span style="color:#6d7686">13:48:05</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m17s    ~10m</span>  step 26 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:48:05</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m17s    ~10m</span>  step 27 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:48:05</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m17s    ~10m</span>  step 28 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:48:05</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m17s    ~10m</span>  step 29 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:48:05</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m17s    ~10m</span>  step 30 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:48:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m18s    ~10m</span>  step 31 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:48:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m18s    ~10m</span>  step 32 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:48:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m18s    ~10m</span>  step 33 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:48:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m18s    ~10m</span>  step 34 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 351 B
+<span style="color:#6d7686">13:48:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m18s    ~10m</span>  step 35 · <span style="color:#ce96d6">GET /rest/track-order/:id</span> → 200 · 98 B
+<span style="color:#6d7686">13:48:06</span>  4/8 T-034  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     38%    6m18s    ~10m</span>  step 36 · experiment → done
+<span style="color:#6d7686">13:48:24</span>  4/8 T-034  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     38%    6m35s    ~10m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 37 steps · 3m26s
+<span style="color:#6d7686">13:48:24</span>  4/8 T-034  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     38%    6m35s    ~10m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: response follows fresh controls</span> · steps 26, 27, 28, 29,
+                                                         30, 31, 32, 33, 34, 35
+<span style="color:#6d7686">13:48:24</span>  <span style="font-weight:bold">4/8 T-034</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">     50%    6m35s     ~6m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (medium)</span> · 3m26s · run <span style="color:#ee96ac">$2.47</span> of $30.00 at API prices
+                                                         The id parameter in GET /rest/track-order/:id is spliced unescaped into the
+                                                         server-side $where JS predicate this.orderId === &#x27;${id}&#x27;.
+<span style="color:#6d7686">13:48:24</span>  4/8 T-034  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     50%    6m35s     ~6m</span>  screenshot
+                                                         /tmp/134/evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-
+                                                         where-predicate-http-1.png
+<span style="color:#6d7686">13:48:24</span>  4/8 T-034  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     50%    6m35s     ~6m</span>  screenshot
+                                                         /tmp/134/evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-
+                                                         where-predicate-http-2.png
+<span style="color:#6d7686">13:48:24</span>  4/8 T-034  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     50%    6m35s     ~6m</span>  screenshot
+                                                         /tmp/134/evidence/T-034-b2749fff0d93b959-nosql-injection-in-order-tracking-
+                                                         where-predicate-http-3.png
+<span style="color:#6d7686">13:48:24</span>  4/8 T-034  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     50%    6m36s     ~6m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show. ·
+                                                         run <span style="color:#ee96ac">$2.47</span>
+<span style="color:#6d7686">13:48:39</span>  4/8 T-034  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     50%    6m51s     ~6m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 15s · run <span style="color:#ee96ac">$2.61</span>
+
+<span style="color:#6d7686">13:48:39</span>  <span style="font-weight:bold">5/8 T-058</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     50%    6m51s     ~6m</span>  <span style="font-weight:bold">Encryption keys and logs served without authorization — server.ts:278</span>
+                                                         <span style="color:#ef966d">high</span> · access-control · ALL /encryptionkeys/:file, ALL /support/logs/:file
+<span style="color:#6d7686">13:48:39</span>  5/8 T-058  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     50%    6m51s     ~6m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:48:52</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m04s     ~7m</span>  step 1 · Check architecture for route handler details before testing
+                                                                  read_context → done · <span style="color:#6d7686">model 13s</span> · run <span style="color:#ee96ac">$2.68</span>
+<span style="color:#6d7686">13:49:01</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m13s     ~7m</span>  step 2 · Check unauthenticated access to encryption key file.
+                                                                  <span style="color:#ce96d6">GET /encryptionkeys/jwt.pub</span> → 200 · 248 B · <span style="color:#6d7686">model 9s</span> · run <span style="color:#ee96ac">$2.75</span>
+<span style="color:#6d7686">13:49:08</span>  5/8 T-058  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     50%    7m20s     ~7m</span>  test plan · /encryptionkeys/jwt.pub
+<span style="color:#6d7686">13:49:08</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m20s     ~7m</span>  step 4 · <span style="color:#ce96d6">GET /encryptionkeys/jwt.pub as account-1</span> → 200 · 248 B
+<span style="color:#6d7686">13:49:08</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m20s     ~7m</span>  step 5 · <span style="color:#ce96d6">GET /encryptionkeys/jwt.pub</span> → 200 · 248 B
+<span style="color:#6d7686">13:49:08</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m20s     ~7m</span>  step 6 · <span style="color:#ce96d6">GET /encryptionkeys/vrf6bbb5b081502e6b2</span> → 404 · 1074 B
+<span style="color:#6d7686">13:49:08</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m20s     ~7m</span>  step 7 · experiment → done
+<span style="color:#6d7686">13:49:19</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m31s     ~7m</span>  step 8 · Technical QA requests a follow-up
+                                                                  qa_feedback → done · run <span style="color:#ee96ac">$2.90</span>
+<span style="color:#6d7686">13:49:30</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m42s     ~7m</span>  step 9 · Check if non-public key file is served unauthenticated
+                                                                  <span style="color:#ce96d6">GET /encryptionkeys/premium.key</span> → error: request does not match
+                                                                  the accepted test plan · run <span style="color:#ee96ac">$3.06</span>
+<span style="color:#6d7686">13:49:46</span>  5/8 T-058  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     50%    7m58s     ~7m</span>  plan revised · /encryptionkeys/premium.key
+<span style="color:#6d7686">13:49:47</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m58s     ~7m</span>  step 11 · <span style="color:#ce96d6">GET /encryptionkeys/premium.key as account-1</span> → 200 · 50 B
+<span style="color:#6d7686">13:49:47</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m59s     ~7m</span>  step 12 · <span style="color:#ce96d6">GET /encryptionkeys/premium.key</span> → 200 · 50 B
+<span style="color:#6d7686">13:49:47</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m59s     ~7m</span>  step 13 · <span style="color:#ce96d6">GET /encryptionkeys/vrf6bbb5b086970275e</span> → 404 · 1074 B
+<span style="color:#6d7686">13:49:47</span>  5/8 T-058  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     50%    7m59s     ~7m</span>  step 14 · experiment → done
+<span style="color:#6d7686">13:50:02</span>  5/8 T-058  <span style="color:#6d7686">qa     </span>  <span style="color:#6d7686">     50%    8m14s     ~8m</span>  Technical QA: clear · run <span style="color:#ee96ac">$3.34</span>
+<span style="color:#6d7686">13:50:02</span>  5/8 T-058  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     50%    8m14s     ~8m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 15 steps · 1m23s
+<span style="color:#6d7686">13:50:02</span>  5/8 T-058  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     50%    8m14s     ~8m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: same answer without credentials, unlike a random path</span> ·
+                                                         steps 11, 12, 13
+<span style="color:#6d7686">13:50:03</span>  5/8 T-058  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     50%    8m14s     ~8m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+<span style="color:#6d7686">13:50:08</span>  5/8 T-058  <span style="color:#6d7686">revise </span>  <span style="color:#6d7686">     50%    8m20s     ~8m</span>  correction 1/2 · Original test agent: The title and panel header say
+                                                         &quot;Encryption keys and logs served without authorization&quot;. · run <span style="color:#ee96ac">$3.36</span>
+<span style="color:#6d7686">13:50:13</span>  5/8 T-058  <span style="color:#6d7686">review </span>  <span style="color:#6d7686">     50%    8m25s     ~8m</span>  correction 1/2 · Checking evidence text and layout metadata; no screenshot
+                                                         shown to the model: no application screenshot to show. · run <span style="color:#ee96ac">$3.39</span>
+<span style="color:#6d7686">13:50:21</span>  5/8 T-058  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     50%    8m33s     ~8m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 19s · run <span style="color:#ee96ac">$3.40</span>
+<span style="color:#6d7686">13:50:21</span>  <span style="font-weight:bold">5/8 T-058</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">     62%    8m33s     ~5m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (medium)</span> · 1m23s · run <span style="color:#ee96ac">$3.40</span> of $30.00 at API prices
+                                                         Unauthenticated GET /encryptionkeys/premium.key, a non-public key file,
+                                                         returned 200 with 50 bytes, identical to the signed-in account-1 answer.
+<span style="color:#6d7686">13:50:21</span>  5/8 T-058  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     62%    8m33s     ~5m</span>  screenshot
+                                                         /tmp/134/evidence/T-058-encryption-keys-and-logs-served-without-authorizati
+                                                         on-http-1.png
+<span style="color:#6d7686">13:50:21</span>  5/8 T-058  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     62%    8m33s     ~5m</span>  screenshot
+                                                         /tmp/134/evidence/T-058-encryption-keys-and-logs-served-without-authorizati
+                                                         on-http-2.png
+<span style="color:#6d7686">13:50:21</span>  5/8 T-058  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     62%    8m33s     ~5m</span>  screenshot
+                                                         /tmp/134/evidence/T-058-encryption-keys-and-logs-served-without-authorizati
+                                                         on-explanation-1.png
+
+<span style="color:#6d7686">13:50:21</span>  <span style="font-weight:bold">6/8 T-060</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     62%    8m33s     ~5m</span>  <span style="font-weight:bold">Any authenticated user can list all user accounts — server.ts:363</span>
+                                                         <span style="color:#ef966d">high</span> · access-control · GET /api/Users (login)
+<span style="color:#6d7686">13:50:21</span>  6/8 T-060  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     62%    8m33s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:50:27</span>  6/8 T-060  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     62%    8m39s     ~5m</span>  test plan · /api/Users
+<span style="color:#6d7686">13:50:27</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    8m39s     ~5m</span>  step 2 · <span style="color:#ce96d6">GET /api/Users as account-1</span> → 200 · 6911 B
+<span style="color:#6d7686">13:50:27</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    8m39s     ~5m</span>  step 3 · <span style="color:#ce96d6">GET /api/Users</span> → 401 · 972 B
+<span style="color:#6d7686">13:50:28</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    8m39s     ~5m</span>  step 4 · <span style="color:#ce96d6">GET /api/vrff5aa4e6c7a151b9e</span> → 500 · 2448 B
+<span style="color:#6d7686">13:50:28</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    8m39s     ~5m</span>  step 5 · experiment → done
+<span style="color:#6d7686">13:50:32</span>  6/8 T-060  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     62%    8m44s     ~5m</span>  plan revised · /api/Users
+<span style="color:#6d7686">13:50:36</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    8m48s     ~5m</span>  step 7 · Reference request as admin for user list
+                                                                  <span style="color:#ce96d6">GET /api/Users as admin-1</span> → 200 · 6911 B · run <span style="color:#ee96ac">$3.46</span>
+<span style="color:#6d7686">13:50:41</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    8m53s     ~5m</span>  step 8 · Normal account fetches user list
+                                                                  <span style="color:#ce96d6">GET /api/Users as account-1</span> → 200 · 6911 B · run <span style="color:#ee96ac">$3.48</span>
+<span style="color:#6d7686">13:50:48</span>  6/8 T-060  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     62%    9m00s     ~5m</span>  step 9 · Unauthenticated request for the access-control triple
+                                                                  <span style="color:#ce96d6">GET /api/Users</span> → 401 · 972 B · run <span style="color:#ee96ac">$3.50</span>
+<span style="color:#6d7686">13:51:05</span>  6/8 T-060  <span style="color:#6d7686">qa     </span>  <span style="color:#6d7686">     62%    9m17s     ~5m</span>  Technical QA: clear · run <span style="color:#ee96ac">$3.56</span>
+<span style="color:#6d7686">13:51:05</span>  6/8 T-060  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     62%    9m17s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 10 steps · 44s
+<span style="color:#6d7686">13:51:05</span>  6/8 T-060  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     62%    9m17s     ~5m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: normal account got the privileged answer</span> · steps 7, 8, 9
+<span style="color:#6d7686">13:51:05</span>  6/8 T-060  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     62%    9m17s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+<span style="color:#6d7686">13:51:12</span>  6/8 T-060  <span style="color:#6d7686">revise </span>  <span style="color:#6d7686">     62%    9m24s     ~5m</span>  correction 1/2 · Original test agent: The finding says admin-only access is
+                                                         the intended restriction, but the checked proof says this comes from the
+                                                         finding, not from the evide… · run <span style="color:#ee96ac">$3.59</span>
+<span style="color:#6d7686">13:51:26</span>  6/8 T-060  <span style="color:#6d7686">review </span>  <span style="color:#6d7686">     62%    9m38s     ~5m</span>  correction 1/2 · Checking evidence text and layout metadata; no screenshot
+                                                         shown to the model: no application screenshot to show. · run <span style="color:#ee96ac">$3.63</span>
+<span style="color:#6d7686">13:51:29</span>  6/8 T-060  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     62%    9m41s     ~5m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 24s · run <span style="color:#ee96ac">$3.66</span>
+<span style="color:#6d7686">13:51:29</span>  <span style="font-weight:bold">6/8 T-060</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">     75%    9m41s     ~3m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (medium)</span> · 44s · run <span style="color:#ee96ac">$3.66</span> of $30.00 at API prices
+                                                         GET /api/Users returned 200 with the full account list (ids, emails, roles)
+                                                         for admin-1 (step 7).
+<span style="color:#6d7686">13:51:29</span>  6/8 T-060  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     75%    9m41s     ~3m</span>  screenshot
+                                                         /tmp/134/evidence/T-060-any-authenticated-user-can-list-all-user-accounts-h
+                                                         ttp-1.png
+<span style="color:#6d7686">13:51:29</span>  6/8 T-060  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     75%    9m41s     ~3m</span>  screenshot
+                                                         /tmp/134/evidence/T-060-any-authenticated-user-can-list-all-user-accounts-h
+                                                         ttp-2.png
+<span style="color:#6d7686">13:51:29</span>  6/8 T-060  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     75%    9m41s     ~3m</span>  screenshot
+                                                         /tmp/134/evidence/T-060-any-authenticated-user-can-list-all-user-accounts-e
+                                                         xplanation-1.png
+
+<span style="color:#6d7686">13:51:29</span>  <span style="font-weight:bold">7/8 T-069</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     75%    9m41s     ~3m</span>  <span style="font-weight:bold">User list readable by any authenticated user —</span>
+                                                         <span style="font-weight:bold">routes/authenticatedUsers.ts:12</span>
+                                                         <span style="color:#ef966d">high</span> · access-control · GET /rest/user/authentication-details (login)
+<span style="color:#6d7686">13:51:29</span>  7/8 T-069  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     75%    9m41s     ~3m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:51:44</span>  7/8 T-069  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     75%    9m56s     ~3m</span>  step 1 · Technical QA requests a follow-up
+                                                                  qa_feedback → done · run <span style="color:#ee96ac">$3.73</span>
+<span style="color:#6d7686">13:51:52</span>  7/8 T-069  <span style="color:#6d7686">plan   </span>  <span style="color:#6d7686">     75%   10m03s     ~3m</span>  test plan · /rest/user/authentication-details
+<span style="color:#6d7686">13:51:56</span>  7/8 T-069  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     75%   10m08s     ~3m</span>  step 3 · Fetch user list as normal account
+                                                                  <span style="color:#ce96d6">GET /rest/user/authentication-details as account-1</span> → 200 · 8953 B
+                                                                  · <span style="color:#6d7686">model 5s</span> · run <span style="color:#ee96ac">$3.76</span>
+<span style="color:#6d7686">13:52:05</span>  7/8 T-069  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     75%   10m17s     ~3m</span>  step 4 · Check whether unauthenticated request also returns full list
+                                                                  (negative control)
+                                                                  <span style="color:#ce96d6">GET /rest/user/authentication-details</span> → 401 · 972 B · <span style="color:#6d7686">model 8s</span> ·
+                                                                  run <span style="color:#ee96ac">$3.81</span>
+<span style="color:#6d7686">13:52:08</span>  7/8 T-069  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     75%   10m20s     ~3m</span>  step 5 · Admin reference request for the same endpoint
+                                                                  <span style="color:#ce96d6">GET /rest/user/authentication-details as admin-1</span> → 200 · 8953 B ·
+                                                                  <span style="color:#6d7686">model 4s</span> · run <span style="color:#ee96ac">$3.83</span>
+<span style="color:#6d7686">13:52:29</span>  7/8 T-069  <span style="color:#6d7686">qa     </span>  <span style="color:#6d7686">     75%   10m41s     ~3m</span>  Technical QA: clear · run <span style="color:#ee96ac">$3.89</span>
+<span style="color:#6d7686">13:52:29</span>  7/8 T-069  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     75%   10m41s     ~3m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 6 steps · 1m00s
+<span style="color:#6d7686">13:52:29</span>  7/8 T-069  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     75%   10m41s     ~3m</span>  <span style="color:#8fd19e;font-weight:bold">✓ proof checked</span><span style="color:#8fd19e">: normal account got the privileged answer</span> · steps 3, 4, 5
+<span style="color:#6d7686">13:52:29</span>  7/8 T-069  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     75%   10m41s     ~3m</span>  <span style="color:#ce96d6;font-weight:bold">▶ evidence reviewer started</span> · Checking evidence text and layout metadata;
+                                                         no screenshot shown to the model: no application screenshot to show.
+<span style="color:#6d7686">13:52:32</span>  7/8 T-069  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     75%   10m44s     ~3m</span>  <span style="color:#ce96d6;font-weight:bold">■ evidence reviewer finished</span> · clear: Evidence text and layout checks
+                                                         passed; no screenshot shown to the model (no application screenshot to
+                                                         show). · 3s · run <span style="color:#ee96ac">$3.92</span>
+<span style="color:#6d7686">13:52:32</span>  <span style="font-weight:bold">7/8 T-069</span>  <span style="color:#8fd19e">done   </span>  <span style="color:#6d7686">     88%   10m44s     ~1m</span>  <span style="color:#8fd19e;font-weight:bold">✔ confirmed (medium)</span> · 1m00s · run <span style="color:#ee96ac">$3.92</span> of $30.00 at API prices
+                                                         GET /rest/user/authentication-details returned 200 with the full user list
+                                                         (admin and customer records, role, lastLoginIp, lastLoginTime) to normal
+                                                         account-1.
+<span style="color:#6d7686">13:52:32</span>  7/8 T-069  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     88%   10m44s     ~1m</span>  screenshot
+                                                         /tmp/134/evidence/T-069-user-list-readable-by-any-authenticated-user-http-1
+                                                         .png
+<span style="color:#6d7686">13:52:32</span>  7/8 T-069  <span style="color:#8fd19e">proof  </span>  <span style="color:#6d7686">     88%   10m44s     ~1m</span>  screenshot
+                                                         /tmp/134/evidence/T-069-user-list-readable-by-any-authenticated-user-http-2
+                                                         .png
+
+<span style="color:#6d7686">13:52:32</span>  <span style="font-weight:bold">8/8 T-039</span>  <span style="color:#ee96ac">start  </span>  <span style="color:#6d7686">     88%   10m44s     ~1m</span>  <span style="font-weight:bold">Unauthenticated key and log file exposure — routes/keyServer.ts:14</span>
+                                                         <span style="color:#ef966d">high</span> · access-control
+<span style="color:#6d7686">13:52:32</span>  8/8 T-039  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     88%   10m44s     ~1m</span>  <span style="color:#ce96d6;font-weight:bold">▶ test agent started</span> · Sonnet 5.5 via Claude CLI · ≤12 steps · identities
+                                                         account-1, account-2, admin-1 · source code
+<span style="color:#6d7686">13:52:52</span>  8/8 T-039  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     88%   11m04s     ~1m</span>  step 1 · Check recorded evidence for keyServer route details
+                                                                  read_context → done · <span style="color:#6d7686">model 19s</span> · run <span style="color:#ee96ac">$4.03</span>
+<span style="color:#6d7686">13:53:03</span>  8/8 T-039  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     88%   11m15s     ~1m</span>  step 2 · Inspect handler to find route pattern and allowed files.
+                                                                  source routes/keyServer.ts:14 → done · <span style="color:#6d7686">model 11s</span> · run <span style="color:#ee96ac">$4.08</span>
+<span style="color:#6d7686">13:53:09</span>  8/8 T-039  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     88%   11m21s     ~1m</span>  step 3 · Unauthenticated comparison for key file exposure
+                                                                  plan_test → error: request may only use the finding&#x27;s declared
+                                                                  variant inputs: no inputs declared · <span style="color:#6d7686">model 6s</span> · run <span style="color:#ee96ac">$4.09</span>
+<span style="color:#6d7686">13:53:13</span>  8/8 T-039  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     88%   11m25s     ~1m</span>  step 4 · Fetch key file without credentials
+                                                                  <span style="color:#ce96d6">GET /encryptionkeys/jwt.pub</span> → error: exposure checks use only the
+                                                                  operator-declared harmless read-only resource; without one,
+                                                                  plan_test with signed_in, whose answers the Verifier compares
+                                                                  without … · <span style="color:#6d7686">model 4s</span> · run <span style="color:#ee96ac">$4.10</span>
+<span style="color:#6d7686">13:53:18</span>  8/8 T-039  <span style="color:#6d7686">·      </span>  <span style="color:#6d7686">     88%   11m30s     ~1m</span>  step 5 · Retry plan declaring the path input file
+                                                                  plan_test → error: the comparison sends one concrete GET: give
+                                                                  path as /a/b with every placeholder filled in, and query inputs in
+                                                                  fixed.params · <span style="color:#6d7686">model 5s</span> · run <span style="color:#ee96ac">$4.11</span>
+<span style="color:#6d7686">13:53:18</span>  8/8 T-039  <span style="color:#f0c66e">⚠      </span>  <span style="color:#6d7686">     88%   11m30s     ~1m</span>  <span style="color:#f0c66e">step 6</span><span style="color:#f0c66e"> · </span><span style="color:#f0c66e">stopped: three actions in a row failed without a usable</span>
+                                                         <span style="color:#f0c66e">observation; the last: plan_test: the comparison sends one concrete GET:</span>
+                                                         <span style="color:#f0c66e">give path as /a/b with every placeholder filled in, and query inputs in</span>
+                                                         <span style="color:#f0c66e">fixed.params</span>
+<span style="color:#6d7686">13:53:18</span>  8/8 T-039  <span style="color:#ce96d6">agent  </span>  <span style="color:#6d7686">     88%   11m30s     ~1m</span>  <span style="color:#ce96d6;font-weight:bold">■ test agent finished</span> · 6 steps · 46s
+<span style="color:#6d7686">13:53:18</span>  8/8 T-039  <span style="color:#f0c66e">proof  </span>  <span style="color:#6d7686">     88%   11m30s     ~1m</span>  <span style="color:#f0c66e;font-weight:bold">✗ no proof</span><span style="color:#f0c66e">: the test agent made no progress and was stopped</span>
+<span style="color:#6d7686">13:53:18</span>  8/8 T-039  <span style="color:#6d7686">quality</span>  <span style="color:#6d7686">     88%   11m30s     ~1m</span>  correction 0/2 · not-reviewed: Review not started: no confirmed variant to
+                                                         present.
+<span style="color:#6d7686">13:53:18</span>  <span style="font-weight:bold">8/8 T-039</span>  <span style="color:#f0c66e">done   </span>  <span style="color:#6d7686">    100%   11m30s        </span>  <span style="color:#f0c66e;font-weight:bold">? inconclusive</span> · 46s · run <span style="color:#ee96ac">$4.11</span> of $30.00 at API prices
+
+<span style="font-weight:bold">Results</span>
+  <span style="color:#8fd19e">✓</span> T-004  critical  injection       <span style="color:#8fd19e">confirmed (medium)  </span>  SQL injection in product search — routes/search.ts:23
+    <span style="color:#6d7686">The error-probe control confirmed SQL injection in the q parameter of GET /rest/products/search. An unbalanced single quote (ap…</span>
+  <span style="color:#8fd19e">✓</span> T-001  high      xss             <span style="color:#8fd19e">confirmed (high)    </span>  Angular sanitizer bypass causes XSS in about, search, administration
+    <span style="color:#6d7686">The q query parameter in /#/search is passed through sanitizer.bypassSecurityTrustHtml (search-result.component.ts:143) and bou…</span>
+  <span style="color:#8fd19e">✓</span> T-033  high      injection       <span style="color:#8fd19e">confirmed (medium)  </span>  NoSQL injection in product reviews $where — routes/showProductReviews.ts…
+    <span style="color:#6d7686">The :id path parameter in GET /rest/products/:id/reviews is concatenated unquoted into a MongoDB $where JavaScript predicate (&#x27;…</span>
+  <span style="color:#8fd19e">✓</span> T-034  high      injection       <span style="color:#8fd19e">confirmed (medium)  </span>  NoSQL injection in order tracking $where predicate — routes/trackOrder.t…
+    <span style="color:#6d7686">The id parameter in GET /rest/track-order/:id is spliced unescaped into the server-side $where JS predicate this.orderId === &#x27;$…</span>
+  <span style="color:#8fd19e">✓</span> T-058  high      access-control  <span style="color:#8fd19e">confirmed (medium)  </span>  Encryption keys and logs served without authorization — server.ts:278
+    <span style="color:#6d7686">Unauthenticated GET /encryptionkeys/premium.key, a non-public key file, returned 200 with 50 bytes, identical to the signed-in …</span>
+  <span style="color:#8fd19e">✓</span> T-060  high      access-control  <span style="color:#8fd19e">confirmed (medium)  </span>  Any authenticated user can list all user accounts — server.ts:363
+    <span style="color:#6d7686">GET /api/Users returned 200 with the full account list (ids, emails, roles) for admin-1 (step 7). The normal account account-1 …</span>
+  <span style="color:#8fd19e">✓</span> T-069  high      access-control  <span style="color:#8fd19e">confirmed (medium)  </span>  User list readable by any authenticated user — routes/authenticatedUsers…
+    <span style="color:#6d7686">GET /rest/user/authentication-details returned 200 with the full user list (admin and customer records, role, lastLoginIp, last…</span>
+  <span style="color:#f0c66e">?</span> T-039  high      access-control  <span style="color:#f0c66e">inconclusive        </span>  Unauthenticated key and log file exposure — routes/keyServer.ts:14
+    <span style="color:#6d7686">stopped: three actions in a row failed without a usable observation; the last: plan_test: the comparison sends one concrete GET…</span>
+  <span style="color:#6d7686">·</span> T-012  critical  injection       <span style="color:#6d7686">needs intrusive mode</span>  Code injection — routes/userProfile.ts:61
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-011  critical  injection       <span style="color:#6d7686">needs intrusive mode</span>  SQL injection in login credential query — routes/login.ts:34
+    <span style="color:#6d7686">run with --allow-intrusive · 2 variants</span>
+  <span style="color:#6d7686">·</span> T-010  critical  access-control  <span style="color:#6d7686">needs intrusive mode</span>  Insecure Direct Object Reference
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-002  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Systemic missing object ownership checks across address, basket, coupon
+    <span style="color:#6d7686">run with --allow-intrusive · 3 variants</span>
+  <span style="color:#6d7686">·</span> T-037  high      injection       <span style="color:#6d7686">needs intrusive mode</span>  User-controlled username compiled as Pug template — routes/userProfile.t…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-042  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Any authenticated user can read other users&#x27; records and all complaints
+    <span style="color:#6d7686">run with --allow-intrusive · 3 variants</span>
+  <span style="color:#6d7686">·</span> T-053  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Recycle records readable by any caller by ID — server.ts:388
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-023  high      path-traversal  <span style="color:#6d7686">needs marker file   </span>  Arbitrary server file read — routes/dataErasure.ts:104
+    <span style="color:#6d7686">a marker_file in a scope file</span>
+  <span style="color:#6d7686">·</span> T-024  high      path-traversal  <span style="color:#6d7686">needs marker file   </span>  Zip entry path traversal on complaint upload — routes/fileUpload.ts:34
+    <span style="color:#6d7686">a marker_file in a scope file</span>
+  <span style="color:#6d7686">·</span> T-025  high      injection       <span style="color:#6d7686">needs intrusive mode</span>  Request body orderLinesData evaluated by notevil in vm — routes/b2bOrder…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-026  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Unauthenticated modification of products — server.ts:503
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-030  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Basket item update lacks ownership check and field — routes/basketItems.…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-035  high      injection       <span style="color:#6d7686">needs intrusive mode</span>  NoSQL operator injection and missing — routes/updateProductReviews.ts:18
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-044  high      ssrf            <span style="color:#6d7686">needs intrusive mode</span>  Server-side request forgery in profile — routes/profileImageUrlUpload.ts…
+    <span style="color:#6d7686">run with --allow-intrusive · 2 variants</span>
+  <span style="color:#6d7686">·</span> T-046  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Password reset response returns full user record — routes/resetPassword.…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-050  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Basket item add checks different BasketId than it — routes/basketItems.t…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-051  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Review author taken from request body — routes/createProductReviews.ts:26
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-052  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Review update lacks ownership check — routes/updateProductReviews.ts:18
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-057  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Deluxe upgrade skips payment verification — routes/deluxe.ts:43
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-059  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Sensitive Routes Registered Without Authentication Middleware
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-061  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Any authenticated user can create products with chosen prices — server.t…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-063  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Unauthenticated product update — server.ts:501
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-065  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Chatbot coupon tool lacks server-side authorization — routes/chat.ts:184
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+  <span style="color:#6d7686">·</span> T-064  high      access-control  <span style="color:#6d7686">needs intrusive mode</span>  Duplicate JSON key bypasses basket ownership check — routes/basketItems.…
+    <span style="color:#6d7686">run with --allow-intrusive</span>
+<span style="color:#6d7686">  37 unsupported or incomplete findings not listed (--print lists them)</span>
+
+<span style="font-weight:bold">Done</span>
+  <span style="color:#6d7686">Report           :</span> <span style="font-weight:bold">/tmp/134/verification.md</span><span style="color:#6d7686"> (Markdown)</span>
+  <span style="color:#6d7686">Data             :</span> <span style="color:#ee96ac">/tmp/134/verification.yaml</span><span style="color:#6d7686"> (YAML, for --resume and export)</span>
+  <span style="color:#6d7686">Evidence         :</span> <span style="font-weight:bold">/tmp/134/evidence/</span>
+  <span style="color:#6d7686">Run              :</span> <span style="font-weight:bold">11m33s · 59 model calls · 100 requests · $4.11 of $30.00 at API prices</span>
+  <span style="color:#6d7686">Action log       :</span> <span style="color:#ee96ac">/tmp/134/agent-log.jsonl</span>
+  <span style="color:#6d7686">Console          :</span> <span style="font-weight:bold">/tmp/134/console.log</span>
+  <span style="color:#6d7686">Annotated        :</span> <span style="color:#ee96ac">/tmp/134/security-assessment.annotated.yaml</span>
+  <span style="color:#6d7686">Annotated report :</span> <span style="font-weight:bold">/tmp/134/security-assessment.annotated.md</span><span style="color:#6d7686"> (may show target data; review before sharing)</span>
+  <span style="color:#6d7686">Verdicts         :</span> <span style="color:#8fd19e">7 confirmed</span><span style="color:#6d7686"> · </span><span style="color:#f0c66e">1 inconclusive</span><span style="color:#6d7686"> · </span><span style="color:#6d7686">35 not tested</span><span style="color:#6d7686"> · </span><span style="color:#6d7686">26 unsupported or incomplete</span>
+</pre>
+</body>
+</html>
