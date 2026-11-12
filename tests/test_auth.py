@@ -22,7 +22,7 @@ class FakeResp:
     def __init__(self, status=200, json=None):
         self.status_code = status
         self._json = json
-        self.headers = {}
+        self.headers, self.text = {}, ""
 
     def json(self):
         if self._json is None:
@@ -69,7 +69,8 @@ def test_form_login_posts_json_to_login_url_and_returns_only_token():
     mgr, tr = _mgr([ident], {"AU": "a@x.test", "AP": "secretpw"})
     headers = mgr.headers_for("a")
     assert headers == {"Authorization": "Bearer FORMTOK"}           # only the token travels onward
-    method, url, _, kw = tr.calls[0]
+    (page, page_url, _, page_kw), (method, url, _, kw) = tr.calls    # the page holds no login form: a JSON login
+    assert page == "GET" and page_url == url and not {"json", "data"} & page_kw.keys()
     assert method == "POST" and url == "https://app.example.com/rest/user/login"
     assert kw["json"] == {"email": "a@x.test", "password": "secretpw"}  # creds sent to the bound endpoint
 

@@ -16,6 +16,7 @@ from appsec_verifier.agent import AgentTools, ToolError
 from appsec_verifier.agent.hosts import HostReply
 from appsec_verifier.auth import AuthError, SessionManager
 from appsec_verifier.auth.accounts import (
+    FROM_TARGET,
     AccountError,
     account_identities,
     choose_fields,
@@ -60,16 +61,13 @@ def test_the_single_login_entry_point_of_the_assessment_is_found():
     assert resolve_login_url(None, SURFACE, URL + "/app/")[0] == URL + "/app/rest/user/login"
 
 
-@pytest.mark.parametrize("doc, expected", [
-    ({}, "it names none"),
-    ({"attack_surface": [{"entry_point": "POST /login"}, {"entry_point": "POST /api/sessions"}]},
-     "found POST /login, POST /api/sessions"),
-    ({"attack_surface": [{"entry_point": "POST /a b/login"}, {"entry_point": "POST /x/../login"}]}, "names none"),
+@pytest.mark.parametrize("doc", [
+    {},
+    {"attack_surface": [{"entry_point": "POST /login"}, {"entry_point": "POST /api/sessions"}]},
+    {"attack_surface": [{"entry_point": "POST /a b/login"}, {"entry_point": "POST /x/../login"}]},
 ])
-def test_no_single_login_entry_point_needs_login_url(doc, expected):
-    with pytest.raises(AccountError, match="--login-url") as exc:
-        resolve_login_url(None, doc, URL)
-    assert expected in str(exc.value)
+def test_without_a_single_login_entry_point_the_login_form_is_found_from_the_target_url(doc):
+    assert resolve_login_url(None, doc, URL) == (URL, FROM_TARGET)
 
 
 @pytest.mark.parametrize("login_url, ok", [
@@ -180,23 +178,23 @@ def test_the_first_working_pair_signs_the_account_in_and_is_kept_for_renewal():
     sessions, identities = _sessions(target, {"JP": "ncc-1701", "BP": "x"})
     assert sessions.sign_in_with_fields("account-1", [("username", "password"), ("email", "password")]) == \
         ("email", "password")
-    assert [c[0:2] for c in target.calls] == [("POST", LOGIN)] * 2
+    assert [c[0:2] for c in target.calls] == [("GET", LOGIN), ("POST", LOGIN)] * 2   # no login form: JSON
     assert sessions.headers_for("account-1") == {"Authorization": "Bearer tok-jim@juice-sh.op"}
-    assert identities[0]["auth"]["username_field"] == "email" and len(target.calls) == 2
+    assert identities[0]["auth"]["username_field"] == "email" and len(target.calls) == 4
 
 
 def test_an_account_whose_login_returns_no_token_is_tried_twice_and_then_never_again():
     target = JuiceShop({})
     sessions, _ = _sessions(target, {"JP": "wrong", "BP": "x"})
-    with pytest.raises(AuthError, match="no token with the fields username/password, email/password"):
+    with pytest.raises(AuthError, match="no session with the fields username/password, email/password"):
         sessions.sign_in_with_fields("account-1", [("username", "password"), ("email", "password"),
                                                    ("login", "password")])
-    assert len(target.calls) == 2                                # never a third attempt
+    assert [c[0] for c in target.calls].count("POST") == 2       # never a third attempt
     with pytest.raises(AuthError, match="not tried again"):
         sessions.headers_for("account-1")                        # no fallback to default field names
     with pytest.raises(AuthError, match="not tried again"):
         sessions.sign_in_with_fields("account-1", [("email", "password")])
-    assert len(target.calls) == 2
+    assert len(target.calls) == 4
 
 
 def test_a_transport_failure_ends_the_attempts_without_falling_back_to_default_fields():
@@ -318,14 +316,13 @@ def test_a_failed_account_login_stops_the_run_and_points_to_identities(tmp_path,
                        "--account", "bender@juice-sh.op=BP", env={"JP": "ncc-1701", "BP": "wrong"})
     out = capsys.readouterr().out
     assert rc == cli.EXIT_BLOCKED and seen == {}
-    assert "no token for account-2" in out and "needs --identities" in out
+    assert "no session for account-2" in out and "needs --identities" in out
     assert len([c for c in target.calls if c[0] == "POST" and c[2].get("email") == "bender@juice-sh.op"]) == 1
 
 
 @pytest.mark.parametrize("extra, surface, env, expected", [
     (("--account", "jim@juice-sh.op=JP", "--identities", "x.yaml"), SURFACE, {"JP": "p"}, "not both"),
     (("--login-url", LOGIN), SURFACE, {}, "--login-url needs --account"),
-    (("--account", "jim@juice-sh.op=JP"), {}, {"JP": "p"}, "no single login entry point"),
     (("--account", "jim@juice-sh.op=JP", "--account", "jim@juice-sh.op=JP"), SURFACE, {"JP": "p"},
      "the same user name is given twice"),
     (("--account", "jim@juice-sh.op=JP"), SURFACE, {}, "environment variable JP is not set"),
@@ -387,3 +384,43 @@ def test_a_scope_file_keeps_the_login_url_inside_its_auth_hosts(tmp_path, monkey
                    "--login-url", "https://auth.example.com/login"])
     err = capsys.readouterr().err
     assert rc == cli.EXIT_BLOCKED and "add its host to auth_hosts" in err and target.calls == []
+
+
+class FormSite:
+    """Fake target with an HTML login: the start page redirects to /signin, whose form posts to /session."""
+
+    def __init__(self, accounts):
+        self.accounts, self.calls = accounts, []
+
+    def __call__(self, method, url, headers, **kw):
+        import httpx
+
+        self.calls.append((method, url, dict(kw.get("data") or {})))
+        path = url[len(URL):].split("?")[0] or "/"
+        if method == "POST" and path == "/session":
+            form = kw.get("data") or {}
+            if form.get("login") in self.accounts and self.accounts[form["login"]] == form.get("secret"):
+                return httpx.Response(303, headers={"location": "/", "set-cookie": f"sid=s-{form['login']}"})
+            return httpx.Response(303, headers={"location": "/signin"})
+        if path == "/signin":
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=(
+                "<form method=post action=/session><input name=login><input type=password name=secret></form>"))
+        if "sid=s-" in headers.get("Cookie", ""):
+            return httpx.Response(200, headers={"content-type": "text/html"}, text="<h1>home</h1>")
+        return httpx.Response(302, headers={"location": "/signin"})
+
+
+def test_without_a_login_endpoint_the_accounts_sign_in_at_the_form_the_target_url_leads_to(
+        tmp_path, monkeypatch, capsys):
+    target, host = FormSite({"jim": "ncc-1701", "bender": "liquor"}), FakeHost()
+    rc, seen = _verify(tmp_path, monkeypatch, target, host, "--account", "jim=JP", "--account", "bender=BP",
+                       env={"JP": "ncc-1701", "BP": "liquor"}, surface={})
+    out = capsys.readouterr().out
+    assert rc == cli.EXIT_OK, out
+    assert "sign in at the login form the target URL leads to" in out             # before the confirmation
+    assert "login form found at /signin; login/secret worked" in out              # after it
+    assert host.prompts == []                                      # the form names its fields: no model call
+    posts = [(url, data) for method, url, data in target.calls if method == "POST"]
+    assert posts == [(URL + "/session", {"login": "jim", "secret": "ncc-1701"}),
+                     (URL + "/session", {"login": "bender", "secret": "liquor"})]
+    assert seen["identities"] == [("account-1", False), ("account-2", False)]

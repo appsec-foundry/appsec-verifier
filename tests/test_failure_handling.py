@@ -495,17 +495,21 @@ def _login_tools(target):
 
 
 def test_a_401_that_a_new_login_does_not_change_logs_in_only_once():
-    target = Target({("POST", LOGIN): Resp(200, {"token": "T0K3N"}), ("GET", f"{BASE}/admin"): Resp(401)})
+    target = Target({("GET", LOGIN): Resp(404), ("POST", LOGIN): Resp(200, {"token": "T0K3N"}),
+                     ("GET", f"{BASE}/admin"): Resp(401)})
     tools = _login_tools(target)
     for _ in range(3):
         assert tools.call("http_request", {"role": "alice", "path": "/admin"})["status"] == 401
-    assert [m for m, _ in target.calls] == ["POST", "GET", "POST", "GET", "GET", "GET"]
+    login, admin = [("GET", LOGIN), ("POST", LOGIN)], ("GET", f"{BASE}/admin")   # a login reads the page first
+    assert target.calls == [*login, admin, *login, admin, admin, admin]
 
 
 def test_an_expired_session_is_renewed_again_after_an_accepted_request():
     pages, sent = iter([401, 401, 200, 401, 200]), []
 
     def transport(method, url, headers, **kw):
+        if (method, url) == ("GET", LOGIN):
+            return Resp(404)                                        # the login page a login reads first
         sent.append(method)
         return Resp(200, {"token": "T0K3N"}) if method == "POST" else Resp(next(pages))
 
@@ -524,7 +528,7 @@ def test_a_refused_login_is_not_tried_again_in_the_run():
     for _ in range(2):
         with pytest.raises(ToolError, match="recognisable token .*; not tried again in this run"):
             tools.call("http_request", {"role": "alice", "path": "/x"})
-    assert target.calls == [("POST", LOGIN)]
+    assert target.calls == [("GET", LOGIN), ("POST", LOGIN)]
 
 
 # ── files are replaced atomically (VER-020, VER-027) ───────────────────────────

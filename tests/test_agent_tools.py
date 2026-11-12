@@ -189,14 +189,14 @@ def test_forbidden_answer_never_triggers_a_new_login(tmp_path):
 
     def transport(m, u, h, **k):
         sent.append((m, u))
-        return LoginResp(200) if u.endswith("/login") else Resp(403)
+        return LoginResp(200) if u.endswith("/login") and m == "POST" else Resp(403)
 
     idents = [{"role": "alice", "method": "form",
                "auth": {"login_url": "https://app.example.com/login", "username_env": "AU", "password_env": "AP"}}]
     tools = AgentTools(_ctx(tmp_path, transport, idents=idents, env={"AU": "alice", "AP": "pw"}))
     for _ in range(3):
         assert tools.http_request(role="alice", path="/rest/admin")["status"] == 403
-    assert [m for m, _ in sent] == ["POST", "GET", "GET", "GET"]
+    assert [m for m, _ in sent] == ["GET", "POST", "GET", "GET", "GET"]     # login page, login, three requests
 
 
 # ── methods ───────────────────────────────────────────────────────────────────

@@ -6,14 +6,17 @@ neutral role name (`account-1`, `admin-1`); the model knows only that name. The
 user name is kept with the run's other secret values and redacted like them,
 the password comes from VARIABLE or hidden input (VER-016).
 
-The login endpoint is the `--login-url` the operator gives, or else the single
+The login endpoint is the `--login-url` the operator gives, else the single
 POST entry point of the assessment's attack surface that looks like a login,
 below the target base URL. It is shown before the confirmation (VER-002), and
-credentials go to no other endpoint (VER-028). The model chooses only the two
+credentials go to no other endpoint (VER-028). Without either, the accounts
+sign in at the HTML login form the target URL shows or redirects to within its
+origin; the settings say so, and the page is named after the confirmation. The model chooses only the two
 field names (`choose_fields`), from the endpoint and, with a source checkout,
-the handler's source; it never sees a value. Each account gets at most two
-attempts; one whose login returns no token is unavailable for the run, and the
-pre-flight check stops the run (VER-032). A privileged account only reads
+the handler's source; it never sees a value. Where the endpoint serves an HTML
+login form, the form's own fields take precedence (html_login.py). Each account
+gets at most two attempts; one whose login obtains no session is unavailable
+for the run, and the pre-flight check stops the run (VER-032). A privileged account only reads
 (VER-030) and is the reference for privileged functions (VER-010).
 """
 
@@ -26,6 +29,7 @@ from urllib.parse import urlsplit
 from ..scope.guard import is_loopback
 
 NORMAL_ROLE, PRIVILEGED_ROLE = "account", "admin"
+FROM_TARGET = "found from the target URL"     # the login source when the login form is found after the confirmation
 MAX_ATTEMPTS = 2
 FIELDS_ACTION = "login_fields"
 _VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
@@ -109,8 +113,9 @@ def handler_of(doc: dict, path: str) -> tuple[str, int] | None:
 
 
 def resolve_login_url(login_url: str | None, doc: dict, target: str) -> tuple[str, str]:
-    """The login endpoint and where it came from: `--login-url` as given, or the single login entry point of
-    the assessment below the target base URL. Raises AccountError when there is none or more than one."""
+    """The login endpoint and where it came from: `--login-url` as given, else the single login entry point of
+    the assessment below the target base URL, else the target URL itself, `FROM_TARGET`: the login form it
+    shows or redirects to is found after the confirmation. Raises AccountError for an unusable --login-url."""
     if login_url:
         try:
             parts = urlsplit(login_url)
@@ -127,8 +132,7 @@ def resolve_login_url(login_url: str | None, doc: dict, target: str) -> tuple[st
         return login_url, "--login-url"
     paths = login_entry_points(doc)
     if len(paths) != 1:
-        found = f"found {', '.join('POST ' + p for p in paths[:5])}" if paths else "it names none"
-        raise AccountError(f"the assessment names no single login entry point ({found}); give it with --login-url")
+        return target, FROM_TARGET
     return target.rstrip("/") + "/" + paths[0].lstrip("/"), "from the assessment"
 
 

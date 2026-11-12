@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .auth.accounts import FROM_TARGET
 from .limits import Limits, RunBudget
 from .loader import AssessmentError, plans_from, read_assessment, select
 from .preflight import (
@@ -438,8 +439,10 @@ def _prepare_accounts(args, doc: dict, scope: dict, guard: ScopeGuard, target: s
     # Offline the passwords are not needed yet: the check sees a stand-in, never used to sign in.
     later = {} if passwords else {v: "asked when the run starts" for _, _, v, _ in pending if not env.get(v)}
     _, errors = _check_identities(None, guard, ChainMap(later, env), doc={"identities": identities})
-    for ident in identities:          # after the schema check, which knows no such field
+    for ident in identities:          # after the schema check, which knows no such fields
         ident["privileged"] = ident["role"].startswith(f"{PRIVILEGED_ROLE}-")
+        if source == FROM_TARGET:
+            ident["auth"]["login_from_target"] = True
     return identities, {"url": login_url, "source": source}, guard, errors
 
 
@@ -449,6 +452,8 @@ def _accounts_note(identities: list[dict], login: dict | None, target: str | Non
     if not login:
         return None
     roles = ", ".join(i["role"] + (" (privileged, read-only)" if i.get("privileged") else "") for i in identities)
+    if login["source"] == FROM_TARGET:
+        return f"{roles} · sign in at the login form the target URL leads to"
     url, base = login["url"], (target or "").rstrip("/")
     if base and url.startswith(base + "/"):
         url = url[len(base):]
@@ -458,37 +463,52 @@ def _accounts_note(identities: list[dict], login: dict | None, target: str | Non
 def _sign_in_accounts(sessions, identities: list[dict], login: dict, host, budget, doc: dict,
                       source_dir) -> list[Check]:
     """VER-041: one model call for the login field names, then each account signs in with at most two
-    attempts; a pair that worked is used for the others. A failed login shows in the identity checks."""
+    attempts; a pair that worked is used for the others. A login form found from the target URL names its own
+    fields and needs no model call; the check names the page found. A failed login shows in the identity
+    checks."""
     from .auth.accounts import AccountError, choose_fields, handler_of
     from .auth.sessions import AuthError
     from .preflight import _REQUEST_ERRORS
 
-    path = urlsplit(login["url"]).path
-    handler = handler_of(doc, path) if login["source"] != "--login-url" else None
-    excerpt = None
-    if handler and source_dir:
-        from .agent.source_reader import SourceAccessError, SourceReader
+    found = login["source"] == FROM_TARGET
+    if found:
+        pairs = [("username", "password")]     # stand-ins: the form found names its own fields
+    else:
+        path = urlsplit(login["url"]).path
+        handler = handler_of(doc, path) if login["source"] != "--login-url" else None
+        excerpt = None
+        if handler and source_dir:
+            from .agent.source_reader import SourceAccessError, SourceReader
 
+            try:
+                excerpt = SourceReader(source_dir).read_window(handler[0], handler[1], context=15)["text"]
+            except SourceAccessError:
+                excerpt = None
         try:
-            excerpt = SourceReader(source_dir).read_window(handler[0], handler[1], context=15)["text"]
-        except SourceAccessError:
-            excerpt = None
-    try:
-        pairs = choose_fields(host, budget, endpoint=f"POST {path}",
-                              handler=f"{handler[0]}:{handler[1]}" if handler else None, excerpt=excerpt)
-    except AccountError as exc:
-        return [Check("Login fields", "fail", str(exc))]
+            pairs = choose_fields(host, budget, endpoint=f"POST {path}",
+                                  handler=f"{handler[0]}:{handler[1]}" if handler else None, excerpt=excerpt)
+        except AccountError as exc:
+            return [Check("Login fields", "fail", str(exc))]
     working, refused = None, []
     for ident in identities:
         try:
             working = sessions.sign_in_with_fields(ident["role"], [working] if working else pairs)
         except (AuthError, *_REQUEST_ERRORS):
             refused.append(ident["role"])       # the identity check names the cause; not tried again
+    if found:
+        page = next((i["auth"]["login_url"] for i in identities if i["role"] not in refused), None)
+        where = f"login form found at {printable(urlsplit(page).path or '/')}" if page else \
+            "the login form the target URL leads to"
+        if not refused:
+            return [Check("Login fields", "ok", f"{where}; {working[0]}/{working[1]} worked")]
+        return [Check("Login fields", "fail", f"{where}; no session for {', '.join(refused)}. Give the login "
+                                              "endpoint with --login-url, or use --identities")]
     shown = ", ".join(f"{u}/{p}" for u, p in pairs)
     if not refused:
         return [Check("Login fields", "ok", f"{shown} proposed by the model; {working[0]}/{working[1]} worked")]
-    return [Check("Login fields", "fail", f"{shown} proposed by the model; no token for {', '.join(refused)}. "
-                                          "A login that does not answer a JSON POST with a token needs --identities")]
+    return [Check("Login fields", "fail", f"{shown} proposed by the model; no session for {', '.join(refused)}. "
+                                          "A login that is neither an HTML login form nor a JSON POST answered "
+                                          "with a token needs --identities")]
 
 
 def _identities_fix(errors: list[str]) -> str:
@@ -514,14 +534,16 @@ def _ask_secret(prompt: str) -> str:
         return ""
 
 
-def _sessions(identities: list[dict], http, env, args, interactive: bool):
+def _sessions(identities: list[dict], http, env, args, interactive: bool, target: str | None = None):
     """The run's SessionManager: values from `env` (environment plus hidden input), sign-ins that need a
-    person only in an interactive run, login programs started from the identities file's directory."""
+    person only in an interactive run, login programs started from the identities file's directory, HTML form
+    logins checked against the target URL (VER-041)."""
     from .auth import SessionManager
     from .auth.interactive import LoginUI
 
     base_dir = Path(args.identities).parent if getattr(args, "identities", None) else None
-    return SessionManager(identities, http, env=env, ui=LoginUI() if interactive else None, base_dir=base_dir)
+    return SessionManager(identities, http, env=env, ui=LoginUI() if interactive else None, base_dir=base_dir,
+                          target=target)
 
 
 def _login_programs(identities: list[dict]) -> str | None:
@@ -748,7 +770,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     from .tools.httpx_transport import transport_from_scope
 
     http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
-    sessions = _sessions(identities, http, env, args, interactive)
+    sessions = _sessions(identities, http, env, args, interactive, target)
     source = SourceReader(args.source) if args.source else None
     registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
     browser, browser_note, browser_missing = _proof_browser(args, http, sel)
@@ -1106,7 +1128,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         print(f"\nThe next checks contact {target}{f' via proxy {via}' if via else ''}: one GET, one login "
               "per identity with a login or token endpoint, one GET per check_url"
               + (f"; first one call to {host.model} for the login field names, at most two logins per account"
-                 if login else "") + ".", file=out)
+                 if login and login["source"] != FROM_TARGET else "") + ".", file=out)
         conf = confirm_authorization(non_interactive=args.non_interactive, assume_yes=args.yes)
         if not conf.confirmed:
             add(Check("Target", "fail", f"not contacted: {conf.reason}; confirm with --yes, or use --offline"))
@@ -1114,7 +1136,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             http = GuardedHttpClient(guard, RunBudget(Limits.load()), transport_from_scope(scope))
             add(check_target(http, target, proxy=via))
             if not failed(checks):
-                sessions = _sessions(identities, http, env, args, interactive)
+                sessions = _sessions(identities, http, env, args, interactive, target)
                 if login:
                     add(*_sign_in_accounts(sessions, identities, login, host, RunBudget(Limits.load()), doc, None))
                 add(*check_identities(sessions, identities, http, target, scope=scope))
@@ -2058,7 +2080,8 @@ def _add_account_options(group) -> None:
     )
     group.add_argument(
         "--login-url", metavar="URL",
-        help="where --account signs in (default: the login entry point the assessment names for the target)",
+        help="where --account signs in (default: the login entry point the assessment names for the target, "
+             "else the login form the target URL leads to)",
     )
 
 

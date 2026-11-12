@@ -51,11 +51,15 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urljoin, urlsplit
+
+from ..tools.http import same_origin
 
 REDACTED = "[redacted]"
 _MIN_SECRET_LEN = 4
 RENEW_MARGIN_S = 60                      # renew a session this long before it expires
+_FORM_REDIRECTS = 5                      # redirects an HTML form login follows within its origin
+_HTML_ACCEPT = "text/html,application/xhtml+xml,*/*;q=0.8"
 INTERACTIVE_METHODS = ("oidc-authorization-code", "oidc-device-code")
 LOGIN_METHODS = ("form", "oidc-password", "oidc-client-credentials", *INTERACTIVE_METHODS, "command")
 STATIC_METHODS = ("bearer", "basic", "session")
@@ -153,9 +157,10 @@ class Session:
 
 class SessionManager:
     def __init__(self, identities: list[dict], http, *, env=None, ui=None, base_dir=None,
-                 clock=time.time, sleep=time.sleep, run_program=None):
+                 clock=time.time, sleep=time.sleep, run_program=None, target: str | None = None):
         self._by_role = {i["role"]: i for i in identities if i.get("role")}
         self._http = http                      # GuardedHttpClient
+        self._target = target                  # the target URL, which an HTML form login is checked against
         if env is None:
             import os
             env = os.environ
@@ -204,28 +209,31 @@ class SessionManager:
 
     def sign_in_with_fields(self, role: str, candidates: list[tuple[str, str]]) -> tuple[str, str]:
         """VER-041: log the `form` identity `role` in with the first (username_field, password_field) pair whose
-        login returns a token, at most two attempts. The pair that worked is kept on the identity for renewals.
-        When none does, the role is refused for the rest of the run, like any rejected login (VER-028)."""
+        login obtains a session, at most two attempts, and return the pair the login used (an HTML login form
+        names its own fields). That pair, and the login page found from the target URL, are kept on the identity
+        for renewals. When none works, the role is refused for the rest of the run, like any rejected login
+        (VER-028)."""
         ident = self._by_role.get(role)
         if ident is None or ident.get("method") != "form":
             raise AuthError(f"unknown form identity {role!r}")
         if role in self._refused:
             raise AuthError(f"{self._refused[role]}; not tried again in this run")
-        auth, tried = ident.setdefault("auth", {}), []
+        auth, tried, cause = ident.setdefault("auth", {}), [], ""
         for username_field, password_field in candidates[:2]:
             attempt = dict(auth, username_field=username_field, password_field=password_field)
             tried.append(f"{username_field}/{password_field}")
             try:
                 session = self._form_login(attempt)
-            except AuthError:
+            except AuthError as exc:
+                cause = f": {exc}"
                 continue
             except Exception as exc:      # not a refused login: stop, and never fall back to default fields
                 self._refused[role] = f"form login failed ({type(exc).__name__})"
                 raise
-            auth.update(username_field=username_field, password_field=password_field)
+            ident["auth"] = attempt
             self._keep(role, session)
-            return username_field, password_field
-        self._refused[role] = f"form login returned no token with the fields {', '.join(tried)}"
+            return attempt["username_field"], attempt["password_field"]
+        self._refused[role] = f"form login obtained no session with the fields {', '.join(tried)}{cause}"
         raise AuthError(self._refused[role])
 
     def end_interactive(self) -> None:
@@ -416,19 +424,92 @@ class SessionManager:
         return session
 
     def _form_login(self, auth: dict) -> Session:
-        login_url = auth.get("login_url")
+        """Where `login_url` serves an HTML login form, submit it as a browser does and take the token the login
+        returns or else the cookies it sets; otherwise POST the user name and password as JSON and take the token
+        (VER-028, VER-041). With `login_from_target` (VER-041), `login_url` is the target URL, the login form is
+        the one it shows or redirects to, and the form may send the password to any address on that origin;
+        `login_url` becomes the page found. `auth` keeps the field names the HTML form used."""
+        from . import html_login
+
+        login_url, found = auth.get("login_url"), bool(auth.get("login_from_target"))
         if not login_url:
             raise AuthError("form login needs a login_url")
-        payload = {
-            auth.get("username_field", "username"): self._env_get(auth.get("username_env")),
-            auth.get("password_field", "password"): self._env_get(auth.get("password_env")),
-        }
-        resp = self._http.request("POST", login_url, {"Accept": "application/json"},
-                                  purpose="auth", json=payload)
+        user = (auth.get("username_field", "username"), self._env_get(auth.get("username_env")))
+        password = (auth.get("password_field", "password"), self._env_get(auth.get("password_env")))
+        cookies: dict[str, str] = {}
+        page, page_url = self._exchange("GET", login_url, cookies)
+        form = html_login.find_form(page.text) if html_login.is_html(page) and 200 <= page.status_code < 300 else None
+        if form is None and found:
+            raise AuthError("form login: the target URL leads to no HTML login form; give the login endpoint with "
+                            "--login-url")
+        if form is None:
+            resp = self._http.request("POST", login_url, {"Accept": "application/json"},
+                                      purpose="auth", json={user[0]: user[1], password[0]: password[1]})
+            token = _extract_token(resp)
+            if not token:
+                raise AuthError(f"form login did not return a recognisable token (HTTP {resp.status_code})")
+            return self._with_token_facts(Session({"Authorization": f"Bearer {token}"}))
+        if form.method != "post":
+            raise AuthError("form login: the login form sends GET, which would put the password in the URL")
+        action = urljoin(page_url, form.action) if form.action else page_url
+        if not same_origin(action, login_url) or (not found and urlsplit(action).path != urlsplit(login_url).path):
+            raise AuthError("form login: the login form at login_url sends the password to another address, "
+                            "and credentials go only to login_url")
+        data, auth["username_field"], auth["password_field"] = html_login.submission(form, user, password)
+        resp, _ = self._exchange("POST", action, cookies, data=data)
         token = _extract_token(resp)
-        if not token:
-            raise AuthError(f"form login did not return a recognisable token (HTTP {resp.status_code})")
-        return self._with_token_facts(Session({"Authorization": f"Bearer {token}"}))
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        if not token and not 200 <= resp.status_code < 300:
+            raise AuthError(f"form login: the login form was answered HTTP {resp.status_code}")
+        if not token and html_login.is_html(resp) and html_login.find_form(resp.text):
+            raise AuthError("form login ended on the login form again; check the user name and password")
+        self._check_target(page_url, cookies, headers)
+        if found:
+            auth["login_url"] = page_url          # renewals start at the page found
+        if token:
+            return self._with_token_facts(Session(headers))
+        cookie = "; ".join(f"{name}={value}" for name, value in cookies.items())
+        problem = header_problem("Cookie", cookie) if cookie else "the login set no cookie"
+        if problem:
+            raise AuthError(f"form login: {problem}")
+        return Session({"Cookie": cookie})
+
+    def _check_target(self, login_page: str, cookies: dict, headers: dict) -> None:
+        """After an HTML form login the target URL must no longer lead to the login form; where it still does, the
+        target did not take the login, e.g. because it sent it to a setup page (VER-041). Skipped where the target
+        URL is the login page itself or on another origin. Cookies the target sets meanwhile join the session."""
+        from . import html_login
+
+        target = self._target
+        if not target or not same_origin(target, login_page) or \
+                (urlsplit(target).path or "/") == (urlsplit(login_page).path or "/"):
+            return
+        resp, _ = self._exchange("GET", target, cookies, headers)
+        if 200 <= resp.status_code < 300 and html_login.is_html(resp) and html_login.find_form(resp.text):
+            raise AuthError("form login: the target URL still leads to the login form after the login, so the "
+                            "target did not accept it")
+
+    def _exchange(self, method: str, url: str, cookies: dict, extra: dict | None = None, **body):
+        """One request of an HTML form login and its redirects within the origin, each sent with the cookies set
+        so far, because the GuardedHttpClient keeps none, and the `extra` headers. A redirect is followed as a
+        GET. Returns the last answer and its URL."""
+        from . import html_login
+
+        for hop in range(_FORM_REDIRECTS + 1):
+            headers = {"Accept": _HTML_ACCEPT, **(extra or {})}
+            if cookies:
+                headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in cookies.items())
+            resp = self._http.request(method, url, headers, purpose="auth", follow_redirects=False, **body)
+            html_login.keep_cookies(resp, cookies, self._clock())
+            found = getattr(resp, "headers", None) or {}
+            location = found.get("Location") or found.get("location")
+            try:
+                target = urljoin(url, location) if location and 300 <= resp.status_code < 400 else None
+            except ValueError:
+                target = None
+            if target is None or hop == _FORM_REDIRECTS or not same_origin(target, url):
+                return resp, url
+            method, url, body = "GET", target, {}
 
     # ── OAuth / OIDC ─────────────────────────────────────────────────────────
 

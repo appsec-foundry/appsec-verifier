@@ -240,6 +240,7 @@ def test_verify_blocks_before_contact_on_an_unreadable_source(tmp_path, monkeypa
 FORM = {"role": "alice", "method": "form",
         "auth": {"login_url": f"{BASE}/rest/user/login", "username_env": "AU", "password_env": "AP"}}
 ENV = {"AU": "alice@example.com", "AP": SECRET, "TOK": "tok-" + SECRET}
+LOGIN_PAGE = ("GET", f"{BASE}/rest/user/login")                    # a form login reads it first
 
 
 def _identities(identities, target, env=ENV):
@@ -248,22 +249,23 @@ def _identities(identities, target, env=ENV):
 
 
 def test_a_form_login_passes_once_and_its_token_is_reused():
-    target = Target({("POST", f"{BASE}/rest/user/login"): _resp(200, {"authentication": {"token": "T0K3N"}})})
+    target = Target({LOGIN_PAGE: _resp(404),
+                     ("POST", f"{BASE}/rest/user/login"): _resp(200, {"authentication": {"token": "T0K3N"}})})
     http = _http(target)
     sessions = SessionManager([FORM], http, env=ENV)
     [check] = check_identities(sessions, [FORM], http, BASE, scope=SCOPE)
     assert check.status == "ok" and check.message == "form: logged in"
     sessions.headers_for("alice")                                     # the run reuses it, no second login
-    assert len(target.calls) == 1
+    assert len(target.calls) == 2                                     # the login page, then the login
 
 
 def test_a_rejected_login_is_not_retried_and_shows_no_secret_or_body():
     body = {"error": f"wrong password {SECRET} for alice@example.com"}
-    target = Target({("POST", f"{BASE}/rest/user/login"): _resp(401, body)})
+    target = Target({LOGIN_PAGE: _resp(404), ("POST", f"{BASE}/rest/user/login"): _resp(401, body)})
     [check] = _identities([FORM], target)
     assert check.status == "fail" and "HTTP 401" in check.message
     assert SECRET not in check.message and "wrong password" not in check.message and "alice@" not in check.message
-    assert len(target.calls) == 1
+    assert len(target.calls) == 2
 
 
 def test_an_unreachable_login_endpoint_names_the_cause():
@@ -457,7 +459,7 @@ def run(tmp_path, monkeypatch):
                        "path": "/resource", "allowed_roles": ["alice"], "denied_roles": ["anonymous"],
                        "pointer": "/marker", "value": "fixture-resource"}]}),
              "identities": _write(tmp_path / "i.yaml", {"identities": [FORM]})}
-    state = SimpleNamespace(target=Target({("GET", BASE): _resp(200),
+    state = SimpleNamespace(target=Target({("GET", BASE): _resp(200), LOGIN_PAGE: _resp(404),
                                            ("POST", f"{BASE}/rest/user/login"): _resp(200, {"token": "T0K3N"})}),
                             host=Host(HostReply(step=VALID, usd=0.001)), access=[], files=files)
 
@@ -485,7 +487,7 @@ def test_preflight_passes_and_prints_json_without_secrets(run, capsys):
                                                       "Target", "alice"]
     assert "shop · 2026-11-01 · 1 findings: 1 dynamic" in result["checks"][0]["message"]
     assert SECRET not in out + err and "T0K3N" not in out + err
-    assert [c[0] for c in run.target.calls] == ["GET", "POST"] and run.host.calls == []
+    assert [c[0] for c in run.target.calls] == ["GET", "GET", "POST"] and run.host.calls == []  # target, login
 
 
 def test_without_confirmation_nothing_is_contacted(run, capsys):
@@ -620,9 +622,10 @@ def test_verify_stops_before_any_model_call_when_the_target_does_not_answer(tmp_
 def test_verify_stops_before_any_model_call_when_a_login_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("AU", ENV["AU"])
     monkeypatch.setenv("AP", SECRET)
-    target = Target({("GET", BASE): _resp(200), ("POST", f"{BASE}/rest/user/login"): _resp(401, {"error": "no"})})
+    target = Target({("GET", BASE): _resp(200), LOGIN_PAGE: _resp(404),
+                     ("POST", f"{BASE}/rest/user/login"): _resp(401, {"error": "no"})})
     rc, asked = _verify(tmp_path, monkeypatch, target, identities=[FORM])
-    assert rc == cli.EXIT_BLOCKED and asked == [] and len(target.calls) == 2
+    assert rc == cli.EXIT_BLOCKED and asked == [] and len(target.calls) == 3
 
 
 def test_verify_runs_after_passing_checks(tmp_path, monkeypatch, capsys):

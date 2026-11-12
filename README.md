@@ -83,7 +83,7 @@ window: {from: "2026-11-01T00:00:00Z", until: "2026-11-30T23:59:59Z"}
 owner: {name: Your Name}
 ```
 
-For a login that answers a JSON POST with a token, name the accounts on the command line, for example `--account jim@juice-sh.op --account bender@juice-sh.op`; the Verifier asks for the passwords with hidden input. Other logins go into an `identities.yaml` that names environment variables, never the passwords themselves: bearer token, basic, form login, headers copied from the browser, OIDC (sign-in in your browser, device code, client credentials, password grant) or a login program.
+For an HTML login form or a login that answers a JSON POST with a token, name the accounts on the command line, for example `--account jim@juice-sh.op --account bender@juice-sh.op`; the Verifier asks for the passwords with hidden input and, without `--login-url`, signs in at the login the assessment names or the login form the target URL leads to. Other logins go into an `identities.yaml` that names environment variables, never the passwords themselves: bearer token, basic, form login, headers copied from the browser, OIDC (sign-in in your browser, device code, client credentials, password grant) or a login program.
 
 Reference: [scope file](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001), [identities file](docs/cli.md#identities-file--identitiesyaml-sessions-ver-016028040), [accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041). Examples: [`juice-shop/`](examples/juice-shop/) (local target, form login), [`sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, SSO sign-in in the browser), [`login-program/`](examples/login-program/) (form with a CSRF token).
 
