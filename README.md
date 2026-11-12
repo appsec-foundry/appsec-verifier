@@ -122,13 +122,17 @@ Run `appsec-verifier preflight` with the same files first to check them without 
 
 Before it contacts the target, `verify` shows the test plan: the findings it will test, and the findings it cannot test in this run with what they need. Those are skipped unless you add `--test-all`. During the run it prints each agent step with the request and its result, and each verdict with its reason ([console output](docs/cli.md#console-output)). At the end it lists every finding with its result.
 
+[![Console output of the Juice Shop example: the test agent tests a NoSQL injection finding, the proof check passes and the finding is confirmed](examples/juice-shop/result/console-T-033.png)](examples/juice-shop/result/console.log.md)
+
 `verify` writes to `--output` (default `./verification`):
 
 - `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on, as raw HTTP with the decisive part of the response, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `console.log`, with `--console-log`: what the run printed, without colour or with `--console-log color` in colour.
-- `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots.
+- `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and screenshots of the application and of the requests the verdict rests on, such as the one below; `--screenshots` chooses the classes. They can show target data; check them before sharing. Known credentials are masked in application screenshots.
+
+![Evidence image of the same NoSQL injection finding: the false condition returns 0 review entries, the true condition 2](examples/juice-shop/result/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-1.png)
 
 Two further model reviews run within the run's limits: one checks negative and unproven results for missing tests and whether a confirmed access-control result shows access the application intends, the other checks that the evidence of a confirmed finding is understandable ([technical QA](docs/cli.md#technical-qa-ver-046), [presentation review](docs/cli.md#evidence-presentation-review)).
 
