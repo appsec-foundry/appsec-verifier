@@ -1373,7 +1373,8 @@ def _identities_note(identities, sel):
 # run (_run_hints); the browser's also replaces its few words, since it names the actual cause.
 _NEEDS = {
     "resource": ("test resource",
-                 "a test_resources entry in a scope file, two --account with --allow-intrusive, or an --admin-account",
+                 "a test_resources entry in a scope file, two --account with --allow-intrusive, or an --admin-account "
+                 "for a privileged function",
                  ["add an operator-owned test_resources entry to the scope file, with the finding ID, allowed and "
                   "denied roles, and a harmless response marker",
                   "for IDOR and missing authorisation also: two accounts (--account) with --allow-intrusive, or an "
@@ -1450,7 +1451,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
     in safe mode or all need a login and there is no test identity.
     A finding that names no request is tried only with `source`, where a literal
     route near its location can supply one (agent/controller.py)."""
-    from .agent.experiments import access_methods
+    from .agent.experiments import RECORD_CWES, access_methods
     from .endpoints import WRITE_METHODS
     from .verification_context import missing_capabilities, record_segment
 
@@ -1463,6 +1464,9 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=False) 
         methods = access_methods(plan.id, plan.cwe, scope, identities, writes=not safe)
         if not methods and access_methods(plan.id, plan.cwe, scope, identities, writes=True):
             return "intrusive", "safe mode; without a declared test resource the Verifier creates one, which writes"
+        if not methods and plan.cwe in RECORD_CWES:
+            return "resource", ("no declared test resource, and not two normal accounts with --allow-intrusive; a "
+                                "privileged account does not prove another account's record")
         if not methods:
             return "resource", ("no declared test resource, and neither two normal accounts with --allow-intrusive "
                                 "nor a privileged account")

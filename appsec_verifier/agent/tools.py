@@ -67,6 +67,7 @@ from ..verify import poc
 from .experiments import (
     ENGINE_ERROR_CWES,
     PLAN_SCHEMA,
+    RECORD_CWES,
     access_methods,
     agent_controls,
     bracket_params,
@@ -594,6 +595,10 @@ class AgentTools:
                         second = self.ctx.marker[0] + secrets.token_hex(4)
                     plan = {**plan, "second_marker": second}
             else:
+                if "reference" not in methods and getattr(self.ctx.plan, "cwe", None) in RECORD_CWES:
+                    raise ToolError("an IDOR concerns another account's record, which a privileged comparison cannot "
+                                    "show; it needs a test_resource or two normal accounts with --allow-intrusive "
+                                    "(VER-010)")
                 if "reference" not in methods:
                     raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
                 if plan["reference"] not in privileged_roles(self.ctx.identities):

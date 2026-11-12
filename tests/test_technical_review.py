@@ -84,7 +84,7 @@ def test_qa_gets_the_proof_contract_its_follow_ups_must_fit(tmp_path):
     """VER-046: the reviewer sees the routes, the proof forms open to the class and the citation rule, so it asks
     only what a follow-up can still turn into a checked result."""
     ctx = context(tmp_path)
-    ctx.plan = replace(ctx.plan, cls="access-control", cwe="CWE-639")
+    ctx.plan = replace(ctx.plan, cls="access-control", cwe="CWE-862")
     ctx.identities = [{"role": "account-1"}, {"role": "admin-1", "privileged": True}]
     ctx.agent_history = [{"tool": "http_request", "args": {"path": "/go"}, "result": {"status": 200}}]
     qa, host = reviewer(ctx, [CLEAR])
@@ -92,6 +92,10 @@ def test_qa_gets_the_proof_contract_its_follow_ups_must_fit(tmp_path):
     contract = host.calls[0][1]["proof_contract"]
     assert contract["access_proofs"] == ["reference"] and "one experiment" in contract["citations"]
     assert "user id" in contract["identities"] and contract["routes"]
+    ctx.plan = replace(ctx.plan, cwe="CWE-639")          # an IDOR: the privileged comparison is no proof (VER-010)
+    qa, host = reviewer(ctx, [CLEAR])
+    assert consider(ctx, qa) is None
+    assert host.calls[0][1]["proof_contract"]["access_proofs"][0].startswith("none:")
     injection = context(tmp_path)
     injection.plan = replace(injection.plan, cls="injection", cwe="CWE-943")
     injection.agent_history = ctx.agent_history

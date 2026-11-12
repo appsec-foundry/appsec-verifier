@@ -437,12 +437,14 @@ IDENTITIES = [{"role": "account-1", "method": "bearer", "auth": {"token_env": "A
 ENV = {"A": "token-account-1", "B": "token-account-2", "C": "token-admin-1"}
 
 
-def _tools(tmp_path, *, intrusive=True, identities=IDENTITIES, scope=None, transport=None):
+def _tools(tmp_path, *, intrusive=True, identities=IDENTITIES, scope=None, transport=None, cwe=None):
     ctx = _ctx(tmp_path, transport or (lambda *a, **k: Resp()), safe=not intrusive, read_only=not intrusive,
                env=ENV, idents=identities)
     ctx.marker = MARKER
     if scope:
         ctx.scope = scope
+    if cwe:
+        ctx.plan = replace(ctx.plan, cwe=cwe)
     return AgentTools(ctx)
 
 
@@ -461,8 +463,11 @@ def test_an_owner_plan_returns_the_marker_in_intrusive_mode(tmp_path):
     ({"identities": IDENTITIES[1:]}, {"owner": "account-2"}, "two normal accounts"),
     ({"scope": {**SCOPE, "test_resources": [RESOURCE]}}, {"owner": "account-2"}, "takes precedence"),
     ({}, {"owner": "account-2", "method": "POST"}, "read with GET"),
-    ({}, {"reference": "account-1"}, "must be a privileged account"),
-    ({"identities": IDENTITIES[:2]}, {"reference": "account-1"}, "privileged and a normal account"),
+    ({"cwe": "CWE-862"}, {"reference": "account-1"}, "must be a privileged account"),
+    ({"identities": IDENTITIES[:2], "cwe": "CWE-862"}, {"reference": "account-1"}, "privileged and a normal account"),
+    # VER-010: an IDOR is another account's record, which the privileged account's answer cannot show
+    ({}, {"reference": "admin-1"}, "IDOR concerns another account's record"),
+    ({"intrusive": False}, {"reference": "admin-1"}, "IDOR concerns another account's record"),
     ({}, {"owner": "account-2", "reference": "admin-1"}, "invalid experiment declaration"),
 ])
 def test_plan_test_refuses_an_access_plan_the_run_cannot_prove(tmp_path, kwargs, plan, reason):
@@ -563,16 +568,17 @@ def test_the_header_capability_is_a_test_accounts_session(identities, inputs, mi
 def test_a_read_variant_that_needs_the_header_is_planned_with_test_accounts(tmp_path):
     read = {"id": "read", "hypothesis": "Any account reads any basket", "required_capabilities": ["header"],
             "request": {"method": "GET", "path": "/rest/basket/:id", "inputs": [{"location": "path", "name": "id"}]}}
-    result = _pinned(_tools(tmp_path), read).plan_test(**_plan_args(reference="admin-1", variant="read"))
+    result = _pinned(_tools(tmp_path, cwe="CWE-862"), read).plan_test(**_plan_args(reference="admin-1",
+                                                                                     variant="read"))
     assert result["accepted"] is True
-    tools = _pinned(_tools(tmp_path), read)
+    tools = _pinned(_tools(tmp_path, cwe="CWE-862"), read)
     tools.ctx.identities = []
     with pytest.raises(ToolError, match="unavailable capabilities: header"):
         tools.plan_test(**_plan_args(reference="admin-1", variant="read"))
 
 
 def test_a_privileged_comparison_needs_no_writes(tmp_path):
-    result = _tools(tmp_path, intrusive=False).plan_test(**_plan_args(reference="admin-1"))
+    result = _tools(tmp_path, intrusive=False, cwe="CWE-862").plan_test(**_plan_args(reference="admin-1"))
     assert result["accepted"] is True and "marker" not in result
 
 
@@ -691,6 +697,14 @@ def test_the_test_plan_follows_the_accounts_and_the_mode():
     assert _blocker(replace(plan, cwe="CWE-306"), identities=normal + admin, safe=False)[0] == "resource"
     assert _blocker(plan, identities=normal, scope={"test_resources": [RESOURCE]}) is None
     assert _blocker(plan, identities=normal[1:], scope={"test_resources": [RESOURCE]})[0] == "resource"
+    # VER-008, VER-010: an IDOR is another account's record; a privileged account cannot prove it, so it is not
+    # tested unless an account can create the record or the operator declares one
+    idor = replace(plan, cwe="CWE-639")
+    assert _blocker(idor, identities=normal + admin)[0] == "intrusive"
+    need, reason = _blocker(idor, identities=normal[:1] + admin)
+    assert need == "resource" and "privileged account does not prove another account's record" in reason
+    assert _blocker(idor, identities=normal + admin, safe=False) is None
+    assert _blocker(idor, identities=normal + admin, scope={"test_resources": [RESOURCE]}) is None
 
 
 def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
@@ -715,15 +729,17 @@ def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
     assert _blocker(_plan("access-control"), identities=two + admin, safe=False) is None  # the route rule decides
 
 
-@pytest.mark.parametrize("identities, safe, scope, expected", [
-    (ROLES[:2], False, {}, "Own-resource proof"),
-    (ROLES, True, {}, "Privileged-function proof"),
-    (ROLES, False, {"test_resources": [RESOURCE]}, "use the configured test_resource"),
-    (ROLES[:2], True, {}, "cannot be confirmed in this run"),
+@pytest.mark.parametrize("identities, safe, scope, cwe, expected", [
+    (ROLES[:2], False, {}, "CWE-639", "Own-resource proof"),
+    (ROLES, True, {}, "CWE-862", "Privileged-function proof"),
+    (ROLES, False, {"test_resources": [RESOURCE]}, "CWE-639", "use the configured test_resource"),
+    (ROLES[:2], True, {}, "CWE-639", "cannot be confirmed in this run"),
+    (ROLES, True, {}, "CWE-639", "cannot be confirmed in this run"),        # an IDOR: no privileged comparison
 ])
-def test_the_prompt_names_only_the_proofs_the_run_allows(identities, safe, scope, expected):
-    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe="CWE-639"), identities=identities,
+def test_the_prompt_names_only_the_proofs_the_run_allows(identities, safe, scope, cwe, expected):
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe), identities=identities,
                           safe=safe, read_only=safe, scope=scope, marker=MARKER)
     prompt = _system(ctx)
     assert expected in prompt and M not in prompt
     assert ("Own-resource proof" in prompt) == (expected == "Own-resource proof")
+    assert ("Privileged-function proof" in prompt) == (expected == "Privileged-function proof")

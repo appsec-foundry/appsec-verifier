@@ -187,6 +187,9 @@ def confirming_form(cwe, location) -> str | None:
 
 # Exposure and missing authentication are proven only with an operator-declared resource (verifiable-cwes.yaml).
 _RESOURCE_ONLY_CWES = ("CWE-200", "CWE-306")
+# An IDOR concerns another account's record, never a privileged function, so the privileged comparison cannot
+# prove it (VER-010): without a declared resource only a record an account creates can.
+RECORD_CWES = ("CWE-639",)
 
 
 def normal_roles(identities) -> list[str]:
@@ -200,14 +203,16 @@ def privileged_roles(identities) -> list[str]:
 def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[str]:
     """How this run can prove an access-control finding (VER-010): `resource`, the operator's test resource,
     which takes precedence; else `owner`, a resource a normal account creates (two normal accounts and writes),
-    and `reference`, a comparison with a privileged account (VER-041)."""
+    and, except for an IDOR, `reference`, a comparison with a privileged account for a privileged function
+    (VER-041). The test plan, plan_test, the prompt and technical QA all read this, so a finding no method fits is
+    not tested (VER-008)."""
     if any(r["finding_id"] == finding_id for r in (scope or {}).get("test_resources", [])):
         return ["resource"]
     if cwe in _RESOURCE_ONLY_CWES:
         return []
     normal = normal_roles(identities)
-    return [m for m, ok in (("owner", writes and len(normal) >= 2),
-                            ("reference", bool(normal and privileged_roles(identities)))) if ok]
+    reference = bool(normal and privileged_roles(identities)) and cwe not in RECORD_CWES
+    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("reference", reference)) if ok]
 
 
 def sql_controls(plan):

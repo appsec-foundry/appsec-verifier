@@ -225,6 +225,7 @@ def test_the_privileged_comparison_names_what_it_cannot_prove():
     """VER-010: without writes, an ownership or missing-authentication finding has no proof in this run, and no
     proof needs a looked-up user id; the agent hears that before trying plans the tools refuse."""
     ctx = _ctx()
+    ctx.plan.cwe = "CWE-862"                  # an IDOR (CWE-639) is never offered the privileged comparison
     ctx.identities = [{"role": "account-1"}, {"role": "admin-1", "privileged": True}]
     text = system_prompt(ctx)
     assert "fits only a finding that identifies a function as privileged" in text
