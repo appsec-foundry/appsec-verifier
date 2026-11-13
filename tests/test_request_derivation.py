@@ -383,11 +383,51 @@ def test_the_script_itself_supplies_its_request_with_the_names_it_contains(tmp_p
     response(ctx, "<p>help</p>", path="/vulnerabilities/view_help.php")
     with pytest.raises(ToolError):
         derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "admin"}])
-    ctx.agent_history[0]["result"] = {"status": 500}
-    with pytest.raises(ToolError):
-        derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "id"}])
-    ctx.agent_history[0]["result"] = {"status": 200}
-    assert derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "id"}])["accepted"]
+    for status in (404, 405, 410):                      # VER-056: the file is not served there
+        ctx.agent_history[0]["result"] = {"status": status}
+        with pytest.raises(ToolError, match="other than 404, 405 or 410"):
+            derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "id"}])
+    for status in (200, 302, 400, 403, 500):            # any other answer shows that it is served
+        ctx.agent_history[0]["result"] = {"status": status}
+        ctx.derived_requests, ctx.inferred_route_roots = [], []        # each status as the finding's first derivation
+        assert derive(ctx, "/vulnerabilities/view_help.php", inputs=[{"location": "query", "name": "id"}])["accepted"]
+
+
+def test_a_script_that_answers_500_without_its_input_still_supplies_its_request(tmp_path):
+    """VER-056, VER-036: DVWA's open redirect is the script itself, which answers 500 without its redirect
+    parameter. That answer shows the file is served: it is no failed action, it supplies the request, and the
+    finding's request is sent. A page above it supplies none through the forms of an answer that failed."""
+    sent = []
+
+    def target(method, url, headers, **kwargs):
+        sent.append((method, url.removeprefix("https://app.example.com"), kwargs.get("params")))
+        if (kwargs.get("params") or {}).get("redirect"):
+            moved = Resp(302, "")
+            moved.headers = {"Location": kwargs["params"]["redirect"]}
+            return moved
+        return Resp(500, '<form action="source/low.php"><input name="redirect"></form>')
+
+    file = "vulnerabilities/open_redirect/source/low.php"
+    ctx = page_script(tmp_path, file, "<?php\nheader('location: ' . $_GET['redirect']);\n", line=2, transport=target)
+    ctx.plan = replace(ctx.plan, cls="open-redirect", cwe="CWE-601")
+    marker = {"redirect": "https://x.invalid/"}
+    actions = [
+        {"tool": "http_request", "args": {"path": "/" + file, "params": marker}},          # no route yet: refused
+        {"tool": "http_request", "args": {"path": "/" + file, "prerequisite": True}},      # 500: the file is served
+        {"tool": "derive_request", "args": {"evidence_step": 2, "method": "GET", "path": "/" + file,
+         "inputs": [{"location": "query", "name": "redirect"}], "reason": "the script reads redirect"}},
+        {"tool": "http_request", "args": {"path": "/" + file, "params": marker}},
+        {"verdict": {"verdict": "inconclusive", "rationale": "reached the request"}},
+    ]
+    result = AgentProbe("open-redirect", lambda: ScriptedPlanner(actions)).run(ctx)
+    assert result.limits_hit is None
+    assert sent == [("GET", "/" + file, None), ("GET", "/" + file, marker)]
+    above = page_script(tmp_path, file, "<?php\nheader('location: ' . $_GET['redirect']);\n", line=2)
+    response(above, '<form action="source/low.php"><input name="redirect"></form>',
+             path="/vulnerabilities/open_redirect/")
+    above.agent_history[0]["result"] = {"status": 500}
+    with pytest.raises(ToolError, match="other than 404, 405 or 410"):
+        derive(above, "/" + file, inputs=[{"location": "query", "name": "redirect"}])
 
 
 def test_a_routeless_page_script_reaches_its_request_through_a_read_and_a_derivation(tmp_path):
@@ -416,8 +456,8 @@ def test_a_refusal_names_the_unread_pages_and_then_the_missing_request(tmp_path)
     read yet; once all are read without one, it says to report the missing request; without a source checkout at
     once. The requests stay refused."""
     ctx = page_script(tmp_path)
-    response(ctx, "<p>error</p>", path="/vulnerabilities/sqli/source/low.php")
-    ctx.agent_history[0]["result"] = {"status": 500}
+    response(ctx, "<p>not found</p>", path="/vulnerabilities/sqli/source/low.php")
+    ctx.agent_history[0]["result"] = {"status": 404}
     unread = "not read yet, /vulnerabilities/sqli/source/, /vulnerabilities/sqli/, with http_request prerequisite"
     with pytest.raises(ToolError, match=unread):
         derive(ctx, "/vulnerabilities/sqli/source/low.php", inputs=[{"location": "query", "name": "id"}])

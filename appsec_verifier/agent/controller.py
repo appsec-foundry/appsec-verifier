@@ -1,5 +1,5 @@
 """Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036,
-VER-043, VER-047, VER-057).
+VER-043, VER-047, VER-052, VER-056, VER-057).
 
 ScopeGuard remains the connection authority. Assessment routes and independently
 checked request derivations narrow that scope; model plans alone add nothing.
@@ -27,7 +27,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
-from .derivation import refused_write, request_hint
+from .derivation import refused_write, request_hint, served_evidence_file
 from .experiments import brackets, control_values, normal_roles, take_sink, token
 from .tools import ToolError, _strings
 
@@ -391,7 +391,10 @@ class Controller:
         # server without plan context is usually not informative.
         experiment_probe = (name == "http_request" and self.plan
                             and self.plan.get("kind") in ("boolean", "timing"))
-        failed = bool(result.get("error")) or (server_error and not experiment_probe)
+        # VER-056: a page script's evidence file that answers a read without its input with a server error shows
+        # that it is served; that answer can supply the finding's request, so it is an observation, not a failure.
+        served = name == "http_request" and served_evidence_file(self.ctx, args or {}, status)
+        failed = bool(result.get("error")) or (server_error and not experiment_probe and not served)
         if failed:
             self.failures += 1
             self.last_failure = _clip(f"{name}: {result.get('error') or f'HTTP {status}'}")

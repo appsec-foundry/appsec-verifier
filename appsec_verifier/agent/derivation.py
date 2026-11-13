@@ -534,6 +534,22 @@ def request_hint(ctx, history) -> str | None:
     return None
 
 
+_NOT_SERVED = (404, 405, 410)
+
+
+def served_evidence_file(ctx, args: dict, status) -> bool:
+    """VER-056: whether a recorded GET of a page script's evidence file itself shows that the file is served: any
+    answer but 404, 405 or 410, such as the 500 of a script that rejects a request lacking its input. Only the
+    file itself; a page above it supplies a request only through a successful answer's forms and links."""
+    if type(status) is not int or status in _NOT_SERVED or page_source(ctx) is None:
+        return False
+    if (args.get("method") or "GET").upper() != "GET":
+        return False
+    pages = page_candidates(getattr(ctx.plan, "instance", None))
+    sent = urlsplit(resolve(ctx, args.get("path") or "/")).path
+    return bool(pages) and sent == urlsplit(resolve(ctx, pages[0])).path
+
+
 def refused_write(ctx, method: str, path: str) -> str:
     """VER-052: keep a write this run refused for its mode, nobody could allow or the operator declined, for the
     finding's result, where --allow-intrusive would send it; returns what the agent can do next."""
@@ -614,10 +630,13 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         candidates = _source_candidates(ctx, history, h)
     elif h.get("tool") == "http_request":
         response = ctx.responses.get(evidence_step, {})
-        if not response.get("complete") or not 200 <= h.get("result", {}).get("status", 0) < 300:
-            raise ValueError(_hinted("request derivation needs a complete successful recorded response", ctx, history))
+        status = h.get("result", {}).get("status", 0)
+        successful = bool(response.get("complete")) and type(status) is int and 200 <= status < 300
+        if not successful and not served_evidence_file(ctx, h.get("args") or {}, status):
+            raise ValueError(_hinted("request derivation needs a complete successful recorded response, or an answer "
+                                     "of the evidence file itself other than 404, 405 or 410", ctx, history))
         parser = _Forms(resolve(ctx, h["args"].get("path", "/")))
-        parser.feed(response.get("body", ""))
+        parser.feed(response.get("body", "") if successful else "")     # forms and links: a successful page only
         candidates = parser.routes
     else:
         raise ValueError("only recorded source declarations and application links or forms supply requests")
