@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass
 
 from ..limits import LimitExceeded, execution_deadline
-from .steps import inconclusive, parse_step, prompt, system_prompt
+from .steps import inconclusive, parse_step, prompt, step_schema, system_prompt
 
 CALL_TIMEOUT_S = 300.0
 MAX_OUTPUT_BYTES = 1_048_576
@@ -191,8 +191,9 @@ class HostPlanner:
         self._host = host
 
     def next_step(self, ctx, history: list[dict]) -> dict:
+        """The finding's next step; structured output offers only the actions its prompt offers."""
         try:
-            return parse_step(self._request(ctx, system_prompt(ctx), prompt(ctx, history)))
+            return parse_step(self._request(ctx, system_prompt(ctx), prompt(ctx, history), schema=step_schema(ctx)))
         except HostCallError as exc:
             return inconclusive(str(exc))
 
@@ -205,10 +206,10 @@ class HostPlanner:
         """A tool-less review/revision call; its caller validates the separate schema (VER-042). `images` are PNG
         bytes the caller has cleared for a model; a host that cannot take them never receives them."""
         ctx.guard.check_window()
-        return self._request(ctx, system, payload, schema=schema,
+        return self._request(ctx, system, payload, schema=schema, review=True,
                              images=tuple(images) if self.supports_images else ())
 
-    def _request(self, ctx, system: str, payload: str, *, schema=None, images=()):
+    def _request(self, ctx, system: str, payload: str, *, schema=None, review=False, images=()):
         host = self._host
         if host.broken:
             raise HostCallError(f"{host.label} stopped for this run: {host.broken}")
@@ -218,14 +219,13 @@ class HostPlanner:
         remaining = ctx.budget.remaining_time()
         if remaining is not None:
             timeout = min(timeout, remaining)
-        if schema is not None:
+        if review:
             window = ctx.guard.remaining_time()
             if window is not None:
                 timeout = min(timeout, window)
         try:
             with execution_deadline(timeout, kind="model-timeout"):
-                reply = host.call(system, payload, timeout, ctx.budget,
-                                  **({"schema": schema} if schema is not None else {}),
+                reply = host.call(system, payload, timeout, ctx.budget, schema=schema,
                                   **({"images": images} if images else {}))
         except LimitExceeded as exc:
             if exc.kind != "model-timeout":

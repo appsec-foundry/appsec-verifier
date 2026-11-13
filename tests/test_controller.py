@@ -488,7 +488,7 @@ def test_model_call_deadline_counts_as_host_failure(tmp_path, monkeypatch):
         label = "fake"
         broken = None
 
-        def call(self, *args):
+        def call(self, *args, **kwargs):
             time.sleep(0.5)
 
     monkeypatch.setattr(hosts, "CALL_TIMEOUT_S", 0.02)

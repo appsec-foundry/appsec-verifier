@@ -295,6 +295,29 @@ def test_failed_call_ends_only_this_finding():
     assert HostPlanner(host).next_step(_ctx(), [])["tool"] == "http_request"
 
 
+@pytest.mark.parametrize("cls", ["xss", "injection", "access-control"])
+def test_a_findings_structured_output_offers_only_the_actions_its_prompt_offers(cls):
+    """Refused case, as in a DVWA run: the prompt did not offer login_fields, but the step schema's action enum
+    did, and an XSS agent spent two of its steps on it. A finding's call now enumerates the prompt's actions only."""
+    seen = []
+
+    class Host(ScriptedHost):
+        def call(self, system, prompt, timeout, budget, *, schema=None):
+            seen.append((system, schema))
+            return HostReply(step=_wire("http_request", path="/x"))
+
+    ctx = _ctx()
+    ctx.plan.cls = cls
+    HostPlanner(Host([])).next_step(ctx, [])
+    system, schema = seen[0]
+    listed = json.loads(system.split("The actions and their argument schemas are:\n", 1)[1].split("\n", 1)[0])
+    assert schema["properties"]["action"]["enum"] == [a["name"] for a in listed]
+    assert "login_fields" not in schema["properties"]["action"]["enum"]
+    assert "login_fields" in STEP_SCHEMA["properties"]["action"]["enum"]   # the login-field call keeps its action
+    assert {k: v for k, v in schema.items() if k != "properties"} == \
+        {k: v for k, v in STEP_SCHEMA.items() if k != "properties"}
+
+
 def test_cost_is_charged_and_the_ceiling_blocks_further_calls():
     ctx = _ctx(Limits(cost_limit_usd=0.015))
     host = ScriptedHost([HostReply(step=_wire("http_request", path="/x"), usd=0.01)] * 2)

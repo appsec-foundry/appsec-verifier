@@ -398,7 +398,10 @@ class FakeHost:
     def __init__(self, *replies):
         self.replies, self.calls, self.broken = list(replies), 0, None
 
-    def call(self, system, prompt, timeout, budget):
+    def call(self, system, prompt, timeout, budget, *, schema=None):
+        """Answers a finding's steps only; a review call (technical QA) fails without using a reply."""
+        if "args_json" not in ((schema or {}).get("properties") or {}):
+            raise TypeError("this fake host answers finding steps only")
         self.calls += 1
         return self.replies[min(self.calls, len(self.replies)) - 1]
 

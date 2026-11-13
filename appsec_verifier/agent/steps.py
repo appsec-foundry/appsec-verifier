@@ -68,6 +68,14 @@ def offered(ctx, name: str) -> bool:
     return True
 
 
+def step_schema(ctx) -> dict:
+    """The step schema of a finding's call: its action enum lists only the actions the finding's prompt offers, so
+    structured output cannot name one the prompt does not describe, such as login_fields, which is asked only
+    before the run. STEP_SCHEMA, with every action, stays the default of the other calls."""
+    actions = [t["name"] for t in _tool_defs() if offered(ctx, t["name"])]
+    return {**STEP_SCHEMA, "properties": {**STEP_SCHEMA["properties"], "action": {"type": "string", "enum": actions}}}
+
+
 def _offered_schema(tool: dict, ctx=None) -> dict:
     """The schema shown to the model. A plan's optional strategy (VER-043) is accepted but not offered, so the
     model is not prompted to write one; the JavaScript predicate form is offered to a NoSQL finding only, the
