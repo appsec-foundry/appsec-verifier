@@ -12,10 +12,12 @@ An identity's credentials go only to the origin it is bound to (its
 scope (VER-018, VER-028). Only GET, HEAD and OPTIONS are sent in safe mode, and
 POST, PUT and PATCH only in intrusive mode, with the finding's marker and
 without naming an existing record in the path (agent/controller.py). In safe
-mode, where the operator can be asked, a write that passes every other check,
-or a plan that needs writes neither its variant declares nor an access-control
-proof's created resource needs, is put to the operator
-first, and a yes turns the finding intrusive (VER-052, write_prompt.py); DELETE and
+mode, where the operator can be asked, a write that passes every other check
+and that the finding did not name before the run (a variant, a request the
+assessment names, an input or resource the scope file declares), or a plan
+that needs such writes and no access-control proof's created resource, is put
+to the operator first, and a yes turns the finding intrusive (VER-052,
+write_prompt.py); DELETE and
 every other method are never sent (VER-014). A privileged account (--admin-account) only reads, in any
 mode (VER-041). An access-control plan without an operator test resource is
 accepted only when the run allows its proof: a resource a normal account
@@ -318,8 +320,10 @@ class AgentTools:
                 prerequisites.append(prerequisite)
             plan = {**plan, "strategy": {**plan["strategy"], "prerequisites": prerequisites}}
         # VER-052: when the operator can be asked, the plan is checked as in intrusive mode; what only intrusive
-        # mode allows is collected, and the operator is asked once every other check has passed.
-        asking = (self.ctx.safe or self.ctx.read_only) and self._ask_writes() is not None
+        # mode allows is collected, and the operator is asked once every other check has passed. A write the
+        # finding names before the run is not asked about: --allow-intrusive decided it at the start.
+        asking = ((self.ctx.safe or self.ctx.read_only) and self._ask_writes() is not None
+                  and not self._foreseen_write(plan.get("method", "GET"), plan.get("path", "")))
         safe_mode = (self.ctx.safe or self.ctx.read_only) and not asking
         needs_writes: list[str] = []
         # Name every declaration problem at once, so one revision can fix them all.
@@ -945,6 +949,29 @@ class AgentTools:
         """The operator's question for write requests safe mode does not send, or None (VER-052)."""
         return getattr(self.ctx, "ask_writes", None)
 
+    def _foreseen_write(self, method: str, path: str) -> str | None:
+        """Who names the write `method path` for this finding before the run: a declared variant, the assessment
+        (a request of the finding or one that prepares its test) or the scope file (an operator-declared input or
+        test resource); None for a write the agent comes upon while testing. The test plan showed a foreseen write,
+        so --allow-intrusive decided it at the start and the operator is not asked mid-run (VER-052)."""
+        if method in SAFE_METHODS:
+            return None
+        plan = self.ctx.plan
+        for variant in (getattr(plan, "verification_context", None) or {}).get("variants", []):
+            request = variant.get("request") or {}
+            if request.get("method") == method and planned_route(request.get("path") or "", path):
+                return f"variant {variant.get('id')!r} names this write"
+        if any(e.method in (method, "ALL") and planned_route(e.path, path)
+               for e in (*getattr(plan, "endpoints", ()), *getattr(plan, "preparation", ()))):
+            return "the assessment names this write for the finding"
+        scope = self.ctx.scope or {}
+        if any(r.get("finding_id") == plan.id and planned_route(r.get("path") or "", path)
+               and (r.get("method", "GET") == method if key == "test_resources"
+                    else r.get("input_location") in ("json", "form"))
+               for key in ("injection_inputs", "test_resources") for r in scope.get(key, [])):
+            return "the scope file names this write for the finding"
+        return None
+
     def _may_write(self, requests: list[str], identity: str) -> bool:
         """Whether this finding may send write requests: in intrusive mode, or after the operator allowed them,
         which turns this finding intrusive (VER-052). The agent's step note is shown as its reason."""
@@ -1091,7 +1118,12 @@ class AgentTools:
                     f"another origin (VER-018). Send this request without a role."
                 )
         # VER-052: every other check has passed, so the operator is asked only for a write the run would send in
-        # intrusive mode; before the session headers, which may sign in.
+        # intrusive mode, and only for one the finding did not name before the run; before the session headers,
+        # which may sign in.
+        foreseen = (self.ctx.safe or self.ctx.read_only) and self._foreseen_write(m, url)
+        if foreseen:
+            raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); {foreseen} before the run, so "
+                            "--allow-intrusive decides it and the operator is not asked (VER-052)")
         if m not in SAFE_METHODS and not self._may_write([f"{m} {urlsplit(url).path or '/'}"], role or ""):
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); the operator did not allow "
                             "write requests for this finding (VER-052)")

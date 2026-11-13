@@ -209,6 +209,82 @@ def test_a_write_the_variant_declares_is_refused_without_asking(tmp_path):
     assert asked == [] and tools.ctx.safe and getattr(tools, "_experiment", None) is None
 
 
+_NAMED_WRITE = {"id": "variant-001", "hypothesis": "id is concatenated into the UPDATE",
+                "request": {"method": "POST", "path": "/rest/basket/{id}", "inputs": [{"location": "json",
+                                                                                         "name": "id"}]}}
+
+
+def _naming(source):
+    """The plan or scope fields by which a finding names POST /rest/basket/{id} before the run."""
+    from appsec_verifier.endpoints import Endpoint
+
+    write = (Endpoint("POST", "/rest/basket/{id}", None),)
+    return {
+        "variant": ({"verification_context": {"version": 1, "variants": [_NAMED_WRITE]},
+                     "variant_id": "variant-001"}, {}),
+        "assessment request": ({"endpoints": write}, {}),
+        "assessment request for any method": ({"endpoints": (Endpoint("ALL", "/rest/basket/{id}", None),)}, {}),
+        "preparation": ({"preparation": write}, {}),
+        "scope injection input": ({}, {"injection_inputs": [{"finding_id": "T-1", "path": "/rest/basket/{id}",
+                                                             "input_location": "json", "input_name": "id",
+                                                             "semantics": "literal"}]}),
+        "scope test resource": ({}, {"test_resources": [{"id": "r", "finding_id": "T-1", "path": "/rest/basket/{id}",
+                                                         "method": "POST", "allowed_roles": ["customer-a"],
+                                                         "denied_roles": [], "pointer": "/id", "value": "1"}]}),
+    }[source]
+
+
+@pytest.mark.parametrize("source", ["variant", "assessment request", "assessment request for any method",
+                                    "preparation", "scope injection input", "scope test resource"])
+def test_a_write_the_finding_names_before_the_run_is_refused_without_asking(tmp_path, source):
+    """Refused case, as in a DVWA run: the agent sent its variant's own POST "to test operator write permission"
+    and the operator was asked mid-run. The test plan showed that write, so --allow-intrusive decides it; only a
+    write the agent comes upon while testing is put to the operator."""
+    from dataclasses import replace
+
+    plan_fields, scope_fields = _naming(source)
+    sent = []
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: sent.append(a) or Resp()))
+    tools.ctx.plan = replace(tools.ctx.plan, **plan_fields)
+    tools.ctx.scope = {**tools.ctx.scope, **scope_fields}
+    asked = _asking(tools, False)
+    with pytest.raises(ToolError, match="before the run, so --allow-intrusive decides it and the operator is not "
+                                        "asked"):
+        tools.http_request(role="customer-a", method="POST", path="/rest/basket/7", json={"id": "vrf1"})
+    assert asked == [] and sent == [] and tools.ctx.safe
+    with pytest.raises(ToolError, match="the operator did not allow write requests"):
+        tools.http_request(role="customer-a", method="POST", path="/rest/coupon", json={"c": "vrf1"})
+    assert asked == [(["POST /rest/coupon"], None, "customer-a")] and sent == []    # an unforeseen write is asked
+
+
+def test_a_write_the_finding_names_is_sent_once_the_run_allows_writes(tmp_path):
+    """The rule decides only whether to ask: with --allow-intrusive, or after a yes, the named write is sent."""
+    from dataclasses import replace
+
+    sent = []
+    tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: sent.append((m, u)) or Resp(), safe=False,
+                            read_only=False))
+    tools.ctx.plan = replace(tools.ctx.plan, **_naming("variant")[0])
+    assert tools.http_request(role="customer-a", method="POST", path="/rest/basket/7", json={"id": "vrf1"})[
+        "status"] == 200
+    assert sent == [("POST", "https://app.example.com/rest/basket/7")]
+
+
+def test_a_plan_on_a_write_the_assessment_names_is_refused_without_asking(tmp_path):
+    """Refused case: a plan whose write the finding names before the run is not put to the operator either."""
+    from dataclasses import replace
+
+    from appsec_verifier.endpoints import Endpoint
+
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+    tools.ctx.plan = replace(tools.ctx.plan, cls="injection", cwe="CWE-89",
+                             endpoints=(Endpoint("POST", "/rest/user/login", None),))
+    asked = _asking(tools, True)
+    with pytest.raises(ToolError, match="a write needs --allow-intrusive"):
+        tools.plan_test(**_WRITE_PLAN)
+    assert asked == [] and tools.ctx.safe and getattr(tools, "_experiment", None) is None
+
+
 # ── in a run (cli.py, verify/runner.py) ──────────────────────────────────────
 
 _SAFE_MODE_ONLY = ("not-attempted", "not tested: safe mode; every request the finding names writes, and the proof "
