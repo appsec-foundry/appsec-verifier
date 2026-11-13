@@ -251,8 +251,9 @@ def test_a_finding_prompt_carries_only_its_own_class():
     assert '"name": "browser_check"' in text and '"name": "plan_test"' not in text and "sql_template" not in text
     assert "sql_template with exactly one" in injection
     # Fixed bounds, so the prompts cannot silently grow back (characters, not tokens). The injection bound grew by
-    # 250 for the text observation of page answers (VER-055).
-    assert len(text) < 16_000 and len(injection) < 21_250
+    # 250 for the text observation of page answers (VER-055), and by 50 for read_response's text window of an HTML
+    # answer, which a pointer cannot read.
+    assert len(text) < 16_000 and len(injection) < 21_300
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():

@@ -791,12 +791,17 @@ class AgentTools:
                 raise ToolError("no recorded response for that step in this finding")
             body = response["body"]
             if pointer is not None:
+                if not response["complete"]:
+                    raise ToolError(f"the answer of step {n} was cut, so pointer cannot select a JSON value in it; "
+                                    "omit pointer to read its text from offset")
                 try:
-                    if not response["complete"]:
-                        raise ValueError("incomplete")
                     body = token(pointer_value(body, pointer))
+                except jsonlib.JSONDecodeError as exc:
+                    raise ToolError(f"the answer of step {n} is not JSON, such as an HTML page; omit pointer to read "
+                                    "its text, 1500 characters from offset") from exc
                 except (ValueError, TypeError, KeyError, IndexError, RecursionError) as exc:
-                    raise ToolError("the JSON pointer cannot be read from this response") from exc
+                    raise ToolError(f"the JSON answer of step {n} has no value at that pointer; omit pointer to read "
+                                    "its text from offset") from exc
             out.append(
                 {
                     "step": n,

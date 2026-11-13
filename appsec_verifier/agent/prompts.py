@@ -85,8 +85,8 @@ def _tool_defs() -> list[dict]:
         },
         {
             "name": "read_response",
-            "description": "Read or compare already recorded redacted answers from this "
-            "finding. Select a JSON pointer or a text window; no new target request.",
+            "description": "Read or compare recorded redacted answers of this finding; no new target request. "
+            "Without pointer: 1500 characters of text from offset, HTML included. pointer: a JSON value only.",
             "input_schema": {
                 "type": "object",
                 "required": ["steps"],

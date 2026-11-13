@@ -156,7 +156,20 @@ def test_response_inspection_is_redacted_bounded_and_finding_local(tmp_path):
     assert len(window["text"]) == 1500 and window["more"]
     with pytest.raises(ToolError, match="this finding"):
         tools.read_response(steps=[2])
+    with pytest.raises(ToolError, match="no value at that pointer; omit pointer"):
+        tools.read_response(steps=[1], pointer="/missing")
     assert AgentTools(ctx).take_response() is None
+
+
+def test_a_pointer_into_an_html_answer_names_the_text_window_instead(tmp_path):
+    # An HTML page has no JSON value: the refusal says to omit pointer, and without it the page text is returned.
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(200, "<html><body><p>Welcome</p></body></html>"))
+    tools = AgentTools(ctx)
+    tools.http_request(path="/search")
+    ctx.responses[1] = tools.take_response()
+    with pytest.raises(ToolError, match="not JSON, such as an HTML page; omit pointer"):
+        tools.read_response(steps=[1], pointer="/body_excerpt")
+    assert "Welcome" in tools.read_response(steps=[1])["responses"][0]["text"]
 
 
 def test_forms_obey_guard_mode_and_marker_steering(tmp_path):
