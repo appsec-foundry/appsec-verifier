@@ -30,6 +30,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import planned_route
+from .experiments import EXPOSURE_CWES
 
 MAX_DERIVED = 8
 _PLACEHOLDER = re.compile(r":\w+|\{\w+\}|<\w+>|\d+|[0-9a-fA-F-]{36}")
@@ -508,11 +509,17 @@ def page_source(ctx) -> str | None:
 def request_hint(ctx, history) -> str | None:
     """For a refusal of a finding that names no request (VER-008, VER-056), the next step it names: a page its file
     path gives that no answered request of this finding read yet, or, once none is left or no source checkout can
-    supply a request, that the missing request is reported as a prerequisite. None while the source may supply one,
-    or once the finding has a request."""
+    supply a request, that the missing request is reported as a prerequisite; for an exposure finding, whose page
+    reads are refused, that the missing test resource is. None while the source may supply one, or once the finding
+    has a request."""
     if original_routes(ctx) or getattr(ctx, "derived_requests", None):
         return None
     if page_source(ctx) is not None:
+        if getattr(ctx.plan, "cwe", None) in EXPOSURE_CWES:
+            # The agent's own requests reach only a declared test resource here, a page read included (AgentTools).
+            return ("for this finding's CWE your own requests, page reads included, reach only an operator-declared "
+                    "test_resources entry, so its file path supplies no request; report the missing test resource "
+                    "as a prerequisite")
         read = {urlsplit(resolve(ctx, (h.get("args") or {}).get("path") or "/")).path for h in history
                 if h.get("tool") == "http_request" and isinstance((h.get("result") or {}).get("status"), int)}
         left = [p for p in page_candidates(ctx.plan.instance) if urlsplit(resolve(ctx, p)).path not in read]

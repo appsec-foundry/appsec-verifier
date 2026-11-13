@@ -438,6 +438,27 @@ def test_a_refusal_names_the_unread_pages_and_then_the_missing_request(tmp_path)
     assert "report the missing request" not in str(refused.value) and "not read yet" not in str(refused.value)
 
 
+def test_an_exposure_finding_without_a_request_is_not_sent_to_pages_it_may_not_read(tmp_path):
+    """VER-056 with the exposure rule: an exposure finding's own requests reach only a declared test resource, so its
+    refusals do not name the candidate pages, whose reads would be refused too; they say to report the missing test
+    resource. A declared resource gives the finding its request, and no such hint is needed."""
+    ctx = page_script(tmp_path, file="dvwa/includes/DBMS/MySQL.php", text="<?php copy($conf, $conf . '.bak');\n",
+                      line=1)
+    ctx.plan = replace(ctx.plan, cls="access-control", cwe="CWE-530")
+    with pytest.raises(ToolError) as refused:
+        Controller(ctx).before("http_request", {"path": "/config/config.inc.php.bak"})
+    assert "report the missing test resource" in str(refused.value) and "not read yet" not in str(refused.value)
+    with pytest.raises(ToolError, match="only the operator-declared harmless read-only resource"):
+        AgentTools(ctx).http_request(path="/dvwa/includes/DBMS/MySQL.php", prerequisite=True)
+    from appsec_verifier.agent.derivation import request_hint
+    page = ctx.plan
+    ctx.plan = replace(page, instance="routes/backup.ts:1")         # not a page script: its source may declare one
+    assert request_hint(ctx, []) is None
+    ctx.plan = page
+    ctx.scope = {**ctx.scope, "test_resources": [{"finding_id": ctx.plan.id, "path": "/config/x.bak"}]}
+    assert request_hint(ctx, []) is None
+
+
 @pytest.mark.parametrize(("safe", "asking", "reason"), [
     (True, False, "no operator can allow it in this run"),
     (True, True, "no matching route"),
