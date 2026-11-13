@@ -1,5 +1,5 @@
 """The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
-VER-043, VER-046, VER-047, VER-053, VER-057, VER-059).
+VER-043, VER-046, VER-047, VER-052, VER-053, VER-057, VER-059).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
 when a control meets a server error; a write plan's controls run only when the agent asks with send_controls. An
@@ -94,6 +94,20 @@ def _result_from_verdict(v: dict) -> ProbeResult:
         observations=v.get("observations", []),
         # The model's own account of evidence is not taken over: the code records it (VER-034).
     )
+
+
+def untested_write(ctx, result: ProbeResult) -> ProbeResult:
+    """VER-052: a finding that ends not-attempted after this run refused a write it would send with
+    --allow-intrusive is not tested in this mode, like a finding whose named requests all write: the report names
+    the refused writes and how to allow them, and the console lists it under intrusive mode (limits_hit
+    safe-mode). Any other result is returned as it is."""
+    refused = getattr(ctx, "refused_writes", None)
+    if result.verdict != "not-attempted" or not isinstance(refused, list) or not refused:
+        return result
+    writes = ", ".join(refused[:3]) + (f" and {len(refused) - 3} more" if len(refused) > 3 else "")
+    return replace(result, limits_hit="safe-mode",
+                   rationale=f"not tested: safe mode; the finding needs {writes}, which this run does not send; "
+                             "run with --allow-intrusive to test it")
 
 
 def take_model_calls(ctx) -> list[dict]:
@@ -196,6 +210,7 @@ class AgentProbe:
             from ..verify.browser_evidence import attach_explanation, capture_application, recapture
             from ..verify.presentation import present
 
+            result = untested_write(ctx, result)
             if live and result.limits_hit is None:
                 capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
                                     verdict.get("proof_steps"))

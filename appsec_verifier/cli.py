@@ -1834,7 +1834,12 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
         (planning.evidence_id: the finding id, with a variant's digest)."""
         fr = r["finding_ref"]
         key = str(fr.get("id")) + ("-" + fr["variant_digest"][:16] if fr.get("variant_digest") else "")
-        return blocked[key][0] if r["verdict"] == "not-attempted" and key in blocked else None
+        if r["verdict"] != "not-attempted":
+            return None
+        if key in blocked:
+            return blocked[key][0]
+        # VER-052: a write the run refused during the test, which --allow-intrusive would send (agent/loop.py).
+        return "intrusive" if r.get("limits_hit") == "safe-mode" else None
 
     def result(r) -> str:
         if need(r):

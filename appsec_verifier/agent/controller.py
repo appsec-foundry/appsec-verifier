@@ -27,7 +27,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
-from .derivation import request_hint
+from .derivation import refused_write, request_hint
 from .experiments import brackets, control_values, normal_roles, take_sink, token
 from .tools import ToolError, _strings
 
@@ -183,8 +183,9 @@ class Controller:
                     and getattr(self.ctx, "ask_writes", None) is None):
                 # The run sends no write whatever its route (VER-030), so that is the reason the agent can act on.
                 raise ToolError(f"{method} is disabled in safe/read-only mode (VER-014/030), and no operator can "
-                                "allow it in this run; if the finding needs this write, name the missing write "
-                                f"permission in the verdict. Requests this finding may send: {_route_list(routes)}")
+                                f"allow it in this run; "
+                                f"{refused_write(self.ctx, method, route_path.split('?', 1)[0] or '/')}. "
+                                f"Requests this finding may send: {_route_list(routes)}")
             hint = request_hint(self.ctx, getattr(self.ctx, "agent_history", [])) if not routes else None
             raise ToolError("request has no matching route in this finding or its operator-declared resources; "
                             f"allowed: {_route_list(routes)}" + (f"; {hint}" if hint else ""))

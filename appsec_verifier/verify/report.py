@@ -228,6 +228,8 @@ _NOT_TESTED = (
      "needs --allow-intrusive: the Verifier would create its own test record"),
     (r"safe mode; every request the source registers for its handlers writes",
      "needs --allow-intrusive: every request the source registers for its handlers writes"),
+    (r"safe mode; the finding needs (.+), which this run does not send.*",      # refused during the test (VER-052)
+     r"needs --allow-intrusive: its test needs \1"),
     (r"safe mode;.*", "needs --allow-intrusive: every request it names writes"),
     (r"no declared test resource, and neither.*",
      "needs a test resource (test_resources), two test accounts with --allow-intrusive, or a privileged account"),
@@ -436,6 +438,8 @@ def _why_not(r: dict) -> str | None:
     proof = r.get("proof") or {}
     if proof.get("missing"):
         return "; ".join(str(m) for m in proof["missing"])
+    if r.get("limits_hit") == "safe-mode":         # a write the run refused during the test (VER-052)
+        return _not_tested(r.get("rationale"))
     if r.get("limits_hit"):
         stopped = re.sub(r"^stopped(?: by limit)?: ", "", str(r.get("rationale") or ""))
         return f"stopped: {stopped}" if stopped else f"stopped by the {r['limits_hit']} limit"

@@ -314,7 +314,9 @@ properties:
 
         limits_hit:
           type: [string, "null"]
-          description: Which bound, if any, stopped this result early (VER-015).
+          description: >-
+            Which bound, if any, stopped this result early (VER-015); `safe-mode` for a finding not tested because
+            the run refused a write its test needs (VER-052).
 
         evidence:
           type: array

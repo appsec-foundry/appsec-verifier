@@ -73,6 +73,7 @@ from ..planning import evidence_name
 from ..tools.http import ALLOWED_METHODS, SAFE_METHODS, ScopeViolation, same_origin
 from ..verification_context import _PLACEHOLDER, missing_capabilities, path_values, planned_route, record_segments
 from ..verify import poc
+from .derivation import refused_write
 from .experiments import (
     ENGINE_ERROR_CWES,
     EXPOSURE_CWES,
@@ -666,8 +667,10 @@ class AgentTools:
             ):
                 raise ToolError("the plan needs a matching operator-supplied test resource")
         if needs_writes and not self._may_write(needs_writes, plan.get("owner") or plan.get("role") or ""):
+            next_step = refused_write(self.ctx, plan.get("method", "GET"), urlsplit(plan.get("path") or "/").path)
             raise ToolError("this plan needs write requests, which safe mode does not send, and the operator did not "
-                            "allow them for this finding (VER-030, VER-052): " + "; ".join(needs_writes))
+                            "allow them for this finding (VER-030, VER-052): " + "; ".join(needs_writes)
+                            + f"; {next_step}")
         self._experiment = plan
         notes = []
         if candidates and plan.get("method", "GET") not in SAFE_METHODS:
@@ -1090,7 +1093,8 @@ class AgentTools:
         if m not in ALLOWED_METHODS:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
         if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only) and self._ask_writes() is None:
-            raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive")
+            raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); use --allow-intrusive; "
+                            + refused_write(self.ctx, m, urlsplit(path).path or "/"))
         if m not in SAFE_METHODS and role and self._privileged(role):
             raise ToolError(f"{role} is a privileged account and only reads (VER-041); write as a normal account")
         if self.ctx.http is None or not self.ctx.target_base:
@@ -1143,10 +1147,12 @@ class AgentTools:
         foreseen = (self.ctx.safe or self.ctx.read_only) and self._foreseen_write(m, url)
         if foreseen:
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); {foreseen} before the run, so "
-                            "--allow-intrusive decides it and the operator is not asked (VER-052)")
+                            "--allow-intrusive decides it and the operator is not asked (VER-052); "
+                            + refused_write(self.ctx, m, urlsplit(url).path or "/"))
         if m not in SAFE_METHODS and not self._may_write([f"{m} {urlsplit(url).path or '/'}"], role or ""):
             raise ToolError(f"{m} is disabled in safe/read-only mode (VER-014/030); the operator did not allow "
-                            "write requests for this finding (VER-052)")
+                            "write requests for this finding (VER-052); "
+                            + refused_write(self.ctx, m, urlsplit(url).path or "/"))
         if role:
             headers = self._session_headers(role)
         try:

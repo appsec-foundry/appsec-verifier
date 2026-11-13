@@ -386,3 +386,81 @@ def test_a_report_with_the_operators_answers_is_schema_valid(tmp_path, monkeypat
                             .read_text())
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
     assert not sorted(e.message for e in validator_for(schema)(schema).iter_errors(doc))
+
+
+# ── a write the run refused during the test (VER-052) ────────────────────────
+
+
+def test_a_refused_write_is_kept_for_the_finding_and_the_agent_told_how_to_end_it(tmp_path):
+    """Refused for the mode, with nobody to ask or after a no, a write is kept and the refusal says how to end."""
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+    with pytest.raises(ToolError, match="tested only with this write, submit_verdict not-attempted"):
+        tools.http_request(role="customer-a", method="POST", path="/rest/basket?x=1", json={"x": "vrf1"})
+    _asking(tools, False)
+    with pytest.raises(ToolError, match="did not allow write requests.*submit_verdict not-attempted"):
+        tools.http_request(role="customer-a", method="PUT", path="/rest/basket/2", json={"x": "vrf1"})
+    assert tools.ctx.refused_writes == ["POST /rest/basket", "PUT /rest/basket/2"]
+    forbidden = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+    forbidden.ctx.scope = {**forbidden.ctx.scope, "allow_state_change": False}   # --allow-intrusive would not help
+    with pytest.raises(ToolError):
+        forbidden.http_request(role="customer-a", method="POST", path="/rest/basket", json={"x": "vrf1"})
+    assert not getattr(forbidden.ctx, "refused_writes", None)
+
+
+def test_a_finding_that_needs_a_refused_write_ends_not_tested_in_this_mode(tmp_path):
+    """The agent's not-attempted after a refused write is the run's 'needs intrusive mode', naming the write; any
+    other verdict, or one without a refused write, stays as it is."""
+    from test_agent_probe import ScriptedPlanner
+
+    from appsec_verifier.agent.loop import AgentProbe
+
+    def run(*actions):
+        ctx = _ctx(tmp_path, lambda *a, **k: Resp())
+        return AgentProbe("access-control", lambda: ScriptedPlanner(list(actions))).run(ctx)
+
+    write = {"tool": "http_request", "args": {"role": "customer-a", "method": "PUT", "path": "/rest/basket/2",
+                                               "json": {"name": "vrf1"}}}
+    result = run(write, {"verdict": {"verdict": "not-attempted", "rationale": "the stored name needs this PUT"}})
+    assert result.verdict == "not-attempted" and result.limits_hit == "safe-mode"
+    assert result.rationale == ("not tested: safe mode; the finding needs PUT /rest/basket/2, which this run does "
+                                "not send; run with --allow-intrusive to test it")
+    assert run(write, {"verdict": {"verdict": "inconclusive", "rationale": "partly seen"}}).limits_hit is None
+    assert run({"verdict": {"verdict": "not-attempted", "rationale": "nothing to read"}}).limits_hit is None
+
+
+def test_the_console_and_the_report_list_it_under_intrusive_mode():
+    from appsec_verifier.verify.report import _not_tested
+
+    rationale = ("not tested: safe mode; the finding needs PUT /rest/basket/2, which this run does not send; run "
+                 "with --allow-intrusive to test it")
+    assert _not_tested(rationale) == "needs --allow-intrusive: its test needs PUT /rest/basket/2"
+    assert _not_tested("not tested: safe mode; every declared variant needs a state change") == (
+        "needs --allow-intrusive: every request it names writes")
+    plan = SimpleNamespace(id="T-1", severity="high")
+    doc = {"results": [{"finding_ref": {"id": "T-1", "title": "stored xss"}, "verdict": "not-attempted",
+                        "class": "xss", "rationale": rationale, "limits_hit": "safe-mode",
+                        "eligibility": {"status": "dynamic"}}]}
+    lines = "\n".join(cli._results(cli.Style(False), doc, [plan], {}))
+    assert "needs intrusive mode" in lines and "run with --allow-intrusive" in lines
+
+
+def test_an_interactive_run_derives_a_write_so_the_operator_can_be_asked(tmp_path):
+    """VER-052: with someone to ask, derive_request accepts a write intrusive mode would send; sending it still
+    needs the operator's yes. Without anyone to ask it is refused and kept for the report."""
+    from test_request_derivation import page_script
+
+    def setup(asking):
+        ctx = page_script(tmp_path)
+        ctx.agent_history = [{"tool": "read_source", "args": {"path": "vulnerabilities/sqli/source/low.php"},
+                              "result": {"text": "Route::post('/vulnerabilities/sqli/save', fn() => $_POST['id']);",
+                                         "start_line": 1}}]
+        ctx.ask_writes = (lambda *a, **k: False) if asking else None
+        return ctx
+
+    args = {"evidence_step": 1, "method": "POST", "path": "/vulnerabilities/sqli/save",
+            "inputs": [{"location": "form", "name": "id"}], "reason": "the source declares the write"}
+    refused = setup(False)
+    with pytest.raises(ToolError, match="derived writes need intrusive mode.*submit_verdict not-attempted"):
+        AgentTools(refused).derive_request(**args)
+    assert refused.refused_writes == ["POST /vulnerabilities/sqli/save"]
+    assert AgentTools(setup(True)).derive_request(**args)["accepted"] is True

@@ -534,6 +534,20 @@ def request_hint(ctx, history) -> str | None:
     return None
 
 
+def refused_write(ctx, method: str, path: str) -> str:
+    """VER-052: keep a write this run refused for its mode, nobody could allow or the operator declined, for the
+    finding's result, where --allow-intrusive would send it; returns what the agent can do next."""
+    if (getattr(ctx, "scope", None) or {}).get("allow_state_change") is not False:
+        refused = getattr(ctx, "refused_writes", None)
+        if not isinstance(refused, list):
+            refused = []
+            ctx.refused_writes = refused
+        if f"{method} {path}" not in refused:
+            refused.append(f"{method} {path}")
+    return ("if the finding can be tested only with this write, submit_verdict not-attempted; the report names the "
+            "write and how to allow it")
+
+
 def _hinted(message: str, ctx, history) -> str:
     hint = request_hint(ctx, history)
     return f"{message}; {hint}" if hint else message
@@ -587,7 +601,11 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
     if not same_origin(url, ctx.target_base) or not ctx.guard.authorize(url, "target").allowed:
         raise ValueError("derived request is outside the authorised target")
     if method not in SAFE_METHODS and (ctx.safe or ctx.read_only or ctx.scope.get("allow_state_change") is False):
-        raise ValueError("derived writes need intrusive mode and state-change permission")
+        # VER-052: where the operator can be asked, a write is derived as in intrusive mode; sending it still needs
+        # the operator's yes (AgentTools._may_write). Otherwise the refused write is kept for the report.
+        if getattr(ctx, "ask_writes", None) is None or ctx.scope.get("allow_state_change") is False:
+            raise ValueError("derived writes need intrusive mode and state-change permission; "
+                             + refused_write(ctx, method, urlsplit(url).path or "/"))
     h = history[evidence_step - 1]
     if h.get("result", {}).get("error"):
         raise ValueError("a failed action supplies no request evidence")
