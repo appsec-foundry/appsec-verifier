@@ -155,7 +155,7 @@ def _clean(ctx, value):
     if isinstance(value, str):
         return value.replace(marker, "[marker-file]") if marker else value
     if isinstance(value, dict):
-        return {k: _clean(ctx, v) for k, v in value.items()}
+        return {_clean(ctx, k): _clean(ctx, v) for k, v in value.items()}
     if isinstance(value, list):
         return [_clean(ctx, v) for v in value]
     return value

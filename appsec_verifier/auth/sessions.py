@@ -287,8 +287,8 @@ class SessionManager:
         def walk(v):
             if isinstance(v, str):
                 return pattern.sub(lambda m: placeholders[m.group(0)], v) if pattern else v
-            if isinstance(v, dict):
-                return {k: walk(x) for k, x in v.items()}
+            if isinstance(v, dict):     # keys too: a target may key its answer by a token or session id
+                return {walk(k): walk(x) for k, x in v.items()}
             if isinstance(v, list | tuple):
                 return [walk(x) for x in v]
             return v

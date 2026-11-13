@@ -134,6 +134,15 @@ def test_redact_replaces_env_values_and_obtained_tokens_in_every_form():
     assert "bob" in out["body"]        # shorter than 4 characters: left alone, it would mask ordinary text
 
 
+def test_redact_masks_a_credential_that_keys_a_json_object():
+    """VER-016: an answer keyed by a session or token, such as {"<session id>": {...}}, shows no credential."""
+    mgr, _ = _mgr([FORM, BASIC], ENV)
+    mgr.headers_for("a")
+    out = mgr.redact({"sessions": {"FORMTOK": {"user": "alice@shop.test"}, "hunter22": 1}, 7: "x"})
+    assert "FORMTOK" not in str(out) and "hunter22" not in str(out)
+    assert out["sessions"]["[a session]"] == {"user": "alice@shop.test"} and out[7] == "x"
+
+
 def test_redact_keeps_masking_a_token_after_invalidate():
     mgr, _ = _mgr([FORM], ENV)
     mgr.headers_for("a")
