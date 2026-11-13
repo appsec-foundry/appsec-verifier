@@ -1,6 +1,6 @@
 """The comparison without credentials (VER-057): a request without credentials gets an account's answer, while a
-random path next to it does not. The Verifier sends the three reads itself and compares them in code; no model
-sees their answers, and none is kept."""
+random path next to it does not. The Verifier sends the three reads itself and compares them in code; only the answer
+without credentials, which anyone can read, is kept and shown to the model, the other two are not."""
 
 from __future__ import annotations
 
@@ -201,7 +201,9 @@ def test_an_exposure_finding_offers_no_other_plan_and_no_own_requests(tmp_path):
 
 # ── what the Verifier sends and keeps ─────────────────────────────────────────
 
-def test_a_comparison_request_keeps_no_body_and_only_the_plan_sends_one(tmp_path):
+def test_only_the_answer_without_credentials_is_kept_and_only_the_plan_sends_a_request(tmp_path):
+    """Refused case: the account's answer and the random path's keep no body anywhere; the answer without
+    credentials to the finding's path is kept and shown like any other response."""
     tools = _tools(tmp_path, transport=lambda *a, **k: Resp(200, SECRET))
     with pytest.raises(ToolError, match="one the accepted comparison sends"):
         tools.http_request(path=PATH, comparison=True)                        # no accepted plan yet
@@ -209,11 +211,17 @@ def test_a_comparison_request_keeps_no_body_and_only_the_plan_sends_one(tmp_path
     requests = tools.experiment_requests()
     assert [(r["path"], r.get("role")) for r in requests] == [(PATH, "account-1"), (PATH, None),
                                                               (plan["control_path"], None)]
-    out = tools.http_request(**requests[1])
-    response, exchanges = tools.take_response(), tools.take_exchanges()
-    assert out["status"] == 200 and out["length"] == len(SECRET) and out["body_withheld"] is True
-    assert "s3cr3t" not in json.dumps([out, response["body"], exchanges])
-    assert exchanges[0]["response"]["content"]["_omitted"].startswith("body not kept: compared in code only")
+    seen = []
+    for request in requests:
+        out = tools.http_request(**request)
+        seen.append((out, tools.take_response(), tools.take_exchanges()))
+    (account, _, account_record), (anonymous, response, record), (control, _, control_record) = seen
+    assert anonymous["status"] == 200 and "body_withheld" not in anonymous and "s3cr3t" in anonymous["body_excerpt"]
+    assert "s3cr3t" in response["body"] and "s3cr3t" in record[0]["response"]["content"]["text"]
+    for out, kept in ((account, account_record), (control, control_record)):
+        assert out["body_withheld"] is True and out["length"] == len(SECRET)
+        assert "s3cr3t" not in json.dumps([out, kept])
+        assert kept[0]["response"]["content"]["_omitted"].startswith("body not kept: compared in code only")
     with pytest.raises(ToolError, match="one the accepted comparison sends"):
         tools.http_request(path="/rest/admin/other", comparison=True)
     with pytest.raises(ToolError, match="one the accepted comparison sends"):
@@ -247,7 +255,7 @@ def test_only_the_comparison_reaches_the_random_path(tmp_path):
 
 # ── through the loop ──────────────────────────────────────────────────────────
 
-def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None):
+def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None, presentation=None):
     sent = []
 
     def recording(m, u, h, **k):
@@ -263,7 +271,8 @@ def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None):
             if not history:
                 return {"tool": "plan_test", "args": _args()}
             return {"verdict": {"verdict": "confirmed", "rationale": "served without login",
-                                "proof_steps": list(verdict_steps)}}
+                                "proof_steps": list(verdict_steps),
+                                **({"presentation": presentation} if presentation else {})}}
 
     planners = []
 
@@ -280,7 +289,7 @@ def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None):
     return result, sent, planners[0].seen
 
 
-def test_a_configuration_served_without_login_is_confirmed_without_any_model_seeing_it(tmp_path):
+def test_a_configuration_served_without_login_is_confirmed_and_shows_what_anyone_can_read(tmp_path):
     def target(m, path, h):
         return Resp(200, SECRET) if path == PATH else Resp(404, "<h1>Not found</h1>")
 
@@ -289,11 +298,39 @@ def test_a_configuration_served_without_login_is_confirmed_without_any_model_see
     assert [(m, p, a) for m, p, a in sent] == [("GET", PATH, "Bearer token-account-1"), ("GET", PATH, None),
                                               ("GET", sent[2][1], None)]
     assert sent[2][1].startswith("/rest/admin/" + MARKER[0])
-    assert "s3cr3t" not in "".join(seen)                                      # never in the model's view
-    files = [p.read_text() for p in Path(tmp_path / "evidence").rglob("*") if p.is_file()]
-    assert files and not any("s3cr3t" in text for text in files)              # nor in the evidence
-    assert "s3cr3t" not in json.dumps(result.poc, default=str)
-    assert any("compared answers are not shown" in o for o in result.observations)
+    history = json.loads(seen[-1])
+    assert "s3cr3t" not in json.dumps(history[1]) and history[1]["result"]["body_withheld"] is True   # the account
+    assert "s3cr3t" in history[2]["result"]["body_excerpt"]                       # without credentials: shown
+    feedback = history[4]
+    assert feedback["tool"] == "experiment" and "step 3, the answer without credentials" in feedback["result"]["next"]
+    har = json.loads(next(Path(tmp_path / "evidence").glob("*-poc.har")).read_text())
+    kept = {e["_step"]: "s3cr3t" in (e["response"]["content"].get("text") or "") for e in har["log"]["entries"]}
+    assert kept == {2: False, 3: True, 4: False}
+    assert not any("Application screenshot unavailable: the compared answers" in o for o in result.observations)
+
+
+def test_the_agent_can_quote_the_answer_without_credentials_but_not_the_account_s(tmp_path):
+    """VER-057 with VER-059: the readable answer can be shown in the presentation; the account's, never kept, cannot."""
+    def target(m, path, h):
+        return Resp(200, SECRET) if path == PATH else Resp(404, "<h1>Not found</h1>")
+
+    def presentation(step):
+        return {"summary": "Without a login anyone reads the server secret from the admin configuration.",
+                "steps": [{"step": 2, "role": "normal", "label": "the signed-in account reads the configuration"},
+                          {"step": 3, "role": "outcome", "label": "the same answer without a login",
+                           **({"excerpt": '"secret":"s3cr3t-config-value"'} if step == 3 else {})},
+                          {"step": 4, "role": "control", "label": "a random path next to it: not found",
+                           **({"excerpt": '"secret":"s3cr3t-config-value"'} if step == 2 else {})}]}
+
+    result, _, _ = _run(tmp_path, target, presentation=presentation(3))
+    assert result.poc["presentation"]["composed_by"] == "test-agent"
+    shown = {s["step"]: s for s in result.poc["shown"]}
+    assert "s3cr3t-config-value" in shown[3]["response_excerpt"] and "s3cr3t" not in shown[2]["response_excerpt"]
+    refused = presentation(2)
+    refused["steps"][0]["excerpt"] = '"secret":"s3cr3t-config-value"'          # the account's answer
+    result, _, _ = _run(tmp_path, target, presentation=refused)
+    assert result.poc["presentation"]["composed_by"] == "verifier"
+    assert "the answer of step 2 is withheld or not kept" in result.poc["presentation"]["reason"]
 
 
 def test_a_target_that_answers_every_path_alike_confirms_nothing(tmp_path):

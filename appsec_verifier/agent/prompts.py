@@ -512,8 +512,9 @@ def _access_hint(ctx) -> str:
             "finding's GET as one concrete path (every placeholder filled in, query inputs in fixed.params). When "
             "the plan is accepted the Verifier sends that GET as the account, without credentials, and without "
             "credentials to a random path next to it, compares the answers in code and reports whether the proof "
-            "holds. You do not see these answers. Confirmed needs a 2xx with content for the account, the identical "
-            "answer without credentials, and not that answer for the random path; an answer that changes between "
+            "holds. Of these answers you see only the one without credentials, to show what it exposes. Confirmed "
+            "needs a 2xx with content for the account, the identical answer without credentials, and not that "
+            "answer for the random path; an answer that changes between "
             "requests or names the signed-in user is never identical. The intended restriction comes from the "
             "finding. The comparison supports no negative verdict."
         )

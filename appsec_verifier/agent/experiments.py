@@ -201,8 +201,8 @@ def fixed_forms(cwe, location) -> list[str]:
 
 
 # Missing authentication and exposure: proven with an operator-declared resource, or the comparison without
-# credentials whose answers no model sees (VER-057, verifiable-cwes.yaml); the agent's own requests reach only a
-# declared resource (agent/tools.py).
+# credentials, compared in code, of which the model sees only the answer without credentials (VER-057,
+# verifiable-cwes.yaml); the agent's own requests reach only a declared resource (agent/tools.py).
 EXPOSURE_CWES = ("CWE-200", "CWE-306", "CWE-497", "CWE-530", "CWE-538", "CWE-548", "CWE-552")
 # An IDOR concerns another account's record, never a privileged function, so the privileged comparison cannot
 # prove it (VER-010): without a declared resource only a record an account creates can.
@@ -1160,8 +1160,14 @@ def comparison_ready(ctx, history, steps):
     verdict. Pure: proof.py re-checks the cited steps."""
     problem = signed_in_check(ctx, history, steps)
     if problem is None:
+        path = latest_plan(history)[1].get("path")
+        exposed = next((n for n in sorted(steps) if 1 <= n <= len(history)
+                        and not (history[n - 1].get("args") or {}).get("role")
+                        and (history[n - 1].get("args") or {}).get("path") == path), None)
+        shown = (f"; step {exposed}, the answer without credentials, is shown to you: present what it lets anyone "
+                 "read (VER-059)") if exposed else ""
         return {"proof": "holds", "steps": sorted(steps),
-                "next": "submit_verdict confirmed and cite these steps in proof_steps"}
+                "next": "submit_verdict confirmed and cite these steps in proof_steps" + shown}
     return {"proof": "missing", "reason": problem, "steps": sorted(steps),
             "next": "plan another read of this finding, or submit_verdict inconclusive with this reason; the "
                     "comparison supports no negative verdict"}

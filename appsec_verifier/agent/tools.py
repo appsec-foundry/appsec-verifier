@@ -27,8 +27,10 @@ comparison without credentials with any account of the run, which the
 Verifier sends itself with a random path next to the finding's (VER-057).
 For missing authentication and exposure the agent's own requests reach only an
 operator-declared resource; the comparison's answers are compared in code by
-their digest, and their bodies reach neither the model, the recorded body nor
-the proof of concept. A failing identity or transport ends the call as a tool
+their digest. The answer without credentials to the finding's path is then kept
+and shown like any other response, so the agent can present what anyone can read
+(VER-059); the account's answer and the random path's reach neither the model,
+the recorded body nor the proof of concept. A failing identity or transport ends the call as a tool
 error for the agent, never as an exception past the loop. A response body is
 redacted of every credential value before it is cut to the excerpt (VER-016).
 The agent's path is appended to the target base URL as written, without
@@ -100,7 +102,8 @@ _HIDDEN = "[marker-file]"
 _AUTH_ARTIFACT_NOTICE = "[auth-artifact probe: body withheld; the token value never reaches the model or logs]"
 _ERROR_NOTICE = ("[engine-error probe: body withheld; the error text is kept only in the owner-only proof of "
                  "concept (VER-053)]")
-# VER-057: a comparison's answers are compared in code by their digest; their content is not kept anywhere.
+# VER-057: a comparison's answers are compared in code by their digest; but for the answer without credentials to
+# the finding's path, which is shown like any other, their content is not kept anywhere.
 _COMPARISON_NOTICE = "[comparison without credentials: body withheld; compared in code only (VER-057)]"
 _CALLBACK_WAIT_S = 1.0
 _DRIVE = re.compile(r"^[A-Za-z]:")
@@ -1041,6 +1044,8 @@ class AgentTools:
                     and (path, role or None) in ((plan["path"], plan["signed_in"]), (plan["path"], None),
                                                  (plan.get("control_path"), None))):
                 raise ToolError("a comparison request must be one the accepted comparison sends (VER-057)")
+        # VER-057: what anyone can read, the answer without credentials to the finding's path, is kept and shown.
+        exposed = bool(comparison) and not role and path == (getattr(self, "_experiment", None) or {}).get("path")
         original_path = path
         if path_inputs is not None:
             self._check_steering(None, path_inputs)
@@ -1149,7 +1154,7 @@ class AgentTools:
             from .session_proof import cookie_observations
 
             session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
-            omit = "body not kept: compared in code only (VER-057)" if comparison else None
+            omit = "body not kept: compared in code only (VER-057)" if comparison and not exposed else None
             self._record(self._sent(resp, m, url, headers, params, json, form), role, headers, omit=omit)
             sessions = self.ctx.sessions if role else None
             if sessions is not None:
@@ -1188,7 +1193,7 @@ class AgentTools:
             # the hash or read_response.
             text = redacted = _ERROR_NOTICE
         compared = text
-        if comparison:
+        if comparison and not exposed:
             # VER-057: only the digest and the size of the answer are kept; the body stands down everywhere it could
             # be read: the recorded body (read_response), the excerpt the model sees, and the proof of concept.
             text = redacted = _COMPARISON_NOTICE
@@ -1202,7 +1207,7 @@ class AgentTools:
                                "digest": digest}
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
-        withheld = bool(error_probe or auth_artifact_probe or comparison)
+        withheld = bool(error_probe or auth_artifact_probe or (comparison and not exposed))
         out = {
             "role": role,
             "status": status,
