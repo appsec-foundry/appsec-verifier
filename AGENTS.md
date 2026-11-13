@@ -56,6 +56,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 | `write_prompt.py` | in an interactive run the question for write requests safe mode does not send (VER-052) |
 | `term_style.py` | console colour and logo, adapted from AppSec Analyzer; colour only after `printable` |
 | `progress.py` | `RunProgress`: the run's progress grid and live status line during `verify`, as in AppSec Analyzer |
+| `run_dirs.py` | without `--output`, each run's own private directory in the user data directory, and the run `--resume` continues (VER-058) |
 | `update.py`, `version_info.py` | `update`: pipx reinstall after a yes (VER-033); `--version` from the build stamp `build-info.json` (written by `setup.py`) or Git |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/` | sessions per test identity (`sessions.py`); sign-ins in the operator's browser (`interactive.py`); the login program (`program.py`); pasted sessions and hidden input (`paste.py`) |
@@ -79,6 +80,7 @@ The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts o
 | `--profile` selection, cost limit and cost display in `cli.py` | `appsec_analyzer/cli.py` |
 | `term_style.py`, `progress.py` | `scripts/renderers/term_style.py`, `appsec_analyzer/assessment/console.py` |
 | `budget_prompt.py` | `scripts/runtime/interactive_budget.py` |
+| `run_dirs.py` | `data_base` and `_slug` in `scripts/shared/assessment_location.py`: same platform data directories and name rule |
 | `Dockerfile`, `container/`, `docs/container.md` | `Dockerfile`, `container/`, `docs/container.md`: same base image, Claude CLI pin and hardening |
 | `export`, `schemas/analyzer-annotations.schema.yaml` (VER-021) | no reader yet |
 | `verify/report.py` `annotate_assessment`, `schemas/annotated-assessment.schema.yaml` (VER-027) | `threats[]` and the root of `schemas/threat-model.output.schema.yaml` must keep accepting additional fields; `threats[].verification` is the Analyzer's |

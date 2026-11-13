@@ -248,6 +248,8 @@ optional hardening.
 
 - **VER-037: Update an earlier report.** A run can continue the report of an earlier run against the same assessment and target. It keeps each checked verdict, tests the selected findings that have none, and tests again the findings the operator names, for example after a fix, replacing their earlier result. Each result states when it was tested. A report for another assessment or target is not continued.
 
+- **VER-058: Keep each run's results apart and private.** Without a named output directory, each run writes its report and evidence to a new private directory of its own under the operator's application data directory, named by the assessment's project and the start time, so no run lands in the working directory or replaces an earlier one. Continuing a run (VER-037) without a named directory takes the latest run of the same project against the same assessment and target. A named output directory behaves as before.
+
 - **VER-021: Offer a result for the Analyzer to re-ingest.** The verdicts can
   also be emitted in a form keyed by finding identifier and the cross-run key
   (VER-007), meant for AppSec Analyzer to read back and annotate findings with
@@ -299,8 +301,8 @@ optional hardening.
   - **Mode and output** (VER-030, VER-020, VER-027): safe mode and the
     standalone report by default. Intrusive mode is offered only where the scope
     allows state change and needs its own explicit yes. An existing report in
-    the output directory is replaced only after its own yes or `--overwrite`;
-    a no stops the run before anything is contacted.
+    a named output directory (VER-058) is replaced only after its own yes or
+    `--overwrite`; a no stops the run before anything is contacted.
 
   Answers are validated like the matching options and allow nothing an option could not; settings already given as options are not asked again. The guided run asks for secret values only hidden and never stores them (VER-016). Before anything is contacted it shows the resolved settings with the equivalent non-interactive invocation, then asks for the confirmation of VER-002; answering the setup questions is not that confirmation. There Enter confirms. Cancelling at any point contacts nothing.
 

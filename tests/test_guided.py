@@ -11,7 +11,9 @@ without a terminal nothing is asked."""
 
 from __future__ import annotations
 
+import os
 import shlex
+from pathlib import Path
 
 import pytest
 import yaml
@@ -93,7 +95,7 @@ def test_with_a_scope_file_nothing_is_asked_and_the_defaults_apply(env):
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
     assert args.scope == str(env.run / "scope.yaml") and f"scope   {env.run / 'scope.yaml'}" in out
     assert args.target is None                                  # verify takes the scope's base_url
-    assert args.identities is None and args.output == "./verification"
+    assert args.identities is None and args.output is None          # verify gives the run its own directory
     assert not args.allow_intrusive and not args.resume and not args.non_interactive and not args.yes
     _, invocation, default_yes = env.calls[0]
     parts = shlex.split(invocation)
@@ -382,12 +384,13 @@ def test_intrusive_mode_is_not_offered_without_state_change(env):
 def test_an_existing_report_is_replaced_only_after_a_yes(env, capsys):
     (env.cwd / "verification").mkdir()
     (env.cwd / "verification" / "verification.yaml").write_text("{}")
-    rc, args, prompts, _ = env.go("")
+    rc, args, prompts, _ = env.go("", extra=["--output", "./verification"])
     assert rc == cli.EXIT_BLOCKED and env.calls == [] and not args.overwrite
     assert prompts == ["There is already a report in ./verification. Overwrite it? [y/N]: "]
     err = capsys.readouterr().err
     assert "The report in ./verification was kept; nothing was contacted." in err and "--resume continues it" in err
-    rc, args, prompts, _ = env.go("y")
+    assert "without --output the run gets a directory of its own" in err
+    rc, args, prompts, _ = env.go("y", extra=["--output", "./verification"])
     assert rc == 0 and args.overwrite and (args.resume, args.output) == (False, "./verification")
     assert "--overwrite" in shlex.split(env.calls[0][1]) and "--resume" not in env.calls[0][1]
 
@@ -396,15 +399,25 @@ def test_an_existing_report_is_replaced_only_after_a_yes(env, capsys):
 def test_an_existing_report_is_not_asked_about_with_overwrite_or_resume(env, flag):
     (env.cwd / "verification").mkdir()
     (env.cwd / "verification" / "verification.md").write_text("report")
-    rc, _, prompts, _ = env.go(extra=[flag])
+    rc, _, prompts, _ = env.go(extra=[flag, "--output", "./verification"])
     assert rc == 0 and prompts == [] and flag in env.calls[0][1]
+
+
+def test_without_output_an_existing_report_is_not_asked_about(env):
+    """VER-058: the run writes to a directory of its own, so the report in ./verification stays untouched."""
+    (env.cwd / "verification").mkdir()
+    (env.cwd / "verification" / "verification.yaml").write_text("{}")
+    rc, args, prompts, _ = env.go()
+    assert rc == 0 and prompts == [] and args.output is None and not args.overwrite
+    assert "--output" not in shlex.split(env.calls[0][1])
 
 
 def test_without_a_terminal_an_existing_report_is_left_to_verify(env):
     """Nothing is asked; `verify` refuses to replace the report without --overwrite (tests/test_endpoints.py)."""
     (env.cwd / "verification").mkdir()
     (env.cwd / "verification" / "verification.yaml").write_text("{}")
-    rc, args, prompts, _ = env.go(extra=["--profile", "claude", "--url", BASE], interactive=False)
+    rc, args, prompts, _ = env.go(extra=["--profile", "claude", "--url", BASE, "--output", "./verification"],
+                                  interactive=False)
     assert rc == 0 and prompts == [] and not args.overwrite and len(env.calls) == 1
 
 
@@ -442,7 +455,7 @@ def test_cancelling_at_any_question_contacts_nothing(env, capsys, stop, question
         (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
     else:
         (env.run / "scope.yaml").write_text(yaml.safe_dump({**SCOPE, "allow_state_change": True}))
-    rc, _, prompts, _ = env.go(stop)
+    rc, _, prompts, _ = env.go(stop, extra=["--output", "./verification"] if question == "overwrite" else [])
     assert rc == cli.EXIT_BLOCKED and env.calls == [] and len(prompts) == 1
     assert not (env.run / "scope.yaml").exists() or question != "target URL"
     assert "Cancelled; nothing was contacted" in capsys.readouterr().err
@@ -489,7 +502,7 @@ def test_non_interactive_runs_verify_with_the_options(env, target):
     target = [str(env.run / "scope.yaml") if t == "SCOPE" else t for t in target]
     rc, args, prompts, _ = env.go(interactive=False, extra=[*target, "--profile", "anthropic-api"])
     assert rc == 0 and prompts == []
-    assert args.non_interactive and args.output == "./verification" and args.min_severity is None
+    assert args.non_interactive and args.output is None and args.min_severity is None
     assert env.calls[0][1] is None and env.calls[0][2] is False
 
 
@@ -546,3 +559,5 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
     assert "Assessment :" not in out.out and "▶ AppSec Verifier" not in out.out   # shown once, at the start
     assert "The same run without questions" in out.out and "Not authorised to proceed" in out.err
     assert not (env.cwd / "verification").exists()
+    runs = Path(os.environ["XDG_DATA_HOME"]) / "appsec-verifier" / "runs"
+    assert list(runs.glob("*/*")) == []                 # the declined run's own directory is gone again (VER-058)

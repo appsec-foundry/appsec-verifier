@@ -152,6 +152,28 @@ def report_exists(output) -> bool:
     return any((Path(output) / name).is_file() for name in ("verification.yaml", "verification.md"))
 
 
+def _default_output(args, doc: dict, assessment: Path, target: str) -> Path:
+    """Without --output (VER-058): a new run directory of the assessment's project, or with --resume the newest
+    run there whose report is for this assessment and target (VER-037), if there is one."""
+    from .run_dirs import data_base, latest_run, new_run, project_name
+
+    project = data_base() / project_name(doc)
+    if args.resume:
+        from .verify.report import resume_problems
+        from .verify.runner import _sha256
+
+        sha = _sha256(assessment)
+
+        def fits(path: Path) -> bool:
+            report, errors = read_report(path)
+            return not errors and not resume_problems(report, sha, target)
+
+        found = latest_run(project, fits)
+        if found:
+            return found
+    return new_run(project)
+
+
 def _blocked(headline: str, details=(), fix: str | None = None, *, contacted: bool = False) -> int:
     """Why a run cannot go on, shown the same way everywhere on standard error: what is wrong, the
     details, what to do, and, unless something was contacted, that nothing was. Exit 2."""
@@ -618,13 +640,21 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     identities whose sessions were pasted, both from the guided run; they live
     only in this process (VER-016). With --console-log, what the run prints
     also goes to console.log in the output directory, once the run writes a
-    report there."""
-    if not args.console_log:
-        return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=None)
-    from .progress import console_log
+    report there. Without --output the run gets a directory of its own, which
+    is removed again when the run wrote nothing into it (VER-058)."""
+    fresh = args.output is None
+    try:
+        if not args.console_log:
+            return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=None)
+        from .progress import console_log
 
-    with console_log(plain=args.console_log == "plain") as console:
-        return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=console)
+        with console_log(plain=args.console_log == "plain") as console:
+            return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=console)
+    finally:
+        if fresh and args.output:
+            from .run_dirs import remove_if_empty
+
+            remove_if_empty(Path(args.output))
 
 
 def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool, *,
@@ -696,6 +726,12 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             "check --cost-limit, --max-calls, --max-requests, --max-attempts, --max-duration and --rate",
         )
     existing, resumed = None, None
+    if args.output is None:
+        try:
+            args.output = str(_default_output(args, doc, assessment, target))
+        except OSError as exc:
+            return _blocked("The output directory cannot be created", [f"{exc.filename}: {type(exc).__name__}"],
+                            "give a directory with --output")
     existing_path = Path(args.output) / "verification.yaml"
     if not args.resume and not args.overwrite and report_exists(args.output):
         return _blocked(
@@ -2202,8 +2238,8 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     out.add_argument(
         "--output",
         metavar="DIR",
-        default=None if guided else "./verification",
-        help="directory for the report and the evidence (default: ./verification)",
+        help="directory for the report and the evidence (default: a new private directory for each run, on Linux "
+        "in ~/.local/share/appsec-verifier/runs/PROJECT/)",
     )
     out.add_argument("--report", action="store_true", help="standalone report (default)")
     out.add_argument(
@@ -2219,12 +2255,13 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     report.add_argument(
         "--resume",
         action="store_true",
-        help="continue the report in the output directory: findings with a verdict keep it, the others are tested",
+        help="continue the report in --output, or without it the newest run for this assessment and target: "
+        "findings with a verdict keep it, the others are tested",
     )
     report.add_argument(
         "--overwrite",
         action="store_true",
-        help="replace a report already in the output directory (without this or --resume, such a report stops the run)",
+        help="replace a report already in --output (without this or --resume, such a report stops the run)",
     )
     out.add_argument(
         "--console-log",

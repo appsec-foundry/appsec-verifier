@@ -5,7 +5,7 @@ dist/
 __pycache__/
 *.pyc
 
-# Verification run outputs (default output dir and numbered copies such as verification-2/)
+# Verification run outputs written here with --output (verification/ and numbered copies such as verification-2/)
 /verification*/
 
 # Hook/runtime artifacts written into the worktree (not project content)

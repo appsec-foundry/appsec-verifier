@@ -25,7 +25,7 @@ pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
 appsec-verifier ./out/security-assessment.yaml
 ```
 
-The guided run asks for the target URL, shows which findings it can test and what the others still need, and starts after your confirmation. By default it tests findings of severity high and above with the `claude` profile. The report is written to `./verification/verification.md`.
+The guided run asks for the target URL, shows which findings it can test and what the others still need, and starts after your confirmation. By default it tests findings of severity high and above with the `claude` profile. Each run writes its report to a new private directory, which the run names at its start and end ([Output](#output)).
 
 XSS findings also need the proof browser ([Install](#install)), access-control findings need test accounts ([Scope and test accounts](#scope-and-test-accounts)). To try the Verifier, run OWASP Juice Shop locally (`docker run --rm -p 3000:3000 bkimminich/juice-shop`) and use the files in [`examples/juice-shop/`](examples/juice-shop/).
 
@@ -129,7 +129,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 ## Output
 
-`verify` writes to `--output` (default `./verification`):
+`verify` writes to `--output` or, without it, to a new private directory for each run, e.g. `~/.local/share/appsec-verifier/runs/<project>/<start time>/` on Linux ([details](docs/cli.md#outputs)):
 
 - `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on as raw HTTP, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
@@ -137,7 +137,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 - `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data, so check them before sharing.
 - `console.log`, with `--console-log`: what the run printed ([console output](docs/cli.md#console-output)).
 
-Ctrl-C stops the run and still writes the report. `--resume` continues a run that did not finish, and a report already in `--output` is replaced only with `--overwrite`. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding.
+Ctrl-C stops the run and still writes the report. `--resume` continues a run that did not finish, without `--output` the newest one for the same assessment and target, and a report already in `--output` is replaced only with `--overwrite`. `--annotate` also writes copies of the assessment and of the Analyzer's Markdown report with the verdict, the rating after verification and the proof of concept of each tested finding.
 
 ## Install
 

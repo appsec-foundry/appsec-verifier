@@ -13,6 +13,7 @@ import gzip
 import json
 import math
 import os
+import stat
 import sys
 import threading
 import time
@@ -104,13 +105,13 @@ def _write(path, doc):
     return path
 
 
-def _verify(tmp_path, monkeypatch, planner, *extra, target=None, threats=None):
+def _verify(tmp_path, monkeypatch, planner, *extra, target=None, threats=None, output=True):
     target = target or Target(default=Resp())
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (planner, dict(INFO)))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
     argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": threats or THREATS})),
             "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--test-all",
-            "--output", str(tmp_path / "out"),
+            *(["--output", str(tmp_path / "out")] if output else []),
             "--rate", "0", "--screenshots", "none", *extra]
     return cli.main(argv), target
 
@@ -177,9 +178,9 @@ def test_resume_of_an_unusable_report_is_refused_before_any_contact(tmp_path, mo
     assert (tmp_path / "out" / "verification.yaml").read_text() == existing
 
 
-def _saved_checked_results(tmp_path, count):
+def _saved_checked_results(tmp_path, count, out=None):
     """Resume fixtures model already checked results, independently of the planner stub."""
-    path = tmp_path / "out" / "verification.yaml"
+    path = (out or tmp_path / "out") / "verification.yaml"
     doc = yaml.safe_load(path.read_text())
     for row in doc["results"][:count]:
         row.update(verdict="blocked-by-control", rationale="first run", proof={"checked": True, "contract": 3})
@@ -228,6 +229,74 @@ def test_resume_without_a_report_runs_as_usual(tmp_path, monkeypatch):
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
     assert Checked.asked == ["T-1", "T-2", "T-3", "T-4"]
+
+
+# ── without --output each run gets a private directory of its own (VER-058) ─────
+
+def _project_runs(tmp_path, monkeypatch):
+    """The runs of the test assessment, which names no project, below a data directory in tmp_path; the working
+    directory is empty."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    (tmp_path / "cwd").mkdir()
+    monkeypatch.chdir(tmp_path / "cwd")
+    return tmp_path / "data" / "appsec-verifier" / "runs" / "assessment"
+
+
+def test_without_output_each_run_writes_to_a_private_directory_of_its_own(tmp_path, monkeypatch, capsys):
+    runs = _project_runs(tmp_path, monkeypatch)
+    for _ in range(2):
+        assert _verify(tmp_path, monkeypatch, Checked, output=False)[0] == cli.EXIT_OK
+    first, second = sorted(runs.iterdir())
+    out = capsys.readouterr().out
+    for run in (first, second):
+        assert (run / "verification.yaml").is_file() and (run / "agent-log.jsonl").is_file()
+        assert f"Report     : {run / 'verification.md'}\n" in out                       # in the settings
+        assert f"Report     : {run / 'verification.md'} (Markdown)\n" in out            # in Done
+    for directory in (runs.parent.parent, runs.parent, runs, first, second):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert list((tmp_path / "cwd").iterdir()) == []
+
+
+def test_without_output_a_run_that_writes_nothing_leaves_no_directory(tmp_path, monkeypatch):
+    runs = _project_runs(tmp_path, monkeypatch)
+    rc, target = _verify(tmp_path, monkeypatch, Checked, target=Target(default=httpx.ConnectError("down")),
+                         output=False)
+    assert rc == cli.EXIT_BLOCKED and target.calls                      # the pre-flight reached the target
+    assert list(runs.iterdir()) == []
+
+
+def test_without_output_an_unusable_data_directory_blocks_before_any_contact(tmp_path, monkeypatch, capsys):
+    _project_runs(tmp_path, monkeypatch)
+    (tmp_path / "data").write_text("not a directory")
+    rc, target = _verify(tmp_path, monkeypatch, Checked, output=False)
+    err = capsys.readouterr().err
+    assert rc == cli.EXIT_BLOCKED and target.calls == []
+    assert "The output directory cannot be created" in err and "give a directory with --output" in err
+
+
+def test_resume_without_output_continues_the_newest_run_for_the_same_assessment_and_target(
+        tmp_path, monkeypatch, capsys):
+    runs = _project_runs(tmp_path, monkeypatch)
+    assert _verify(tmp_path, monkeypatch, InterruptedAtT3, output=False)[0] == cli.EXIT_INTERRUPTED
+    (earlier,) = runs.iterdir()
+    _saved_checked_results(tmp_path, 2, out=earlier)
+    other = _verify(tmp_path, monkeypatch, Checked, threats=THREATS[:3], output=False)   # newer, other assessment
+    assert other[0] == cli.EXIT_OK and len(list(runs.iterdir())) == 2
+    capsys.readouterr()
+    Checked.asked = []
+    assert _verify(tmp_path, monkeypatch, Checked, "--resume", output=False)[0] == cli.EXIT_OK
+    assert Checked.asked == ["T-3", "T-4"] and len(list(runs.iterdir())) == 2
+    assert f"continues {earlier / 'verification.yaml'}" in capsys.readouterr().out
+    doc = yaml.safe_load((earlier / "verification.yaml").read_text())
+    assert [r["rationale"] for r in doc["results"]] == ["first run", "first run", "checked", "checked"]
+
+
+def test_resume_without_output_and_without_a_fitting_run_starts_a_new_one(tmp_path, monkeypatch):
+    runs = _project_runs(tmp_path, monkeypatch)
+    assert _verify(tmp_path, monkeypatch, Checked, threats=THREATS[:3], output=False)[0] == cli.EXIT_OK
+    Checked.asked = []
+    assert _verify(tmp_path, monkeypatch, Checked, "--resume", output=False)[0] == cli.EXIT_OK
+    assert Checked.asked == ["T-1", "T-2", "T-3", "T-4"] and len(list(runs.iterdir())) == 2
 
 
 # ── unreadable input files block with exit 2 ───────────────────────────────────

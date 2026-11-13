@@ -14,6 +14,15 @@ def _plain_console(monkeypatch):
     monkeypatch.setattr(cli, "_logo_shown", False)
 
 
+@pytest.fixture(autouse=True)
+def _temporary_data_directory(tmp_path_factory):
+    """A run without --output writes below the user data directory (VER-058); tests get a temporary one. Its own
+    MonkeyPatch, so a test's monkeypatch.undo() cannot send a run into the developer's home."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("XDG_DATA_HOME", str(tmp_path_factory.mktemp("data")))
+        yield
+
+
 REAL_MODEL_TEST = cli._model_test
 
 

@@ -3,7 +3,8 @@
 `appsec-verifier <assessment>` reads the assessment offline, shows what it
 holds, and asks only for what has no usable default: the target URL when there
 is no scope file, an identities file when one is found, and whether to overwrite
-a report already in the output directory. The severity floor
+a report already in the directory given with --output; without --output each
+run gets a directory of its own (VER-058). The severity floor
 is high and the model profile claude unless options say otherwise; the run
 prints the floor, and offers the next lower severity when nothing of high or
 above can be verified. A profile that is not available stops the run before
@@ -55,7 +56,6 @@ from .term_style import Style
 
 SEVERITY_FLOORS = ("critical", "high", "medium", "low")
 DEFAULT_FLOOR = "high"
-DEFAULT_OUTPUT = "./verification"
 
 # (args attribute, verify option, Limits field)
 _LIMITS = (
@@ -128,7 +128,6 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
     """Collect the settings of a run into `args` (the `verify` options) and hand them to verify."""
     if not interactive:
         args.non_interactive = True
-        args.output = args.output or DEFAULT_OUTPUT
         missing = [flag for flag, value in (("--scope or --url", args.scope or args.target),
                                             ("--profile", args.profile)) if not value]
         if missing:
@@ -405,16 +404,16 @@ def _ask_mode(d: Dialog, args, scope: dict) -> None:
 
 
 def _ask_output(d: Dialog, args) -> bool:
-    """The report goes to --output or ./verification. A report already there is replaced only with
-    --overwrite or a yes here, and --resume continues it; a no stops the run before anything is contacted."""
-    args.output = args.output or DEFAULT_OUTPUT
-    if args.resume or args.overwrite or not cli.report_exists(args.output):
+    """Without --output the run gets a directory of its own (VER-058), so nothing is asked. A report already in
+    --output is replaced only with --overwrite or a yes here, and --resume continues it; a no stops the run
+    before anything is contacted."""
+    if not args.output or args.resume or args.overwrite or not cli.report_exists(args.output):
         return True
     if d.yes(f"There is already a report in {clean(args.output)}. Overwrite it?"):
         args.overwrite = True
         return True
     _err(f"\nthe report in {clean(args.output)} was kept; nothing was contacted.\n"
-         "  --resume continues it, --output DIR writes elsewhere.")
+         "  --resume continues it; without --output the run gets a directory of its own.")
     return False
 
 
