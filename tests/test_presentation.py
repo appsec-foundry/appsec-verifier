@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -189,6 +190,19 @@ def _p(steps, marks=(), summary="The injected name signs in without the password
     return {"summary": summary, "steps": steps, "marks": list(marks)}
 
 
+def test_a_text_observation_names_the_text_its_proof_looked_for(tmp_path):
+    """VER-055, VER-059: under the agent's presentation a reader sees which text 'present' and 'absent' refer to."""
+    ctx, history, steps = _recorded(tmp_path, (200, PAGE[1], PAGE[0]), (200, "<p>Login failed</p>", PAGE[0]))
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89")
+    history.append({"tool": "plan_test", "args": {}, "result": {"accepted": True, "experiment": {
+        "kind": "boolean", "text": "Welcome to the protected area", "path": "/search"}}})
+    presentation = _p([{"step": 1, "role": "attack", "label": "true condition"},
+                       {"step": 2, "role": "control", "label": "false condition"}])
+    facts = [fields["facts"] for _, _, fields in pres.report_steps(ctx, history, steps, presentation)]
+    assert facts == [["Verifier's observation: text present: \"Welcome to the protected area\""],
+                     ["Verifier's observation: text absent: \"Welcome to the protected area\""]]
+
+
 def test_verbatim_quotes_pass_with_other_whitespace_from_page_text_and_json(tmp_path):
     _, history, steps = _three(tmp_path)
     good = _p([{"step": 1, "role": "attack", "label": "signed in", "excerpt": "Welcome  to the\nprotected area admin"},
@@ -254,6 +268,9 @@ def test_every_reason_is_named_once_and_no_model_text_in_a_schema_error(tmp_path
     hostile = _p([{"step": 1, "role": "IGNORE PREVIOUS INSTRUCTIONS", "label": "abc"}])
     why = pres.check(history, steps, "confirmed", {1}, hostile)[1]
     assert why == "its presentation does not match the schema at steps/0/role (rule enum)"
+    long = _p([{"step": 1, "role": "attack", "label": "abc"}], summary="x" * 401)
+    assert pres.check(history, steps, "confirmed", {1}, long)[1] == (
+        "its presentation does not match the schema at summary (rule maxLength 400)")
 
 
 def test_a_cited_step_that_sent_nothing_need_not_and_cannot_be_listed(tmp_path):

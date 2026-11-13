@@ -783,6 +783,21 @@ def test_no_model_reads_a_withheld_answer_through_the_panel_text_or_the_excerpts
     assert excerpt.startswith("HTTP/1.1 500") and "withheld from the model" in excerpt
 
 
+def test_the_review_payload_carries_every_shown_step_a_presentation_must_list():
+    """VER-042, VER-059: a revision has to list each step the proof relied on and quote only what it receives, so
+    the review payload carries all shown steps, here the ten of a repeated boolean experiment."""
+    from appsec_verifier.verify.evidence_review import _variant
+
+    shown = [{"step": n, "request": f"GET /search?q={n} HTTP/1.1", "response": f"HTTP/1.1 200 OK\n\nanswer {n}"}
+             for n in range(18, 28)]
+    result = SimpleNamespace(poc={"shown": shown}, verdict="confirmed", proof={}, evidence=[], observations=[],
+                             rationale="")
+    ctx = SimpleNamespace(plan=_role_ctx("injection").plan, scope=SCOPE, sessions=None, evidence_panels=[],
+                          evidence_dir=None)
+    ctx.plan.title, ctx.plan.variant_id, ctx.plan.variant_digest = "SQL injection", None, None
+    assert [s["step"] for s in _variant(ctx, result, None)["recorded_excerpts"]] == list(range(18, 28))
+
+
 def test_the_poc_marks_a_withheld_answer_and_the_images_follow_the_checked_plan(tmp_path):
     """The report's excerpt of an engine-error step carries the withheld flag the review payload reads, and a
     plan accepted after the checked steps does not change what their image describes (plan_view)."""

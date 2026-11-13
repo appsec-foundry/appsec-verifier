@@ -67,13 +67,16 @@ PRESENTATION_HELP = (
     "(the application without the attack), attack, outcome (what the attacker obtained; confirmed only) or control "
     "(rules out a coincidence); label: what the step is and what happened, in plain words; excerpt: the part of its "
     "answer that shows it, verbatim from a tool result, at most 12 lines, omitted where the status tells it or the "
-    "answer was withheld. marks: verbatim quotes from a URL-decoded request or an excerpt, labelled with why they "
+    "answer was withheld. A request shows only its answer's start, an experiment or browser check none: read what "
+    "you quote with read_response first. "
+    "marks: verbatim quotes from a URL-decoded request or an excerpt, labelled with why they "
     "matter. summary: confirmed, what the attacker sent and obtained; otherwise what the steps show and what is "
     "missing. A different page or text alone is no exploit. Every quote and step is checked; a failed check shows "
     "the Verifier's own presentation instead."
 )
 
 _VALIDATOR = Draft202012Validator(PRESENTATION_SCHEMA)
+_BOUNDS = ("maxLength", "minLength", "maxItems", "minItems", "minimum", "maximum")
 MAX_EXCERPT_LINES = 12
 _REQUEST_CHARS = 1500
 TITLES = {"normal": "Normal request", "attack": "Attack", "outcome": "Outcome", "control": "Control"}
@@ -157,7 +160,9 @@ def check(history: list[dict], steps: list[dict], verdict: str, decisive: set[in
     error = next(iter(sorted(_VALIDATOR.iter_errors(presentation), key=str)), None)
     if error is not None:
         where = "/".join(map(str, error.absolute_path)) or "its top level"
-        return None, f"its presentation does not match the schema at {where} (rule {error.validator})"
+        # A size rule names its bound, so the next attempt can meet it; the bound is the schema's, not model text.
+        bound = f" {error.validator_value}" if error.validator in _BOUNDS else ""
+        return None, f"its presentation does not match the schema at {where} (rule {error.validator}{bound})"
     recorded = {s["step"]: e for s in steps if (e := _shown_entry(s)) is not None}
     withheld = withheld_steps(history)
     listed = [item["step"] for item in presentation["steps"]]
@@ -214,7 +219,7 @@ def assess(ctx, history: list[dict], steps: list[dict], result, cited, presentat
 def _step(ctx, history, n: int, e: dict, item: dict, marks: list[dict], withheld: set[int]):
     """What one step shows: its request and answer texts, their marks as (label, text), and the Verifier's own
     observation where the proof reads one from the step (poc._proof_observation)."""
-    from .poc import _OBSERVATIONS, _proof_observation
+    from .poc import _proof_observation
 
     res = e["response"]
     status = f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()
@@ -229,8 +234,22 @@ def _step(ctx, history, n: int, e: dict, item: dict, marks: list[dict], withheld
     req_marks = [(m["label"], m["text"]) for m in marks if m["step"] == n and m["part"] == "request"]
     res_marks = [(m["label"], m["text"]) for m in marks if m["step"] == n and m["part"] == "response"]
     seen = _proof_observation(ctx, history, n, e)
-    facts = [f"Verifier's observation: {_OBSERVATIONS[seen[0]][2 if seen[1] else 3]}"] if seen else []
+    facts = [f"Verifier's observation: {_observation(history, seen)}"] if seen else []
     return request_text(e), answer, req_marks, res_marks, facts
+
+
+def _observation(history: list[dict], seen: tuple) -> str:
+    """What the proof check read from a step, in words; a text observation names the text it looked for (VER-055),
+    so a reader can tell what 'present' and 'absent' refer to."""
+    from ..agent.experiments import latest_plan
+    from .poc import _OBSERVATIONS
+
+    label = _OBSERVATIONS[seen[0]][2 if seen[1] else 3]
+    text = latest_plan(history)[1].get("text") if seen[0] == "text_present" else None
+    if not isinstance(text, str) or not text:
+        return label
+    text = " ".join(text.split())
+    return f'{label}: "{text if len(text) <= 80 else text[:79] + "…"}"'
 
 
 def report_steps(ctx, history: list[dict], steps: list[dict], presentation: dict) -> list[tuple[int, dict, dict]]:

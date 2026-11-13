@@ -28,8 +28,9 @@ from ..agent.steps import strict_json
 from ..limits import LimitExceeded, execution_deadline
 from ..planning import evidence_id, evidence_name
 from .poc import WITHHELD_BODY
-from .presentation import REVISION_PRESENTATION, normalized
+from .presentation import PRESENTATION_SCHEMA, REVISION_PRESENTATION, normalized
 
+MAX_SHOWN_STEPS = PRESENTATION_SCHEMA["properties"]["steps"]["maxItems"]
 MAX_REVIEW_IMAGES = 3
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
@@ -226,10 +227,12 @@ def _withheld_response(response: str) -> str:
 
 def _variant(ctx, res, presentation):
     poc = res.poc or {}
+    # Every shown step, as many as a presentation may list: a revision must list each step the proof relied on
+    # (VER-059), such as the ten of a repeated boolean experiment, and can quote only what it receives here.
     shown = [
         {"step": s["step"], "request": s["request"][:6000],
          "response": _withheld_response(s["response"]) if s.get("withheld") else s["response"][:6000]}
-        for s in poc.get("shown", [])[:6]
+        for s in poc.get("shown", [])[:MAX_SHOWN_STEPS]
     ]
     return _clean(
         ctx,
