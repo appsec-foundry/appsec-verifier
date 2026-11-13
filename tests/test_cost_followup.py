@@ -273,7 +273,7 @@ def test_a_login_variant_without_the_password_is_refused_before_any_request(tmp_
     ({"fixed": {"json": {}}}, "invalid experiment declaration"),
     ({"fixed": {"json": {"password": {"$ne": 1}}}}, "invalid experiment declaration"),   # values are scalars
     ({"fixed": {"json": {"password": "x"}}, "sql_template": None, "positive": "a", "negative": "b"},
-     "plan has none"),
+     "Declare a boolean plan with error_probe or sql_template and fixed instead"),
 ])
 def test_fixed_values_are_refused_where_they_do_not_fit(tmp_path, extra, reason):
     from appsec_verifier.agent.tools import AgentTools, ToolError
@@ -282,6 +282,44 @@ def test_fixed_values_are_refused_where_they_do_not_fit(tmp_path, extra, reason)
     args = {k: v for k, v in {**_login_plan()["args"], "auth_artifact": None, **extra}.items() if v is not None}
     with pytest.raises(ToolError, match=reason):
         AgentTools(ctx).plan_test(**args)
+
+
+@pytest.mark.parametrize("cwe, location, named", [
+    ("CWE-89", "params", "Declare a boolean plan with error_probe or sql_template and fixed instead"),
+    ("CWE-943", "json", "Declare a boolean plan with error_probe or operator_challenge and fixed instead"),
+    ("CWE-90", "params", "no generated controls through this input; omit fixed"),
+])
+def test_fixed_on_controls_the_agent_chose_names_the_forms_that_take_it(tmp_path, cwe, location, named):
+    """Refused case, as in a DVWA run: own controls plus fixed for a login's other inputs were refused three times
+    with no hint, and the agent was stopped. The refusal names the declarations whose controls carry fixed."""
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    sent = []
+    ctx = _search_ctx(tmp_path, sent)
+    ctx.plan = replace(ctx.plan, cwe=cwe)
+    args = {"kind": "boolean", "hypothesis": "The search term is concatenated into the query",
+            "path": "/rest/products/search", "input_location": location, "input_name": "q", "baseline": "zzz",
+            "positive": "zzz' OR '1'='1' -- ", "negative": "zzz' OR '1'='2' -- ", "pointer": "/data",
+            "fixed": {"params": {"sort": "name"}}}
+    with pytest.raises(ToolError, match=re.escape(named)):
+        AgentTools(ctx).plan_test(**args)
+    assert sent == []
+
+
+@pytest.mark.parametrize("form", [{"error_probe": True}, {"sql_template": "zzz' AND {{predicate}} -- "}])
+def test_each_form_the_refusal_names_takes_fixed_and_its_controls_carry_it(tmp_path, form):
+    """The forms named above are accepted with fixed, and every generated control carries the fixed values."""
+    from appsec_verifier.agent.experiments import fixed_forms
+    from appsec_verifier.agent.tools import AgentTools
+
+    assert set(form) <= set(fixed_forms("CWE-89", "params"))
+    tools = AgentTools(_search_ctx(tmp_path, []))
+    args = {"kind": "boolean", "hypothesis": "The search term is concatenated into the query",
+            "path": "/rest/products/search", "input_location": "params", "input_name": "q", "baseline": "zzz",
+            **({} if "error_probe" in form else {"pointer": "/data"}), "fixed": {"params": {"sort": "name"}}, **form}
+    assert tools.plan_test(**args)["accepted"] is True
+    requests = tools.experiment_requests()
+    assert requests and all(r["params"]["sort"] == "name" for r in requests)
 
 
 def test_command_injection_probes_carry_no_fixed_values(tmp_path):

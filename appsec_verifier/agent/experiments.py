@@ -189,6 +189,17 @@ def confirming_form(cwe, location) -> str | None:
     return "predicate_template" if cwe == "CWE-90" else None
 
 
+def fixed_forms(cwe, location) -> list[str]:
+    """The declarations whose generated controls carry `fixed`, the request's other inputs, for an injection of this
+    CWE through this input: the engine-error probe first, as the prompt orders them, then the template form that
+    can confirm (VER-011, VER-053). Command injection probes carry nothing else, so none."""
+    if cwe == "CWE-78":
+        return []
+    forms = ["error_probe"] if cwe in ENGINE_ERROR_CWES and (cwe != "CWE-943" or location == "json") else []
+    return forms + [form for form in (confirming_form(cwe, location) or "").split(" or ")
+                    if form and generates_controls({"kind": "boolean", form: True})]
+
+
 # Missing authentication and exposure: proven with an operator-declared resource, or the comparison without
 # credentials whose answers no model sees (VER-057, verifiable-cwes.yaml); the agent's own requests reach only a
 # declared resource (agent/tools.py).

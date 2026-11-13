@@ -83,6 +83,7 @@ from .experiments import (
     comparison_path,
     control_values,
     engine_error_signature,
+    fixed_forms,
     generates_controls,
     normal_roles,
     pointer_value,
@@ -483,13 +484,22 @@ class AgentTools:
                             "(sql_template for CWE-89 or operator_challenge for CWE-943)")
         if plan.get("fixed") and not (plan["kind"] == "access-control" and plan.get("signed_in")):
             # A comparison without credentials (VER-057) takes its query inputs from fixed; checked below.
-            if not generates_controls(plan):
-                raise ToolError("fixed gives values to the controls the Verifier generates; this plan has none")
-            if plan["input_name"] in (plan["fixed"].get(plan.get("input_location")) or {}):
-                raise ToolError("fixed must not set the injected input; the generated controls supply it")
-            if getattr(self.ctx.plan, "cwe", "") == "CWE-78":
+            cwe = getattr(self.ctx.plan, "cwe", "")
+            if cwe == "CWE-78":
                 # Command probes send nothing but the harmless arithmetic controls (_check_steering).
                 raise ToolError("command injection probes carry no other values, so fixed is not available")
+            if not generates_controls(plan) and plan["kind"] not in ("boolean", "timing"):
+                raise ToolError("fixed applies to generated injection controls and to the comparison without "
+                                "credentials (signed_in); omit it here")
+            if not generates_controls(plan):
+                # VER-043: name the declarations that take fixed, so the next plan can be accepted.
+                forms = fixed_forms(cwe, plan.get("input_location"))
+                raise ToolError("fixed gives the request's other inputs to controls the Verifier generates; controls "
+                                "you choose carry none and support only a negative verdict. "
+                                + (f"Declare a boolean plan with {' or '.join(forms)} and fixed instead" if forms else
+                                   "This finding's CWE has no generated controls through this input; omit fixed"))
+            if plan["input_name"] in (plan["fixed"].get(plan.get("input_location")) or {}):
+                raise ToolError("fixed must not set the injected input; the generated controls supply it")
         if plan.get("error_set"):
             # VER-053: the engine-error sweep's controls are its break/balance set, not the five fixed groups.
             values = [v for e in plan["error_set"] for v in (e["break"], e["balance"])]
