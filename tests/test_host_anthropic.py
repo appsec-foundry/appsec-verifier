@@ -97,6 +97,7 @@ def test_tool_defs_expose_only_the_confined_tools():
         "read_response",
         "derive_request",        # evidence-backed planning only; no target contact (VER-008, VER-043)
         "plan_test",
+        "revise_observation",    # recheck a completed experiment without target contact (VER-055)
         "send_controls",         # sends an accepted write experiment's controls in one action (VER-011)
         "login_fields",          # asked once before the run (VER-041), never offered during a finding
     }

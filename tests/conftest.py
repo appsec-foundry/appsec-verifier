@@ -6,6 +6,25 @@ from appsec_verifier import cli
 
 
 @pytest.fixture(autouse=True)
+def _no_implicit_live_browser(request, monkeypatch):
+    """Unit/CLI tests must inject a browser; only the opt-in browser module may start Chrome."""
+    if request.node.path.name == "test_browser_live.py":
+        return
+    from appsec_verifier.tools.browser import ProofBrowser
+
+    original = ProofBrowser.__init__
+
+    def refused(_headless):
+        raise AssertionError("offline tests must supply a fake browser launcher")
+
+    def initialize(self, *args, **kwargs):
+        kwargs.setdefault("launcher", refused)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ProofBrowser, "__init__", initialize)
+
+
+@pytest.fixture(autouse=True)
 def _plain_console(monkeypatch):
     """Console colour follows NO_COLOR, FORCE_COLOR and the terminal; tests start
     from plain output whatever the developer's environment sets."""

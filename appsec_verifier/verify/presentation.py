@@ -205,7 +205,8 @@ def assess(ctx, history: list[dict], steps: list[dict], result, cited, presentat
     from ..agent.experiments import plan_view
     from .poc import _shown_entry, decisive_steps
 
-    view = plan_view(history, (result.proof or {}).get("steps") or cited)
+    cited = (result.proof or {}).get("steps") or cited
+    view = plan_view(history, cited)
     requests = {s["step"] for s in steps if _shown_entry(s) is not None}
     decisive = set(decisive_steps(ctx, view, result.verdict, cited)) & requests
     if not decisive:

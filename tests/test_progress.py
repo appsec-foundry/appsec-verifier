@@ -783,6 +783,11 @@ def test_the_agent_loop_logs_and_shows_the_planner_note_and_ignores_it_for_a_ver
 
 def _verify_run(tmp_path, monkeypatch, capsys, info, *extra, usd=0.0):
     """One `verify` run over a fake planner whose every step costs `usd`; returns (stderr rows, stdout)."""
+    from test_poc import RenderBrowser
+
+    browser = RenderBrowser()
+    browser.close = lambda: None
+    monkeypatch.setattr(cli, "_proof_browser", lambda *args: (browser, "fake proof browser", None))
     scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "tester"},
              "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
     (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))

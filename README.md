@@ -163,7 +163,7 @@ The [Dockerfile](Dockerfile) builds an image that runs one command with Docker, 
 
 - A confirmed finding shows that the tested step works, not that a complete attack chain does.
 - Live runs, the proof browser included, have been made only against a local OWASP Juice Shop with the `claude` profile. The `codex-cli` and `copilot-cli` profiles have been tested only with simulated answers.
-- Boolean injection checks need a response field or page text that differs between the true and false condition; very large pages can exceed the recording limit and stay inconclusive.
+- Boolean injection checks need a response field or page text that differs between the true and false condition. The agent can correct the selected observation using recorded answers; very large pages can exceed the recording limit and stay inconclusive.
 - Custom request headers and browser interactions such as clicks are not supported; findings that need them are shown as untestable.
 - Path-traversal and SSRF checks decode percent-encoding, but no other encodings.
 - A sign-in in the browser works when the application's API accepts the identity provider's token. An application that keeps its own session cookie after SSO needs a copied session or a login program. Copied sessions are not renewed during a run.

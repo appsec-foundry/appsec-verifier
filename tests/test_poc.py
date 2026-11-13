@@ -440,7 +440,7 @@ def test_a_verdict_that_cites_no_step_gets_an_image_that_says_it_proves_nothing(
     result, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
                          [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
     assert "Step 1 · GET as anonymous" in shot["html"]
-    assert "The verdict cites no step, so these requests prove nothing." in shot["html"]
+    assert "The verdict cites no step; these recorded attempts have no completed proof." in shot["html"]
     assert "what the verdict rests on" not in shot["html"]
     assert result.poc["shown"] == [] and not any(s["decisive"] for s in result.poc["steps"])
 
@@ -876,6 +876,32 @@ def test_a_text_observation_image_frames_the_selected_text_its_proof_reads():
     assert "<b>the selected text in the answer: no</b>" in page
     assert "true condition: text present · false condition: text absent." in page
     assert "compared: the text &quot;Item number 2&quot;" in page
+
+
+@pytest.mark.parametrize("answer", ["<pre>Welcome to the result</pre>", "Welcome &amp; result"])
+def test_an_html_image_keeps_a_mark_lost_when_extracting_visible_text(answer):
+    """A located HTML difference/text must stay visible and escaped, even after a long navigation block."""
+    navigation = "<nav>" + "common navigation " * 90 + "</nav>"
+    plan = {**{k: v for k, v in _EXPERIMENT.items() if k != "pointer"}, "text": answer}
+    history = [_accepted(**plan), _sent("/search", q=plan["positive"]), _sent("/search", q=plan["negative"])]
+    shown = [(2, _probe_exchange(plan["positive"], 200, navigation + answer, "text/html")),
+             (3, _probe_exchange(plan["negative"], 200, navigation + "No result", "text/html"))]
+    page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "inconclusive", None)
+    assert f"<mark>{html.escape(answer)}</mark>" in page
+    assert "<nav>" not in page and "<pre>Welcome" not in page
+    assert "[…]" in page
+
+
+def test_an_html_difference_is_marked_in_the_excerpt_actually_shown():
+    navigation = "<nav>" + "common navigation " * 90 + "</nav>"
+    plan = {**_EXPERIMENT, "pointer": "/html"}  # invalid observation, as in the saved DVWA run
+    history = [_accepted(**plan), _sent("/search", q=plan["positive"]), _sent("/search", q=plan["negative"])]
+    shown = [(2, _probe_exchange(plan["positive"], 200, navigation + "<pre><br>Welcome</pre>", "text/html")),
+             (3, _probe_exchange(plan["negative"], 200, navigation + "<pre>Incorrect</pre>", "text/html"))]
+    page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "inconclusive", None)
+    assert page.count("◀ answer differs") == 2
+    assert "<mark>&lt;" in page
+    assert "This does not complete the required proof." in page
 
 
 def test_an_arithmetic_image_frames_each_controls_own_result_not_a_longer_number():

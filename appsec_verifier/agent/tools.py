@@ -789,6 +789,24 @@ class AgentTools:
             out["note"] = note
         return out
 
+    def revise_observation(self, **args) -> dict:
+        """VER-055: append a selector correction for existing evidence; never change or resend a request."""
+        from .experiments import OBSERVATION_SCHEMA, experiment_steps, revisable_observation
+
+        if not Draft202012Validator(OBSERVATION_SCHEMA).is_valid(args):
+            raise ToolError("give plan_step and exactly one of text or pointer; no request fields may change")
+        if self.ctx.plan.cls != "injection":
+            raise ToolError("observation correction applies only to injection experiments")
+        start = args["plan_step"]
+        plan = self.ctx.accepted_plans.get(start)
+        if not plan or not revisable_observation(plan):
+            raise ToolError("the plan has no revisable text or response-field observation in this finding")
+        steps = experiment_steps(self.ctx.agent_history, start)
+        if not steps:
+            raise ToolError("the plan has no completed control experiment in this finding")
+        return {"accepted": True, "plan_step": start, "steps": steps,
+                "observation": {k: args[k] for k in ("text", "pointer") if k in args}}
+
     def read_response(self, *, steps: list[int], pointer: str | None = None, offset: int = 0) -> dict:
         out = []
         for n in steps:
@@ -860,6 +878,7 @@ class AgentTools:
             "search_source": self.search_source,
             "browser_check": self.browser_check,
             "plan_test": self.plan_test,
+            "revise_observation": self.revise_observation,
             "read_context": self.read_context,
             "read_response": self.read_response,
         }.get(name)

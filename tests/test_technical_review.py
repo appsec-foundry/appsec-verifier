@@ -104,6 +104,8 @@ def test_qa_gets_the_proof_contract_its_follow_ups_must_fit(tmp_path):
     assert host.calls[0][1]["proof_contract"]["confirming_inputs"] == {
         "params": "operator_challenge or js_predicate_template", "json": "operator_challenge",
         "path": "js_predicate_template"}
+    repair = host.calls[0][1]["proof_contract"]["observation_correction"]
+    assert "revise_observation" in repair and "without requests" in repair and "Missing or incomplete" in repair
 
 
 @pytest.mark.parametrize("reply", [selection(999), {**CLEAR, "action": "http_request"},

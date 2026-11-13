@@ -19,7 +19,7 @@ from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
 from ..verification_context import missing_capabilities
 from ..verify.presentation import PRESENTATION_HELP
 from .derivation import page_candidates, page_source
-from .experiments import EXPOSURE_CWES, PLAN_SCHEMA, access_methods
+from .experiments import EXPOSURE_CWES, OBSERVATION_SCHEMA, PLAN_SCHEMA, access_methods
 from .proof import redirect_host
 
 _RESULT_CAP = 4000  # bound tool-result text fed back to the model (tokens/cost)
@@ -53,7 +53,7 @@ def _tool_defs() -> list[dict]:
             "name": "plan_test",
             "description": "Declare the input and controls the Verifier must generate itself: an injection "
             "experiment, or an access-control or session proof. Other classes need no plan. "
-            "Use boolean with a sink input and a JSON pointer to a meaningful response field. When the plan is "
+            "Use boolean with a sink input and an observation: pointer for JSON, text for HTML/text. When the plan is "
             "accepted the Verifier sends the generated read controls at once; on a write, call send_controls. "
             "sql_template and expression_template may be a list of up to three candidates; the first whose "
             "controls the target answers without a server error is used. fixed gives the request's other inputs, "
@@ -63,6 +63,14 @@ def _tool_defs() -> list[dict]:
             "change goes only with owner. "
             "If the finding lists variants, set variant to the one you test.",
             "input_schema": PLAN_SCHEMA,
+        },
+        {
+            "name": "revise_observation",
+            "description": "Correct only the text or JSON pointer of a completed injection experiment. Give its "
+            "plan_step and exactly one of text or pointer. Rechecks every recorded control without target requests; "
+            "the request plan, identities and controls stay fixed. Withheld observations cannot be changed. "
+            "A missing or incomplete response remains insufficient. The correction is recorded separately.",
+            "input_schema": OBSERVATION_SCHEMA,
         },
         {
             "name": "send_controls",
@@ -407,6 +415,9 @@ def _injection_rules() -> str:
         "into two stable classes; the true class need not match the uninjected baseline, and for a result set "
         "that empties on the false condition point at the container, or at a field only the true answers have. "
         "For a page answer use text, a literal a recorded answer shows but no sent value holds, not pointer. "
+        "If an experiment chose the wrong observation, use revise_observation with its plan_step and text or "
+        "pointer to recheck the complete recorded control set without repeating requests. This does not repair "
+        "missing evidence or change a request. The Verifier fills in an automatic experiment's control citations. "
         "Reflection, timestamps, error pages and ordinary input-dependent results are not proof. "
         "Command, code-evaluation, template and XPath injection can use expression_template with one "
         "{{expression}} placeholder "

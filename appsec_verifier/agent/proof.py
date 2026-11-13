@@ -82,8 +82,10 @@ from ..planning import evidence_id
 from ..verification_context import planned_route
 from ..verify.probes import DEFAULT_FORMS, ProbeResult
 from .experiments import (
+    ObservationError,
     access_check,
     callback_injection_check,
+    complete_experiment_citations,
     experiment_groups,
     injection_proof,
     latest_plan,
@@ -173,6 +175,8 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     """`result` if it is not confirmed or its proof holds, else an inconclusive result with the reason."""
     if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
         return result
+    if getattr(ctx.plan, "cls", None) == "injection":
+        cited = complete_experiment_citations(history, cited if cited is not None else [])
     if result.verdict != "confirmed":
         return _negative(ctx, plan_view(history, cited), result, cited)
     # The plan guides the agent; an assumption it still lists as missing blocks nothing once the class's proof
@@ -482,7 +486,11 @@ def _no_split(ctx, plan, groups, verdict) -> str | None:
         return "the baseline does not answer 2xx the same way each time"
     try:
         values = [observe(ctx, n, plan) for n, _ in baseline]
-    except (ValueError, KeyError, TypeError, IndexError, RecursionError):
+    except ObservationError as exc:
+        return str(exc)
+    except (KeyError, IndexError):
+        return "the selected JSON field is absent in a baseline answer; correct it with revise_observation"
+    except (ValueError, TypeError, RecursionError):
         return "the planned response observation cannot be compared"
     if len({token(v) for v in values}) != 1 or values[0] in (None, "", [], {}):
         return "the baseline does not answer with the same content each time"
@@ -502,7 +510,11 @@ def _no_split(ctx, plan, groups, verdict) -> str | None:
         return "the true and false controls do not answer 2xx alike"
     try:
         values = [observe(ctx, n, plan) for n, _ in tests]
-    except (ValueError, KeyError, TypeError, IndexError, RecursionError):
+    except ObservationError as exc:
+        return str(exc)
+    except (KeyError, IndexError):
+        return "the selected JSON field is absent in a control answer; correct it with revise_observation"
+    except (ValueError, TypeError, RecursionError):
         return "the planned response observation cannot be compared"
     if len({token(v) for v in values}) != 1:
         return "the true and false controls answer differently, so this is no negative result"

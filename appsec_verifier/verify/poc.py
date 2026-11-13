@@ -1105,9 +1105,6 @@ def _proof_observation(ctx, history: list[dict], n: int, e: dict) -> tuple[str, 
     _, plan = latest_plan(history)
     if cls == "injection" and plan.get("kind") == "boolean" and not plan.get("pointer"):
         # VER-055: a page or text answer, observed through the selected text or the step's own computed result.
-        if isinstance(plan.get("text"), str) and plan["text"]:
-            yes = plan["text"] in _text(e)
-            return "text_present", yes, ("body", "", plan["text"]) if yes else None
         if plan.get("expression_template"):
             sent = _sink(plan, step.get("args") or {})
             own = next((value for group, value in (plan.get("expected_values") or {}).items()
@@ -1121,6 +1118,9 @@ def _proof_observation(ctx, history: list[dict], n: int, e: dict) -> tuple[str, 
             before = body[found.start() - 1] if found.start() else ""
             # The character before the whole number locates it, so a longer number holding its digits is not framed.
             return "result_returned", True, ("body", before if before not in "<>" else "", str(own))
+        if isinstance(plan.get("text"), str) and plan["text"]:
+            yes = plan["text"] in _text(e)
+            return "text_present", yes, ("body", "", plan["text"]) if yes else None
     if cls != "injection" or not plan.get("sql_marker"):
         return None
     sent = _sink(plan, step.get("args") or {})
@@ -1271,7 +1271,12 @@ def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
         else:
             parser = _VisibleText()
             parser.feed(text[:MAX_BODY_CHARS])
-            text = "Visible text excerpt: " + " ".join(parser.parts)
+            visible = " ".join(parser.parts)
+            needles = [v[2] if isinstance(v, tuple) else v for _, v in marks]
+            # A mark located in HTML can disappear when tags/entities are stripped. Keep the recorded
+            # source as escaped text in that case, so both the excerpt and its mark use the same text.
+            text = ("HTML excerpt: " + text if any(v and v in text and v not in visible for v in needles)
+                    else "Visible text excerpt: " + visible)
     else:
         try:
             if getattr(ctx.plan, "cls", None) == "access-control":
@@ -1332,7 +1337,7 @@ def _test_line(ctx, history: list[dict]) -> str:
         compared = (plan.get("pointer") or (f"the text {_quoted(plan['text'])}" if plan.get("text") else None)
                     or "each result in the answer")     # VER-055: a page or text answer
         if plan.get("expression_template"):
-            return f"{normal} with computed expressions; compared: {compared}"
+            return f"{normal} with computed expressions; compared: {plan.get('pointer') or 'each result in the answer'}"
         return f"{normal} with injected conditions that are true and false; compared: {compared}"
     if cls == "access-control" and plan.get("kind") == "access-control":
         resource, owner = _declared_resource(ctx, plan), plan.get("owner")
@@ -1406,7 +1411,7 @@ def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], r
             rows[name].append(seen)
     shown = [f"{name}: {', '.join(seen[:3])}" for name, seen in list(rows.items())[:5]]
     closing = (_VERDICT_SENTENCE.get(verdict, "No completed proof.") if cited
-               else "The verdict cites no step, so these requests prove nothing.")
+               else "The verdict cites no step; these recorded attempts have no completed proof.")
     return " · ".join(shown) + ". " + closing
 
 
@@ -1630,7 +1635,8 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     from ..agent.experiments import plan_view
 
     # The images describe the plan the checked steps ran under, not one accepted after them (plan_view).
-    history = plan_view(history, (result.proof or {}).get("steps") or cited)
+    cited = (result.proof or {}).get("steps") or cited
+    history = plan_view(history, cited)
     withheld = withheld_steps(history)
     decisive = set(decisive_steps(ctx, history, result.verdict, cited))
     for step in steps:

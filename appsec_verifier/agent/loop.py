@@ -1,5 +1,5 @@
 """The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
-VER-043, VER-046, VER-047, VER-052, VER-053, VER-057, VER-059).
+VER-043, VER-046, VER-047, VER-052, VER-053, VER-055, VER-057, VER-059).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
 when a control meets a server error; a write plan's controls run only when the agent asks with send_controls. An
@@ -44,7 +44,8 @@ from .tools import AgentTools, ToolError
 _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
 _LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "error", "path", "start_line",
-                  "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "body_withheld")
+                  "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "body_withheld",
+                  "plan_step", "observation", "steps")
 _PROPOSAL_CAP = 500
 
 
@@ -211,16 +212,17 @@ class AgentProbe:
             from ..verify.presentation import present
 
             result = untested_write(ctx, result)
+            cited = (result.proof or {}).get("steps") or verdict.get("proof_steps")
             if live and result.limits_hit is None:
                 capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
-                                    verdict.get("proof_steps"))
-            result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"),
+                                    cited)
+            result = poc.attach(ctx, history, sent, result, cited, verdict.get("highlight"),
                                 verdict.get("presentation"))
             attach_explanation(ctx, result, verdict.get("image_explanation"))
             # An evidence review may ask for another page for an unclear screenshot, or present the proof of
             # concept again (VER-042, VER-059).
-            ctx.recapture = partial(recapture, ctx, tools, history, sent, result, verdict.get("proof_steps"))
-            ctx.represent = partial(present, ctx, history, sent, result, verdict.get("proof_steps"))
+            ctx.recapture = partial(recapture, ctx, tools, history, sent, result, cited)
+            ctx.represent = partial(present, ctx, history, sent, result, cited)
             return _finish(ctx, step, result)
 
         def attach_stopped(stopped):
@@ -292,10 +294,13 @@ class AgentProbe:
 
         def report_experiment(sent_steps):
             """Append the experiment's own feedback step and return it (VER-011, VER-043, VER-057)."""
-            from .experiments import comparison_ready, injection_ready
+            from .experiments import comparison_ready, injection_ready, latest_plan, plan_view
 
-            comparison = (getattr(tools, "_experiment", None) or {}).get("signed_in")
-            feedback = (comparison_ready if comparison else injection_ready)(ctx, history, sent_steps)
+            view = plan_view(history, sent_steps)
+            start, plan = latest_plan(view)
+            comparison = plan.get("signed_in")
+            feedback = (comparison_ready if comparison else injection_ready)(ctx, view, sent_steps)
+            feedback["plan_step"] = start
             _log(ctx, len(history) + 1, tool="experiment", result=feedback)
             history.append({"tool": "experiment", "args": {}, "result": feedback})
             return feedback
@@ -468,6 +473,8 @@ class AgentProbe:
                 result = ctx.sessions.redact(result)  # VER-016: no credential value reaches the planner
             _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})
             history.append({"tool": name, "args": args, "result": result})
+            if name == "revise_observation" and result.get("accepted"):
+                report_experiment(result["steps"])
             # When the steps so far already meet the class proof by a signal the code sets itself (an executed
             # XSS marker, an SSRF callback hit, a path-traversal marker read), tell the agent so its next step
             # is the verdict (VER-043). The code still re-checks the cited steps before a confirmed verdict.

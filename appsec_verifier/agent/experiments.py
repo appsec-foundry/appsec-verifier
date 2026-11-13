@@ -161,6 +161,23 @@ PLAN_SCHEMA = {
     ],
 }
 
+OBSERVATION_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["plan_step"],
+    "properties": {
+        "plan_step": {"type": "integer", "minimum": 1},
+        "pointer": PLAN_SCHEMA["properties"]["pointer"],
+        "text": PLAN_SCHEMA["properties"]["text"],
+    },
+    "oneOf": [{"required": ["pointer"]}, {"required": ["text"]}],
+}
+
+
+def revisable_observation(plan) -> bool:
+    """VER-055: only response-field/text experiments, never withheld or mechanism-owned observations."""
+    return plan.get("kind") == "boolean" and not any(
+        plan.get(k) for k in ("auth_artifact", "error_probe", "sql_marker", "oob_template"))
+
+
 def generates_controls(plan) -> bool:
     """Whether the Verifier generates this accepted plan's controls itself (VER-011, VER-053)."""
     return plan.get("kind") == "boolean" and bool(
@@ -493,8 +510,57 @@ def latest_plan(history: list[dict]):
     for n in range(len(history), 0, -1):
         h = history[n - 1]
         if h.get("tool") == "plan_test" and h.get("result", {}).get("accepted") is True:
-            return n, h.get("result", {}).get("experiment") or h["args"]
+            plan = h.get("result", {}).get("experiment") or h["args"]
+            # Append-only corrections change the observation, never the request plan or its position. A view
+            # selecting an earlier experiment still sees only corrections bound to that experiment (VER-055).
+            for revision in history[n:]:
+                result = revision.get("result") or {}
+                if (revision.get("tool") == "revise_observation" and result.get("accepted") is True
+                        and result.get("plan_step") == n and revisable_observation(plan)):
+                    plan = {k: v for k, v in plan.items() if k not in ("pointer", "text")}
+                    plan.update({k: v for k, v in result["observation"].items() if k in ("pointer", "text")})
+            return n, plan
     return 0, {}
+
+
+def experiment_steps(history: list[dict], plan_step: int) -> list[int]:
+    """Every automatic control of one completed experiment, including failed controls (VER-011, VER-055)."""
+    active, steps = 0, []
+    completed = False
+    for n, h in enumerate(history, 1):
+        if h.get("tool") == "plan_test" and (h.get("result") or {}).get("accepted") is True:
+            active = n
+        if active == plan_step:
+            if h.get("tool") == "http_request" and h.get("experiment") is True:
+                steps.append(n)
+            elif h.get("tool") == "experiment" and (h.get("result") or {}).get("steps") == steps:
+                completed = True
+    return steps if completed else []
+
+
+def complete_experiment_citations(history: list[dict], cited):
+    """Expand an automatic experiment's citations to its whole control set; manual proof rules stay intact."""
+    if not isinstance(cited, list) or any(type(n) is not int or not 1 <= n <= len(history) for n in cited):
+        return cited
+    if len(set(cited)) != len(cited):
+        return cited
+    if not cited:
+        for n in range(len(history), 0, -1):
+            steps = experiment_steps(history, n) if history[n - 1].get("tool") == "plan_test" else []
+            if steps:
+                return steps
+        return cited
+    selected = set()
+    for n in cited:
+        h = history[n - 1]
+        if h.get("tool") != "http_request" or h.get("experiment") is not True:
+            return cited
+        start, _ = latest_plan(history[:n - 1])
+        steps = experiment_steps(history, start)
+        if not steps:
+            return cited
+        selected.update(steps)
+    return sorted(selected)
 
 
 def plan_view(history: list[dict], cited) -> list[dict]:
@@ -512,18 +578,31 @@ def plan_view(history: list[dict], cited) -> list[dict]:
             else h for n, h in enumerate(history, 1)]
 
 
+class ObservationError(ValueError):
+    """A safe, actionable distinction between a bad observation and unavailable evidence (VER-055)."""
+
+
 def observation(ctx, step, pointer):
     response = getattr(ctx, "responses", {}).get(step)
     if not response or not response.get("complete"):
-        raise ValueError("recorded response unavailable or truncated")
-    return pointer_value(response["body"], pointer)
+        raise ObservationError(f"recorded response of step {step} is unavailable or incomplete; "
+                               "an observation correction cannot recover missing evidence")
+    try:
+        return pointer_value(response["body"], pointer)
+    except json.JSONDecodeError as exc:
+        raise ObservationError(f"the answer of step {step} is not valid JSON; for an HTML or text answer, "
+                               "use revise_observation with text instead of pointer") from exc
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise ObservationError(f"the JSON pointer cannot select a value in step {step}; "
+                               "inspect read_response and correct it with revise_observation") from exc
 
 
 def body_of(ctx, step) -> str:
     """The whole recorded response body of a step, for the returned-marker membership check (VER-053)."""
     response = getattr(ctx, "responses", {}).get(step)
     if not response or not response.get("complete"):
-        raise ValueError("recorded response unavailable or truncated")
+        raise ObservationError(f"recorded response of step {step} is unavailable or incomplete; "
+                               "an observation correction cannot recover missing evidence")
     return response["body"]
 
 
@@ -700,6 +779,8 @@ def injection_check(ctx, history, cited):
                     return "fresh arithmetic expressions were not evaluated to the expected distinct answers"
             if len({str(observation(ctx, n, plan["pointer"])) for n, _ in groups["baseline"]}) != 1:
                 return "the baseline observation is unstable"
+        except ObservationError as exc:
+            return str(exc)
         except (ValueError, KeyError, IndexError, TypeError):
             return "the expression observation is unavailable"
         return None
@@ -709,8 +790,13 @@ def injection_check(ctx, history, cited):
         return "the selected text is part of a sent value, so its presence may be an echo"      # VER-055
     try:
         values = {name: [_observe_or_absent(ctx, n, plan) for n, _ in group] for name, group in groups.items()}
+    except ObservationError as exc:
+        return str(exc)
     except (ValueError, KeyError, IndexError, TypeError, RecursionError):
         return "the declared observation is missing or incomplete"
+    if plan.get("pointer") and all(v is None for group in values.values() for v in group):
+        return ("the selected JSON field is absent or null in every recorded answer; inspect read_response "
+                "and select the result field with revise_observation")
     return boolean_classes(plan, values)
 
 
@@ -779,7 +865,7 @@ def injection_ready(ctx, history, steps):
     agent so its next step is the verdict. Pure: it sets no verdict and writes no evidence; proof.py still
     re-checks the cited steps before a confirmed verdict stands. When a control met a server error the feedback
     names it, so the agent can see the template is wrong without reading the step itself."""
-    _, plan = latest_plan(history)
+    plan_step, plan = latest_plan(history)
     if agent_controls(plan):
         # Controls the agent chose itself ran as an experiment: they can carry a negative verdict, never a
         # confirmation; name the declaration that could confirm, or that none can (VER-011).
@@ -797,6 +883,11 @@ def injection_ready(ctx, history, steps):
         feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
                     "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"
                     + ("" if plan.get("error_probe") or plan.get("kind") != "boolean" else ". " + NEGATIVE_CONTEXTS)}
+    if revisable_observation(plan):
+        feedback["plan_step"] = plan_step
+        feedback["next"] = (f"If only the observation is wrong, call revise_observation with plan_step {plan_step} "
+                            "and exactly one of text or pointer; it rechecks all recorded controls without requests. "
+                            "Missing or incomplete evidence still needs new tests. Otherwise: " + feedback["next"])
     failed = next((n for n in reversed(steps) if (history[n - 1].get("result") or {}).get("status", 0) >= 500
                    or (history[n - 1].get("result") or {}).get("error")), None)
     if failed is not None:

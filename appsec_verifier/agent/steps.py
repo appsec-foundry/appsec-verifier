@@ -60,6 +60,8 @@ def offered(ctx, name: str) -> bool:
         return cls == "xss"
     if name == "plan_test":
         return cls in ("injection", "access-control", "session")
+    if name == "revise_observation":
+        return cls == "injection"
     if name == "send_controls":
         return cls == "injection" and intrusive
     if name == "archive_probe":
@@ -84,10 +86,32 @@ def _offered_schema(tool: dict, ctx=None) -> dict:
     schema = tool["input_schema"]
     if tool["name"] == "plan_test":
         hidden = {"strategy"}
-        if getattr(getattr(ctx, "plan", None), "cwe", None) != "CWE-943":
+        cls = getattr(getattr(ctx, "plan", None), "cls", None)
+        cwe = getattr(getattr(ctx, "plan", None), "cwe", None)
+        if cwe != "CWE-943":
             hidden.add("js_predicate_template")
-        if getattr(getattr(ctx, "plan", None), "cls", None) != "access-control":
+        if cls != "access-control":
             hidden.add("signed_in")      # the comparison without credentials (VER-057) is access control's alone
+        if cls == "injection":
+            # Keep the correction action within the prompt's existing size bound. A finding needs only its
+            # own injection forms; accepting legacy declarations still goes through the global validators.
+            hidden.update(("resource", "owner", "change", "reference"))
+            if cwe != "CWE-90":
+                hidden.update(("predicate_template", "predicate_attribute"))
+            if cwe != "CWE-943":
+                hidden.add("operator_challenge")
+            if cwe not in ("CWE-78", "CWE-94", "CWE-95", "CWE-1336", "CWE-643"):
+                hidden.add("expression_template")
+            if cwe not in ("CWE-94", "CWE-95", "CWE-1336"):
+                hidden.add("oob_template")
+            if cwe != "CWE-89":
+                hidden.update(("sql_template", "sql_marker"))
+            if cwe not in ("CWE-89", "CWE-943"):
+                hidden.add("auth_artifact")
+            schema = {**schema, "properties": {**schema["properties"], "kind": {"enum": ["boolean", "timing"]}},
+                      "allOf": [rule for rule in schema.get("allOf", []) if not (
+                          rule["if"].get("properties", {}).get("kind", {}).get("const") == "access-control"
+                          or rule["if"].get("required") == ["change"])]}
         schema = {**schema, "properties": {k: v for k, v in schema.get("properties", {}).items() if k not in hidden}}
     if tool["name"] == "submit_verdict":     # VER-059: offered precisely and as required, accepted as any object
         presentation = {**PRESENTATION_SCHEMA, "description": PRESENTATION_HELP}

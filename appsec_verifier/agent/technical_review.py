@@ -98,6 +98,11 @@ def proof_contract(ctx, controller) -> dict:
     elif cls == "injection":
         contract["confirming_inputs"] = {location: confirming_form(cwe, location) or "negative verdict only"
                                          for location in ("params", "json", "path")}
+        contract["observation_correction"] = (
+            "revise_observation with plan_step and exactly one of text or pointer rechecks the complete recorded "
+            "control set without requests. Use it to fix a JSON/HTML mismatch or the selected field/text, "
+            "not plan_test, which declares new controls and sends a read experiment again. Missing or incomplete "
+            "evidence still needs new tests. Other proof rules and the original request plan remain binding.")
     return contract
 
 
