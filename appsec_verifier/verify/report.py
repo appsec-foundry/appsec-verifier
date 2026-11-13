@@ -39,6 +39,7 @@ import yaml
 
 from ..version_info import resource_root
 from .poc import ROLE_TITLES, TARGET_DATA_NOTE
+from .presentation import COMPOSED_NOTE
 from .probes import proof_shown
 
 _VERDICT_LABEL = {
@@ -700,7 +701,7 @@ def _details(r: dict) -> list[str]:
     if r.get("rationale") and not r.get("limits_hit"):
         out += ["", "**Test agent's explanation** (not proof)", "", _fenced(str(r["rationale"]), "text")]
     notes = [o for o in r.get("observations") or []
-             if not o.startswith(("Application screenshot unavailable:", "Deviation:"))]
+             if not o.startswith(("Application screenshot unavailable:", "Deviation:", COMPOSED_NOTE))]
     if notes:
         out += ["", "**Other observations** (not verified)", "", _fenced("\n".join(notes), "text")]
     return out + _review_markdown(r, 4)
@@ -794,17 +795,27 @@ def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: b
     if poc.get("file"):
         note += f"All requests and responses: {_code(poc['file'])}."
     out += [note.strip()] if note.strip() else []
+    # VER-059: the test agent's presentation, its words fenced as model text, or why the Verifier composed it.
+    composed = poc.get("presentation") or {}
+    agent = composed.get("composed_by") == "test-agent"
+    if agent and composed.get("summary"):
+        out += ["", "The test agent chose the steps, excerpts and marks below; the Verifier found each in the record.",
+                "", _fenced(f"Test agent's account: {composed['summary']}", "text")]
+    elif composed.get("reason"):
+        out += ["", _fenced(f"Excerpts composed by the Verifier: {composed['reason']}.", "text")]
     parsed = {s["step"]: s for s in _steps(r)}
     for shown in poc.get("shown") or []:
         s = parsed.get(shown["step"]) or {}
         title = f"**Step {_inline(shown['step'], 8)}**"
         if shown.get("role") in ROLE_TITLES:     # the normal requests come first, then the attacks (VER-035)
             title = (f"**{ROLE_TITLES[shown['role']]} · step {_inline(shown['step'], 8)}**"
-                     + (f" ({_inline(shown['role_label'], 80)})" if shown.get("role_label") else ""))
+                     + (f" ({_inline(shown['role_label'], 80)})" if shown.get("role_label") and not agent else ""))
         if s.get("method"):
             title += (f" · {_code(s['method'] + ' ' + s['path'])} as {_inline(s['role'], 60)} → "
                       f"{_inline(s['answer'], 80)}")
         facts = shown.get("facts") or []
+        if agent and shown.get("role_label"):      # model text stays in the fence
+            facts = [f"Test agent: {shown['role_label']}", *facts]
         out += ["", title]
         if facts:
             out += ["", _fenced("\n".join(facts), "text")]

@@ -40,7 +40,8 @@ def issue(code="comparison", variant="T-1", detail="Explain the contrast between
 
 
 def revision(text="The recorded response contains the test marker.", quote="marker"):
-    return {"explanation": text, "quotes": [{"step": 1, "part": "response", "text": quote}], "page": None}
+    return {"explanation": text, "quotes": [{"step": 1, "part": "response", "text": quote}], "page": None,
+            "presentation": None}
 
 
 class Host:
@@ -119,7 +120,7 @@ def test_feedback_returns_to_original_planner_then_independent_reviewer():
     assert original.requests[0][0] is ctx
     assert original.requests[0][1]["feedback"] == issue()["issues"]
     assert reviewers[0].requests[1][1]["variants"][0]["presentation"] == {
-        k: v for k, v in revision().items() if k != "page"}
+        k: v for k, v in revision().items() if k not in ("page", "presentation")}
     assert res.evidence_review["status"] == "clear" and res.evidence_review["rounds"] == 1
     assert res.proof == {"checked": True, "executed": True}
 
@@ -179,8 +180,10 @@ def test_repeated_issue_category_stops_even_if_model_rephrases_it():
         {"action": "http_request", "args_json": '{"path":"/new"}'},
         {**revision(), "verdict": "not-reproducible"},
         revision(quote="invented evidence"),
-        {"explanation": "new", "quotes": [{"step": 99, "part": "response", "text": "marker"}], "page": None},
-        {"explanation": "new", "quotes": [{"step": 1, "part": "body", "text": "marker"}], "page": None},
+        {"explanation": "new", "quotes": [{"step": 99, "part": "response", "text": "marker"}], "page": None,
+         "presentation": None},
+        {"explanation": "new", "quotes": [{"step": 1, "part": "body", "text": "marker"}], "page": None,
+         "presentation": None},
     ],
 )
 def test_invalid_revision_is_rejected_without_actions_or_changed_proof(bad):
@@ -505,8 +508,8 @@ def test_review_receives_checked_browser_proof_without_pixels():
 
 
 def test_inconclusive_without_excerpts_can_be_explained_without_inventing_quotes():
-    ctx, res, host, *_ = pair([issue(), {"explanation": "No evidence was collected.", "quotes": [], "page": None},
-                               CLEAR])
+    ctx, res, host, *_ = pair([issue(), {"explanation": "No evidence was collected.", "quotes": [], "page": None,
+                                         "presentation": None}, CLEAR])
     res.verdict, res.poc, res.proof = "inconclusive", None, None
     review_finding([(ctx, res)])
     assert res.evidence_review["status"] == "clear"
@@ -532,7 +535,8 @@ def test_application_image_precedes_http_and_the_review_follows_in_the_appendix(
 
 
 def test_existing_excerpts_still_require_a_recorded_quote():
-    ctx, res, *_ = pair([issue(), {"explanation": "Unsupported correction.", "quotes": [], "page": None}])
+    ctx, res, *_ = pair([issue(), {"explanation": "Unsupported correction.", "quotes": [], "page": None,
+                                   "presentation": None}])
     review_finding([(ctx, res)])
     assert res.evidence_review["status"] == "stopped"
     assert res.evidence_review["reason"] == "Evidence review stopped: missing recorded quote."

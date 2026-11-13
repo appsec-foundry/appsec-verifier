@@ -19,6 +19,7 @@ from jsonschema import Draft202012Validator
 
 from ..auth.accounts import FIELDS_ACTION
 from ..verification_context import bounded
+from ..verify.presentation import PRESENTATION_HELP, PRESENTATION_SCHEMA
 from .prompts import _seed, _system, _tool_defs
 
 STEP_SCHEMA = {
@@ -88,6 +89,10 @@ def _offered_schema(tool: dict, ctx=None) -> dict:
         if getattr(getattr(ctx, "plan", None), "cls", None) != "access-control":
             hidden.add("signed_in")      # the comparison without credentials (VER-057) is access control's alone
         schema = {**schema, "properties": {k: v for k, v in schema.get("properties", {}).items() if k not in hidden}}
+    if tool["name"] == "submit_verdict":     # VER-059: offered precisely and as required, accepted as any object
+        presentation = {**PRESENTATION_SCHEMA, "description": PRESENTATION_HELP}
+        schema = {**schema, "properties": {**schema.get("properties", {}), "presentation": presentation},
+                  "required": [*schema.get("required", []), "presentation"]}
     return schema
 
 

@@ -131,7 +131,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 `verify` writes to `--output` or, without it, to a new private directory for each run, e.g. `~/.local/share/appsec-verifier/runs/<project>/<start time>/` on Linux ([details](docs/cli.md#outputs)):
 
-- `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on as raw HTTP, and for UI findings a screenshot of the exploit or its effect.
+- `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on as raw HTTP, with the parts the test agent chose to show what the attacker sent and obtained, each checked against the record, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data, so check them before sharing.

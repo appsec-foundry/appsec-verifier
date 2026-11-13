@@ -1,4 +1,4 @@
-"""The proof of concept of every tested finding (VER-034, VER-035, VER-016, VER-022).
+"""The proof of concept of every tested finding (VER-034, VER-035, VER-016, VER-022, VER-059).
 
 Every request an agent step sends to the target is recorded with the answer to
 it, by the code from what was sent and received: by `http_request`, and by
@@ -29,9 +29,10 @@ recorded response without a new request and marks the values the verdict
 names. Live application observations are attached before this renderer. The
 report displays application images and marked HTTP excerpts; exchange images
 are saved for later use, not embedded. Every finding with decisive steps also gets an image of those
-exchanges, and one whose verdict cites none (a limit stopped it) an image of its
-answered requests after the last test plan, whose header says it proves nothing:
-request and response side by side, built here as escaped HTML with
+exchanges: as the test agent presents them where verify/presentation.py accepts its presentation (VER-059),
+otherwise as described here, with the reason in its header and in the observations. One whose verdict
+cites none (a limit stopped it) gets an image of its answered requests after the last test plan, whose
+header says it proves nothing: request and response side by side, built here as escaped HTML with
 what the code can locate marked, each kind labelled by a red tag: the
 identities an access-control proof compares, the XSS or SSRF marker, the
 redirect host and Location header, the marker file and its content, the input
@@ -443,7 +444,8 @@ def _target(url: str) -> str:
 
 # ── what each shown step is in the test (VER-035) ────────────────────────────
 
-ROLE_TITLES = {"normal": "Normal request", "control": "Control", "attack": "Attack", "effect": "Effect"}
+ROLE_TITLES = {"normal": "Normal request", "control": "Control", "attack": "Attack", "effect": "Effect",
+               "outcome": "Outcome"}     # outcome: a step the test agent presents so (VER-059)
 _ROLE_ORDER = {kind: i for i, kind in enumerate(ROLE_TITLES)}
 _MISSING = object()
 _EXPERIMENT_ROLES = {"baseline": ("normal", "baseline input"), "positive": ("attack", "true condition"),
@@ -1419,11 +1421,13 @@ def _shown_line(panel: list[tuple[int, dict]], roles) -> str:
 
 
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                      highlight=None, *, cited: bool = True, comparison=None) -> tuple[str, int]:
+                      highlight=None, *, cited: bool = True, comparison=None, composed: str | None = None
+                      ) -> tuple[str, int]:
     """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): request and
     response side by side per step, what the verdict rests on marked. Without `cited` they are the answered
-    requests after the last test plan of a verdict that cites no step, and the header says so. Returns the page
-    and the number of marks. Every recorded value is escaped; the page has no script."""
+    requests after the last test plan of a verdict that cites no step, and the header says so; `composed` says why
+    the test agent's presentation is not used (VER-059). Returns the page and the number of marks. Every recorded
+    value is escaped; the page has no script."""
     from ..agent.experiments import latest_plan
     from ..planning import _TITLE_LOCATION
 
@@ -1448,6 +1452,7 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
              f"<span class=k>Result:</span> "
              f"{html.escape(_result_line(ctx, history, everything, roles, verdict, cited))}",
              f"<span class=k>Shown:</span> {html.escape(_shown_line(shown, roles))}",
+             *([f"<small>Composed by the Verifier: {html.escape(composed)}.</small>"] if composed else []),
              f"<small>AppSec Verifier · recorded and redacted{' in ' + html.escape(har_path) if har_path else ''}"
              f" at {html.escape(shown_time(captured))}; nothing sent again. Excerpts shortened; yellow marks what "
              "a request sent, a red frame what an answer shows.</small>"]
@@ -1527,7 +1532,9 @@ def _for_model(e: dict) -> dict:
 
 
 def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                         highlight, *, cited: bool = True) -> list[dict]:
+                         highlight, *, cited: bool = True, composed: str | None = None) -> list[dict]:
+    """The Verifier's own images of the exchanges; `composed` says why the test agent's presentation is not used
+    (VER-059)."""
     shots = []
     withheld = withheld_steps(history) & {n for n, _ in shown}
     # What a model reviews of the panels (VER-042) is the page as it would look with every withheld answer
@@ -1536,23 +1543,26 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
     # Two exchanges per panel preserve the comparison without a long full-page image.
     for panel in panels(shown, step_roles(ctx, history, shown), opposite=opposites(history)):
         page, marked = exchange_document(ctx, history, panel, verdict, har_path,
-                                         highlight, cited=cited, comparison=shown)
+                                         highlight, cited=cited, comparison=shown, composed=composed)
         model_page = page
         if withheld:
             model_page, _ = exchange_document(ctx, history, [(n, safe[n]) for n, _ in panel], verdict, har_path,
-                                              highlight, cited=cited, comparison=list(safe.items()))
+                                              highlight, cited=cited, comparison=list(safe.items()),
+                                              composed=composed)
         visible = _VisibleText()
         visible.feed(model_page)
         ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
         try:
-            shots += ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)
+            shots += [{**shot, "composed_by": "verifier"}
+                      for shot in ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)]
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             break
     return shots
 
 
-def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
-    """Bound final rendering; retain recorded exchanges after a stop (VER-036).
+def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None, presentation=None):
+    """Bound final rendering; retain recorded exchanges after a stop (VER-036). `presentation` is the test agent's
+    (VER-059), used where verify/presentation.py accepts it.
 
     Saving existing evidence has a separate five-second shutdown allowance.
     It never starts a browser, model call or target request.
@@ -1571,7 +1581,7 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
     seconds = min(remaining, window) if window is not None else remaining
     try:
         with execution_deadline(seconds, kind=kind):
-            return _attach(ctx, history, steps, result, cited, highlight)
+            return _attach(ctx, history, steps, result, cited, highlight, presentation)
     except LimitExceeded as exc:
         result.limits_hit = result.limits_hit or exc.kind
         result.observations.append("Evidence rendering stopped at the execution deadline; screenshots may be missing.")
@@ -1593,7 +1603,7 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
         return result
 
 
-def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None):
+def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None, presentation=None):
     for number, step in enumerate(history, 1):
         if step.get("tool") == "browser_check":
             paths = {e.get("path") for e in step.get("result", {}).get("evidence", [])
@@ -1632,23 +1642,36 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     roles = step_roles(ctx, history, shown_entries)
     shown_entries = by_role(shown_entries, roles)       # the normal requests before the attacks (VER-035)
     others = [e for _, e in shown_entries]
+    from .presentation import COMPOSED_NOTE, assess, shown_steps
+    from .presentation import screenshots as composed_screenshots
+
+    # VER-059: the test agent's presentation where the code accepts it, else the Verifier's own and why.
+    accepted, why = assess(ctx, history, steps, result, cited, presentation) if decisive else (None, None)
     result.poc = {
         "file": har_path,
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
-        "shown": [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
-                   "response": _raw_response(e, _focus(ctx, others, e), har_path),
-                   **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path, roles),
-                   **({"withheld": True} if n in withheld else {})}     # no model reads its answer (VER-053)
-                  for n, e in shown_entries],
+        "shown": shown_steps(ctx, history, steps, accepted, har_path) if accepted else [
+            {"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
+             "response": _raw_response(e, _focus(ctx, others, e), har_path),
+             **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path, roles),
+             **({"withheld": True} if n in withheld else {})}     # no model reads its answer (VER-053)
+            for n, e in shown_entries],
+        **({"presentation": {"composed_by": "test-agent", "summary": accepted["summary"]}} if accepted
+           else {"presentation": {"composed_by": "verifier", "reason": why}} if why else {}),
     }
+    if why:
+        result.observations.append(f"{COMPOSED_NOTE}{why}.")
     shots: list[dict] = []
     cls, browser = getattr(ctx.plan, "cls", None), getattr(ctx, "browser", None)
     if browser is not None and cls in getattr(browser, "screenshots", ()):
         if result.verdict == "confirmed" and cls == "access-control" and not any(
                 e.get("presentation") == "application" for e in result.evidence):
             shots = _page_screenshots(ctx, steps, highlight)
-        if shown_entries:                        # the exchanges, also beside a page that shows the proof
-            shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight)
+        if accepted:                             # the exchanges as the test agent presents them
+            shots += composed_screenshots(ctx, history, steps, accepted, result, har_path)
+        elif shown_entries:                      # the exchanges, also beside a page that shows the proof
+            shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight,
+                                          composed=why)
         elif not decisive and (tried := _tried(history, steps)):     # e.g. a finding a limit stopped
             shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False)
     result.evidence = [*(result.evidence or []), *shots]

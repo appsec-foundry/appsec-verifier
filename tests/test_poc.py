@@ -1059,7 +1059,7 @@ def test_final_screenshot_deadline_keeps_verdict_and_har(tmp_path, monkeypatch):
     ctx.budget = RunBudget(Limits(max_duration_s=1))
     completed = []
 
-    def stuck(*args):
+    def stuck(*args, **kwargs):
         time.sleep(3)
         completed.append(True)
         return []

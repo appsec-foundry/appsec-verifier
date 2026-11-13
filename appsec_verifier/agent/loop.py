@@ -1,5 +1,5 @@
 """The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
-VER-043, VER-046, VER-047, VER-053, VER-057).
+VER-043, VER-046, VER-047, VER-053, VER-057, VER-059).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
 when a control meets a server error; a write plan's controls run only when the agent asks with send_controls. An
@@ -183,8 +183,30 @@ class AgentProbe:
         last_rejected = None
         last_cited = None
         repairs = 0
+        # VER-059: one chance to fix a presentation the Verifier cannot use. `presented` holds the result and verdict
+        # whose presentation went back to the agent; they stand, and the answer adds only its presentation.
+        presentation_repaired = False
+        presented = None
         qa_candidate = None
         intent_candidate = None     # a checked access-control confirmation QA sent back to test another resource
+
+        def conclude(step: int, result, verdict, *, live: bool = True):
+            """Record the verdict's evidence and end the finding (VER-034, VER-035, VER-059). Without `live`, a limit
+            ended the wait for the agent, so no application page is opened."""
+            from ..verify.browser_evidence import attach_explanation, capture_application, recapture
+            from ..verify.presentation import present
+
+            if live and result.limits_hit is None:
+                capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
+                                    verdict.get("proof_steps"))
+            result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"),
+                                verdict.get("presentation"))
+            attach_explanation(ctx, result, verdict.get("image_explanation"))
+            # An evidence review may ask for another page for an unclear screenshot, or present the proof of
+            # concept again (VER-042, VER-059).
+            ctx.recapture = partial(recapture, ctx, tools, history, sent, result, verdict.get("proof_steps"))
+            ctx.represent = partial(present, ctx, history, sent, result, verdict.get("proof_steps"))
+            return _finish(ctx, step, result)
 
         def attach_stopped(stopped):
             # A follow-up cannot erase an already checked observation when its budget ends.
@@ -194,7 +216,11 @@ class AgentProbe:
                 stopped = replace(prior, limits_hit=stopped.limits_hit, observations=[
                     *prior.observations, "Technical QA follow-up stopped before a revised conclusion."])
                 qa.state["reason"] = "Technical objections remain; the follow-up stopped within the existing limits."
-            return poc.attach(ctx, history, sent, stopped, cited)
+            from ..verify.presentation import present
+
+            result = poc.attach(ctx, history, sent, stopped, cited)
+            ctx.represent = partial(present, ctx, history, sent, result, cited)    # an evidence review may (VER-059)
+            return result
 
         def keep(step: int, name: str) -> None:
             response = tools.take_response()
@@ -302,8 +328,12 @@ class AgentProbe:
                 controller.before_model()
                 proposal = controller.run(lambda: planner.next_step(ctx, history))
             except LimitExceeded as exc:
+                if presented is not None:      # the verdict was complete; only its presentation was awaited
+                    return conclude(step, *presented, live=False)
                 return attach_stopped(_stopped(ctx, step, exc))
             action = check_action(proposal)  # VER-019: no unchecked arguments
+            if presented is not None and "verdict" not in action:
+                return conclude(step, *presented)   # VER-059: only a verdict answers a presentation feedback
             if "refused" in action:
                 # VER-017: refused and logged, nothing runs; counted like a failed action (VER-036)
                 controller.refuse(action["refused"], action["error"])
@@ -323,6 +353,13 @@ class AgentProbe:
                         proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP],
                     )
                 verdict = action["verdict"]
+                if presented is not None:
+                    # VER-059: the answer to a presentation feedback adds its presentation only; the result and
+                    # verdict that got the feedback stand, whatever else the answer says. An answer without one,
+                    # such as a host error, keeps the first, so the report gives its reason.
+                    (result, kept), presented = presented, None
+                    again = verdict.get("presentation")
+                    return conclude(step, result, {**kept, **({"presentation": again} if again is not None else {})})
                 result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
                 if (result.proof or {}).get("checked") is False and repairs < 2 and decision < self._max_steps:
                     repairs += 1
@@ -368,16 +405,22 @@ class AgentProbe:
                     _log(ctx, step, tool="qa_feedback", note="Technical QA requests a follow-up", result=feedback)
                     history.append({"tool": "qa_feedback", "args": {}, "result": feedback})
                     continue
-                from ..verify.browser_evidence import attach_explanation, capture_application, recapture
+                from ..verify.presentation import assess
 
-                if result.limits_hit is None:
-                    capture_application(ctx, tools, history, sent, result, verdict.get("browser_evidence"),
-                                        verdict.get("proof_steps"))
-                result = poc.attach(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("highlight"))
-                attach_explanation(ctx, result, verdict.get("image_explanation"))
-                # An evidence review may ask for another page for an unclear screenshot (VER-042).
-                ctx.recapture = partial(recapture, ctx, tools, history, sent, result, verdict.get("proof_steps"))
-                return _finish(ctx, step, result)
+                # VER-059: a presentation the Verifier cannot render goes back to the agent once, with the reason,
+                # while a step is left; the verdict and its checked proof stay as they are. A missing one is not
+                # asked for here: the offered schema requires it, and an evidence review asks for it (VER-042).
+                _, why = assess(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("presentation"))
+                if why and verdict.get("presentation") is not None and why != "the verdict cites no step" \
+                        and not presentation_repaired and decision < self._max_steps:
+                    presentation_repaired, presented = True, (result, verdict)
+                    feedback = {"status": "presentation not accepted", "reason": why,
+                                "next": "submit the same verdict again with a corrected presentation; only the "
+                                        "presentation of that answer is used"}
+                    _log(ctx, step, tool="presentation_feedback", result=feedback)
+                    history.append({"tool": "presentation_feedback", "args": {}, "result": feedback})
+                    continue
+                return conclude(step, result, verdict)
             name, args = action["tool"], action["args"]
             if name == "send_controls":
                 # The agent asks the Verifier to send an accepted write plan's controls, in one action and

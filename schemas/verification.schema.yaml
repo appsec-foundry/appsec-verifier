@@ -375,7 +375,7 @@ properties:
                 required: [step, request, response]
                 properties:
                   step:       { type: integer }
-                  role:       { enum: [normal, control, attack, effect], description: What the step is in the test, where the plan or markers say so. }
+                  role:       { enum: [normal, control, attack, effect, outcome], description: What the step is in the test, where the plan or markers say so, or as the test agent presents it (VER-059). }
                   role_label: { type: string, description: The step's part in the comparison, e.g. "true condition". }
                   request:    { type: string }
                   response:   { type: string }
@@ -383,6 +383,18 @@ properties:
                   request_excerpt: { type: string, description: Relevant request excerpt with labelled proof marks. }
                   response_excerpt: { type: string, description: Relevant response excerpt with labelled proof marks. }
                   facts: { type: array, items: { type: string }, description: Recorded observations for this step. }
+            presentation:
+              type: object
+              description: |
+                Who composed the shown steps and their excerpts (VER-059): the test
+                agent, with its one-sentence account, or the Verifier, with the
+                reason the test agent's presentation was not used.
+              required: [composed_by]
+              additionalProperties: false
+              properties:
+                composed_by: { enum: [test-agent, verifier] }
+                summary: { type: string, description: The test agent's sentence; model text, never proof. }
+                reason: { type: string }
 
         evidence_review:
           anyOf:

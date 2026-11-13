@@ -1,5 +1,5 @@
 """The action schemas and prompts every model host shares (VER-011, VER-017, VER-019, VER-043, VER-046, VER-047,
-VER-050, VER-055, VER-056, VER-057).
+VER-050, VER-055, VER-056, VER-057, VER-059).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, find_source, search_source, browser_check,
@@ -17,6 +17,7 @@ import json
 
 from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
 from ..verification_context import missing_capabilities
+from ..verify.presentation import PRESENTATION_HELP
 from .derivation import page_candidates, page_source
 from .experiments import EXPOSURE_CWES, PLAN_SCHEMA, access_methods
 from .proof import redirect_host
@@ -221,7 +222,8 @@ def _tool_defs() -> list[dict]:
             "application can show, supply browser_evidence with the page that shows it best, so the effect is "
             "captured there. For any confirmed verdict with an application screenshot, image_explanation is one "
             "sentence that tells a reader what the image shows; the report labels it as your explanation. HTTP "
-            "evidence always accompanies the image.",
+            "evidence always accompanies the image. For every verdict that cites steps, presentation composes how "
+            "a reader sees the proof of concept.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -257,6 +259,9 @@ def _tool_defs() -> list[dict]:
                         "Omit for API-only findings. XSS already captures the page where its marker executed.",
                     },
                     "image_explanation": {"type": "string", "minLength": 10, "maxLength": 300},
+                    # Any value passes here, null included, so a faulty presentation never costs the verdict; the
+                    # model is offered PRESENTATION_SCHEMA, and verify/presentation.py checks it (VER-059).
+                    "presentation": {"description": PRESENTATION_HELP},
                     "highlight": {
                         "type": "array",
                         "maxItems": 3,

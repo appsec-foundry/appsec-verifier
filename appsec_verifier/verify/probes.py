@@ -121,6 +121,7 @@ class ProbeContext:
     evidence_reviewer_factory: object | None = None
     evidence_panels: list[dict] = field(default_factory=list)
     recapture: object | None = None   # another page for an unclear screenshot after a review issue (VER-042)
+    represent: object | None = None   # the test agent's revised presentation after a review issue (VER-059)
 
 
 @runtime_checkable

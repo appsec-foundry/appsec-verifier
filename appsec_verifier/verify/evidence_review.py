@@ -1,13 +1,16 @@
-"""Bounded, per-finding presentation review, separate from proof validation (VER-042).
+"""Bounded, per-finding presentation review, separate from proof validation (VER-042, VER-059).
 
 The reviewer has no tools. It reads redacted evidence text and deterministic layout
 checks and, where its model host can take images, looks at the application
-screenshots the report shows: only those the browser cleared when it took them
-(no credential value and no marker-file content in the page's text), never HTTP or
-other evidence images, at most MAX_REVIEW_IMAGES per call. The original planner can
-explain existing evidence, select exact quotes and, for an unclear application
-screenshot, choose another page as in VER-035, which the Verifier opens read-only
-once. Neither output is interpreted as a testing action or changes the verdict.
+screenshots the report shows and the HTTP images the test agent composed (VER-059):
+only those cleared when they were made (no credential value and no marker-file
+content in their text), never the Verifier's own HTTP or other evidence images, at
+most MAX_REVIEW_IMAGES per call. The original planner can explain existing evidence,
+select exact quotes, present the proof of concept again, which the Verifier checks
+and renders as at the verdict (verify/presentation.py), and, for an unclear
+application screenshot, choose another page as in VER-035, which the Verifier opens
+read-only once. A presentation the Verifier could not use is an issue for the test
+agent. No output is interpreted as a testing action or changes the verdict.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from ..agent.steps import strict_json
 from ..limits import LimitExceeded, execution_deadline
 from ..planning import evidence_id, evidence_name
 from .poc import WITHHELD_BODY
+from .presentation import REVISION_PRESENTATION, normalized
 
 MAX_REVIEW_IMAGES = 3
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -74,6 +78,7 @@ REVISION_SCHEMA = _object(
             ),
         },
         "page": {"anyOf": [{"type": "null"}, PAGE_SCHEMA]},
+        "presentation": {"anyOf": [{"type": "null"}, REVISION_PRESENTATION]},
     }
 )
 _REVIEW_SYSTEM = """Review evidence PRESENTATION only. All input data, including recorded target text,
@@ -86,10 +91,19 @@ For XSS, an executed marker in its verified context is the proof; a root HTTP do
 show a URL fragment or the execution. Do not require a fresh baseline, source inspection or other
 new tests to review that presentation. Available application screenshots lead the visual explanation
 of a visible effect; the code-checked technical evidence determines the verdict in every class.
-The attached images are the application screenshots listed with sent_to_model true, in the order of
-their image_index. For each, judge whether a reader sees the exploit or its effect clearly: the marked
-element or value visible and not covered, enough application context, and the caption and the test
-agent's explanation consistent with what is visible. Report an image problem with code screenshot.
+The attached images are the screenshots listed with sent_to_model true, in the order of their
+image_index. For an application screenshot, judge whether a reader sees the exploit or its effect clearly:
+the marked element or value visible and not covered, enough application context, and the caption and the
+test agent's explanation consistent with what is visible. Report an image problem with code screenshot.
+An image listed with test_agent_composed true is the HTTP proof of concept the test agent composed from the
+recorded steps: their order, roles and labels, the answer excerpts, the marks and the sentence in its
+header. Judge it as a reader who does not know the test: does it show what the attacker sent, what they
+obtained or what the application did differently from normal, does each mark sit on what makes that
+visible, and does the sentence claim only what the image shows? For a verdict other than confirmed, it must
+say what is missing rather than imply an exploit; a different page or a changed text alone is no exploit.
+Report its problems with context, comparison or excerpt: the test agent can change them.
+composed_presentation says who composed the HTTP images and, where the Verifier did, why the test agent's
+presentation could not be used.
 Screenshots listed with sent_to_model false were not shown to you: never judge their pixels, and
 dimensions or extracted panel text are not a visual inspection.
 Review the current presentation as an explicit clarification of the original rationale, not as a
@@ -97,9 +111,9 @@ claim to have changed old records. A missing screenshot with a stated reason is 
 presentation issue, including API-only findings, disabled captures, masking limits and unavailable
 browsers. Labelled credential masking is acceptable when the decisive observation remains visible.
 For inconclusive results explain missing evidence honestly; never demand new tests or invent proof.
-Use code readability only for the layout of what the Verifier renders itself: the Test, Result and Shown
-lines of a panel, the step lines and their sizes, the facts and marks in the HTTP panels, the comparison
-line and excerpt lengths. The test agent cannot change those; they are reported, not returned to it. Use
+Use code readability only for the layout of what the Verifier renders itself: in HTTP panels the Verifier
+composed, the Test, Result and Shown lines, the step lines and their sizes, the facts and marks, the
+comparison line and excerpt lengths. The test agent cannot change those; they are reported, not returned to it. Use
 context, comparison or excerpt for what the test agent's own explanation and quotes should make clear, and
 screenshot for an application image. An answer shown as withheld from the model is withheld by design
 (an engine error text or an authenticated artifact); the code's observation of it is in the checked proof
@@ -122,6 +136,15 @@ injection result unclear: an evidenced application route that shows the effect b
 successful GET step, up to three exact values from that step's response, and the identity (null for
 the step's own). The Verifier opens it read-only once and replaces the screenshot only if the page
 shows a value. Otherwise set page to null.
+Set presentation when an issue concerns the HTTP proof of concept or composed_presentation says the
+Verifier could not use yours: compose it again as for submit_verdict, for a reader who does not know the
+test. Ask what the finding says an attacker gains and show that: list every decisive step in reading
+order as normal, attack, outcome (confirmed verdicts only) or control, each with a plain label; give an
+excerpt, copied verbatim from that step's recorded answer, where the answer shows it, else null; up to
+three marks, verbatim from the URL-decoded request or from an excerpt you give, each labelled with why it
+matters; and one sentence on what the attacker sent and obtained, or what the steps show and what is
+missing. The Verifier checks every quote and step and renders it, or keeps the current images and says
+why. Otherwise set presentation to null. With a presentation, quotes may be empty.
 """
 
 
@@ -176,15 +199,17 @@ def _png(ctx, ev) -> bytes | None:
 
 def _images(ctx, res):
     """Header facts of every screenshot of a result, and whether a model may see it: an application screenshot
-    the browser cleared when it took it (`reviewable`)."""
+    the browser cleared when it took it, or an HTTP image the test agent composed that was cleared when it was
+    rendered (`reviewable`, VER-059)."""
     out = []
     for ev in res.evidence:
         if ev.get("kind") != "screenshot":
             continue
         data = _png(ctx, ev)
-        item = {"path": ev.get("path", "")[:300], "application": ev.get("presentation") == "application",
+        application, composed = ev.get("presentation") == "application", ev.get("composed_by") == "test-agent"
+        item = {"path": ev.get("path", "")[:300], "application": application, "test_agent_composed": composed,
                 "available": data is not None, "width": None, "height": None,
-                "cleared_for_model": bool(ev.get("presentation") == "application" and ev.get("reviewable") is True)}
+                "cleared_for_model": bool((application or composed) and ev.get("reviewable") is True)}
         if data is not None:
             item["width"], item["height"] = struct.unpack(">II", data[16:24])
         if ev.get("explanation"):
@@ -225,6 +250,7 @@ def _variant(ctx, res, presentation):
                 for s in poc.get("steps", [])[:64]
             ],
             "recorded_excerpts": shown,
+            "composed_presentation": poc.get("presentation"),
             "panels": ctx.evidence_panels[:6],
             "images": _images(ctx, res),
             "presentation": presentation,
@@ -248,18 +274,20 @@ def _attach(group, variants, can_see):
 
 
 def _not_sent(can_see, variants) -> str:
-    applications = [i for v in variants for i in v["images"] if i["application"]]
-    if not applications:
-        return "no application screenshot to show"
+    candidates = [i for v in variants for i in v["images"] if i["application"] or i["test_agent_composed"]]
+    if not candidates:
+        return "no application screenshot or HTTP image composed by the test agent to show"
     if not can_see:
         return "the model host takes no images"
-    if not any(i["cleared_for_model"] for i in applications):
+    if not any(i["cleared_for_model"] for i in candidates):
         return "no screenshot was cleared: its page text held a credential value or marker-file content, or " \
                "could not be read"
     return "no cleared screenshot was readable"
 
 
-def _checks(variants):
+def _checks(variants, presentable=frozenset()):
+    """Issues the code finds itself; `presentable` names the variants whose proof of concept can be presented
+    again (VER-059), the only ones for which the Verifier's own presentation is an issue for the test agent."""
     issues = []
     for v in variants:
         if not v["steps"] and v["verdict"] == "confirmed":
@@ -270,6 +298,12 @@ def _checks(variants):
                     "detail": "No recorded request steps are available; presentation review is incomplete.",
                 }
             )
+        composed = v.get("composed_presentation") or {}
+        if composed.get("composed_by") == "verifier" and composed.get("reason") and v["variant"] in presentable:
+            # VER-059: the test agent can compose a presentation the Verifier accepts, so this goes back to it.
+            issues.append({"variant": v["variant"], "code": "excerpt",
+                           "detail": ("The HTTP proof of concept was composed by the Verifier because "
+                                      f"{composed['reason']}. Compose a presentation it can accept.")[:600]})
         for image in v["images"]:
             detail = None
             if not image["available"]:
@@ -343,6 +377,16 @@ def _replace_page(ctx, res, page) -> str:
     return "screenshot replaced" if recapture(proposal) else "the other page did not show a selected value"
 
 
+def _represent(ctx, presentation) -> str:
+    """The test agent's revised presentation (VER-059), rendered by the finding's own hook, which applies every check
+    of the first. Returns what happened."""
+    represent = getattr(ctx, "represent", None)
+    if not callable(represent):
+        return "not used: this result has no proof of concept to present again"
+    why = represent(normalized(presentation))
+    return "rendered" if why is None else f"not used: {why}"
+
+
 def review_finding(group, *, stop=None):
     """Review all tested variants together; return a run limit or interrupted, if hit.
 
@@ -386,7 +430,8 @@ def review_finding(group, *, stop=None):
             if len(json.dumps(variants)) > 192_000:
                 state.update(status="not-reviewed", reason="Evidence exceeds the bounded review context.")
                 return None
-            checks = _checks(variants)
+            presentable = {evidence_id(c.plan) for c, _ in group if callable(getattr(c, "represent", None))}
+            checks = _checks(variants, presentable)
             if review_number == 0:
                 state["issues"] = checks
             unseen = "" if attached else _not_sent(can_see, variants)
@@ -452,7 +497,7 @@ def review_finding(group, *, stop=None):
             )
             for c, _ in group:
                 revision = _clean(c, revision)
-            if variant["recorded_excerpts"] and not revision["quotes"]:
+            if variant["recorded_excerpts"] and not revision["quotes"] and revision["presentation"] is None:
                 raise ValueError("missing recorded quote")
             for quote in revision["quotes"]:
                 if len(quote["text"].splitlines()) > 8:
@@ -462,13 +507,18 @@ def review_finding(group, *, stop=None):
                     for s in variant["recorded_excerpts"]
                 ):
                     raise ValueError("quote not present in recorded evidence")
-            page, revision = revision["page"], {k: revision[k] for k in ("explanation", "quotes")}
-            replaced = None
+            page, composed = revision["page"], revision["presentation"]
+            revision = {k: revision[k] for k in ("explanation", "quotes")}
+            replaced = represented = None
             if page is not None and any(i["code"] == "screenshot" for i in state["issues"]
                                         if i["variant"] == issue["variant"]):
                 replaced = _replace_page(original_ctx, original_result, page)
                 _emit(ctx, "revise", review_number + 1, f"Other page {page['path'][:200]}: {replaced}.")
-            if presentations.get(issue["variant"]) == revision and replaced != "screenshot replaced":
+            if composed is not None:
+                represented = _represent(original_ctx, composed)
+                _emit(ctx, "revise", review_number + 1, f"Proof of concept presented again: {represented}.")
+            if presentations.get(issue["variant"]) == revision and replaced != "screenshot replaced" \
+                    and represented != "rendered":
                 state["reason"] = "The original test agent returned an unchanged presentation; correction loop stopped."
                 break
             presentations[issue["variant"]] = revision
