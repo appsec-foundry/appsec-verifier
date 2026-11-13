@@ -27,7 +27,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
-from .derivation import refused_write, request_hint, served_evidence_file
+from .derivation import refused_write, request_hint
 from .experiments import brackets, control_values, normal_roles, take_sink, token
 from .tools import ToolError, _strings
 
@@ -57,6 +57,7 @@ class Controller:
         self.ctx = ctx
         self.repetitions = Counter()
         self.failures = 0
+        self.failure_kinds = Counter()
         self.last_failure = None  # the last failed action and why, named when failures stop the finding
         self.plan = None
         self.source_routes = []
@@ -73,9 +74,9 @@ class Controller:
     def check(self):
         self.ctx.guard.check_window()
         self.ctx.budget.check_time()
-        if self.failures >= 3:
+        if self.failures >= 6 or max(self.failure_kinds.values(), default=0) >= 3:
             last = f"; the last: {self.last_failure}" if self.last_failure else ""
-            raise LimitExceeded("stagnation", f"three actions in a row failed without a usable observation{last}")
+            raise LimitExceeded("stagnation", f"repeated tool failures without a usable observation{last}")
 
     def before_model(self):
         self.check()
@@ -375,39 +376,39 @@ class Controller:
         """A tool call the step contract refused (steps.py): nothing ran, and it counts as a failed action."""
         self._counted = None
         self.failures += 1
+        self.failure_kinds["schema"] += 1
         self.last_failure = _clip(f"{name or 'step'} refused: {error or 'not a valid step'}")
 
     def observe(self, name, args, result):
         if self._preparing and type(result.get("status")) is int and self._preparing not in self.deviations:
             self.deviations.append(self._preparing)
         self._preparing = None
-        status = result.get("status")
-        server_error = type(status) is int and status >= 500
-        # An injection experiment's http_request is a hypothesis check: a 5xx can be the whole observation
-        # (stable server-side error contrasting with a working baseline, an SQL/driver error that evidences
-        # the sink). The verdict logic in proof.py still gates what a 5xx can actually prove; the controller
-        # must not retire the experiment before the agent can run those comparisons. Outside an accepted
-        # boolean/timing experiment, 5xx keeps counting as a failed action because a probe that crashes the
-        # server without plan context is usually not informative.
-        experiment_probe = (name == "http_request" and self.plan
-                            and self.plan.get("kind") in ("boolean", "timing"))
-        # VER-056: a page script's evidence file that answers a read without its input with a server error shows
-        # that it is served; that answer can supply the finding's request, so it is an observation, not a failure.
-        served = name == "http_request" and served_evidence_file(self.ctx, args or {}, status)
-        failed = bool(result.get("error")) or (server_error and not experiment_probe and not served)
+        # An answered target request is an observation even when HTTP reports an error. It may show a
+        # missing runtime prerequisite; it never proves or disproves the finding by itself.
+        failed = bool(result.get("error"))
         if failed:
             self.failures += 1
-            self.last_failure = _clip(f"{name}: {result.get('error') or f'HTTP {status}'}")
+            kind = result.get("error_kind", "refused")
+            self.failure_kinds[kind] += 1
+            self.last_failure = _clip(f"{name} ({kind}): {result['error']}")
+            result["recovery"] = {"category": kind, "attempts_left": max(0, min(
+                3 - self.failure_kinds[kind], 6 - self.failures)),
+                "next": "correct the arguments or use recorded evidence; missing capabilities require an "
+                        "inconclusive result, not retries; this feedback grants no permission"}
             if name == "plan_test" and self._counted is not None:
                 # A rejected plan executed nothing, and its key leaves out the strategy it was rejected for:
                 # the corrected plan keeps the allowance. Repeated rejections still stop after three failures.
                 self.repetitions[self._counted] -= 1
         elif name == "plan_test":
             if result.get("accepted"):
+                self.failures = 0
+                self.failure_kinds.clear()
+                self.last_failure = None
                 self.plan = result.get("experiment") or args
                 self._experiment_shape = None   # a fresh plan pins its own shape on the next probe
         else:
             self.failures = 0
+            self.failure_kinds.clear()
             self.last_failure = None
             # Only the nearest preceding literal route at the evidenced source location.
             # Source text narrows the operator's scope; model prose never supplies a route.

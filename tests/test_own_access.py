@@ -11,6 +11,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from test_access_policy import policy
 from test_agent_tools import SCOPE, Resp, _ctx
 from test_endpoints import _blocker, _plan
 from test_experiments import STRATEGY
@@ -53,7 +54,13 @@ def _req(role, body="", status=200, method="GET", path="/api/Feedbacks/7", json=
 def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639", owned=()):
     history = copy.deepcopy(history)
     responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
-    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe), scope=scope or {},
+    declared = {"access_policies": [
+        policy("/api/Feedbacks/7", allowed=("account-2",), denied=("account-1",)),
+        policy("/api/Feedbacks/7", method="PUT", allowed=("account-1",), denied=("account-2",)),
+        policy(FN, allowed=("admin-1",), denied=("account-1",)),
+    ]}
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe),
+                          scope=declared if scope is None else scope,
                           identities=ROLES, marker=MARKER, responses=responses, sessions=None, evidence_dir=None,
                           owned=set(owned))
     if cited is None:
@@ -151,7 +158,7 @@ def test_own_resource_negative_verdicts():
 def test_the_identical_answer_for_a_normal_account_confirms_at_medium():
     result = _check(privileged())
     assert result.verdict == "confirmed" and result.confidence == "medium"
-    assert "admin-1 does not show" in result.proof["scope"] and "marker" not in result.proof
+    assert result.proof["access_restriction"]["allowed_roles"] == ["admin-1"] and "marker" not in result.proof
 
 
 @pytest.mark.parametrize("history, reason", [
@@ -409,6 +416,8 @@ def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record
         ctx.plan = replace(ctx.plan, verification_context={"version": 1, "variants": [variant]},
                            variant_id=variant["id"])
     ctx.marker = MARKER
+    ctx.scope = {**ctx.scope, "access_policies": [
+        policy("/api/Feedbacks/7", method="PUT", allowed=("account-1",), denied=("account-2",))]}
     result = AgentProbe("access-control", Planner).run(ctx)
     assert result.verdict == "confirmed" and result.confidence == "medium", result.rationale
     assert writes == [("POST", "/api/Feedbacks"), ("PUT", "/api/Feedbacks/7")]   # /api/Feedbacks/1 was refused

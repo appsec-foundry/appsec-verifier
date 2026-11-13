@@ -96,6 +96,7 @@ def test_tool_defs_expose_only_the_confined_tools():
         "submit_verdict",
         "read_context",
         "read_response",
+        "check_prerequisite",   # recorded runtime state only, no target contact (VER-008)
         "derive_request",        # evidence-backed planning only; no target contact (VER-008, VER-043)
         "plan_test",
         "revise_observation",    # recheck a completed experiment without target contact (VER-055)
@@ -355,15 +356,17 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path, issues):
             }
         ],
     }
-    res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=8).run(ctx)
-    assert res.verdict == "confirmed" and res.identities_used == ["customer-a", "customer-b"]
+    res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=4).run(ctx)
+    assert res.verdict == ("inconclusive" if issues else "confirmed")
+    assert res.identities_used == ["customer-a", "customer-b"]
     assert calls == ["Bearer AAAA", "Bearer BBBB"]
     # An access-control confirmation is reviewed for intended access (VER-046): one QA call within the run budget.
-    # An objection stands beside the verdict; it neither changes it nor starts another test step or round.
+    # With no test steps left, an unresolved intent objection downgrades the confirmation.
     assert ctx.budget.calls == 5 and ctx.budget.cost == pytest.approx(5 * 0.008)
     assert res.technical_review["status"] == ("needs-attention" if issues else "clear")
     assert res.technical_review["issues"] == issues and res.technical_review["rounds"] == 0
-    assert res.proof["checked"] and "intended authorization" in client.calls[4]["system"][0]["text"]
+    assert res.proof["checked"] is (not bool(issues))
+    assert "intended authorization" in client.calls[4]["system"][0]["text"]
     assert json.loads(client.calls[4]["messages"][0]["content"])["remaining_correction_rounds"] == 0
     assert '"status": 200' in client.calls[2]["messages"][0]["content"]  # results reach the model as data
 

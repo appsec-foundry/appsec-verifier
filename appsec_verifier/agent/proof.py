@@ -121,6 +121,9 @@ def _xss_routes(ctx, history: list[dict]) -> list[str]:
     code derived for it, narrowed to a declared plan path when the agent gave one (VER-043)."""
     variants = getattr(ctx.plan, "verification_context", {}).get("variants", [])
     routes = [v["request"]["path"] for v in variants if (v.get("request") or {}).get("path")]
+    if not variants:
+        # Deriving a write for stored XSS must not erase the assessed page used for readback.
+        routes += [e.path for e in getattr(ctx.plan, "endpoints", ()) if e.method in ("GET", "PAGE")]
     routes += [r["path"] for r in getattr(ctx, "derived_requests", [])]
     _, plan = latest_plan(history)
     if plan.get("path"):
@@ -268,7 +271,10 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     if problem is not None:
         return _downgrade(result, problem)
     result.evidence = _write_record(ctx, "exchanges", exchanges)
-    return _checked(result, view, cited, ctx)
+    result = _checked(result, view, cited, ctx)
+    from .access_policy import require_restriction
+
+    return require_restriction(ctx, view, cited, result)
 
 
 def proof_form(cls, plan) -> str | None:
@@ -303,13 +309,8 @@ def _checked(result, history, cited, ctx=None):
         scope = (f"cited requests only, on a resource {plan['owner']} created; the record with the marker stays "
                  "on the target")
         events["marker"] = "".join(getattr(ctx, "marker", None) or ())
-    elif plan.get("reference"):
-        scope = (f"cited requests only; the same answer as for {plan['reference']} does not show that the "
-                 "function is meant for privileged accounts only; that restriction is taken from the finding")
-    elif plan.get("signed_in"):
-        scope = (f"cited requests only; the same answer without credentials as for {plan['signed_in']} does not "
-                 "show that the function is meant for signed-in accounts only; that restriction is taken from the "
-                 "finding; the answers were compared in code and are not kept")
+    elif plan.get("reference") or plan.get("signed_in"):
+        scope = "cited requests only; the access comparison and its expected restriction are recorded separately"
     result.proof = {
         **events,
         "checked": True,
@@ -615,6 +616,7 @@ def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[lis
     if any(type(n) is not int for n in cited) or len(cited) != len(set(cited)):
         return [], "proof steps must be distinct integer request ids"
     exchanges = []
+    comparison_groups = {}
     for n in cited:
         if type(n) is not int or not 1 <= n <= len(history):
             return [], f"proof step {n!r} does not exist"
@@ -629,6 +631,12 @@ def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[lis
             "role": args.get("role"),
             "status": res["status"], "length": res.get("length"), "body_sha256": res.get("body_sha256"),
         }
+        if args.get("comparison") and step.get("experiment") is True:
+            # Retain equality evidence without storing withheld bodies or disclosing their keyed digests.
+            response = getattr(ctx, "responses", {}).get(n, {})
+            digest = response.get("digest") if response.get("complete") else None
+            group = comparison_groups.setdefault(digest, len(comparison_groups) + 1) if digest else None
+            exchange.update(comparison_body_group=group, body_withheld=bool(res.get("body_withheld")))
         if "location" in res:
             exchange["location_host"] = _location_host(ctx, res["location"])
         if "marker_read" in res:

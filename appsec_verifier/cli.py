@@ -1626,8 +1626,8 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     """The test plan before the confirmation: one line per finding the run tests, with its title and
     the requests the assessment names, those that prepare a test resource marked `(prepares)`. A finding
     whose declared variants differ in request or inputs adds one indented line per variant, naming its own
-    request and inputs, and its line names no requests; the runner tries them in that order and stops at
-    the first confirmed variant. Variants that do not differ get no lines: the finding's line names their
+    request and inputs, and its line names no requests; the runner tries them in that order, skipping only
+    completed equivalent tests. Variants that do not differ get no lines: the finding's line names their
     request and count. Then the findings the run cannot test, grouped by what they need and how to provide it.
     `hints` replaces a need's how-to with what is actually missing (the browser's cause). Without
     `full` (in `verify`) a line is cut to fit a terminal, and each need gets one row with a few words

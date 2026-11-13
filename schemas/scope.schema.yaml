@@ -238,6 +238,33 @@ properties:
         cookie_name: {type: string, minLength: 1, maxLength: 128}
         role: {type: string, minLength: 1, maxLength: 80}
 
+  access_policies:
+    type: array
+    maxItems: 100
+    description: Intended access declared by the operator, never additional permission to send requests (VER-010).
+    items:
+      type: object
+      additionalProperties: false
+      required: [finding_id, path, allowed_roles, denied_roles, restriction, source]
+      properties:
+        finding_id: {type: string, minLength: 1, maxLength: 80}
+        path: {type: string, minLength: 1, maxLength: 2000, pattern: '^/[^?#]*$'}
+        method: {enum: [GET, HEAD, OPTIONS, POST, PUT, PATCH], default: GET}
+        allowed_roles:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 80}
+        denied_roles:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 80}
+        restriction: {type: string, minLength: 10, maxLength: 1000}
+        source: {type: string, minLength: 3, maxLength: 1000}
+
   test_resources:
     type: array
     maxItems: 100

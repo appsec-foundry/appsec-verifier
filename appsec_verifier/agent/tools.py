@@ -160,6 +160,10 @@ class ToolError(Exception):
     """A tool call was rejected or malformed. Surfaced to the agent as an error
     result, never raised past the loop."""
 
+    def __init__(self, message, *, kind="refused"):
+        super().__init__(message)
+        self.kind = kind
+
 
 def _body_text(resp) -> str:
     text = getattr(resp, "text", None)
@@ -868,6 +872,11 @@ class AgentTools:
         self._kept += len(e["response"]["content"].get("text") or "")
         self._exchanges.append(e)
 
+    def check_prerequisite(self, **args):
+        from .prerequisites import check
+
+        return check(self.ctx, **args)
+
     def call(self, name: str, args: dict) -> dict:
         tool = {
             "derive_request": self.derive_request,
@@ -880,6 +889,7 @@ class AgentTools:
             "plan_test": self.plan_test,
             "revise_observation": self.revise_observation,
             "read_context": self.read_context,
+            "check_prerequisite": self.check_prerequisite,
             "read_response": self.read_response,
         }.get(name)
         if tool is None:
@@ -944,7 +954,8 @@ class AgentTools:
         if self.ctx.plan.cls != "xss":
             raise ToolError("the proof browser is only available for XSS findings")
         if self.ctx.browser is None:
-            raise ToolError("no proof browser in this run; install appsec-verifier[browser] and Google Chrome")
+            raise ToolError("no proof browser in this run; install appsec-verifier[browser] and Google Chrome",
+                            kind="capability")
         headers, origin = {}, self.ctx.target_base
         if role:
             origin = self._bound_origin(role)
@@ -1319,7 +1330,7 @@ class AgentTools:
 
     def read_source(self, *, path: str, around_line: int | None = None) -> dict:
         if self.ctx.source is None:
-            raise ToolError("no source checkout is available for this run")
+            raise ToolError("no source checkout is available for this run", kind="capability")
         try:
             return self.ctx.source.read_window(path, around_line=around_line)
         except SourceAccessError as exc:
@@ -1327,7 +1338,7 @@ class AgentTools:
 
     def find_source(self, *, query: str) -> dict:
         if self.ctx.source is None:
-            raise ToolError("no source checkout is available for this run")
+            raise ToolError("no source checkout is available for this run", kind="capability")
         try:
             out = self.ctx.source.find(query)
         except SourceAccessError as exc:
@@ -1341,7 +1352,7 @@ class AgentTools:
     def search_source(self, *, text: str) -> dict:
         """VER-050: literal content search inside the source checkout, under the same confinement as read_source."""
         if self.ctx.source is None:
-            raise ToolError("no source checkout is available for this run")
+            raise ToolError("no source checkout is available for this run", kind="capability")
         try:
             return self.ctx.source.search(text)
         except SourceAccessError as exc:

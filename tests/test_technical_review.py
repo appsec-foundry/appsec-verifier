@@ -277,6 +277,36 @@ def test_qa_clear_never_substitutes_for_a_class_proof(tmp_path):
     assert result.technical_review["status"] == "clear"
 
 
+def test_a_corrected_inconclusive_reason_replaces_the_rejected_claim_but_keeps_its_failure(tmp_path):
+    ctx = context(tmp_path)
+    final = "The prerequisite is unavailable; the recorded request did not test the affected operation."
+    actions = [attempt(), conclusion(9),
+               {"verdict": {"verdict": "inconclusive", "rationale": final, "proof_steps": [1]}}]
+    factory, host, _, _ = scripted_factory(actions, [CLEAR])
+    result = AgentProbe("open-redirect", factory, max_steps=4).run(ctx)
+    assert result.verdict == "inconclusive" and final in result.rationale
+    assert result.proof["checked"] is False and result.proof["missing"]
+    assert "Agent's claim:" not in result.rationale
+    assert "Earlier proof attempt was not accepted:" in result.rationale
+    assert final in host.calls[0][1]["proposed"]["rationale"]
+    assert [s["step"] for s in result.poc["shown"]] == [1]
+
+
+@pytest.mark.parametrize("cls,cwe", [("xss", "CWE-79"), ("open-redirect", "CWE-601")])
+def test_qa_receives_the_actual_class_actions_and_no_injection_plan_requirement(tmp_path, cls, cwe):
+    ctx = context(tmp_path)
+    ctx.plan = replace(ctx.plan, cls=cls, cwe=cwe)
+    qa, host = reviewer(ctx, [CLEAR])
+    assert consider(ctx, qa) is None
+    contract = host.calls[0][1]["proof_contract"]
+    assert "plan_test" not in contract["actions"]
+    assert "one experiment" not in contract["citations"]
+    assert "no plan_test" in contract["confirmation"].lower()
+    assert contract["target_origin"] == ctx.target_base
+    assert "CSP allow-list does not authorise" in contract["destination_rule"]
+    assert "runtime reachability" in contract["prerequisites"]
+
+
 def test_technical_issues_are_schema_valid_and_visible_without_a_presentation_review(tmp_path):
     ctx = context(tmp_path)
     qa, _ = reviewer(ctx, [question(detail="```\n<script>unsafe()</script>")])

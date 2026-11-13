@@ -33,6 +33,7 @@ PRESENTATION_SCHEMA = {
         "summary": {"type": "string", "minLength": 10, "maxLength": 400},
         "steps": {
             "type": "array", "minItems": 1, "maxItems": 24,
+            "description": "Each step number once; each row shows both its request and response.",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -66,11 +67,12 @@ PRESENTATION_HELP = (
     "attacker gains and show that, not the test's mechanics. steps: every proof step in reading order, role normal "
     "(the application without the attack), attack, outcome (what the attacker obtained; confirmed only) or control "
     "(rules out a coincidence); label: what the step is and what happened, in plain words; excerpt: the part of its "
-    "answer that shows it, verbatim from a tool result, at most 12 lines, omitted where the status tells it or the "
+    "answer body or recorded header that shows it, verbatim from a tool result, at most 12 lines, omitted where "
+    "the status tells it or the "
     "answer was withheld. A request shows only its answer's start, an experiment or browser check none: read what "
     "you quote with read_response first. "
-    "marks: verbatim quotes from a URL-decoded request or an excerpt, labelled with why they "
-    "matter. summary: confirmed, what the attacker sent and obtained; otherwise what the steps show and what is "
+    "marks: verbatim quotes from a URL-decoded request, displayed response header or an excerpt, labelled with why "
+    "they matter. summary: confirmed, what the attacker sent and obtained; otherwise what the steps show and what is "
     "missing. A different page or text alone is no exploit. Every quote and step is checked; a failed check shows "
     "the Verifier's own presentation instead."
 )
@@ -131,7 +133,11 @@ def _verbatim(excerpt: str, e: dict) -> bool:
     from .poc import MAX_BODY_CHARS, _text, _VisibleText
 
     text, quote = _text(e), _norm(excerpt)
-    if quote in _norm(text):
+    # Header excerpts include their field names; a bare header value must not look like response-body evidence.
+    header_lines = [_norm(line) for line in response_head(e).splitlines()]
+    quoted_lines = [_norm(line) for line in excerpt.strip().splitlines()]
+    header_quote = any(header_lines[i:i + len(quoted_lines)] == quoted_lines for i in range(len(header_lines)))
+    if quote in _norm(text) or header_quote:
         return True
     forms = []
     if "html" in str(e["response"]["content"].get("mimeType", "")).lower():
@@ -143,6 +149,26 @@ def _verbatim(excerpt: str, e: dict) -> bool:
     except (ValueError, RecursionError):
         pass
     return any(quote in _norm(form) and not set(quote) & _DECODED[kind] for kind, form in forms)
+
+
+def response_head(e: dict) -> str:
+    """The recorded, already redacted response status and headers; never reconstructed model text."""
+    res = e["response"]
+    return "\n".join([f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip(),
+                      *(f"{h['name']}: {h['value']}" for h in res.get("headers", []))])
+
+
+def _answer(e: dict, excerpt: str, hidden: bool) -> str:
+    res = e["response"]
+    head = f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()
+    if hidden:
+        note = res["content"].get("_omitted") or "answer withheld from models; kept for the operator in the HAR file"
+        return head + f"\n\n[{note}]"
+    # These protocol properties can decide a proof without a response body. Do not duplicate an exact quote.
+    headers = [f"{h['name']}: {h['value']}" for h in res.get("headers", [])
+               if h["name"].lower() in ("location", "content-type", "www-authenticate")]
+    head = "\n".join([head, *(line for line in headers if line not in excerpt)])
+    return head + ("\n\n" + excerpt if excerpt else "")
 
 
 def _hidden(e: dict, n: int, withheld: set[int]) -> bool:
@@ -193,7 +219,9 @@ def check(history: list[dict], steps: list[dict], verdict: str, decisive: set[in
             problems.append(f"a mark names step {n}, which the presentation does not list as a recorded request")
         elif mark["part"] == "request" and mark["text"] not in request_text(recorded[n]):
             problems.append(f"a mark is not in the URL-decoded request of step {n}")
-        elif mark["part"] == "response" and mark["text"] not in excerpts[n]:
+        elif mark["part"] == "response" and mark["text"] not in (
+                response_head(recorded[n]).split("\n", 1)[0] if _hidden(recorded[n], n, withheld)
+                else _answer(recorded[n], excerpts[n], False)):
             problems.append(f"a mark on the answer of step {n} is not in the excerpt shown for it")
     return (None, "; ".join(dict.fromkeys(problems))) if problems else (presentation, None)
 
@@ -217,21 +245,45 @@ def assess(ctx, history: list[dict], steps: list[dict], result, cited, presentat
     return check(view, steps, result.verdict, decisive, presentation)
 
 
+def repair_context(ctx, history: list[dict], steps: list[dict], result, cited) -> dict:
+    """Give the presentation-only repair exact redacted evidence it cannot obtain through another tool call.
+
+    No decorated UI excerpts or synthetic comparison text is quotable. Withheld or omitted responses stay
+    withheld, and request values and bodies are masked before taking bounded windows.
+    """
+    from ..agent.experiments import latest_plan, plan_view
+    from ..agent.technical_review import clean
+    from .poc import _focus, _shown_entry, _text, decisive_steps, withheld_steps
+
+    cited = (result.proof or {}).get("steps") or cited
+    view = plan_view(history, cited)
+    decisive = set(decisive_steps(ctx, view, result.verdict, cited))
+    withheld = withheld_steps(view)
+    observation = clean(ctx, latest_plan(view)[1].get("text"))
+    entries = [(s["step"], clean(ctx, e)) for s in steps
+               if (e := _shown_entry(s)) is not None and s["step"] in decisive]
+    recorded = []
+    for n, e in entries[:24]:
+        item = {"step": n, "request": request_text(e)[:1500]}
+        if _hidden(e, n, withheld):
+            item["response_withheld"] = True
+        else:
+            body = _text(e)
+            focus = (body.index(observation) if isinstance(observation, str) and observation and observation in body
+                     else _focus(ctx, [entry for _, entry in entries], e))
+            start = max(0, min(focus - 150, len(body) - 600))
+            item.update(response_head=response_head(e)[:1500], body_excerpt=body[start:start + 600])
+        recorded.append(item)
+    # Exchanges were redacted on capture; apply the shared model redactor as well, including marker-file content.
+    return clean(ctx, {"required_steps": [n for n, _ in entries], "recorded_evidence": recorded})
+
+
 def _step(ctx, history, n: int, e: dict, item: dict, marks: list[dict], withheld: set[int]):
     """What one step shows: its request and answer texts, their marks as (label, text), and the Verifier's own
     observation where the proof reads one from the step (poc._proof_observation)."""
     from .poc import _proof_observation
 
-    res = e["response"]
-    status = f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()
-    if item.get("excerpt"):
-        answer = status + "\n\n" + item["excerpt"]
-    elif n in withheld:
-        answer = status + "\n\n[answer withheld from models; kept for the operator in the HAR file]"
-    elif res["content"].get("_omitted"):
-        answer = status + f"\n\n[{res['content']['_omitted']}]"
-    else:
-        answer = status
+    answer = _answer(e, item.get("excerpt") or "", _hidden(e, n, withheld))
     req_marks = [(m["label"], m["text"]) for m in marks if m["step"] == n and m["part"] == "request"]
     res_marks = [(m["label"], m["text"]) for m in marks if m["step"] == n and m["part"] == "response"]
     seen = _proof_observation(ctx, history, n, e)

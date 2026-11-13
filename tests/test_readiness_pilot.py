@@ -6,6 +6,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from test_access_policy import policy
 from test_agent_tools import Resp, _ctx
 from test_endpoints import _blocker
 from test_experiments import STRATEGY
@@ -78,6 +79,8 @@ def test_preparation_requires_an_accepted_owner_plan_and_cannot_escape_scope(tmp
     ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request expected"),
                safe=False, read_only=False, env=ENV, idents=IDENTITIES[:2])
     ctx.plan, ctx.marker = plans_from(document())[0], MARKER
+    ctx.scope = {**ctx.scope, "access_policies": [policy("/api/Notes/7", allowed=("account-1",),
+                                                        denied=("account-2",), finding=ctx.plan.id)]}
     args = {"method": "POST", "path": "/api/Notes", "role": "account-1", "json": {"text": "".join(MARKER)}}
     with pytest.raises(ToolError, match="no matching route"):
         Controller(ctx).before("http_request", args)
@@ -119,6 +122,8 @@ def test_stateful_two_account_pilot(tmp_path, protected, public):
 
     ctx = _ctx(tmp_path, transport, safe=False, read_only=False, env=ENV, idents=IDENTITIES[:2])
     ctx.plan, ctx.marker = plans_from(document())[0], MARKER
+    ctx.scope = {**ctx.scope, "access_policies": [policy("/api/Notes/7", allowed=("account-1",),
+                                                        denied=("account-2",), finding=ctx.plan.id)]}
     ctx.budget = ctx.http._budget  # one shared run budget, as in the production runner
     ctx.evidence_dir = tmp_path / "evidence"
     requests = [
@@ -154,6 +159,8 @@ def test_a_refused_or_unanswered_preparation_is_no_deviation(tmp_path):
     ctx = _ctx(tmp_path, lambda *a, **k: pytest.fail("no request expected"),
                safe=False, read_only=False, env=ENV, idents=IDENTITIES[:2])
     ctx.plan, ctx.marker = plans_from(document())[0], MARKER
+    ctx.scope = {**ctx.scope, "access_policies": [policy("/api/Notes/7", allowed=("account-1",),
+                                                        denied=("account-2",), finding=ctx.plan.id)]}
     c = ControllerWithPlan(ctx, {"kind": "access-control", "owner": "account-1", "path": "/api/Notes/:id"})
     args = {"method": "POST", "path": "/api/Notes", "role": "account-1", "json": {"text": "unmarked"}}
     with pytest.raises(ToolError, match="must carry"):

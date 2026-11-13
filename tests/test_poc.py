@@ -448,8 +448,8 @@ def test_a_verdict_that_cites_no_step_gets_an_image_that_says_it_proves_nothing(
 def test_a_finding_a_limit_stopped_gets_the_image_of_its_requests(tmp_path):
     browser = RenderBrowser()
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(500, "{}"), cls="injection", browser=browser)
-    result, _ = _run(ctx, [_get(None, "/search", q=str(n)) for n in range(5)])   # three server errors stop it
-    assert result.limits_hit == "stagnation" and len(browser.exchanges) == 2
+    result, _ = _run(ctx, [_get(None, "/search", q=str(n)) for n in range(5)], max_steps=3)
+    assert result.limits_hit == "attempts" and len(browser.exchanges) == 2
     assert all("cites no step" in panel["html"] for panel in browser.exchanges)
     assert sum(panel["html"].count("<section>") for panel in browser.exchanges) == 3
 

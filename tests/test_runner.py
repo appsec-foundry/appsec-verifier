@@ -89,8 +89,8 @@ def test_registered_probe_runs_and_sees_safe_flag():
     assert seen == {"safe": True, "read_only": True}
 
 
-def test_confirmed_variant_retires_remaining_variants_of_the_same_finding():
-    """VER-039: one confirmed variant is enough; the finding's other variants end as not-attempted."""
+def test_confirmed_variant_does_not_retire_unproven_equivalent_variants():
+    """VER-039: a confirmed finding does not imply coverage of its other variants."""
     seen = []
 
     class OnceXss:
@@ -108,14 +108,13 @@ def test_confirmed_variant_retires_remaining_variants_of_the_same_finding():
     v2 = FindingPlan(id="T-1", cwe="CWE-79", severity="High", title="t", match_key="f.ts|CWE-79",
                      instance="f.ts:10", status="dynamic", cls="xss", reason="r", variant_id="variant-002")
     doc = _run([v1, v2], registry=reg)
-    assert seen == ["variant-001"]  # the second variant never ran
+    assert seen == ["variant-001", "variant-002"]
     assert doc["results"][0]["verdict"] == "confirmed"
-    assert doc["results"][1]["verdict"] == "not-attempted"
-    assert "another variant of this finding already confirmed it" in doc["results"][1]["rationale"]
+    assert doc["results"][1]["verdict"] == "confirmed"
 
 
-def test_a_variant_with_a_request_already_tested_is_not_retested():
-    """VER-039: variants that carry the same request are verified once, even when none confirms."""
+def test_a_shared_request_without_equivalent_proof_context_is_retested():
+    """VER-039: shared requests and incomplete attempts cannot establish equivalent coverage."""
     seen = []
 
     class RecordXss:
@@ -133,9 +132,8 @@ def test_a_variant_with_a_request_already_tested_is_not_retested():
     v2 = FindingPlan(**base, variant_id="v2", endpoints=(Endpoint("GET", "/x", None),))  # same request
     v3 = FindingPlan(**base, variant_id="v3", endpoints=(Endpoint("GET", "/y", None),))  # different request
     doc = _run([v1, v2, v3], registry=reg)
-    assert seen == ["v1", "v3"]  # v2 skipped as a duplicate request
-    assert doc["results"][1]["verdict"] == "not-attempted"
-    assert "already tested the same request" in doc["results"][1]["rationale"]
+    assert seen == ["v1", "v2", "v3"]
+    assert doc["results"][1]["verdict"] == "inconclusive"
     assert doc["results"][2]["verdict"] == "inconclusive"
 
 
@@ -186,5 +184,36 @@ def test_a_variant_with_another_input_on_the_same_route_is_still_tested():
         {"id": "v3", "request": {"method": "GET", "path": "/x", "inputs": [{"location": "query", "name": "sort"}]}},
     ]}
     doc = _run(expand_variants([base]), registry=reg)
-    assert seen == ["v1", "v3"]
-    assert [r["verdict"] for r in doc["results"]] == ["inconclusive", "not-attempted", "inconclusive"]
+    assert seen == ["v1", "v2", "v3"]
+    assert [r["verdict"] for r in doc["results"]] == ["inconclusive"] * 3
+
+
+def test_only_completed_equivalent_variants_are_reused():
+    from dataclasses import replace
+
+    from appsec_verifier.planning import expand_variants
+
+    seen = []
+
+    class Proof:
+        cls = "xss"
+
+        def run(self, ctx):
+            seen.append(ctx.plan.variant_id)
+            return ProbeResult(verdict="confirmed", proof={"checked": True, "executed": True})
+
+    variant = {"id": "first", "request": {"method": "GET", "path": "/search",
+               "inputs": [{"location": "query", "name": "q"}]}, "hypothesis": "q reaches the script sink",
+               "prerequisites": ["authenticated as account-1"],
+               "expected_observations": ["marker executes"], "negative_controls": ["plain text cannot execute"]}
+    base = replace(_plan("T-1", "xss"), verification_context={"variants": [
+        variant, {**variant, "id": "duplicate"},
+        {**variant, "id": "other-hypothesis", "hypothesis": "q reaches an attribute sink"},
+        {**variant, "id": "other-identity", "prerequisites": ["anonymous"]},
+        {**variant, "id": "other-proof", "negative_controls": ["encoded text cannot execute"]},
+    ]})
+    registry = ProbeRegistry()
+    registry.register(Proof())
+    results = _run(expand_variants([base]), registry=registry)["results"]
+    assert seen == ["first", "other-hypothesis", "other-identity", "other-proof"]
+    assert results[1]["verdict"] == "not-attempted" and "equivalent" in results[1]["rationale"]

@@ -1,0 +1,5 @@
+.assessment-work/
+.assessment-state.json
+.appsec-lock.guard
+.run-issues.json
+console.log

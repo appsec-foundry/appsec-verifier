@@ -1251,6 +1251,13 @@ def comparison_ready(ctx, history, steps):
     verdict. Pure: proof.py re-checks the cited steps."""
     problem = signed_in_check(ctx, history, steps)
     if problem is None:
+        from .access_policy import restriction
+
+        if restriction(ctx, history, steps) is None:
+            return {"proof": "missing", "access_observed": True, "steps": sorted(steps),
+                    "reason": "access observed, but no independent access restriction is established",
+                    "next": "submit_verdict inconclusive; report observed access separately from the "
+                            "unproven restriction. A model claim cannot supply that restriction"}
         path = latest_plan(history)[1].get("path")
         exposed = next((n for n in sorted(steps) if 1 <= n <= len(history)
                         and not (history[n - 1].get("args") or {}).get("role")

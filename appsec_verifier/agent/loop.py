@@ -45,7 +45,7 @@ _VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusiv
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
 _LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "error", "path", "start_line",
                   "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "body_withheld",
-                  "plan_step", "observation", "steps")
+                  "plan_step", "observation", "steps", "error_kind", "recovery")
 _PROPOSAL_CAP = 500
 
 
@@ -152,6 +152,17 @@ class AgentProbe:
     def run(self, ctx: ProbeContext) -> ProbeResult:
         controller = Controller(ctx)
         result = self._run(ctx, controller)
+        # A model may correctly report inconclusive immediately after the comparison feedback. Still retain
+        # the code-checked observed access separately from the missing restriction (VER-010/057).
+        if self.cls == "access-control" and result.verdict == "inconclusive" and not result.proof:
+            history = getattr(ctx, "agent_history", [])
+            observed = next((h.get("result", {}).get("steps") for h in reversed(history)
+                             if h.get("tool") == "experiment" and h.get("result", {}).get("access_observed")), None)
+            if observed:
+                checked = check_proof(ctx, history, replace(result, verdict="confirmed"), observed)
+                if (checked.proof or {}).get("observed_access"):
+                    result.proof, result.evidence = checked.proof, checked.evidence
+                    result.observations = checked.observations
         result.technical_review = getattr(ctx, "technical_review_result", None)
         if result.technical_review and result.technical_review["status"] != "not-reviewed":
             _log(ctx, None, tool="technical_review", note="Technical QA: " + result.technical_review["status"],
@@ -164,6 +175,9 @@ class AgentProbe:
         result.observations = [*result.observations, *(
             f"Prerequisite read: {route}, a request this finding's test needed but the assessment does not name "
             "(VER-047)." for route in controller.prerequisites)]
+        for item in getattr(ctx, "prerequisite_checks", []):
+            result.observations.append(f"Runtime prerequisite {item['condition']}: {item['status']} "
+                                       f"(recorded steps {item['steps']}).")
         for request in ctx.derived_requests:
             origin = (f"supported by recorded step {request['evidence_step']}" if request.get("evidence_step")
                       else "resolved from the source before the test")
@@ -203,7 +217,6 @@ class AgentProbe:
         presentation_repaired = False
         presented = None
         qa_candidate = None
-        intent_candidate = None     # a checked access-control confirmation QA sent back to test another resource
 
         def conclude(step: int, result, verdict, *, live: bool = True):
             """Record the verdict's evidence and end the finding (VER-034, VER-035, VER-059). Without `live`, a limit
@@ -211,6 +224,10 @@ class AgentProbe:
             from ..verify.browser_evidence import attach_explanation, capture_application, recapture
             from ..verify.presentation import present
 
+            if self.cls == "access-control":
+                from .access_policy import apply_intent_review
+
+                result = apply_intent_review(result, qa.state)
             result = untested_write(ctx, result)
             cited = (result.proof or {}).get("steps") or verdict.get("proof_steps")
             if live and result.limits_hit is None:
@@ -233,6 +250,10 @@ class AgentProbe:
                 stopped = replace(prior, limits_hit=stopped.limits_hit, observations=[
                     *prior.observations, "Technical QA follow-up stopped before a revised conclusion."])
                 qa.state["reason"] = "Technical objections remain; the follow-up stopped within the existing limits."
+                if self.cls == "access-control":
+                    from .access_policy import apply_intent_review
+
+                    stopped = apply_intent_review(stopped, qa.state)
             from ..verify.presentation import present
 
             result = poc.attach(ctx, history, sent, stopped, cited)
@@ -259,7 +280,7 @@ class AgentProbe:
                 return sent_steps, attach_stopped(_stopped(ctx, len(history) + 1, exc))
             except ToolError as exc:
                 if write:   # the agent asked; tell it why nothing was sent
-                    result = {"error": str(exc)}
+                    result = {"error": str(exc), "error_kind": exc.kind}
                     step_n = len(history) + 1
                     _log(ctx, step_n, tool="send_controls", result=result)
                     history.append({"tool": "send_controls", "args": {}, "result": result})
@@ -274,7 +295,7 @@ class AgentProbe:
                     controller.before("http_request", request, experiment=True)
                     result = controller.run(lambda request=request: tools.http_request(**request))
                 except ToolError as exc:
-                    result = {"error": str(exc)}
+                    result = {"error": str(exc), "error_kind": exc.kind}
                 except LimitExceeded as exc:
                     keep(step_n, "http_request")
                     return sent_steps, attach_stopped(_stopped(ctx, step_n, exc))
@@ -360,7 +381,7 @@ class AgentProbe:
                 args = action["args"] if isinstance(action["args"], dict) else {}   # None: not one JSON object
                 call = {"tool": action["refused"], "args": args,
                         **({"note": action["note"]} if action.get("note") else {})}
-                result = {"error": action["error"]}
+                result = {"error": action["error"], "error_kind": "schema"}
                 _log(ctx, step, **call, result=result)
                 history.append({"tool": action["refused"], "args": args, "result": result})
                 continue
@@ -381,7 +402,8 @@ class AgentProbe:
                     again = verdict.get("presentation")
                     return conclude(step, result, {**kept, **({"presentation": again} if again is not None else {})})
                 result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
-                if (result.proof or {}).get("checked") is False and repairs < 2 and decision < self._max_steps:
+                if ((result.proof or {}).get("checked") is False and not (result.proof or {}).get("observed_access")
+                        and repairs < 2 and decision < self._max_steps):
                     repairs += 1
                     last_rejected = result
                     last_cited = verdict.get("proof_steps")
@@ -394,25 +416,22 @@ class AgentProbe:
                     history.append({"tool": "proof_feedback", "args": {}, "result": feedback})
                     continue
                 if last_rejected is not None and verdict.get("verdict") == "inconclusive":
-                    result = last_rejected
-                    verdict = {**verdict, "proof_steps": last_cited}
-                # VER-046: a confirmed verdict whose proof check passed is not reviewed; QA stays for negative
-                # and unproven conclusions, where it can point at a missing attempt. If QA already engaged this
-                # finding on an earlier conclusion, it still runs so it can close out that objection. An
-                # access-control confirmation is judged for intended access only; its one follow-up tests a
-                # protected resource where QA holds the tested one public, and the confirmation stands unless a
-                # checked confirmation replaces it.
+                    # A corrected conclusion may explain an unavailable prerequisite more accurately than
+                    # the earlier rejected confirmation. Retain the code's failure and classification, but
+                    # replace the rejected model claim and its citations with the corrected conclusion.
+                    result.proof = last_rejected.proof
+                    missing = "; ".join((result.proof or {}).get("missing", ["insufficient proof"]))
+                    previous = "Earlier proof attempt was not accepted: " + missing
+                    label = (last_rejected.rationale or "indicative, not proven").partition(":")[0]
+                    corrected = (result.rationale or "No further proof collected").rstrip(". ")
+                    result.rationale = f"{label}: {corrected}. {previous}"
+                    if "proof_steps" not in verdict:
+                        verdict = {**verdict, "proof_steps": last_cited}
+                # VER-046: intent objections invalidate access-control confirmations at the final gate.
                 feedback = None
                 confirmed_checked = result.verdict == "confirmed" and (result.proof or {}).get("checked") is True
                 intent_only = confirmed_checked and self.cls == "access-control"
-                if intent_candidate is not None and not confirmed_checked:
-                    followed = " ".join(str(result.rationale or "").split())[:300]
-                    result, verdict = intent_candidate
-                    result.observations = [*result.observations, "Technical QA follow-up on a protected resource "
-                                           f"ended without a checked confirmation: {followed}"]
-                    qa.state["reason"] = ("The follow-up found no checked confirmation on a protected resource; the "
-                                          "objection stands beside the earlier verdict.")
-                elif confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
+                if confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
                     qa.state["reason"] = "A confirmed verdict whose proof check passed is not reviewed (VER-046)."
                 else:
                     feedback = qa.consider(history, result, tools, controller, self._max_steps - decision,
@@ -420,12 +439,10 @@ class AgentProbe:
                 if feedback is not None:
                     if (result.proof or {}).get("checked") is True:
                         qa_candidate = (result, verdict.get("proof_steps"))
-                    if intent_only:
-                        intent_candidate = (result, verdict)
                     _log(ctx, step, tool="qa_feedback", note="Technical QA requests a follow-up", result=feedback)
                     history.append({"tool": "qa_feedback", "args": {}, "result": feedback})
                     continue
-                from ..verify.presentation import assess
+                from ..verify.presentation import assess, repair_context
 
                 # VER-059: a presentation the Verifier cannot render goes back to the agent once, with the reason,
                 # while a step is left; the verdict and its checked proof stay as they are. A missing one is not
@@ -435,9 +452,12 @@ class AgentProbe:
                         and not presentation_repaired and decision < self._max_steps:
                     presentation_repaired, presented = True, (result, verdict)
                     feedback = {"status": "presentation not accepted", "reason": why,
+                                **repair_context(ctx, history, sent, result, verdict.get("proof_steps")),
                                 "next": "submit the same verdict again with a corrected presentation; only the "
                                         "presentation of that answer is used"}
-                    _log(ctx, step, tool="presentation_feedback", result=feedback)
+                    # Response excerpts are model context, not action-log content.
+                    _log(ctx, step, tool="presentation_feedback",
+                         result={k: v for k, v in feedback.items() if k != "recorded_evidence"})
                     history.append({"tool": "presentation_feedback", "args": {}, "result": feedback})
                     continue
                 return conclude(step, result, verdict)
@@ -461,7 +481,7 @@ class AgentProbe:
                 tools.note = action.get("note")     # shown as the agent's reason if it asks for writes (VER-052)
                 result = controller.run(lambda name=name, args=args: tools.call(name, args))
             except ToolError as exc:
-                result = {"error": str(exc)}
+                result = {"error": str(exc), "error_kind": exc.kind}
             except LimitExceeded as exc:
                 keep(step, name)
                 return attach_stopped(_stopped(ctx, step, exc, **call))

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+from test_access_policy import policy
 from test_agent_tools import Resp, _ctx
 from test_experiments import STRATEGY
 
@@ -62,7 +63,8 @@ def comparison(anonymous=SECRET, anonymous_status=200, control="<h1>404</h1>", c
 def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-306"):
     history = copy.deepcopy(history)
     responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
-    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe), scope=scope or {},
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe),
+                          scope={"access_policies": [policy(PATH)]} if scope is None else scope,
                           identities=[{"role": "account-1"}], marker=MARKER, responses=responses, sessions=None,
                           evidence_dir=None)
     if cited is None:
@@ -83,7 +85,7 @@ def _change(history, step, **changes):
 def test_the_account_answer_without_credentials_confirms_at_medium():
     result = _check(comparison())
     assert result.verdict == "confirmed" and result.confidence == "medium", result.rationale
-    assert "taken from the finding" in result.proof["scope"] and "not kept" in result.proof["scope"]
+    assert result.proof["access_restriction"]["source"].startswith("operator:")
     assert result.proof["tested_path"] == PATH
 
 
@@ -255,7 +257,8 @@ def test_only_the_comparison_reaches_the_random_path(tmp_path):
 
 # ── through the loop ──────────────────────────────────────────────────────────
 
-def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None, presentation=None):
+def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None, presentation=None,
+         declared=True, verdict_kind="confirmed"):
     sent = []
 
     def recording(m, u, h, **k):
@@ -270,7 +273,7 @@ def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None, presentatio
             self.seen.append(json.dumps(history, default=str))
             if not history:
                 return {"tool": "plan_test", "args": _args()}
-            return {"verdict": {"verdict": "confirmed", "rationale": "served without login",
+            return {"verdict": {"verdict": verdict_kind, "rationale": "served without login",
                                 "proof_steps": list(verdict_steps),
                                 **({"presentation": presentation} if presentation else {})}}
 
@@ -283,6 +286,7 @@ def _run(tmp_path, transport, verdict_steps=(2, 3, 4), browser=None, presentatio
     ctx = _ctx(tmp_path, recording, env=ENV, idents=IDENTITIES)
     ctx.plan = replace(ctx.plan, cwe="CWE-306", endpoints=(Endpoint("GET", PATH, None),))
     ctx.marker = MARKER
+    ctx.scope = {**ctx.scope, "access_policies": [policy(PATH)] if declared else []}
     ctx.evidence_dir = tmp_path / "evidence"
     ctx.browser = browser
     result = AgentProbe("access-control", factory).run(ctx)
@@ -428,6 +432,7 @@ def _qa_run(tmp_path, *, secret_exposed, replies, second_verdict="inconclusive")
     ctx = _ctx(tmp_path, target, env=ENV, idents=IDENTITIES)
     ctx.plan = replace(ctx.plan, cwe="CWE-306", endpoints=(Endpoint("GET", KEYS, None),))
     ctx.marker = MARKER
+    ctx.scope = {**ctx.scope, "access_policies": [policy("/keys/public.pub"), policy("/keys/secret.key")]}
     return AgentProbe("access-control", factory).run(ctx), host, histories, actions
 
 
@@ -443,20 +448,15 @@ def test_qa_sends_a_public_resource_objection_back_once_and_a_checked_confirmati
                                          replies=[_review(PUBLIC_RESOURCE, INTENDED), _review()])
     assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/secret.key"
     feedback = [h for h in histories[-1] if h["tool"] == "qa_feedback"]
-    assert len(feedback) == 1 and feedback[0]["result"]["issues"] == [PUBLIC_RESOURCE]   # only that objection
-    assert [call[1]["public_resource_follow_up"] for call in host.calls] == [True, False]
+    assert len(feedback) == 1 and feedback[0]["result"]["issues"] == [PUBLIC_RESOURCE, INTENDED]
+    assert [call[1]["remaining_correction_rounds"] for call in host.calls] == [2, 1]
     assert result.technical_review["status"] == "clear" and result.technical_review["rounds"] == 1
 
 
-def test_a_follow_up_without_a_checked_confirmation_leaves_the_first_one_and_its_objection(tmp_path):
-    """The protected resource is refused without a login: the agent's inconclusive follow-up does not change the
-    code-checked verdict; the objection stays beside it and the follow-up's outcome is recorded."""
-    result, _, _, _ = _qa_run(tmp_path, secret_exposed=False, replies=[_review(PUBLIC_RESOURCE)])
-    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/public.pub"
-    assert result.technical_review["status"] == "needs-attention"
-    assert result.technical_review["issues"] == [PUBLIC_RESOURCE]
-    assert any(o.startswith("Technical QA follow-up on a protected resource ended without a checked confirmation")
-               for o in result.observations)
+def test_a_follow_up_without_confirmation_does_not_restore_the_objected_confirmation(tmp_path):
+    result, _, _, _ = _qa_run(tmp_path, secret_exposed=False, replies=[_review(PUBLIC_RESOURCE), _review()])
+    assert result.verdict == "inconclusive"
+    assert not (result.proof or {}).get("checked")
     import yaml
     from jsonschema import Draft202012Validator
 
@@ -464,14 +464,9 @@ def test_a_follow_up_without_a_checked_confirmation_leaves_the_first_one_and_its
     Draft202012Validator(schema["$defs"]["technical_review"]).validate(result.technical_review)
 
 
-def test_no_other_objection_and_no_second_public_resource_objection_starts_a_test(tmp_path):
-    """Refused cases: an objection that the access is intended stays beside the verdict without a test, and a
-    public-resource objection to the follow-up's own confirmation is not sent back a second time."""
-    result, _, histories, actions = _qa_run(tmp_path, secret_exposed=True, replies=[_review(INTENDED)])
-    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/public.pub"
-    assert result.technical_review["rounds"] == 0 and len(actions) == 2          # the follow-up never ran
-    assert not any(h["tool"] == "qa_feedback" for h in histories[-1])
-    result, _, _, _ = _qa_run(tmp_path, secret_exposed=True, second_verdict="confirmed",
-                              replies=[_review(PUBLIC_RESOURCE), _review(PUBLIC_RESOURCE)])
-    assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/secret.key"
-    assert result.technical_review["rounds"] == 1 and result.technical_review["status"] == "needs-attention"
+def test_interpretation_objections_reach_the_agent_and_unresolved_objections_prevent_confirmation(tmp_path):
+    result, _, histories, _ = _qa_run(tmp_path, secret_exposed=True,
+                                      replies=[_review(INTENDED), _review()])
+    assert result.verdict == "inconclusive"
+    feedback = [h for h in histories[-1] if h["tool"] == "qa_feedback"]
+    assert feedback[0]["result"]["issues"] == [INTENDED]

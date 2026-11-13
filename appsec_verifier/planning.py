@@ -234,7 +234,7 @@ def _needs_write(variant) -> bool:
 
 def expand_variants(plans):
     """One plan per variant. Within a finding, variants that need no write come first, otherwise in assessment
-    order, so a confirmation without a write leaves the others untested (VER-026, VER-039)."""
+    order; equivalent completed tests alone permit reuse (VER-026, VER-039)."""
     out = []
     for p in plans:
         variants = p.verification_context.get("variants", [])

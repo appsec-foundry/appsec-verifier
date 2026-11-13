@@ -82,7 +82,9 @@ def remaining_variants(plans, existing):
     completed = {(r["finding_ref"]["id"], r["finding_ref"].get("variant_digest"))
                  for r in existing.get("results", []) if r.get("verdict") in VERIFIED
                  and (r.get("proof") or {}).get("checked") is True
-                 and (r.get("proof") or {}).get("contract") == 3}
+                 and (r.get("proof") or {}).get("contract") == 3
+                 and (r.get("class") != "access-control" or r.get("verdict") != "confirmed"
+                      or (r.get("proof") or {}).get("access_restriction"))}
     return [p for p in expand_variants(plans) if (p.id, p.variant_digest) not in completed]
 
 
@@ -632,6 +634,13 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
     if why := _why_not(r):
         out += ["", f"**Why not confirmed:** {_sentence(why)}"]
     notes = []
+    restriction = proof.get("access_restriction")
+    if isinstance(restriction, dict):
+        description = restriction.get("restriction") or (
+            "Allowed: " + ", ".join(restriction.get("allowed_roles", []))
+            + "; denied: " + ", ".join(restriction.get("denied_roles", [])))
+        notes.append(f"**Expected access:** {_sentence(description)} "
+                     f"Source: {_sentence(restriction.get('source'))}")
     limits = re.sub(r"^cited requests only[;,]?\s*", "", str(proof.get("scope") or "")) if proof.get("checked") else ""
     limits = re.sub(r"^on ", "tested on ", limits)
     if limits:

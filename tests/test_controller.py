@@ -54,6 +54,27 @@ def test_three_distinct_failures_stop_before_next_model_call(tmp_path):
     assert result.limits_hit == "stagnation" and len(calls) == 3
 
 
+def test_accepted_plan_clears_schema_failures_but_does_not_reset_repetition_budget(tmp_path):
+    controller = Controller(context(tmp_path))
+    controller.refuse("plan_test", "missing observation")
+    controller.refuse("plan_test", "invalid observation")
+    controller.observe("plan_test", {}, {"accepted": True, "experiment": {"path": "/search"}})
+    assert controller.failures == 0 and not controller.failure_kinds
+    controller.refuse("plan_test", "invalid again")
+    controller.check()
+    assert controller.failures == 1
+
+
+def test_mixed_error_categories_are_bounded_and_report_recovery(tmp_path):
+    controller = Controller(context(tmp_path))
+    for kind in ("schema", "capability", "refused", "schema", "capability", "refused"):
+        answer = {"error": "cannot perform action", "error_kind": kind}
+        controller.observe("read_source", {}, answer)
+        assert answer["recovery"]["category"] == kind
+    with pytest.raises(LimitExceeded, match="repeated tool failures"):
+        controller.check()
+
+
 def test_plan_cannot_authorize_other_route(tmp_path):
     c = Controller(context(tmp_path))
     with pytest.raises(ToolError, match="no matching route"):
@@ -797,7 +818,7 @@ def test_5xx_during_an_accepted_injection_experiment_is_an_observation_not_a_fai
     """Ein 500 auf eine Injection-Probe (z. B. SQLite-Fehler bei unbalancierter Klammer) ist das
     eigentliche Observationssignal; die Stagnationsschranke darf das Experiment nicht abschiessen,
     bevor der Agent es werten kann. proof.py entscheidet weiter, was ein 5xx tatsaechlich beweist.
-    Ausserhalb eines akzeptierten Experiments zaehlt 5xx weiter als Fehlschlag."""
+    Auch ausserhalb eines Experiments bleibt die Antwort eine Beobachtung."""
     c = Controller(context(tmp_path))
     c.plan = {"kind": "boolean", "path": "/search", "method": "GET", "input_location": "params",
               "input_name": "q", "baseline": "a", "positive": "b", "negative": "c"}
@@ -809,10 +830,8 @@ def test_5xx_during_an_accepted_injection_experiment_is_an_observation_not_a_fai
     c2 = Controller(context(tmp_path))
     for _ in range(3):
         c2.observe("http_request", {"method": "GET", "path": "/search"}, {"status": 500, "length": 10})
-    with pytest.raises(LimitExceeded, match="three actions in a row failed") as exc:
-        c2.check()
-    assert exc.value.kind == "stagnation"
-    assert str(exc.value).endswith("; the last: http_request: HTTP 500")
+    c2.check()
+    assert c2.failures == 0
 
 
 def test_a_stop_after_failed_actions_names_the_last_one_and_is_not_called_a_limit(tmp_path):
@@ -822,11 +841,13 @@ def test_a_stop_after_failed_actions_names_the_last_one_and_is_not_called_a_limi
     c.observe("read_source", {"path": "a.ts"}, {"lines": 3})
     c.refuse("fetch_url", "unknown action 'fetch_url'")
     c.observe("plan_test", {"kind": "boolean"}, {"error": "path input needs exactly one placeholder"})
+    c.check()  # distinct failure categories still leave room to recover
+    c.observe("plan_test", {}, {"error": "another refused plan"})
     c.observe("plan_test", {"kind": "boolean"}, {"error": "path input needs exactly one\nplaceholder " + "x" * 300})
     with pytest.raises(LimitExceeded) as exc:
         c.check()
     detail = str(exc.value)
-    assert detail.startswith("three actions in a row failed without a usable observation; the last: plan_test: "
+    assert detail.startswith("repeated tool failures without a usable observation; the last: plan_test (refused): "
                              "path input needs exactly one placeholder xx")
     assert detail.endswith("…") and "\n" not in detail and len(detail) < 300
     assert exc.value.rationale() == "stopped: " + detail

@@ -15,7 +15,7 @@ flowchart LR
     E --> F["verification.md<br/>evidence/"]
 ```
 
-Nothing is sent to the target before the confirmation. Each finding is tested on its own, with a fresh agent, its own marker, its own step budget and its own proof check; results of other findings reach it only where the assessment lists them as dependencies. A finding with several variants (different requests for the same weakness) tests each variant in a run of its own, one after another. The first confirmed variant ends the rest, and a variant whose request another variant already tested is not tested again.
+Nothing is sent to the target before the confirmation. Each finding is tested on its own, with a fresh agent, its own marker, its own step budget and its own proof check; results of other findings reach it only where the assessment lists them as dependencies. A finding with several variants (different requests for the same weakness) tests each variant in a run of its own, one after another. Different variants continue after a confirmation. Only a completed equivalent test with matching request, inputs, hypothesis, prerequisites and proof conditions permits reuse; a shared URL alone does not.
 
 ## Before the first request
 

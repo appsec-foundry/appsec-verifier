@@ -273,6 +273,77 @@ def test_every_reason_is_named_once_and_no_model_text_in_a_schema_error(tmp_path
         "its presentation does not match the schema at summary (rule maxLength 400)")
 
 
+def test_recorded_headers_can_be_presented_and_a_bodyless_redirect_keeps_its_location(tmp_path):
+    ctx, history, steps = _recorded(tmp_path, (302, "", "text/html"))
+    entry = steps[0]["entries"][0]
+    location = "https://fixture-marker.invalid/"
+    entry["response"]["headers"].append({"name": "Location", "value": location})
+    item = {"step": 1, "role": "outcome", "label": "Redirect to the test host"}
+    without_excerpt = _p([item])
+    assert pres.check(history, steps, "confirmed", {1}, without_excerpt)[1] is None
+    shown = pres.report_steps(ctx, history, steps, without_excerpt)[0][2]["response_excerpt"]
+    assert "Location: " + location in shown
+    assert pres.check(history, steps, "confirmed", {1}, _p([item], [
+        {"step": 1, "part": "response", "text": location, "label": "Recorded destination"}]))[1] is None
+    quoted = _p([{**item, "excerpt": "Location: " + location}],
+                [{"step": 1, "part": "response", "text": location, "label": "Recorded destination"}])
+    assert pres.check(history, steps, "confirmed", {1}, quoted)[1] is None
+    quoted["steps"][0]["excerpt"] = location
+    assert "not a verbatim part" in pres.check(history, steps, "confirmed", {1}, quoted)[1]
+    quoted["steps"][0]["excerpt"] = "Location: https://invented.invalid/"
+    assert "not a verbatim part" in pres.check(history, steps, "confirmed", {1}, quoted)[1]
+
+
+def test_presentation_repairs_receive_exact_redacted_records_but_no_withheld_answer(tmp_path):
+    ctx, history, steps = _recorded(tmp_path, (200, "<p>fixture-sensitive-value</p>", "text/html"),
+                                  (200, "withheld-answer", "text/plain"))
+    ctx.sessions.remember_secret("fixture-sensitive-value")
+    steps[1]["entries"][0]["response"]["content"]["_omitted"] = "body not kept"
+    steps[1]["entries"][0]["response"]["headers"].append({"name": "Location", "value": "withheld-header-value"})
+    result = SimpleNamespace(verdict="confirmed", proof={"checked": True, "steps": [1, 2]})
+    feedback = pres.repair_context(ctx, history, steps, result, [1, 2])
+    assert feedback["required_steps"] == [1, 2]
+    assert feedback["recorded_evidence"][0]["body_excerpt"] == "<p>[redacted]</p>"
+    assert feedback["recorded_evidence"][1]["response_withheld"] is True
+    assert "fixture-sensitive-value" not in json.dumps(feedback)
+    assert "withheld-answer" not in json.dumps(feedback)
+    assert "withheld-header-value" not in json.dumps(feedback)
+    item = {"step": 2, "role": "control", "label": "Withheld comparison"}
+    for text in ("withheld-header-value", "body not kept"):
+        presentation = _p([item], [{"step": 2, "part": "response", "text": text, "label": "No invented evidence"}])
+        assert "not in the excerpt" in pres.check(history, steps, "confirmed", {2}, presentation)[1]
+
+
+def test_repair_excerpt_focuses_on_the_checked_text_after_redaction(tmp_path):
+    observation = "Welcome fixture-sensitive-value to the protected resource"
+    body = "<nav>" + "navigation " * 200 + "</nav><p>" + observation + "</p>"
+    ctx, history, steps = _recorded(tmp_path, (200, body, "text/html"))
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89")
+    ctx.sessions.remember_secret("fixture-sensitive-value")
+    history.insert(0, {"tool": "plan_test", "args": {}, "result": {"accepted": True,
+                       "experiment": {"kind": "boolean", "text": observation}}})
+    steps[0]["step"] = 2
+    result = SimpleNamespace(verdict="confirmed", proof={"checked": True, "steps": [2]})
+    feedback = pres.repair_context(ctx, history, steps, result, [2])
+    assert "Welcome [redacted] to the protected resource" in feedback["recorded_evidence"][0]["body_excerpt"]
+    assert "fixture-sensitive-value" not in json.dumps(feedback)
+
+
+def test_presentation_feedback_supplies_evidence_without_logging_response_bodies(tmp_path):
+    records = []
+    browser = Browser()
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), browser=browser)
+    ctx.log = records.append
+    result, planner = _run(ctx, [_get("customer-a"), _get("customer-b"),
+                               _verdict(_good(summary="x" * 401)), _verdict(_good())])
+    assert result.verdict == "confirmed"
+    feedback = json.loads(planner.seen[-1])[-1]["result"]
+    assert feedback["required_steps"] == [2, 3] and feedback["recorded_evidence"]
+    logged = next(r["result"] for r in records if r.get("tool") == "presentation_feedback")
+    assert "recorded_evidence" not in logged
+    assert "bob@shop.test" not in json.dumps(logged)
+
+
 def test_a_cited_step_that_sent_nothing_need_not_and_cannot_be_listed(tmp_path):
     """A cited source read or plan has no request to show: only the cited requests must be listed."""
     ctx, history, steps = _three(tmp_path)

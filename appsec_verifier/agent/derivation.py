@@ -1,6 +1,8 @@
 """Evidence-backed request derivation inside a finding (VER-005, VER-008, VER-043, VER-056).
 
-Source declarations and recorded links/forms supply candidates, never authority. A
+Source declarations and recorded links/forms supply candidates, never authority. Literal browser requests in
+recorded JavaScript/TypeScript also supply declarations; relative URLs need a recorded document loading the
+script (client_routes). A
 source declaration is recognised by its form, not its framework: a route literal as
 the first argument of a call or annotation that names an HTTP method or a routing
 function, joined, where the model asks for it, to a route prefix declared above it
@@ -42,6 +44,8 @@ _ROUTE = re.compile(
     r"|^\s*path\(\s*['\"](?P<relative>[^'\"\s]{0,500})['\"]"
 )
 _IMPORT = re.compile(r"(?:from\s*|require\(\s*|import\s*)['\"](\.[^'\"\s]{1,200})['\"]")
+_INCLUDE = re.compile(r"(?m)^\s*(?:include|require)(?:_once)?\s*\(?\s*(?:(__DIR__)\s*\.\s*)?"
+                      r"['\"]([^'\"$\s]{1,200})['\"]\s*\)?\s*;")
 # A route declaration, whatever the framework: the route literal is the first argument of a call or annotation that
 # names an HTTP method or a routing function, e.g. router.get('/x', …), r.GET("/x", …), Route::get('/x', …),
 # get '/x' (Rails), @GetMapping("/x"), @RequestMapping(value = "/x", method = …), [HttpGet("x")],
@@ -598,12 +602,61 @@ def _page_roots(ctx, h, forms) -> tuple[list[dict], list[dict]]:
 
 
 def _source_candidates(ctx, history, h):
+    from .client_routes import candidates as client_candidates
+
     path = h.get("args", {}).get("path")
     registrations = [r for r in registration_routes(ctx, history) if r["source_file"] == path]
-    if path not in _source_roots(ctx, history) and not registrations:
+    if path not in _source_roots(ctx, history) and not registrations and not _included_pages(ctx, history, path):
         raise ValueError("the source is not the finding's evidence or a recorded local import from it")
     result = h.get("result", {})
-    return list(registrations) + _declared(history, path, result.get("text", ""), result.get("start_line", 1))
+    text, start = result.get("text", ""), result.get("start_line", 1)
+    clients = client_candidates(ctx, history, path, text, start, _WEB_ROOTS)
+    file, _, line = (ctx.plan.instance or "").rpartition(":")
+    enclosing = _enclosing(text, start, int(line)) if file == path and line.isdigit() else set()
+    for candidate in clients:
+        # Two requests in the function containing the evidenced sink belong to its workflow even when their
+        # URLs differ. No transitive expansion through other source functions or application links.
+        if enclosing & _enclosing(text, start, candidate["source_line"]):
+            candidate["workflow_source"] = True
+    return (list(registrations) + _declared(history, path, text, start) + clients
+            + _included_pages(ctx, history, path))
+
+
+def _included_pages(ctx, history, path):
+    """A recorded, served page literally including the evidence file can supply its entry point."""
+    root = (ctx.plan.instance or "").rsplit(":", 1)[0]
+    if path == root:
+        return []
+    reads = [h for h in history if h.get("tool") == "read_source" and h.get("args", {}).get("path") == path
+             and not h.get("result", {}).get("error")]
+    evidence = "\n".join(h.get("result", {}).get("text", "") for h in history
+                         if h.get("tool") == "read_source" and h.get("args", {}).get("path") == root)
+    if not evidence or not path.endswith(_PAGE_SUFFIXES):
+        return []
+    for read in reads:
+        result = read.get("result", {})
+        text = result.get("text", "")[:64000]
+        for match in list(_INCLUDE.finditer(text))[:12]:
+            name = match[2].lstrip("/") if match[1] else match[2]
+            target = posixpath.normpath(str(PurePosixPath(path).parent / name))
+            if target != root or target.startswith(("../", "/")):
+                continue
+            pages = page_candidates(path + ":1")
+            if not pages:
+                continue
+            url = resolve(ctx, pages[0])
+            for n, step in enumerate(history, 1):
+                if (step.get("tool") == "http_request" and resolve(ctx, step.get("args", {}).get("path", "")) == url
+                        and 200 <= (step.get("result", {}).get("status") or 0) < 300
+                        and getattr(ctx, "responses", {}).get(n, {}).get("complete")):
+                    parser = _Forms(url)
+                    parser.feed(ctx.responses[n].get("body", "")[:64000])
+                    names = set(_LITERAL.findall(evidence))
+                    candidates = [r for r in parser.routes if r["path"] == url
+                                  and any(i["name"] in names for i in r["inputs"])]
+                    return [{**r, "source_file": path, "source_line": result.get("start_line", 1)
+                             + text[:match.start()].count("\n"), "workflow_source": True} for r in candidates]
+    return []
 
 
 def derive(ctx, *, evidence_step, method, path, inputs, reason):
@@ -656,10 +709,13 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         # Or, for a page script, a recorded answer of a page its file path gives (VER-056).
         roots, extra = _page_roots(ctx, h, candidates)
         candidates = [*candidates, *extra]
+    workflow = [r for r in candidates if r.get("workflow_source")]
+    # The relationship is the recorded source function/include, not an expanding URL prefix.
     matching = [r for r in candidates if r["method"] in (method, "ALL")
                 and planned_route(resolve(ctx, r["path"]), url)
                 and all(_offers(r, i) for i in inputs)]
-    if not matching or not any(related(resolve(ctx, r["path"]), url) for r in roots):
+    if not matching or not (any(related(resolve(ctx, r["path"]), url) for r in roots)
+                            or any(r in workflow for r in matching)):
         raise ValueError(_hinted("request or inputs lack recorded evidence for the finding's original resource", ctx,
                                  history))
     if source:

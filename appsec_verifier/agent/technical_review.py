@@ -5,9 +5,8 @@ responses or return questions to the original loop. Three judgments, two evidenc
 selections and two correction rounds are shared by all variants of a finding.
 Neither QA nor its feedback changes authorization, proof checks or run limits.
 An access-control confirmation whose proof check passed is judged only for
-whether the access is intended (`intent=True`); its one follow-up, once per finding,
-is an objection that the tested resource is meant to be public while the finding
-names a protected one (`public-resource`).
+whether the access violates the independently established restriction (`intent=True`).
+Unresolved objections prevent confirmation at the final gate.
 """
 
 from __future__ import annotations
@@ -61,15 +60,13 @@ and screenshots are reviewed separately; you have not seen image pixels. Do not 
 to improve presentation. Follow-ups retain all history, repetition limits and budgets; at most two rounds
 are shared by all variants. Your feedback never grants permission and never confirms a finding.
 """
-QA_INTENT = """This access-control finding's code-checked proof passed: an identity received what the proof
-requires. Judge only whether that observed access contradicts the application's intended authorization, from
-the finding, source excerpts and recorded responses; for example, a resource or function the application
-deliberately shares with these identities does not. An objection and its question are shown to the operator
-beside the verdict, which stays unchanged. One objection alone may reach the test agent, once per finding and
-only while public_resource_follow_up is true: code public-resource, when the tested resource is meant to be
-public (such as a public key or a public page) while the finding names a protected one; its question names the
-protected resource to test instead. No other question reaches the test agent. Return clear when nothing
-recorded indicates that the access is intended.
+QA_INTENT = """The recorded comparison and an operator-established restriction support this proposed
+access-control confirmation. Check whether the observed access actually violates the application's
+intended authorization. A public
+resource, different identity, configuration or resource context can contradict the interpretation. Unresolved
+technical objections leave the result inconclusive; they never remain beside a confirmed verdict. You cannot
+supply a missing restriction yourself. Return clear only when no concrete objection remains. A supported
+follow-up question can use the existing tools and budgets, never widen authorization.
 """
 
 
@@ -79,23 +76,34 @@ def proof_contract(ctx, controller) -> dict:
     outside it cost test steps without changing the result."""
     from .controller import _route_list
     from .experiments import access_methods, confirming_form
+    from .prompts import _tool_defs
+    from .steps import offered
 
     plan = ctx.plan
     cls, cwe = getattr(plan, "cls", None), getattr(plan, "cwe", None)
     contract = {
         "routes": _route_list(controller._routes()),
-        "citations": "a confirmation cites the steps of one experiment, sent after its plan; an injection's "
-                     "negative verdict cites boolean experiments on one input in at least two declared contexts; "
-                     "a later plan does not void an earlier experiment",
-        "identities": "no proof needs an account's user id or record id beforehand; a read that only looks one "
-                      "up is not part of the finding",
+        "citations": "cite recorded observations of this finding, not source reads or plan declarations",
+        "actions": [t["name"] for t in _tool_defs() if offered(ctx, t["name"])],
+        "target_origin": ctx.target_base,
+        "destination_rule": "all requests, including browser subresources, must pass the run's scope; "
+                            "an application CSP allow-list does not authorise another destination",
+        "prerequisites": "check whether the running configuration activates the evidenced code path; "
+                         "source alone does not establish runtime reachability. Report an unmet prerequisite "
+                         "instead of asking for a proof that the available actions cannot produce",
     }
     if cls == "access-control":
+        contract["identities"] = ("these access proofs need no account user id or record id beforehand; "
+                                  "the operator-declared resource or the created test record supplies it")
+        contract["citations"] = "a confirmation cites the steps of one experiment, sent after its plan"
         writes = not (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True))
         contract["access_proofs"] = access_methods(getattr(plan, "id", None), cwe, getattr(ctx, "scope", None),
                                                    getattr(ctx, "identities", None), writes=writes) or [
             "none: a configured test_resource or two normal accounts with --allow-intrusive is missing"]
     elif cls == "injection":
+        contract["citations"] = ("a confirmation cites the steps of one experiment, sent after its plan; "
+                                 "a negative verdict cites boolean experiments on one input in at least two "
+                                 "declared contexts; a later plan does not void an earlier experiment")
         contract["confirming_inputs"] = {location: confirming_form(cwe, location) or "negative verdict only"
                                          for location in ("params", "json", "path")}
         contract["observation_correction"] = (
@@ -103,6 +111,13 @@ def proof_contract(ctx, controller) -> dict:
             "control set without requests. Use it to fix a JSON/HTML mismatch or the selected field/text, "
             "not plan_test, which declares new controls and sends a read experiment again. Missing or incomplete "
             "evidence still needs new tests. Other proof rules and the original request plan remain binding.")
+    elif cls == "xss":
+        contract["confirmation"] = ("browser_check must observe execution of the finding's generated marker "
+                                    "on its evidenced route; reflected HTML, a loaded library or a source read "
+                                    "alone cannot confirm. No plan_test is required or available for XSS")
+    elif cls == "open-redirect":
+        contract["confirmation"] = ("a recorded 3xx response must point to this finding's marker.invalid host "
+                                    "in Location; no plan_test or external navigation is needed")
     return contract
 
 
@@ -127,15 +142,10 @@ class TechnicalReview:
         self.state = {"status": "not-reviewed", "rounds": 0, "reviews": 0, "inspected_steps": [],
                       "reason": "No proposed conclusion was reviewed.", "issues": []}
 
-    def _public_follow_up_open(self, remaining) -> bool:
-        """Whether the one public-resource follow-up of a checked access-control confirmation is still available:
-        once per finding, within the shared correction rounds and the test steps left (VER-046)."""
-        return not self.shared.get("public_resource") and self.shared.get("rounds", 0) < 2 and remaining > 0
-
     def consider(self, history, result, tools, controller, remaining, *, intent=False):
         """Return questions for the existing loop, or None; never return a verdict. With `intent`, QA judges
-        whether a checked access-control confirmation shows intended access; it returns a question only for a
-        public-resource objection, once per finding, within the shared correction rounds (VER-046)."""
+        whether a checked access-control comparison violates its established restriction, within the shared
+        correction rounds (VER-046)."""
         ctx = self.ctx
         try:
             if not callable(getattr(self.original, "structured", None)):
@@ -163,8 +173,7 @@ class TechnicalReview:
                 "capabilities": {"source": ctx.source is not None, "browser": ctx.browser is not None,
                                  "callback": ctx.listener is not None},
                 "remaining_test_steps": remaining,
-                "remaining_correction_rounds": 0 if intent else 2 - self.shared.get("rounds", 0),
-                **({"public_resource_follow_up": self._public_follow_up_open(remaining)} if intent else {}),
+                "remaining_correction_rounds": min(max(remaining, 0), 2 - self.shared.get("rounds", 0)),
                 "proposed": {"verdict": result.verdict, "rationale": result.rationale, "proof": result.proof},
                 "steps": [{"step": n, "tool": h.get("tool"), "args": bounded(clean(ctx, h.get("args"))),
                            "result": bounded(clean(ctx, h.get("result")))} for n, h in enumerate(history, 1)][-64:],
@@ -209,13 +218,6 @@ class TechnicalReview:
                     self.state["reason"] = "No unresolved technical objections in the reviewed attempts."
                     return None
                 issues = reply["issues"]
-                if intent:
-                    issues = [i for i in issues if i["code"] == "public-resource"]
-                    if not issues or not self._public_follow_up_open(remaining):
-                        self.state["reason"] = ("The objections stand beside the code-checked access-control "
-                                                "verdict; this review starts no further tests.")
-                        return None
-                    self.shared["public_resource"] = 1
                 if self.shared.get("rounds", 0) >= 2 or remaining <= 0:
                     self.state["reason"] = "Technical objections remain; correction rounds or test steps are exhausted."
                     return None

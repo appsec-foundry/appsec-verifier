@@ -36,7 +36,7 @@ The agent takes request details the assessment leaves open from the source code 
 | Weakness | Confirmed when |
 | --- | --- |
 | Cross-site scripting | a marker script runs in the proof browser; reflected text does not count |
-| Access control: IDOR, missing authorisation or authentication, exposed information and files | an account gets a resource it must not get, or a request without login gets exactly the answer a logged-in account gets |
+| Access control: IDOR, missing authorisation or authentication, exposed information and files | a checked access comparison violates an independently declared restriction; matching responses alone do not suffice |
 | SQL, NoSQL and LDAP injection | the response follows true and false conditions the Verifier generates (a field, a page text or a login), an injected marker comes back (SQL), or a malformed input provokes a database error (SQL, NoSQL); a delay alone never counts |
 | Command, code, template and XPath injection | the target returns the result of arithmetic the Verifier generates, a malformed input provokes an engine error (not for commands), or, for code and template injection, the payload makes the target call a callback listener |
 | Path traversal | the target returns the scope's marker file, or a file from an uploaded ZIP can be read outside the directory it is unpacked to |
@@ -44,13 +44,13 @@ The agent takes request details the assessment leaves open from the source code 
 | SSRF | the target calls a callback listener |
 | Session cookie without Secure, HttpOnly or SameSite | the session cookie repeatedly lacks the attribute (SameSite: Lax or Strict) |
 
-Some classes need preparation: XSS the proof browser, access control test accounts or a test resource in the scope, SSRF and blind injection a listener the target can reach (started automatically for a `localhost` target), path traversal a marker file, session cookies the cookie's name in the scope. The guided run and `preflight` say what a finding still needs. The exact rules are in [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs of each class in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
+Some classes need preparation: XSS the proof browser, access control test accounts and an established access restriction in the scope, SSRF and blind injection a listener the target can reach (started automatically for a `localhost` target), path traversal a marker file, session cookies the cookie's name in the scope. The guided run and `preflight` say what a finding still needs. The exact rules are in [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs of each class in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
 
-The report shows the requests each verdict rests on. The evidence image of the NoSQL injection above:
+The agent can resolve missing requests from recorded source and application evidence, including browser request workflows and literal page includes ([request derivation](docs/cli.md#continuous-control-ver-036)); the report shows the requests each verdict rests on. The evidence image of the NoSQL injection above:
 
 ![Evidence image of the NoSQL injection finding: the false condition returns 0 review entries, the true condition 2](examples/juice-shop/result/evidence/T-033-c23d5ea977c2e5ab-nosql-injection-in-product-reviews-where-http-1.png)
 
-Each finding ends with one of these verdicts. A negative verdict covers only the request and variant that were tested.
+Each finding ends with one of these verdicts. A negative verdict covers only the request and variant that were tested; different variants continue after a confirmation.
 
 | Verdict | Meaning |
 | --- | --- |

@@ -23,6 +23,7 @@ mode; each answer is kept on its result (VER-052).
 from __future__ import annotations
 
 import hashlib
+import json
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -230,19 +231,24 @@ def run_verification(
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
     def _variant_signature(plan):
-        """The request a plan tests (method, path, sorted inputs). Variants of one finding that share it are
-        verified once (VER-039)."""
+        """Only fully described equivalent variants share a result (VER-039).
+
+        Missing hypothesis/identity/proof context is not evidence of equivalence.
+        Keep all variant fields except its label; unknown future fields narrow reuse.
+        """
         variants = getattr(plan, "verification_context", {}).get("variants", [])
-        req = (variants[0].get("request") if variants else None) or (
-            {"method": plan.endpoints[0].method, "path": plan.endpoints[0].path}
-            if getattr(plan, "endpoints", ()) else {})
-        inputs = tuple(sorted((i.get("location"), i.get("name")) for i in (req.get("inputs") or [])))
-        return (req.get("method", "GET"), req.get("path", ""), inputs)
+        if len(variants) != 1:
+            return None
+        variant = {k: v for k, v in variants[0].items() if k != "id"}
+        required = ("request", "hypothesis", "prerequisites", "expected_observations", "negative_controls")
+        if not all(variant.get(k) for k in required):
+            return None
+        return json.dumps(variant, sort_keys=True, separators=(",", ":"))
 
     results = []
     groups = {}
     last_variant = {p.id: i for i, p in enumerate(plans, start=1)}
-    confirmed_ids: set[str] = set()  # VER-039: one confirmed variant retires the finding's other variants
+    confirmed_ids: set[str] = set()  # Findings eligible for evidence review.
     tested_signatures: dict[str, set] = {}  # VER-039: a request already tested is not tested again
     stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
@@ -250,17 +256,10 @@ def run_verification(
         started = _iso(datetime.now(timezone.utc))
         if evidence_id(plan) in skipped:
             res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[evidence_id(plan)]}")
-        elif shown and plan.id in confirmed_ids:
-            res = ProbeResult(
-                verdict="not-attempted",
-                rationale="not tested: another variant of this finding already confirmed it",
-            )
-            if progress is not None:
-                progress.finding(plan, agent=False)
         elif shown and _variant_signature(plan) in tested_signatures.get(plan.id, set()):
             res = ProbeResult(
                 verdict="not-attempted",
-                rationale="not tested: another variant of this finding already tested the same request",
+                rationale="not tested: another variant of this finding already completed an equivalent test",
             )
             if progress is not None:
                 progress.finding(plan, agent=False)
@@ -277,8 +276,6 @@ def run_verification(
         else:
             if shown and progress is not None:
                 progress.finding(plan)
-            if shown:
-                tested_signatures.setdefault(plan.id, set()).add(_variant_signature(plan))
             budget.begin_finding()  # VER-051: this finding's per-finding spend cap starts here
             try:
                 res = _verify_one(plan, registry, ctx_factory, log)
@@ -295,6 +292,9 @@ def run_verification(
                 stopped = res.limits_hit
             if res.verdict == "confirmed":
                 confirmed_ids.add(plan.id)
+            signature = _variant_signature(plan)
+            if shown and signature is not None and (res.proof or {}).get("checked") is True:
+                tested_signatures.setdefault(plan.id, set()).add(signature)
         results.append(_result_entry(i, plan, res))
         if ask_writes is not None and evidence_id(plan) in ask_writes.records:   # each answer, for its finding
             results[-1]["write_permission"] = dict(ask_writes.records[evidence_id(plan)])
