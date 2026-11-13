@@ -411,6 +411,47 @@ def test_a_routeless_page_script_reaches_its_request_through_a_read_and_a_deriva
         ("GET", "/vulnerabilities/sqli/", None), ("GET", "/vulnerabilities/sqli/", {"id": "1"})]
 
 
+def test_a_refusal_names_the_unread_pages_and_then_the_missing_request(tmp_path):
+    """VER-056, VER-008: for a page script without a request, a refusal names the candidate pages no answered request
+    read yet; once all are read without one, it says to report the missing request; without a source checkout at
+    once. The requests stay refused."""
+    ctx = page_script(tmp_path)
+    response(ctx, "<p>error</p>", path="/vulnerabilities/sqli/source/low.php")
+    ctx.agent_history[0]["result"] = {"status": 500}
+    unread = "not read yet, /vulnerabilities/sqli/source/, /vulnerabilities/sqli/, with http_request prerequisite"
+    with pytest.raises(ToolError, match=unread):
+        derive(ctx, "/vulnerabilities/sqli/source/low.php", inputs=[{"location": "query", "name": "id"}])
+    with pytest.raises(ToolError, match=unread):
+        Controller(ctx).before("http_request", {"path": "/elsewhere"})
+    for page in ("/vulnerabilities/sqli/source/", "/vulnerabilities/sqli/"):
+        ctx.agent_history.append({"tool": "http_request", "args": {"path": page, "prerequisite": True},
+                                  "result": {"status": 404}})
+    with pytest.raises(ToolError, match="supply no request of this finding; report the missing request"):
+        Controller(ctx).before("http_request", {"path": "/elsewhere"})
+    ctx.source = None
+    with pytest.raises(ToolError, match="without a source checkout none can be derived"):
+        Controller(ctx).before("http_request", {"path": "/elsewhere"})
+    named = page_script(tmp_path)
+    named.plan = replace(named.plan, endpoints=(Endpoint("GET", "/vulnerabilities/sqli/", None),))
+    with pytest.raises(ToolError) as refused:
+        Controller(named).before("http_request", {"path": "/elsewhere"})
+    assert "report the missing request" not in str(refused.value) and "not read yet" not in str(refused.value)
+
+
+@pytest.mark.parametrize(("safe", "asking", "reason"), [
+    (True, False, "no operator can allow it in this run"),
+    (True, True, "no matching route"),
+    (False, False, "no matching route"),
+])
+def test_a_write_the_run_cannot_send_is_refused_for_that_reason(tmp_path, safe, asking, reason):
+    """VER-030, VER-052: where no operator can allow a write, that is the refusal's reason, ahead of its route; with
+    an operator to ask, or in intrusive mode, the route check speaks as before. Refused in every case."""
+    ctx = context(tmp_path, safe=safe)
+    ctx.ask_writes = (lambda *a, **k: False) if asking else None
+    with pytest.raises(ToolError, match=reason):
+        Controller(ctx).before("http_request", {"method": "POST", "path": "/elsewhere", "json": {"a": "b"}})
+
+
 def test_the_agent_and_the_test_plan_learn_the_candidate_pages(tmp_path):
     from appsec_verifier import cli
     from appsec_verifier.agent.prompts import _seed

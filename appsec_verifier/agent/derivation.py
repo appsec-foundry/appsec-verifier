@@ -505,6 +505,33 @@ def page_source(ctx) -> str | None:
     return text
 
 
+def request_hint(ctx, history) -> str | None:
+    """For a refusal of a finding that names no request (VER-008, VER-056), the next step it names: a page its file
+    path gives that no answered request of this finding read yet, or, once none is left or no source checkout can
+    supply a request, that the missing request is reported as a prerequisite. None while the source may supply one,
+    or once the finding has a request."""
+    if original_routes(ctx) or getattr(ctx, "derived_requests", None):
+        return None
+    if page_source(ctx) is not None:
+        read = {urlsplit(resolve(ctx, (h.get("args") or {}).get("path") or "/")).path for h in history
+                if h.get("tool") == "http_request" and isinstance((h.get("result") or {}).get("status"), int)}
+        left = [p for p in page_candidates(ctx.plan.instance) if urlsplit(resolve(ctx, p)).path not in read]
+        if left:
+            return ("read a page its file path names that this finding has not read yet, " + ", ".join(left)
+                    + ", with http_request prerequisite=true as an identity, then derive_request citing that step")
+        return ("the pages its file path names supply no request of this finding; report the missing request as a "
+                "prerequisite instead of trying other routes")
+    if getattr(ctx, "source", None) is None:
+        return ("this finding names no request, and without a source checkout none can be derived; report the "
+                "missing request as a prerequisite")
+    return None
+
+
+def _hinted(message: str, ctx, history) -> str:
+    hint = request_hint(ctx, history)
+    return f"{message}; {hint}" if hint else message
+
+
 def _page_roots(ctx, h, forms) -> tuple[list[dict], list[dict]]:
     """VER-056: (roots, extra candidates) a recorded GET of one of the finding's page candidates supplies: the
     evidence file itself, with the names it contains as its inputs; or the forms and links of a page above it that
@@ -563,7 +590,7 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
     elif h.get("tool") == "http_request":
         response = ctx.responses.get(evidence_step, {})
         if not response.get("complete") or not 200 <= h.get("result", {}).get("status", 0) < 300:
-            raise ValueError("request derivation needs a complete successful recorded response")
+            raise ValueError(_hinted("request derivation needs a complete successful recorded response", ctx, history))
         parser = _Forms(resolve(ctx, h["args"].get("path", "/")))
         parser.feed(response.get("body", ""))
         candidates = parser.routes
@@ -589,7 +616,8 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
                 and planned_route(resolve(ctx, r["path"]), url)
                 and all(_offers(r, i) for i in inputs)]
     if not matching or not any(related(resolve(ctx, r["path"]), url) for r in roots):
-        raise ValueError("request or inputs lack recorded evidence for the finding's original resource")
+        raise ValueError(_hinted("request or inputs lack recorded evidence for the finding's original resource", ctx,
+                                 history))
     if source:
         # Source paths are relative to the operator's base URL; browser links are already absolute.
         origin = {k: v for k, v in matching[0].items() if k.startswith("source_")}
