@@ -115,11 +115,14 @@ def system_prompt(ctx) -> str:
 
 
 def prompt(ctx, history: list[dict]) -> str:
+    """The finding's seed, its steps so far, then what changes with every call: the controller budget. A step's
+    entry never changes once recorded, so each prompt begins with the whole previous one up to its last step, and a
+    host can read that part from its prompt cache instead of paying for it again."""
     steps = [{"step": n, "action": h.get("tool"), "args": h.get("args"),
               "result": bounded(h.get("result"))} for n, h in enumerate(history, 1)]
-    return (_seed(ctx) + "\nController budget (including this decision): "
-            + json.dumps(getattr(ctx, "controller_state", {}))
-            + "\n\nSteps so far (JSON):\n" + json.dumps(steps) + "\n\nReply with the next step.")
+    return (_seed(ctx) + "\nSteps so far (JSON):\n" + json.dumps(steps)
+            + "\n\nController budget (including this decision): "
+            + json.dumps(getattr(ctx, "controller_state", {})) + "\n\nReply with the next step.")
 
 
 def inconclusive(reason: str) -> dict:

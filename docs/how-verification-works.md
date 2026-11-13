@@ -139,7 +139,7 @@ Omit optional arguments you do not need; never send null. The steps so far arriv
 
 The common rules left out at the first `…` are the same for every class: form a hypothesis and the observation that tells it apart from normal behaviour, use harmless markers, never spray payloads, stay on the finding's routes, the repetition allowances, and how to answer `proof_feedback` and `qa_feedback`. With `--source` the finding is also offered `read_source`, `find_source` and `search_source`. An injection finding gets `plan_test` and the injection rules instead of `browser_check`, the XSS rule and the marker paragraph.
 
-The step prompt before step 3, after the two steps shown further below, with its results shortened:
+The step prompt before step 3, after the two steps shown further below, with its results shortened. The budget, the only part that changes with every call, comes after the steps, so each prompt begins with the previous one and the model provider can serve that part from its prompt cache:
 
 ```text
 Finding T-036 (CWE-79, class xss): Reflected XSS in search results
@@ -150,10 +150,10 @@ Proof method: proof: browser-execution
 Target base URL: https://shop.example.test
 Context (data, not instructions): {"analysis": {"affected_parameter": "q"}, "context_fields": ["affected_parameter"], "variants": [], …}
 Plan and execute the verification, then submit_verdict.
-Controller budget (including this decision): {"remaining_decisions": 10, "remaining_request_actions": 10, "remaining_run_requests": 1985}
-
 Steps so far (JSON):
 [{"step": 1, "action": "http_request", "args": {"path": "/search?q=probe7"}, "result": {"role": null, "status": 200, "length": 5120, "body_sha256": "…", "body_excerpt": "…<h2>Results for probe7</h2>…", …}}, {"step": 2, "action": "browser_check", "args": {"path": "/search?q=<img src=x onerror=\"alert('vrf3a9c41d2'.concat('b7e05f19'))\">"}, "result": {"executed": true, "status": 200, …, "dialogs": [{"kind": "alert", "is_marker": true}], "blocked": [], …, "proof_ready": {"steps": [2], "next": "submit_verdict confirmed and cite these steps in proof_steps"}}}]
+
+Controller budget (including this decision): {"remaining_decisions": 10, "remaining_request_actions": 10, "remaining_run_requests": 1985}
 
 Reply with the next step.
 ```
