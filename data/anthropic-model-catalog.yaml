@@ -3,9 +3,9 @@
 # refused, because its cost could not be counted.
 #
 # Standard first-party Claude API rates in USD per million tokens, from
-# https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-07).
-# Cache writes are charged at the 1-hour rate, the higher of the two; the
-# profile sets no cache_control, so they are normally zero. The profile sets no
+# https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-11-13).
+# Cache writes use their reported lifetime; missing lifetime details use the
+# higher 1-hour rate. The system prompt requests a 5-minute cache. The profile sets no
 # inference_geo, so the 1.1x data-residency multiplier does not apply.
 # Separate from model-catalog.yaml, which lists only OpenAI models and is kept
 # in step with AppSec Analyzer.
@@ -15,31 +15,36 @@
 # cache reads and cache writes included, and each request is priced on its own.
 
 schema_version: 1
-price_revision: anthropic-standard-2026-11-07
+price_revision: anthropic-standard-2026-11-13
 models:
   claude-opus-5-5:
     input_usd_per_million: 4.0
     output_usd_per_million: 20.0
     cache_write_usd_per_million: 8.0
+    cache_write_5m_usd_per_million: 5.0
     cache_read_usd_per_million: 0.20
   claude-sonnet-5-5:
     input_usd_per_million: 2.0
     output_usd_per_million: 10.0
     cache_write_usd_per_million: 4.0
+    cache_write_5m_usd_per_million: 2.5
     cache_read_usd_per_million: 0.10
   claude-fable-5-1:
     input_usd_per_million: 10.0
     output_usd_per_million: 50.0
     cache_write_usd_per_million: 20.0
+    cache_write_5m_usd_per_million: 12.5
     cache_read_usd_per_million: 0.25
   claude-haiku-5-5:
     input_usd_per_million: 0.10
     output_usd_per_million: 0.50
     cache_write_usd_per_million: 0.20
+    cache_write_5m_usd_per_million: 0.125
     cache_read_usd_per_million: 0.01
     long_prompt:
       threshold_tokens: 100000
       input_usd_per_million: 0.50
       output_usd_per_million: 2.50
       cache_write_usd_per_million: 1.00
+      cache_write_5m_usd_per_million: 0.625
       cache_read_usd_per_million: 0.05

@@ -25,7 +25,8 @@ from appsec_verifier.tools import GuardedHttpClient
 from appsec_verifier.verify.probes import ProbeContext
 
 PRICES = {"input_usd_per_million": 4.0, "output_usd_per_million": 20.0,
-          "cache_write_usd_per_million": 8.0, "cache_read_usd_per_million": 0.2}
+          "cache_write_usd_per_million": 8.0, "cache_write_5m_usd_per_million": 5.0,
+          "cache_read_usd_per_million": 0.2}
 
 
 def _wire(action, **args):
@@ -113,7 +114,8 @@ def test_request_is_tool_less_structured_bounded_and_priced():
     sent = client.calls[0]
     assert "tools" not in sent and "tool_choice" not in sent
     assert sent["output_config"] == {"format": {"type": "json_schema", "schema": STEP_SCHEMA}}
-    assert sent["model"] == "claude-opus-5-5" and sent["system"] == "system"
+    assert sent["model"] == "claude-opus-5-5" and sent["system"] == [
+        {"type": "text", "text": "system", "cache_control": {"type": "ephemeral", "ttl": "5m"}}]
     assert sent["messages"] == [{"role": "user", "content": "prompt"}]
     assert client.options == [{"timeout": 42.0, "max_retries": 0}]     # bounded, never retried past the bound
 
@@ -190,6 +192,7 @@ def test_every_catalog_model_has_complete_prices():
     from appsec_verifier.version_info import resource_root
 
     keys = {"input_usd_per_million", "output_usd_per_million", "cache_write_usd_per_million",
+            "cache_write_5m_usd_per_million",
             "cache_read_usd_per_million"}
     models = yaml.safe_load((resource_root() / "data" / "anthropic-model-catalog.yaml").read_text())["models"]
     assert {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"} <= set(models)
@@ -360,6 +363,56 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path, issues):
     assert ctx.budget.calls == 5 and ctx.budget.cost == pytest.approx(5 * 0.008)
     assert res.technical_review["status"] == ("needs-attention" if issues else "clear")
     assert res.technical_review["issues"] == issues and res.technical_review["rounds"] == 0
-    assert res.proof["checked"] and "intended authorization" in client.calls[4]["system"]
+    assert res.proof["checked"] and "intended authorization" in client.calls[4]["system"][0]["text"]
     assert json.loads(client.calls[4]["messages"][0]["content"])["remaining_correction_rounds"] == 0
     assert '"status": 200' in client.calls[2]["messages"][0]["content"]  # results reach the model as data
+
+
+def test_cache_write_then_read_preserves_the_prompt_and_prices_each_call():
+    first = _msg(_wire("http_request", path="/x"), usage=(100, 200, 2000, 0))
+    first.usage.cache_creation = SimpleNamespace(ephemeral_5m_input_tokens=2000, ephemeral_1h_input_tokens=0)
+    second = _msg(_wire("http_request", path="/y"), usage=(300, 200, 0, 2000))
+    host, client = _host([first, second])
+    a = host.call("stable instructions", "first evidence", 10, _ctx().budget)
+    b = host.call("stable instructions", "changed evidence", 10, _ctx().budget)
+    assert client.calls[0]["system"] == client.calls[1]["system"]
+    assert client.calls[1]["messages"] == [{"role": "user", "content": "changed evidence"}]
+    assert a.usd == pytest.approx((100 * 4 + 200 * 20 + 2000 * 5) / 1e6)
+    assert b.usd == pytest.approx((300 * 4 + 200 * 20 + 2000 * .2) / 1e6)
+    assert b.usage["cache_read_input_tokens"] == 2000
+
+
+@pytest.mark.parametrize("short,long", [(True, 0), (-1, 101), (100.0, 0), (99, 0), (None, 100)])
+def test_invalid_cache_lifetimes_refuse_the_answer(short, long):
+    response = _msg(_wire("http_request", path="/x"), usage=(100, 200, 100, 0))
+    response.usage.cache_creation = SimpleNamespace(ephemeral_5m_input_tokens=short, ephemeral_1h_input_tokens=long)
+    host, _ = _host([response])
+    reply = host.call("system", "prompt", 10, _ctx().budget)
+    assert reply.error == "invalid_response" and reply.step is None
+
+
+def test_cache_charges_exhaust_the_budget_before_another_model_call():
+    response = _msg(_wire("http_request", path="/x"), usage=(0, 0, 2000, 0))
+    response.usage.cache_creation = SimpleNamespace(ephemeral_5m_input_tokens=2000, ephemeral_1h_input_tokens=0)
+    host, client = _host([response])
+    ctx = _ctx(Limits(cost_limit_usd=.005))
+    planner = HostPlanner(host)
+    with pytest.raises(LimitExceeded):
+        planner.next_step(ctx, [])
+    with pytest.raises(LimitExceeded):
+        planner.next_step(ctx, [])
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize("prompt_tokens", [100000, 100001])
+def test_anthropic_mixed_write_lifetimes_use_the_prompt_length_rate(prompt_tokens):
+    from appsec_verifier.agent.host_anthropic import catalog_prices
+
+    response = _msg(_wire("http_request", path="/x"), usage=(prompt_tokens - 3000, 200, 2000, 1000))
+    response.usage.cache_creation = SimpleNamespace(ephemeral_5m_input_tokens=1500, ephemeral_1h_input_tokens=500)
+    host = AnthropicHost(model="claude-haiku-5-5", prices=catalog_prices("claude-haiku-5-5"),
+                         client=FakeClient([response]))
+    reply = host.call("system", "prompt", 10, _ctx().budget)
+    factor = 1 if prompt_tokens == 100000 else 5
+    assert reply.usd == pytest.approx(
+        ((prompt_tokens - 3000) * .1 + 200 * .5 + 1500 * .125 + 500 * .2 + 1000 * .01) * factor / 1e6)

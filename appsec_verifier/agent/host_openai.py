@@ -1,5 +1,5 @@
 """`codex` profile: the OpenAI Responses API with OPENAI_API_KEY, tool-less, as
-AppSec Analyzer's codex profile (VER-023).
+AppSec Analyzer's codex profile (VER-023, VER-060).
 
 Each step is one POST to the fixed Responses endpoint with no tools, strict
 structured output for the step schema, and `store: false`. Redirects are not
@@ -89,6 +89,41 @@ class OpenAIHost:
 
     supports_images = True   # PNG screenshots of an evidence review (VER-042)
 
+    def _cost(self, usage: dict) -> tuple[float, dict]:
+        """Normalize non-overlapping input counts; unknown write lifetimes use the higher rate."""
+        tokens_in, tokens_out = usage["input_tokens"], usage["output_tokens"]
+        if not all(type(n) is int and n >= 0 for n in (tokens_in, tokens_out)):
+            raise ValueError("invalid usage")
+        details = usage.get("input_tokens_details", {})
+        read, written = details.get("cached_tokens", 0), details.get("cache_write_tokens", 0)
+        if not all(type(n) is int and n >= 0 for n in (read, written)) or read + written > tokens_in:
+            raise ValueError("invalid cache usage")
+        short, long = 0, written
+        lifetimes = details.get("cache_write_tokens_details")
+        if lifetimes is not None:
+            short, long = lifetimes["ttl_30m_tokens"], lifetimes["ttl_12h_tokens"]
+            if not all(type(n) is int and n >= 0 for n in (short, long)) or short + long != written:
+                raise ValueError("invalid cache usage")
+        ordinary = tokens_in - read - written
+        prices = self.prices.get("cache_pricing")
+        if prices is not None and "input_tokens_details" in usage:
+            input_cost = (ordinary * prices["input_usd_per_million"]
+                          + read * prices["cache_read_usd_per_million"]
+                          + short * prices["cache_write_30m_usd_per_million"]
+                          + long * prices["cache_write_12h_usd_per_million"])
+        elif read or written:
+            raise ValueError("missing cache prices")
+        else:
+            input_cost = tokens_in * self.prices["input_usd_per_million"]
+        output_cost = tokens_out * self.prices["output_usd_per_million"]
+        if prices is not None and tokens_in > prices["long_prompt_threshold_tokens"]:
+            input_cost *= 2
+            output_cost *= 1.5
+        return (input_cost + output_cost) / 1_000_000, {
+            "input_tokens": ordinary, "output_tokens": tokens_out,
+            "cache_read_input_tokens": read, "cache_creation_input_tokens": written,
+        }
+
     def call(self, system: str, prompt: str, timeout: float, budget, *, schema=None, images=()) -> HostReply:
         body = {
             "model": self.model,
@@ -113,12 +148,7 @@ class OpenAIHost:
             return HostReply(error=f"{_status_reason(status)} (HTTP {status})")
         try:
             response = strict_json(data.decode("utf-8"))
-            usage = response["usage"]
-            tokens_in, tokens_out = usage["input_tokens"], usage["output_tokens"]
-            if not all(type(t) is int and t >= 0 for t in (tokens_in, tokens_out)):
-                raise ValueError("invalid usage")
-            usd = (tokens_in * self.prices["input_usd_per_million"]
-                   + tokens_out * self.prices["output_usd_per_million"]) / 1_000_000
+            usd, usage = self._cost(response["usage"])
         except (ValueError, KeyError, TypeError, UnicodeError, AttributeError):
             return HostReply(error="invalid_response")
         try:
@@ -131,5 +161,5 @@ class OpenAIHost:
                 raise ValueError("refusal or ambiguous output")
             step = strict_json(content[0]["text"])
         except (ValueError, KeyError, TypeError, AttributeError):
-            return HostReply(usd=usd, error="invalid_response")
-        return HostReply(step=step, usd=usd)
+            return HostReply(usd=usd, error="invalid_response", usage=usage)
+        return HostReply(step=step, usd=usd, usage=usage)

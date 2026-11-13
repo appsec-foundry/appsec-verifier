@@ -3,6 +3,10 @@
 # Taken from AppSec Analyzer's data/model-catalog.yaml, the reference: follow its
 # models and prices here. Its adapter, reasoning_efforts and qualified fields are
 # not used, because the Verifier always asks for medium reasoning effort.
+# Unlike the Analyzer, cache_pricing distinguishes ordinary input, cache reads and
+# both write lifetimes (standard API prices checked 2026-11-13 at
+# https://developers.openai.com/api/docs/pricing). Existing input rates remain
+# the conservative fallback when usage details are absent.
 # Aliases do not discover new models over the network.
 
 schema_version: 1
@@ -13,16 +17,34 @@ aliases:
   gpt-astra: gpt-6-astra
 models:
   gpt-6.1-sol:
+    cache_pricing:
+      input_usd_per_million: 2.0
+      cache_read_usd_per_million: 0.1
+      cache_write_30m_usd_per_million: 2.5
+      cache_write_12h_usd_per_million: 5.0
+      long_prompt_threshold_tokens: 272000
     max_output_tokens: 128000
     input_usd_per_million: 2.5
     output_usd_per_million: 10.0
     source: https://developers.openai.com/api/docs/models/gpt-6.1-sol
   gpt-6-luna:
+    cache_pricing:
+      input_usd_per_million: 0.1
+      cache_read_usd_per_million: 0.01
+      cache_write_30m_usd_per_million: 0.125
+      cache_write_12h_usd_per_million: 0.25
+      long_prompt_threshold_tokens: 272000
     max_output_tokens: 128000
     input_usd_per_million: 0.125
     output_usd_per_million: 0.5
     source: https://developers.openai.com/api/docs/models/gpt-6-luna
   gpt-6-astra:
+    cache_pricing:
+      input_usd_per_million: 10.0
+      cache_read_usd_per_million: 1.0
+      cache_write_30m_usd_per_million: 12.5
+      cache_write_12h_usd_per_million: 25.0
+      long_prompt_threshold_tokens: 272000
     max_output_tokens: 128000
     input_usd_per_million: 12.5
     output_usd_per_million: 50

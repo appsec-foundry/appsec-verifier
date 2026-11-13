@@ -101,7 +101,7 @@ Choose the model with `--profile`, as in AppSec Analyzer.
 
 The CLIs run without tools, MCP servers, settings or session history. Using a subscription is subject to the provider's terms for that plan.
 
-The console shows model costs with API billing. With a Claude subscription, `--show-costs` shows what the calls would cost at API prices; this does not change the cost limit. Prices: [`data/model-catalog.yaml`](data/model-catalog.yaml) (OpenAI), [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml) (Anthropic API).
+The console shows model costs with API billing, including reported prompt-cache reads and writes; see [caching and costs](docs/cli.md#output-mode-and-run-mode). With a Claude subscription, `--show-costs` shows what the calls would cost at API prices; this does not change the cost limit. Prices: [`data/model-catalog.yaml`](data/model-catalog.yaml) (OpenAI), [`data/anthropic-model-catalog.yaml`](data/anthropic-model-catalog.yaml) (Anthropic API).
 
 ## Commands
 

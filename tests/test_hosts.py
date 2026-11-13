@@ -746,3 +746,48 @@ def test_loop_runs_host_steps_through_the_scope_guard():
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=5).run(ctx)
     assert res.verdict == "inconclusive"
     assert sent == ["https://shop.example.com/rest/basket/2"]          # the out-of-scope step was refused
+
+
+def _openai_cache_reply(details, *, tokens=1000, status="completed"):
+    response = json.loads(_openai_response(_wire("http_request", path="/x"), status=status, tokens=(tokens, 200)))
+    response["usage"]["input_tokens_details"] = details
+    host = OpenAIHost.resolve(model=None, environ=ENV, post=lambda *a: (200, json.dumps(response).encode()))
+    return host.call("system", "prompt", 10, _ctx().budget)
+
+
+@pytest.mark.parametrize("details,expected", [
+    ({"cached_tokens": 0}, 1000 * 2),
+    ({"cached_tokens": 800}, 200 * 2 + 800 * .1),
+    ({"cached_tokens": 300, "cache_write_tokens": 500}, 200 * 2 + 300 * .1 + 500 * 5),
+    ({"cached_tokens": 300, "cache_write_tokens": 500,
+      "cache_write_tokens_details": {"ttl_30m_tokens": 400, "ttl_12h_tokens": 100}},
+     200 * 2 + 300 * .1 + 400 * 2.5 + 100 * 5),
+])
+def test_openai_prices_cache_usage_without_double_counting(details, expected):
+    reply = _openai_cache_reply(details)
+    assert reply.error is None and reply.usd == pytest.approx((expected + 200 * 10) / 1e6)
+    assert sum(reply.usage[k] for k in ("input_tokens", "cache_read_input_tokens",
+                                       "cache_creation_input_tokens")) == 1000
+
+
+@pytest.mark.parametrize("details", [None, [], {"cached_tokens": True}, {"cached_tokens": -1},
+    {"cached_tokens": 1.0}, {"cached_tokens": 1001}, {"cached_tokens": 600, "cache_write_tokens": 500},
+    {"cache_write_tokens": False}, {"cache_write_tokens": 1, "cache_write_tokens_details": {}},
+    {"cache_write_tokens": 1, "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0}},
+])
+def test_openai_invalid_cache_usage_never_returns_an_action(details):
+    reply = _openai_cache_reply(details)
+    assert reply.error == "invalid_response" and reply.step is None
+
+
+@pytest.mark.parametrize("tokens,multiplier", [(272000, 1), (272001, 2)])
+def test_openai_long_prompt_prices_count_cached_input(tokens, multiplier):
+    reply = _openai_cache_reply({"cached_tokens": tokens}, tokens=tokens)
+    output_multiplier = 1 if multiplier == 1 else 1.5
+    assert reply.usd == pytest.approx((tokens * .1 * multiplier + 200 * 10 * output_multiplier) / 1e6)
+
+
+def test_openai_incomplete_answer_still_records_cache_cost_and_usage():
+    reply = _openai_cache_reply({"cached_tokens": 800}, status="incomplete")
+    assert reply.error == "invalid_response" and reply.usd > 0
+    assert reply.usage["cache_read_input_tokens"] == 800

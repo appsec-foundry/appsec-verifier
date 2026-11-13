@@ -1,6 +1,6 @@
 """`anthropic-api` profile: the Anthropic Messages API through the `anthropic`
 SDK with ANTHROPIC_API_KEY, tool-less, as one host behind HostPlanner
-(VER-015, VER-017, VER-023).
+(VER-015, VER-017, VER-023, VER-060).
 
 Each step is one `messages.create` call without tools and with strict
 structured output for the step schema (`output_config.format`). HostPlanner
@@ -26,7 +26,7 @@ from .steps import STEP_SCHEMA, strict_json
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 MAX_TOKENS = 16_000
-# usage field -> catalog price; cache writes are priced at the 1-hour rate, the higher one
+# usage field -> catalog price; writes without lifetime details use the higher 1-hour rate
 _PRICED_USAGE = (("input_tokens", "input_usd_per_million"), ("output_tokens", "output_usd_per_million"),
                  ("cache_creation_input_tokens", "cache_write_usd_per_million"),
                  ("cache_read_input_tokens", "cache_read_usd_per_million"))
@@ -98,14 +98,25 @@ class AnthropicHost:
         catalog's `long_prompt.threshold_tokens` is priced at the long-prompt rates."""
         tokens = {}
         for field, _ in _PRICED_USAGE:
-            count = getattr(usage, field, None) or 0
+            count = getattr(usage, field, None)
+            if count is None and field.startswith("cache_"):
+                count = 0
             if type(count) is not int or count < 0:
                 raise ValueError("invalid usage")
             tokens[field] = count
         prompt = tokens["input_tokens"] + tokens["cache_creation_input_tokens"] + tokens["cache_read_input_tokens"]
         long = self.prices.get("long_prompt")
         prices = long if long is not None and prompt > long["threshold_tokens"] else self.prices
-        return sum(tokens[field] * prices[price] for field, price in _PRICED_USAGE) / 1_000_000
+        cost = sum(tokens[field] * prices[price] for field, price in _PRICED_USAGE)
+        creation = getattr(usage, "cache_creation", None)
+        if creation is not None:
+            short = getattr(creation, "ephemeral_5m_input_tokens", None)
+            long = getattr(creation, "ephemeral_1h_input_tokens", None)
+            if (not all(type(n) is int and n >= 0 for n in (short, long))
+                    or short + long != tokens["cache_creation_input_tokens"]):
+                raise ValueError("invalid cache usage")
+            cost += short * (prices["cache_write_5m_usd_per_million"] - prices["cache_write_usd_per_million"])
+        return cost / 1_000_000
 
     supports_images = True   # PNG screenshots of an evidence review (VER-042)
 
@@ -116,7 +127,8 @@ class AnthropicHost:
             {"type": "text", "text": prompt}]
         try:
             resp = self._client.with_options(timeout=timeout, max_retries=0).messages.create(
-                model=self.model, max_tokens=MAX_TOKENS, system=system,
+                model=self.model, max_tokens=MAX_TOKENS,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
                 messages=[{"role": "user", "content": content}],
                 output_config={"format": {"type": "json_schema", "schema":
                                           schema if schema is not None else STEP_SCHEMA}},
