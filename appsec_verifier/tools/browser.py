@@ -103,6 +103,8 @@ _NETNS_ARGS = ("--user", "--net", "--map-current-user")
 SCREENSHOT_NOTE = TARGET_DATA_NOTE
 SCREENSHOT_CLASSES = ("xss", "access-control", "injection", "open-redirect", "path-traversal", "ssrf", "session")
 _EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves; answered from the record
+# VER-016: what a caption says when known credentials were masked; each placeholder names account and kind.
+MASKED_NOTE = "Known credentials masked for this screenshot; each placeholder names its account and kind."
 _PAGE_KINDS = ("xss", "application", "access-control")          # application screenshots, named after the finding
 _HIGHLIGHT = "#b00020"
 
@@ -749,7 +751,7 @@ class ProofBrowser:
                     clean_lines = self.redact(lines)
                     masked = masked or clean_lines != lines
                     if masked:
-                        clean_lines.append("Known credentials masked with [redacted] for this screenshot.")
+                        clean_lines.append(MASKED_NOTE)
                     marked = self._mark(
                         page, clean_lines,
                         values=values, label="values from the confirmed proof")
@@ -869,7 +871,7 @@ class ProofBrowser:
                 masked = masked or clean != display
                 display_url, display_origin, *lines = clean
                 if masked:
-                    lines.append("Known credentials masked with [redacted] for this screenshot.")
+                    lines.append(MASKED_NOTE)
             except Exception:  # noqa: BLE001 - no capture without checked captions
                 problem = "the screenshot captions could not be checked for credentials"
             problem = problem or self._capture_error(marked, display_url, display_origin, joined, *lines)
@@ -978,7 +980,7 @@ class ProofBrowser:
             lines = self.redact(caption)
             masked = masked or lines != caption
             if masked:
-                lines.append("Known credentials masked with [redacted] for this screenshot.")
+                lines.append(MASKED_NOTE)
             marked = self._mark(page, lines, values=highlight, none=none, label="value named in the verdict")
             return {**marked, "credential_masked": masked} if marked else None
 

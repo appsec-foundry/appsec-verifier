@@ -135,7 +135,7 @@ def test_the_program_runs_once_and_again_only_to_renew():
     assert runs.calls[0][1]["interactive"] is False
     assert sessions.renew("p")                                  # after a 401
     assert sessions.headers_for("p") == {"Authorization": "Bearer PROG-2"} and len(runs.calls) == 2
-    assert sessions.redact("PROG-1 PROG-2") == "[redacted] [redacted]"
+    assert sessions.redact("PROG-1 PROG-2") == "[p session] [p session]"
 
 
 def test_a_failed_program_is_not_run_again_in_the_run():

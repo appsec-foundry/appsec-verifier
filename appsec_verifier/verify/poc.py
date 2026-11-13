@@ -8,8 +8,9 @@ evidence is not taken over.
 
 Each exchange is redacted when it is recorded: headers the identity added
 read `[identity <role>]`; Authorization, cookies and other headers whose name
-names a credential, query parameters named like a token, every credential
-value the sessions know and every JWT read `[redacted]`. Cookie names and
+names a credential, query parameters named like a token and every JWT read
+`[redacted]`, every credential value the sessions know its placeholder, such as
+`[account-1 password]` (auth/sessions.py). Cookie names and
 Set-Cookie attributes stay. Bodies are kept as text up to `MAX_BODY_CHARS`, cut
 after redaction, and up to `MAX_FINDING_BODY_CHARS` for all bodies of a
 finding together; binary bodies only by type, length and hash. A browser keeps

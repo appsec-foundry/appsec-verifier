@@ -151,7 +151,7 @@ def test_response_inspection_is_redacted_bounded_and_finding_local(tmp_path):
     tools.http_request(path="/search")
     ctx.responses[1] = tools.take_response()
     assert secret not in ctx.responses[1]["body"]
-    assert "[redacted]" in tools.read_response(steps=[1], pointer="/value")["responses"][0]["text"]
+    assert "[customer-a token]" in tools.read_response(steps=[1], pointer="/value")["responses"][0]["text"]
     window = tools.read_response(steps=[1])["responses"][0]
     assert len(window["text"]) == 1500 and window["more"]
     with pytest.raises(ToolError, match="this finding"):

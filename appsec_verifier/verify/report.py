@@ -778,7 +778,7 @@ def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: b
             if ev.get("executed_via"):
                 details.append("Dialog drawn from the recorded execution event.")
             if ev.get("credential_masked"):
-                details.append("Known credentials masked with [redacted].")
+                details.append("Known credentials masked; each placeholder names its account and kind.")
             if details:
                 out += [_fenced(" ".join(details), "text"), ""]
             if ev.get("explanation"):      # model text: fenced, so it stays text (VER-035)

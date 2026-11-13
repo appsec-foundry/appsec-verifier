@@ -34,7 +34,8 @@ again until one of its requests is accepted.
 `redact()` replaces every credential value the run knows (the identities'
 `*_env` values but their user names, which are no secret, and every header
 value, cookie value and token obtained from them, also JSON-escaped and
-URL-encoded) with "[redacted]". The agent loop
+URL-encoded) with a placeholder naming its account and kind, such as
+"[account-1 password]", or "[redacted]" where no single one does. The agent loop
 applies it to every tool result before the planner sees it, and the runner to
 the results before the report is written (VER-016). Values shorter than 4
 characters are not replaced, because they would mask ordinary text.
@@ -177,6 +178,7 @@ class SessionManager:
         self._discovery: dict[str, dict] = {}
         self._cookie_secrets: set[str] = set()
         self._issued: set[str] = set()         # header values and tokens obtained, kept after invalidate()
+        self._issued_by: dict[str, str] = {}   # issued value -> the role whose session it is, for its placeholder
         self._refused: dict[str, str] = {}     # role -> why its session could not be obtained
         self._renewed: set[str] = set()        # roles renewed after a 401 and not accepted since
         self._no_renewal: set[str] = set()     # roles whose renewal was answered 401 again
@@ -276,15 +278,15 @@ class SessionManager:
             self._no_renewal.add(role)
 
     def redact(self, value):
-        """`value` (str, or dicts and lists of them) with every credential value
-        replaced by "[redacted]" (VER-016). Other types pass unchanged."""
-        forms = self._secret_forms()
+        """`value` (str, or dicts and lists of them) with every credential value replaced by its placeholder
+        (VER-016), in one pass, so no replacement is made inside a placeholder. Other types pass unchanged."""
+        placeholders = self._placeholders()
+        pattern = re.compile("|".join(map(re.escape, sorted(placeholders, key=len, reverse=True)))) \
+            if placeholders else None       # longest first, so no fragment of a value is left
 
         def walk(v):
             if isinstance(v, str):
-                for form in forms:
-                    v = v.replace(form, REDACTED)
-                return v
+                return pattern.sub(lambda m: placeholders[m.group(0)], v) if pattern else v
             if isinstance(v, dict):
                 return {k: walk(x) for k, x in v.items()}
             if isinstance(v, list | tuple):
@@ -302,16 +304,18 @@ class SessionManager:
     # ── bookkeeping ──────────────────────────────────────────────────────────
 
     def _keep(self, role: str, session: Session) -> None:
+        values = set()
         for name, value in session.headers.items():
-            self._issued.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
+            values.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
             if name.lower() == "cookie":
-                for part in value.split(";"):
-                    self._issued.add(part.partition("=")[2].strip())
-        self._issued.discard("")
-        self._http.protect_headers(session.headers)
+                values.update(part.partition("=")[2].strip() for part in value.split(";"))
         if session.refresh_token:
             self._refresh[role] = session.refresh_token
-            self._issued.add(session.refresh_token)
+            values.add(session.refresh_token)
+        values.discard("")
+        self._issued.update(values)
+        self._issued_by.update(dict.fromkeys(values, role))
+        self._http.protect_headers(session.headers)
         if session.account:
             self._accounts[role] = session.account
         session.renew_at = self._renew_at(session)
@@ -330,17 +334,37 @@ class SessionManager:
             return None
         return max(session.expires_at - RENEW_MARGIN_S, now + (session.expires_at - now) / 2)
 
-    def _secret_forms(self) -> list[str]:
-        values = set(self._issued)
-        for ident in self._by_role.values():
-            for name in _env_names(ident.get("auth") or {}):
+    def _placeholders(self) -> dict[str, str]:
+        """Each form of each secret value the run knows (as is, JSON-escaped, URL-encoded) -> its placeholder
+        (VER-016): `[<role> <kind>]` where one account holds it as one kind of secret, such as `[account-1
+        password]` or `[account-1 session]` for what its session obtained, else `[redacted]`: for a value several
+        accounts or kinds share, one no account obtained, one that is also a user name (its label would tell that
+        user name and secret are equal) and one whose label would carry a secret."""
+        found: dict[str, set[str]] = {}
+        for value in self._issued:
+            role = self._issued_by.get(value)
+            found.setdefault(value, set()).add(f"[{role} session]" if role else REDACTED)
+        users = set()
+        for role, ident in self._by_role.items():
+            auth = ident.get("auth") or {}
+            users.add(self._env.get(auth.get("username_env") or "") or "")
+            for key, name in _secret_vars(auth):
                 if self._env.get(name):
-                    values.add(self._env[name])
-        forms = set()
-        for v in values:
-            if len(v) >= _MIN_SECRET_LEN or v in self._cookie_secrets:
-                forms.update((v, json.dumps(v)[1:-1], quote(v, safe=""), quote_plus(v)))
-        return sorted(forms, key=len, reverse=True)      # longest first, so no fragment of a value is left
+                    found.setdefault(self._env[name], set()).add(f"[{role} {_KINDS.get(key, 'secret')}]")
+        values = {v for v in found if len(v) >= _MIN_SECRET_LEN or v in self._cookie_secrets}
+        out: dict[str, str] = {}
+        for value in values:
+            labels = found[value]
+            label = labels.pop() if len(labels) == 1 else REDACTED
+            if value in users or any(v in label for v in values):
+                label = REDACTED
+            for form in (value, json.dumps(value)[1:-1], quote(value, safe=""), quote_plus(value)):
+                out[form] = label if out.get(form, label) == label else REDACTED
+        return out
+
+    def holds_placeholder(self, text: str) -> bool:
+        """Whether `text` holds a placeholder of a secret value, so it does not show the value (VER-016)."""
+        return REDACTED in text or any(label in text for label in set(self._placeholders().values()))
 
     def _env_get(self, name: str | None) -> str:
         value = self._env.get(name) if name else None
@@ -616,11 +640,17 @@ def _account(claims: dict) -> tuple[str, str] | None:
     return (str(claims.get("iss", "")), str(sub)) if isinstance(sub, str | int) and str(sub) else None
 
 
-def _env_names(auth: dict) -> list[str]:
-    """The variables that hold an identity's secrets: every `*_env` but `username_env`, and `headers_env`. A user
-    name identifies an account without granting access, so it is no secret (VER-016); one that equals a secret of
-    the run is still replaced as that secret."""
-    names = [name for key, name in auth.items()
+# What a secret variable holds, as its placeholder names it (VER-016); another `*_env` is a "secret".
+_KINDS = {"password_env": "password", "token_env": "token", "client_secret_env": "client secret",
+          "client_id_env": "client id", "headers_env": "session"}
+
+
+def _secret_vars(auth: dict) -> list[tuple[str, str]]:
+    """(key, variable) of each variable that holds an identity's secret: every `*_env` but `username_env`, and each
+    of `headers_env`. A user name identifies an account without granting access, so it is no secret (VER-016); one
+    that equals a secret of the run is still replaced as that secret."""
+    names = [(key, name) for key, name in auth.items()
              if key.endswith("_env") and key != "username_env" and isinstance(name, str) and name]
-    names += [name for name in (auth.get("headers_env") or {}).values() if isinstance(name, str) and name]
+    names += [("headers_env", name) for name in (auth.get("headers_env") or {}).values()
+              if isinstance(name, str) and name]
     return names

@@ -82,7 +82,7 @@ def test_session_headers_come_from_env_and_every_cookie_value_is_redacted():
     sessions, _, _ = mgr([ident], {"C": "sid=abcd1234; csrf=efgh5678", "K": "key-0001"})
     assert sessions.headers_for("a") == {"Cookie": "sid=abcd1234; csrf=efgh5678", "X-Api-Key": "key-0001"}
     out = sessions.redact("echo abcd1234 and efgh5678 and key-0001")
-    assert out == "echo [redacted] and [redacted] and [redacted]"
+    assert out == "echo [a session] and [a session] and [a session]"
 
 
 @pytest.mark.parametrize("value, problem", [("sid=1\r\nX-Evil: 1", "control character"), ("", "missing")])
@@ -136,7 +136,7 @@ def test_a_session_is_renewed_with_its_refresh_token_before_it_expires():
     clock.now += 280
     assert sessions.headers_for("a") == {"Authorization": "Bearer AT-3"}
     assert transport.calls[2][3]["data"]["refresh_token"] == "RT-2"        # the rotated one
-    assert sessions.redact("RT-1 RT-2 AT-3") == "[redacted] [redacted] [redacted]"
+    assert sessions.redact("RT-1 RT-2 AT-3") == "[a session] [a session] [a session]"
 
 
 @pytest.mark.parametrize("token", [

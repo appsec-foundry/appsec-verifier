@@ -85,7 +85,7 @@ def test_a_login_form_is_submitted_with_its_hidden_fields_and_its_cookies_become
     assert headers["Cookie"] == "PHPSESSID=sid0001; security=impossible"   # Domain=localhost does not drop it
     assert follow_headers["Cookie"] == "PHPSESSID=sid0002; security=impossible" and "data" not in follow_kw
     assert all(PASSWORD not in str(call) for call in target.calls if call[0] == "GET")
-    assert sessions.redact("session sid0003 and sid0001") == "session [redacted] and sid0001"
+    assert sessions.redact("session sid0003 and sid0001") == "session [admin session] and sid0001"
 
 
 def test_a_login_that_ends_on_the_login_form_again_is_refused_and_not_tried_again():

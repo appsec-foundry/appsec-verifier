@@ -112,7 +112,7 @@ def test_controls_built_on_a_credential_value_still_prove_injection(tmp_path):
         db.close()
     history = ctx.agent_history
     assert result.verdict == "confirmed"
-    assert history[0]["result"]["experiment"]["baseline"] == "[redacted]"   # the planner's copy stays redacted
+    assert history[0]["result"]["experiment"]["baseline"] == "[customer-a token]"   # the planner's copy stays redacted
     assert ctx.accepted_plans[1]["baseline"] == "apple"
     assert all(set(h) <= {"tool", "args", "result", "experiment"} for h in history)   # nothing beside the steps
 

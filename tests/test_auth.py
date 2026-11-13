@@ -138,7 +138,7 @@ def test_redact_keeps_masking_a_token_after_invalidate():
     mgr, _ = _mgr([FORM], ENV)
     mgr.headers_for("a")
     mgr.invalidate("a")
-    assert mgr.redact("old FORMTOK") == "old [redacted]"
+    assert mgr.redact("old FORMTOK") == "old [a session]"
 
 
 def test_a_user_name_that_equals_a_secret_of_the_run_stays_redacted():
@@ -148,6 +148,29 @@ def test_a_user_name_that_equals_a_secret_of_the_run_stays_redacted():
     assert mgr.redact("Welcome hunter22") == "Welcome [redacted]"
     mgr, _ = _mgr([FORM], env)                             # without that identity it is a user name only
     assert mgr.redact("Welcome hunter22") == "Welcome hunter22"
+
+
+def test_a_placeholder_names_the_account_and_the_kind_of_the_secret():
+    bearer = {"role": "c", "method": "bearer", "auth": {"token_env": "CT"}}
+    mgr, _ = _mgr([FORM, BASIC, bearer], {**ENV, "CT": "tok-c-123456"})
+    mgr.headers_for("a")
+    out = mgr.redact('pw pa ss/wörd"1 basic hunter22 bearer tok-c-123456 session FORMTOK')
+    assert out == "pw [a password] basic [b password] bearer [c token] session [a session]"
+    assert mgr.holds_placeholder("x [b password]") and mgr.holds_placeholder("[redacted]")
+    assert not mgr.holds_placeholder("x [b passwd]")
+
+
+@pytest.mark.parametrize("env, text, out", [
+    ({**ENV, "BP": 'pa ss/wörd"1'}, 'pw pa ss/wörd"1', "pw [redacted]"),                     # two accounts share it
+    ({**ENV, "AU": "hunter22"}, "user hunter22", "user [redacted]"),                       # also a user name
+    ({**ENV, "AU": "pa ss/wörd\"1"}, 'pw pa ss/wörd"1', "pw [redacted]"),                  # user name = password
+    ({**ENV, "BP": "word"}, 'pw pa ss/wörd"1 and word', 'pw [redacted] and [redacted]'),   # in a label: neutral
+])
+def test_a_placeholder_that_would_tell_more_than_that_a_secret_stood_there_is_neutral(env, text, out):
+    """A shared value, a user name that equals a secret, and a secret that a label would carry read [redacted];
+    the one pass never replaces inside a placeholder."""
+    mgr, _ = _mgr([FORM, BASIC], env)
+    assert mgr.redact(text) == out
 
 
 def test_a_page_with_a_user_name_may_reach_a_model_and_one_with_a_password_may_not():
@@ -162,5 +185,5 @@ def test_a_page_with_a_user_name_may_reach_a_model_and_one_with_a_password_may_n
 
 def test_redact_masks_configured_secrets_before_any_login():
     mgr, tr = _mgr([FORM], ENV)
-    assert mgr.redact('echo pa ss/wörd"1 hunter22 alice@shop.test') == "echo [redacted] hunter22 alice@shop.test"
+    assert mgr.redact('echo pa ss/wörd"1 hunter22 alice@shop.test') == "echo [a password] hunter22 alice@shop.test"
     assert tr.calls == []

@@ -179,7 +179,7 @@ def test_report_labels_source_identity_steps_and_masking():
     text = "\n".join(_poc_markdown({"evidence": result.evidence}))
     assert "Application browser capture" in text and "View as owner" in text
     assert "recorded step 1" in text and "Dialog drawn from the recorded execution event" in text
-    assert "Known credentials masked with [redacted]" in text
+    assert "Known credentials masked; each placeholder names its account and kind." in text
     assert result.verdict == "confirmed"
     image.update(source="recorded-html", executed_via=[])
     text = "\n".join(_poc_markdown({"evidence": [image]}))

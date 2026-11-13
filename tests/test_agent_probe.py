@@ -201,7 +201,7 @@ def test_planner_and_report_never_see_a_credential_value(tmp_path):
         target_base=SCOPE["base_url"], authorization={"confirmed": True}, http=ctx.http, sessions=ctx.sessions,
         source=ctx.source)
     assert seen and all("SECRET-TOKEN" not in h for h in seen)
-    assert "[redacted]" in seen[1]
+    assert "[customer-a session]" in seen[1]
     assert "SECRET-TOKEN" not in json.dumps(doc)
     assert doc["results"][0]["rationale"] == "saw token [redacted] echoed"
 

@@ -219,7 +219,7 @@ def test_the_password_and_token_are_redacted_and_the_user_name_stays():
     sessions, _ = _sessions(target, {"JP": "ncc-1701", "BP": "x"})
     sessions.sign_in_with_fields("account-1", [("email", "password")])
     assert sessions.redact("user jim@juice-sh.op pw ncc-1701 tok-jim@juice-sh.op") == \
-        "user jim@juice-sh.op pw [redacted] [redacted]"
+        "user jim@juice-sh.op pw [account-1 password] [account-1 session]"
 
 
 # ── a privileged account only reads ───────────────────────────────────────────

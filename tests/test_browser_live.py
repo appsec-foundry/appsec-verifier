@@ -285,7 +285,9 @@ def test_a_screenshot_masks_credentials_before_capture_and_review(browser, monke
 
 
 @pytest.mark.parametrize("restore", [False, True])
-def test_username_and_fields_are_masked_or_omitted_if_the_page_restores_them(browser, monkeypatch, restore):
+def test_credentials_and_fields_are_masked_or_omitted_if_the_page_restores_them(browser, monkeypatch, restore):
+    """VER-016, VER-035: the password is masked in the page text and in field values and placeholders, and an image
+    whose page undoes the masking is omitted; the user name is no secret and stays visible."""
     from appsec_verifier.auth.sessions import SessionManager
     from appsec_verifier.tools.browser_mask import capture_masked
 
@@ -308,11 +310,11 @@ def test_username_and_fields_are_masked_or_omitted_if_the_page_restores_them(bro
         return capture_masked(page, *args, **kwargs)
 
     monkeypatch.setattr("appsec_verifier.tools.browser.capture_masked", capture)
-    payload = (f'<span id=account>{username}</span><input value="{password}">'
-               f'<input placeholder="{username}"><img src=x onerror=alert({marker_expression(MARKER)})>'
+    payload = (f'<span id=user>{username}</span><span id=account>{password}</span><input value="{password}">'
+               f'<input placeholder="{password}"><img src=x onerror=alert({marker_expression(MARKER)})>'
                '<script>window.restored = 0; const account = document.querySelector("#account");'
-               'setInterval(() => {if (account.textContent.includes("[redacted]")) window.restored++; '
-               f'account.textContent = "{username}";'
+               'setInterval(() => {if (account.textContent.includes("[customer-a password]")) window.restored++; '
+               f'account.textContent = "{password}";'
                '}, 20);</script>')
     if not restore:
         payload = payload.split("<script>")[0] + "<script>window.restored = 0;</script>"
@@ -324,8 +326,8 @@ def test_username_and_fields_are_masked_or_omitted_if_the_page_restores_them(bro
     [shot] = [e for e in result["evidence"] if e["kind"] == "screenshot"]
     assert result["executed"] and shot["credential_masked"] and shot["reviewable"]
     assert len(seen) == 1 and seen[0]["restored"] == 0
-    assert username not in str(seen) and password not in str(seen)
-    assert seen[0]["fields"] == [["[redacted]", ""], ["", "[redacted]"]]
+    assert username in seen[0]["text"] and password not in str(seen)
+    assert seen[0]["fields"] == [["[customer-a password]", ""], ["", "[customer-a password]"]]
 
 
 @pytest.mark.parametrize("case", ["generated", "restored", "after-highlighting"])

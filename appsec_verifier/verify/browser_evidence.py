@@ -53,7 +53,8 @@ def capture_application(ctx, tools, history, sent, result, proposal, cited):
                       and 200 <= e["response"]["status"] < 300), None)
         values = list(proposal["values"])
         text = entry["response"]["content"].get("text", "") if entry is not None else ""
-        if entry is None or any(v not in text or "[redacted]" in v for v in values):
+        masked = ctx.sessions.holds_placeholder if ctx.sessions is not None else (lambda v: "[redacted]" in v)
+        if entry is None or any(v not in text or masked(v) for v in values):
             raise ToolError("the selected visible values are not in a successful recorded GET response")
         role = proposal.get("role") or entry.get("_role")
         if role is not None and role not in {i.get("role") for i in ctx.identities or []}:
