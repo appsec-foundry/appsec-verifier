@@ -429,7 +429,7 @@ def _injection_negative(ctx, history, result, cited):
         experiments.setdefault(start, []).append(n)
     inputs, contexts = set(), {}
     for start, steps in experiments.items():
-        plan, groups, error = experiment_groups(plan_view(history, steps), steps)
+        plan, groups, error = experiment_groups(plan_view(history, steps), steps, getattr(ctx, "accepted_plans", None))
         if plan.get("error_probe"):
             # VER-053/VER-054: the engine-error probe triages reachability; a probe that raised no engine error is
             # not a checked negative, so a negative verdict rests on boolean experiments instead.

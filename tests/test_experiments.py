@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode
 
 import pytest
 
-from appsec_verifier.agent.experiments import PLAN_SCHEMA
+from appsec_verifier.agent.experiments import PLAN_SCHEMA, experiment_groups
 from appsec_verifier.agent.proof import check_proof
 from appsec_verifier.agent.steps import check_action, prompt
 from appsec_verifier.loader import assessment_errors, plans_from
@@ -575,3 +575,21 @@ def test_javascript_predicate_controls_are_fresh_and_complementary():
     assert len(set(controls)) == 4 and all(c.startswith("1 && (") and "||" not in c for c in controls)
     assert first["positive"] != second["positive"]                         # fresh values per plan
     assert "===" in first["positive"] and "!==" in first["positive_other"]
+
+
+@pytest.mark.parametrize("sent, error", [
+    ("apple", None),
+    ("[redacted]", "a cited request did not use a declared control value: step 2"),
+    ("pear", "a cited request did not use a declared control value: step 2"),
+])
+def test_requests_match_the_accepted_plan_not_its_redacted_copy(sent, error):
+    # VER-011, VER-016: the history keeps the plan redacted for the planner; a request belongs to a control only
+    # by the value the accepted plan holds, so neither the redacted text nor another value passes.
+    accepted = plan(baseline="apple", positive="apple' AND 1=1", negative="apple' AND 1=2")["args"]
+    shown = {k: v.replace("apple", "[redacted]") if isinstance(v, str) else v for k, v in accepted.items()}
+    history = [{"tool": "plan_test", "args": accepted, "result": {"accepted": True, "experiment": shown}},
+               req(q=sent)]
+    returned, groups, problem = experiment_groups(history, [2], {1: accepted})
+    assert problem == error
+    assert returned["baseline"] == "[redacted]"   # the caller and its messages keep the redacted plan
+    assert error or [n for n, _ in groups["baseline"]] == [2]

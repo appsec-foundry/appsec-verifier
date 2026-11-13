@@ -549,33 +549,39 @@ def shows_number(body: str, value) -> bool:
     return re.search(rf"(?<!\d){re.escape(str(value))}(?!\d)", body) is not None
 
 
-def experiment_groups(history, cited):
-    start, plan = latest_plan(history)
+def experiment_groups(history, cited, accepted=None):
+    """The cited requests by control group of the plan that governs them (VER-011). A step's recorded result holds
+    the plan redacted for the planner (VER-016), while each request is recorded as sent; a control value that
+    contains a credential, such as a user name as baseline, would match its own request only in one of them. So
+    requests are compared with the plan as accepted, from `accepted` (step -> plan, kept by the loop outside the
+    history), and messages and the returned plan stay redacted."""
+    start, shown = latest_plan(history)
     if not start:
         return {}, {}, "declare a plan_test before collecting proof"
+    plan = (accepted or {}).get(start) or shown
     control_map = control_values(plan)
     groups = {k: [] for k in control_map}
     signatures = set()
     for n in cited:
         if n <= start:
-            return plan, {}, (f"proof must be collected after the declared plan (VER-011): step {n} precedes the "
-                              f"plan in step {start} and must be repeated")
+            return shown, {}, (f"proof must be collected after the declared plan (VER-011): step {n} precedes the "
+                               f"plan in step {start} and must be repeated")
         h = history[n - 1]
         args, result = h.get("args", {}), h.get("result", {})
         if h.get("tool") != "http_request" or not isinstance(result.get("status"), int):
-            return plan, {}, f"proof needs answered target requests; step {n} is none"
+            return shown, {}, f"proof needs answered target requests; step {n} is none"
         if not planned_route(plan["path"], args.get("path") or "") or (
             (args.get("method") or "GET").upper() != plan.get("method", "GET")
         ):
-            return plan, {}, (f"proof requests do not match the declared target: step {n} does not send "
-                              f"{plan.get('method', 'GET')} {plan['path']}")
+            return shown, {}, (f"proof requests do not match the declared target: step {n} does not send "
+                               f"{shown.get('method', 'GET')} {shown['path']}")
         # A query in the path counts as params, as the controller sends it; the rest of the path stays fixed.
         path, _, query = (args.get("path") or "").partition("?")
         sent = {k: dict(args.get(k) or {}) for k in ("params", "json", "form", "headers", "path_inputs")}
         sent["params"].update(parse_qsl(query, keep_blank_values=True))
         if plan.get("input_location") == "path":
             if path != plan["path"]:
-                return plan, {}, "path input requests must retain the exact declared template (VER-044)"
+                return shown, {}, "path input requests must retain the exact declared template (VER-044)"
             value = sent["path_inputs"].pop(plan.get("input_name"), None)
             signatures.add(token([args.get("role"), path, sent]))
         else:
@@ -584,11 +590,11 @@ def experiment_groups(history, cited):
             signatures.add(token([args.get("role"), path, sent]))
         bucket = next((k for k, v in control_map.items() if token(value) == token(v)), None)
         if bucket is None:
-            return plan, {}, f"a cited request did not use a declared control value: step {n}"
+            return shown, {}, f"a cited request did not use a declared control value: step {n}"
         groups[bucket].append((n, result))
     if len(signatures) != 1:
-        return plan, {}, "only the declared input may change; identity and other inputs must stay fixed"
-    return plan, groups, None
+        return shown, {}, "only the declared input may change; identity and other inputs must stay fixed"
+    return shown, groups, None
 
 
 def _error_probe_check(groups, plan) -> str | None:
@@ -612,7 +618,7 @@ def _error_probe_check(groups, plan) -> str | None:
 
 
 def injection_check(ctx, history, cited):
-    plan, groups, error = experiment_groups(history, cited)
+    plan, groups, error = experiment_groups(history, cited, getattr(ctx, "accepted_plans", None))
     if error:
         return error
     if plan.get("kind") not in ("boolean", "timing"):
@@ -804,7 +810,7 @@ def callback_injection_check(ctx, history, cited):
     """VER-048: a blind injection is confirmed when the injecting control reaches the loopback listener and the
     inert-URL control does not. The listener, not the model, observed each hit; the controls buy nothing beyond
     the callback correlation, and no application data is read."""
-    plan, groups, error = experiment_groups(history, cited)
+    plan, groups, error = experiment_groups(history, cited, getattr(ctx, "accepted_plans", None))
     if error:
         return error
     if not plan.get("oob_template"):
@@ -827,7 +833,7 @@ def auth_artifact_check(ctx, history, cited):
     which is withheld in code, agent/tools.py) is computed by the code, so the uniform-status rule does not apply:
     a 401-to-200 auth flip is the point. The complementary true/false pair rules out a coincidence, so no
     repetition is needed."""
-    plan, groups, error = experiment_groups(history, cited)
+    plan, groups, error = experiment_groups(history, cited, getattr(ctx, "accepted_plans", None))
     if error:
         return error
     if not plan.get("auth_artifact"):

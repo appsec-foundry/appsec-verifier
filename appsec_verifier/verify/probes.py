@@ -109,6 +109,9 @@ class ProbeContext:
     progress: object | None = None     # RunProgress that shows each step on the console, or None
     responses: dict = field(default_factory=dict)  # bounded redacted responses, private to this finding
     agent_history: list[dict] = field(default_factory=list)  # recorded steps, never supplied by a model
+    # step -> experiment as plan_test accepted it, unredacted; outside the history the planner reads (VER-016), for
+    # the proof to compare the requests sent with it (VER-011)
+    accepted_plans: dict = field(default_factory=dict)
     derived_requests: list[dict] = field(default_factory=list)  # checked provenance for related requests
     technical_review_budget: dict = field(default_factory=dict)  # shared by all variants (VER-046)
     created: set = field(default_factory=set)  # identifiers the owner's creating answers returned (VER-010)

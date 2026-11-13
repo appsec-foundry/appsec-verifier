@@ -78,6 +78,45 @@ def test_parameter_binding_and_real_query_injection(tmp_path, vulnerable):
         db.close()
 
 
+def test_controls_built_on_a_credential_value_still_prove_injection(tmp_path):
+    # VER-011, VER-016: the baseline is also a credential value, as a user name often is, so the plan the history
+    # keeps for the planner is redacted while the controls go out as accepted. The proof compares the sent controls
+    # with the accepted plan, kept outside the history, so the Verifier recognises its own controls.
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE products(id INTEGER, name TEXT)")
+    db.execute("INSERT INTO products VALUES (7, 'apple')")
+
+    def target(m, u, h, **kwargs):
+        rows = db.execute("SELECT id FROM products WHERE name = '" + kwargs["params"]["q"] + "'").fetchall()
+        return Resp(200, json.dumps({"result": [r[0] for r in rows]}))
+
+    ctx = _ctx(tmp_path, target, env={"TA": "apple"})
+    ctx.scope = {**ctx.scope, "injection_inputs": [
+        {"finding_id": "T-1", "path": "/search", "input_location": "params", "input_name": "q",
+         "semantics": "literal"}]}
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89")
+    declaration = {**plan(baseline="apple")["args"], "sql_template": "apple' AND {{predicate}} -- "}
+
+    class Planner:
+        def next_step(self, context, history):
+            if not history:
+                return {"tool": "plan_test", "args": declaration}
+            if history[-1].get("tool") == "experiment" and history[-1]["result"].get("proof") == "holds":
+                return {"verdict": {"verdict": "confirmed", "rationale": "test",
+                                    "proof_steps": history[-1]["result"]["steps"]}}
+            return {"verdict": {"verdict": "inconclusive", "rationale": "the controls did not prove it"}}
+
+    try:
+        result = AgentProbe("injection", Planner).run(ctx)
+    finally:
+        db.close()
+    history = ctx.agent_history
+    assert result.verdict == "confirmed"
+    assert history[0]["result"]["experiment"]["baseline"] == "[redacted]"   # the planner's copy stays redacted
+    assert ctx.accepted_plans[1]["baseline"] == "apple"
+    assert all(set(h) <= {"tool", "args", "result", "experiment"} for h in history)   # nothing beside the steps
+
+
 def test_variants_keep_independent_coverage():
     doc = {"threats": [{"id": "T-1", "cwe": "CWE-89", "evidence": {"file": "a.py", "line": 1}}]}
     p = plans_from(doc)[0]

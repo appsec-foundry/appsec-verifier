@@ -168,6 +168,7 @@ class AgentProbe:
         tools = AgentTools(ctx)
         history: list[dict] = []
         ctx.agent_history = history
+        ctx.accepted_plans = {}   # the steps of this history
         sent: list[dict] = []  # per step what went to the target and came back, never shown to the planner
         ctx.responses = {}
         ctx.created, ctx.owned = set(), set()
@@ -271,6 +272,9 @@ class AgentProbe:
                     break
                 args, result = candidate
                 controller.observe("plan_test", args, result)
+                ctx.accepted_plans[len(history) + 1] = result["experiment"]
+                if ctx.sessions is not None:
+                    result = ctx.sessions.redact(result)   # VER-016, as for the agent's own plan_test
                 _log(ctx, len(history) + 1, tool="plan_test", args=args,
                      result={k: result[k] for k in _LOGGED_RESULT if k in result})
                 history.append({"tool": "plan_test", "args": args, "result": result})
@@ -400,6 +404,8 @@ class AgentProbe:
                 return attach_stopped(_stopped(ctx, step, exc, **call))
             keep(step, name)
             controller.observe(name, args, result)
+            if name == "plan_test" and result.get("accepted"):
+                ctx.accepted_plans[len(history) + 1] = result["experiment"]
             if ctx.sessions is not None:
                 result = ctx.sessions.redact(result)  # VER-016: no credential value reaches the planner
             _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})
