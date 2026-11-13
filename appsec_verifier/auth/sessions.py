@@ -6,8 +6,8 @@ A session is the set of headers an identity attaches to its own origin
 from environment variables (`bearer`, `basic`, `session`), from a login the
 Verifier performs (`form`, the OIDC grants), or from the operator's login
 program (`command`, see program.py). Secret values are named by `*_env`
-variables (or `headers_env`); the `env` mapping may also hold values the
-operator entered hidden in an interactive run. Values are never logged,
+variables (or `headers_env`), a user name by `username_env`; the `env`
+mapping may also hold values the operator entered hidden in an interactive run. Values are never logged,
 returned in any structure other than the request header, or placed in a report
 (VER-016).
 
@@ -32,8 +32,9 @@ answer to that request, not an expired session, and the role is not logged in
 again until one of its requests is accepted.
 
 `redact()` replaces every credential value the run knows (the identities'
-`*_env` values and every header value, cookie value and token obtained from
-them, also JSON-escaped and URL-encoded) with "[redacted]". The agent loop
+`*_env` values but their user names, which are no secret, and every header
+value, cookie value and token obtained from them, also JSON-escaped and
+URL-encoded) with "[redacted]". The agent loop
 applies it to every tool result before the planner sees it, and the runner to
 the results before the report is written (VER-016). Values shorter than 4
 characters are not replaced, because they would mask ordinary text.
@@ -616,6 +617,10 @@ def _account(claims: dict) -> tuple[str, str] | None:
 
 
 def _env_names(auth: dict) -> list[str]:
-    names = [name for key, name in auth.items() if key.endswith("_env") and isinstance(name, str) and name]
+    """The variables that hold an identity's secrets: every `*_env` but `username_env`, and `headers_env`. A user
+    name identifies an account without granting access, so it is no secret (VER-016); one that equals a secret of
+    the run is still replaced as that secret."""
+    names = [name for key, name in auth.items()
+             if key.endswith("_env") and key != "username_env" and isinstance(name, str) and name]
     names += [name for name in (auth.get("headers_env") or {}).values() if isinstance(name, str) and name]
     return names

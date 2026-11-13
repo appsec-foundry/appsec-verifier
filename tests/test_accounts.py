@@ -213,12 +213,13 @@ def test_a_transport_failure_ends_the_attempts_without_falling_back_to_default_f
     assert broken.calls == 1
 
 
-def test_the_account_values_are_redacted_and_never_reach_the_model():
+def test_the_password_and_token_are_redacted_and_the_user_name_stays():
+    """VER-016: the password and the session never reach the model; the user name is no secret."""
     target = JuiceShop({"jim@juice-sh.op": "ncc-1701"})
     sessions, _ = _sessions(target, {"JP": "ncc-1701", "BP": "x"})
     sessions.sign_in_with_fields("account-1", [("email", "password")])
     assert sessions.redact("user jim@juice-sh.op pw ncc-1701 tok-jim@juice-sh.op") == \
-        "user [redacted] pw [redacted] [redacted]"
+        "user jim@juice-sh.op pw [redacted] [redacted]"
 
 
 # ── a privileged account only reads ───────────────────────────────────────────

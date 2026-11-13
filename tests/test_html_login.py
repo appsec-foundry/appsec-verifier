@@ -233,7 +233,7 @@ def test_a_login_the_target_did_not_take_is_refused_when_the_target_url_still_le
         ("GET", "/"), ("GET", "/login.php")]                                      # the check
 
 
-def test_the_page_the_login_led_to_is_named_without_parameters_query_or_user_name():
+def test_the_page_the_login_led_to_is_named_without_parameters_or_query():
     def target(method, url, headers, **kw):
         html, path = {"content-type": "text/html"}, urlsplit(url).path
         if method == "POST":
@@ -246,7 +246,8 @@ def test_the_page_the_login_led_to_is_named_without_parameters_query_or_user_nam
 
     with pytest.raises(AuthError) as refused:
         manager(target, url=URL + "/").headers_for("admin")
-    assert "the login led to /home/[redacted], but the target URL still leads" in str(refused.value)
+    # The user name in the path is no secret (VER-016); the session id and the query stay out.
+    assert "the login led to /home/admin, but the target URL still leads" in str(refused.value)
     assert "s3cr3t" not in str(refused.value) and "next" not in str(refused.value)
 
 

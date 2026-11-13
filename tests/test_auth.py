@@ -127,8 +127,9 @@ def test_redact_replaces_env_values_and_obtained_tokens_in_every_form():
     text = (f'token FORMTOK user alice@shop.test pw pa ss/wörd"1 json "pa ss/w\\u00f6rd\\"1" '
             f"url pa%20ss%2Fw%C3%B6rd%221 form pa+ss%2Fw%C3%B6rd%221 basic {basic} hunter22 name bob")
     out = mgr.redact({"body": text, "list": [text], "n": 3, "flag": True})
-    for secret in ("FORMTOK", "alice@shop.test", "wörd", "w\\u00f6rd", "w%C3%B6rd", basic, "hunter22"):
+    for secret in ("FORMTOK", "wörd", "w\\u00f6rd", "w%C3%B6rd", basic, "hunter22"):
         assert secret not in out["body"] and secret not in out["list"][0]
+    assert "user alice@shop.test pw" in out["body"]        # a user name is no secret (VER-016)
     assert out["n"] == 3 and out["flag"] is True
     assert "bob" in out["body"]        # shorter than 4 characters: left alone, it would mask ordinary text
 
@@ -140,7 +141,26 @@ def test_redact_keeps_masking_a_token_after_invalidate():
     assert mgr.redact("old FORMTOK") == "old [redacted]"
 
 
+def test_a_user_name_that_equals_a_secret_of_the_run_stays_redacted():
+    """VER-016: a user name is no secret, unless it is the value of one, here another identity's password."""
+    env = {**ENV, "AU": "hunter22"}
+    mgr, _ = _mgr([FORM, BASIC], env)
+    assert mgr.redact("Welcome hunter22") == "Welcome [redacted]"
+    mgr, _ = _mgr([FORM], env)                             # without that identity it is a user name only
+    assert mgr.redact("Welcome hunter22") == "Welcome hunter22"
+
+
+def test_a_page_with_a_user_name_may_reach_a_model_and_one_with_a_password_may_not():
+    """The screenshot check (VER-042) follows the same rule: a user name in the page text clears the image."""
+    from appsec_verifier.verify.runner import _private_text
+
+    mgr, _ = _mgr([FORM], ENV)
+    private = _private_text(mgr, {})
+    assert private("Signed in as alice@shop.test") is False
+    assert private('Your password is pa ss/wörd"1') is True
+
+
 def test_redact_masks_configured_secrets_before_any_login():
     mgr, tr = _mgr([FORM], ENV)
-    assert mgr.redact("echo hunter22 alice@shop.test") == "echo hunter22 [redacted]"
+    assert mgr.redact('echo pa ss/wörd"1 hunter22 alice@shop.test') == "echo [redacted] hunter22 alice@shop.test"
     assert tr.calls == []
