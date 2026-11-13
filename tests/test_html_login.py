@@ -225,11 +225,29 @@ def test_a_target_url_without_a_login_form_sends_no_credentials():
 
 def test_a_login_the_target_did_not_take_is_refused_when_the_target_url_still_leads_to_the_form():
     target = Dvwa(set_up=False)                               # the login ends on a setup page, signed out
-    with pytest.raises(AuthError, match="target URL still leads to the login form"):
+    with pytest.raises(AuthError, match="the login led to /setup.php, but the target URL still leads to the login "
+                                        "form"):
         manager(target, url=URL + "/").headers_for("admin")
     assert [(c[0], urlsplit(c[1]).path) for c in target.calls] == [
         ("GET", "/login.php"), ("POST", "/login.php"), ("GET", "/setup.php"),     # the login
         ("GET", "/"), ("GET", "/login.php")]                                      # the check
+
+
+def test_the_page_the_login_led_to_is_named_without_parameters_query_or_user_name():
+    def target(method, url, headers, **kw):
+        html, path = {"content-type": "text/html"}, urlsplit(url).path
+        if method == "POST":
+            return httpx.Response(302, headers={"location": "/home/admin;jsessionid=sid-s3cr3t?next=x"})
+        if path == "/login.php":
+            return httpx.Response(200, headers=html, text=PAGE.format(action="login.php", method="post", token="t"))
+        if path.startswith("/home/"):
+            return httpx.Response(200, headers=html, text="<h1>Finish your account set-up</h1>")
+        return httpx.Response(302, headers={"location": "/login.php"})
+
+    with pytest.raises(AuthError) as refused:
+        manager(target, url=URL + "/").headers_for("admin")
+    assert "the login led to /home/[redacted], but the target URL still leads" in str(refused.value)
+    assert "s3cr3t" not in str(refused.value) and "next" not in str(refused.value)
 
 
 def test_the_check_is_skipped_where_the_target_url_is_the_login_page_itself():

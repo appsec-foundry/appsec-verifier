@@ -488,6 +488,8 @@ def _sign_in_accounts(sessions, identities: list[dict], login: dict, host, budge
             pairs = choose_fields(host, budget, endpoint=f"POST {path}",
                                   handler=f"{handler[0]}:{handler[1]}" if handler else None, excerpt=excerpt)
         except AccountError as exc:
+            for ident in identities:      # no later login with field names the model did not choose
+                sessions.refuse(ident["role"], "no login field names to sign in with")
             return [Check("Login fields", "fail", str(exc))]
     working, refused = None, []
     for ident in identities:
@@ -506,9 +508,9 @@ def _sign_in_accounts(sessions, identities: list[dict], login: dict, host, budge
     shown = ", ".join(f"{u}/{p}" for u, p in pairs)
     if not refused:
         return [Check("Login fields", "ok", f"{shown} proposed by the model; {working[0]}/{working[1]} worked")]
-    return [Check("Login fields", "fail", f"{shown} proposed by the model; no session for {', '.join(refused)}. "
-                                          "A login that is neither an HTML login form nor a JSON POST answered "
-                                          "with a token needs --identities")]
+    return [Check("Login fields", "fail", f"{shown} proposed by the model; no session for {', '.join(refused)}, "
+                                          "see their lines below. A login the Verifier cannot perform needs "
+                                          "--identities")]
 
 
 def _identities_fix(errors: list[str]) -> str:
@@ -878,9 +880,10 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         add(check_target(http, target, proxy=proxy_for(scope, target)))
         if args.source:  # VER-032: show the source checkout the agent reads from (a fail already stopped above)
             add(check_source(args.source))
-        if not failed(checks) and login:
+        reachable = not failed(checks)
+        if reachable and login:
             add(*_sign_in_accounts(sessions, identities, login, planner_factory.host, budget, doc, args.source))
-        if not failed(checks):
+        if reachable:   # also after a failed sign-in: each account's line names its cause
             add(
                 *(
                     check_identities(sessions, identities, http, target, scope=scope)

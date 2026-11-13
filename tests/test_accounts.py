@@ -317,7 +317,18 @@ def test_a_failed_account_login_stops_the_run_and_points_to_identities(tmp_path,
     out = capsys.readouterr().out
     assert rc == cli.EXIT_BLOCKED and seen == {}
     assert "no session for account-2" in out and "needs --identities" in out
+    assert "account-2" in out and "did not return a recognisable token" in out     # the account's line: the cause
     assert len([c for c in target.calls if c[0] == "POST" and c[2].get("email") == "bender@juice-sh.op"]) == 1
+
+
+def test_without_field_names_from_the_model_no_account_logs_in(tmp_path, monkeypatch, capsys):
+    target = JuiceShop({"jim@juice-sh.op": "ncc-1701"})
+    rc, seen = _verify(tmp_path, monkeypatch, target, FakeHost(error="timeout"), "--account", "jim@juice-sh.op=JP",
+                       env={"JP": "ncc-1701"})
+    out = capsys.readouterr().out
+    assert rc == cli.EXIT_BLOCKED and seen == {}
+    assert "call for the login fields failed" in out and "no login field names to sign in with" in out
+    assert [c for c in target.calls if c[0] == "POST"] == []        # no login with field names the model did not choose
 
 
 @pytest.mark.parametrize("extra, surface, env, expected", [

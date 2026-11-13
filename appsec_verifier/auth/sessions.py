@@ -236,6 +236,10 @@ class SessionManager:
         self._refused[role] = f"form login obtained no session with the fields {', '.join(tried)}{cause}"
         raise AuthError(self._refused[role])
 
+    def refuse(self, role: str, reason: str) -> None:
+        """`role` obtains no session in this run; asking for one names `reason` and logs nothing in (VER-028)."""
+        self._refused[role] = reason
+
     def end_interactive(self) -> None:
         """No more logins that need a person: the run is about to test findings (VER-028)."""
         self._ui = None
@@ -456,14 +460,14 @@ class SessionManager:
             raise AuthError("form login: the login form at login_url sends the password to another address, "
                             "and credentials go only to login_url")
         data, auth["username_field"], auth["password_field"] = html_login.submission(form, user, password)
-        resp, _ = self._exchange("POST", action, cookies, data=data)
+        resp, landed = self._exchange("POST", action, cookies, data=data)
         token = _extract_token(resp)
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         if not token and not 200 <= resp.status_code < 300:
             raise AuthError(f"form login: the login form was answered HTTP {resp.status_code}")
         if not token and html_login.is_html(resp) and html_login.find_form(resp.text):
             raise AuthError("form login ended on the login form again; check the user name and password")
-        self._check_target(page_url, cookies, headers)
+        self._check_target(page_url, landed, cookies, headers)
         if found:
             auth["login_url"] = page_url          # renewals start at the page found
         if token:
@@ -474,10 +478,11 @@ class SessionManager:
             raise AuthError(f"form login: {problem}")
         return Session({"Cookie": cookie})
 
-    def _check_target(self, login_page: str, cookies: dict, headers: dict) -> None:
+    def _check_target(self, login_page: str, landed: str, cookies: dict, headers: dict) -> None:
         """After an HTML form login the target URL must no longer lead to the login form; where it still does, the
-        target did not take the login, e.g. because it sent it to a setup page (VER-041). Skipped where the target
-        URL is the login page itself or on another origin. Cookies the target sets meanwhile join the session."""
+        target did not take the login, e.g. because it sent it to a setup page, and the cause names the page the
+        login `landed` on (VER-041). Skipped where the target URL is the login page itself or on another origin.
+        Cookies the target sets meanwhile join the session."""
         from . import html_login
 
         target = self._target
@@ -486,7 +491,9 @@ class SessionManager:
             return
         resp, _ = self._exchange("GET", target, cookies, headers)
         if 200 <= resp.status_code < 300 and html_login.is_html(resp) and html_login.find_form(resp.text):
-            raise AuthError("form login: the target URL still leads to the login form after the login, so the "
+            page = urlsplit(landed).path.split(";", 1)[0] or "/"      # no parameters such as ;jsessionid, no query
+            led = "" if page == (urlsplit(login_page).path or "/") else f"the login led to {self.redact(page)}, but "
+            raise AuthError(f"form login: {led}the target URL still leads to the login form after the login, so the "
                             "target did not accept it")
 
     def _exchange(self, method: str, url: str, cookies: dict, extra: dict | None = None, **body):
