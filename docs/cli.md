@@ -11,6 +11,7 @@
 | `preflight` | Checks assessment, scope, proxy, source checkout, target, logins and model profile; tests no finding (VER-032). | target, model provider; nothing with `--offline` |
 | `scope` | Resolves and validates a scope file and shows what is in and out of scope (VER-001). | nothing |
 | `export` | Converts the verdicts of a finished `verification.yaml` into a file meant for AppSec Analyzer, which does not read it yet; no re-verification (VER-021, VER-015). | nothing |
+| `runs` | Lists the runs written without `--output` and removes the ones you name or older ones after you confirm (VER-064). | nothing |
 | `update` | Reinstalls a pipx installation of the Verifier after you confirm (VER-033). | the install source, through pipx |
 
 `appsec-verifier` without arguments, or with `--help`, lists the commands with examples. `appsec-verifier <command> --help` lists the options of one command by group, with example calls; `appsec-verifier ASSESSMENT --help` does the same for the guided run. A wrong call shows the short usage, the error and where the examples are. Options count only as written: an abbreviation such as `--show-cost` is an error that names the option meant (`did you mean --show-costs?`), and nothing is contacted.
@@ -403,6 +404,22 @@ appsec-verifier export --verification ./verification/verification.yaml \
 
 Converts a finished `verification.yaml` into verdicts keyed by finding id and the cross-run `match_key` (VER-007), meant for AppSec Analyzer to mark findings with their verification status. The Analyzer does not read this file yet. It never changes or re-scores the assessment (VER-021), contacts nothing and makes no model calls. Default output: `analyzer-verification.json` in the working directory, as JSON. A file that cannot be read or does not match `schemas/verification.schema.yaml` stops it with exit 2.
 
+## `runs` — list and remove earlier runs (VER-064)
+
+```
+appsec-verifier runs
+appsec-verifier runs --remove dvwa/2026-11-13T14-30-05 [PROJECT/RUN …]
+appsec-verifier runs --remove-older-than 30
+```
+
+Without options, `runs` lists the runs in the data directory (see [Outputs](#outputs)) by project and newest first: start time, size, state, mode, target and the verdict counts of the report. The state is `finished`, `interrupted` (stopped with Ctrl-C; the report holds what it found until then), `unfinished` (no report, for example after the run was killed), `report unreadable`, or `running` while a run writes into the directory. A run started with a Verifier version without `runs` shows as `unfinished` while it is still running. Directories you named with `--output` are not listed.
+
+- `--remove PROJECT/RUN …` removes the runs named as the list shows them, such as `dvwa/2026-11-13T14-30-05`. A name the list does not show stops the command, and nothing is removed.
+- `--remove-older-than DAYS` removes the runs that wrote nothing for more than DAYS days. A run continued with `--resume` counts from its last write, not from its start.
+- Both list the runs to remove with their total size and ask `[y/N]`; only `y` or `yes` removes them. Removed reports and evidence cannot be restored. A project left without runs is removed with its last run.
+- A run in progress is never removed, also when you name it.
+- Needs an interactive terminal outside CI (`CI` set); no option skips the question. Otherwise it lists what it would remove, removes nothing and exits 2.
+
 ## `update` — update the installed Verifier (VER-033)
 
 ```
@@ -629,7 +646,7 @@ Default limits of a run: model cost, model calls, requests, steps per finding, r
 
 ## Outputs
 
-Without `--output`, each run writes to a new directory of its own, `<data>/appsec-verifier/runs/<project>/<start time>/`, e.g. `~/.local/share/appsec-verifier/runs/owasp-juice-shop/2026-11-13T14-30-05/`, and never into the working directory. `<data>` is `$XDG_DATA_HOME` or else `~/.local/share` on Linux, `~/Library/Application Support` on macOS and `%LOCALAPPDATA%` on Windows, as for AppSec Analyzer's assessments. `<project>` is the assessment's `meta.project` in lower-case letters, digits and dashes (`assessment` when it names none); the start time is local time, and a run started in the same second as another gets `-2`. These directories are created readable only by you. A run that stops before it writes anything, for example at the confirmation, leaves no directory behind. Earlier runs are kept; nothing removes them. The `Report` line of the run settings and of `Done` names the directory. `--resume` without `--output` takes the newest run of the project whose report is for the same assessment and target, and starts a new one when there is none.
+Without `--output`, each run writes to a new directory of its own, `<data>/appsec-verifier/runs/<project>/<start time>/`, e.g. `~/.local/share/appsec-verifier/runs/owasp-juice-shop/2026-11-13T14-30-05/`, and never into the working directory. `<data>` is `$XDG_DATA_HOME` or else `~/.local/share` on Linux, `~/Library/Application Support` on macOS and `%LOCALAPPDATA%` on Windows, as for AppSec Analyzer's assessments. `<project>` is the assessment's `meta.project` in lower-case letters, digits and dashes (`assessment` when it names none); the start time is local time, and a run started in the same second as another gets `-2`. These directories are created readable only by you. A run that stops before it writes anything, for example at the confirmation, leaves no directory behind. Earlier runs are kept until you remove them with [`runs`](#runs--list-and-remove-earlier-runs-ver-064). The `Report` line of the run settings and of `Done` names the directory. `--resume` without `--output` takes the newest run of the project whose report is for the same assessment and target, and starts a new one when there is none.
 
 Written to `--output` or the run's own directory:
 

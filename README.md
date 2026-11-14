@@ -112,6 +112,7 @@ The console shows model costs with API billing, including reported prompt-cache 
 | `preflight` | Checks assessment, scope, target, logins and model, and shows which findings a run can test; tests no finding. `--offline` contacts nothing. |
 | `scope` | Validates a scope file and shows whether a URL is inside it. Offline. |
 | `export` | Converts a `verification.yaml` into a file for AppSec Analyzer. The Analyzer does not read this file. |
+| `runs` | Lists earlier runs written without `--output` and removes the ones you name or older ones after you confirm. |
 | `update` | Updates a pipx installation after you confirm. |
 
 Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also tests some findings below it, such as XSS and SQL injection findings that are cheap to confirm ([details](docs/cli.md#select-what-to-verify-ver-026)); `--strict-severity` leaves them out. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.

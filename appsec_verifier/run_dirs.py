@@ -5,7 +5,8 @@
 lower-case letters, digits and dashes, as AppSec Analyzer places and names its assessments
 (`data_base` and `_slug` in its `scripts/shared/assessment_location.py`). The run directory is created when the run
 starts, so two runs never share one, and removed again when the run wrote nothing into it. `--resume` without
---output continues the newest run of the project whose report fits (VER-037)."""
+--output continues the newest run of the project whose report fits (VER-037). While a run writes into one of these
+directories it holds a lock in it, so `runs` never removes a run in progress (VER-064)."""
 
 from __future__ import annotations
 
@@ -14,14 +15,17 @@ import itertools
 import os
 import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import IO
 
 APP_DIRECTORY = "appsec-verifier"
 RUNS_DIRECTORY = "runs"
 NAME_LIMIT = 40
 REPORT = "verification.yaml"
+LOCK = ".lock"
+RUN_NAME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d+)?")   # as new_run names them
 
 
 def data_base(env: Mapping[str, str] | None = None, platform: str | None = None, home: Path | None = None) -> Path:
@@ -77,6 +81,52 @@ def remove_if_empty(run: Path) -> None:
     """Remove a run directory nothing was written to; one that holds anything stays."""
     with contextlib.suppress(OSError):
         run.rmdir()
+
+
+@contextlib.contextmanager
+def hold_run(run: Path) -> Iterator[None]:
+    """Mark run as in progress while the block lasts: a lock on a file in it, which the system also releases when
+    the process ends. The file is removed afterwards, so an empty run stays removable. A run another process
+    already holds is left as it is."""
+    try:
+        handle = open(run / LOCK, "a+b")
+    except OSError:
+        yield
+        return
+    locked = _lock(handle)
+    try:
+        yield
+    finally:
+        handle.close()
+        if locked:
+            with contextlib.suppress(OSError):
+                (run / LOCK).unlink()
+
+
+def in_progress(run: Path) -> bool:
+    """Whether a process holds run (hold_run)."""
+    try:
+        handle = open(run / LOCK, "rb")
+    except OSError:
+        return False
+    with handle:
+        return not _lock(handle)
+
+
+def _lock(handle: IO[bytes]) -> bool:
+    """Take the lock on handle's file without waiting; False when another process holds it."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
 
 
 def _mkdir_private(path: Path) -> None:

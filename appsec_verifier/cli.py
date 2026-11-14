@@ -1,6 +1,6 @@
 """appsec-verifier — command-line entry point.
 
-`scope` and `export` run offline (no network, no model calls). `verify`
+`scope`, `export` and `runs` (VER-064) run offline (no network, no model calls). `verify`
 contacts the target through an agent only when model access is configured;
 otherwise it reports every selected finding not-attempted. Before the first
 finding it runs the pre-flight checks of VER-032, one fixed model test included;
@@ -13,6 +13,7 @@ for the full design.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import os
 import shutil
@@ -661,15 +662,19 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
     only in this process (VER-016). With --console-log, what the run prints
     also goes to console.log in the output directory, once the run writes a
     report there. Without --output the run gets a directory of its own, which
-    is removed again when the run wrote nothing into it (VER-058)."""
+    is removed again when the run wrote nothing into it (VER-058); while the
+    run lasts, `held` keeps it marked as in progress (VER-064)."""
     fresh = args.output is None
     try:
-        if not args.console_log:
-            return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=None)
-        from .progress import console_log
+        with contextlib.ExitStack() as held:
+            if not args.console_log:
+                return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=None,
+                               held=held)
+            from .progress import console_log
 
-        with console_log(plain=args.console_log == "plain") as console:
-            return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=console)
+            with console_log(plain=args.console_log == "plain") as console:
+                return _verify(args, invocation, default_yes, secrets=secrets, pasted=pasted, console=console,
+                               held=held)
     finally:
         if fresh and args.output:
             from .run_dirs import remove_if_empty
@@ -678,7 +683,7 @@ def cmd_verify(args: argparse.Namespace, invocation: str | None = None, default_
 
 
 def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool, *,
-            secrets: dict | None, pasted: list[dict] | None, console) -> int:
+            secrets: dict | None, pasted: list[dict] | None, console, held: contextlib.ExitStack) -> int:
     assessment = Path(args.assessment)
     if not assessment.is_file():
         return _blocked(f"The assessment {assessment} was not found", fix="check the path given with --assessment")
@@ -757,6 +762,10 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         except OSError as exc:
             return _blocked("The output directory cannot be created", [f"{exc.filename}: {type(exc).__name__}"],
                             "give a directory with --output")
+    from .run_dirs import data_base, hold_run
+
+    if Path(args.output).resolve().is_relative_to(data_base().resolve()):   # also a run named with --output
+        held.enter_context(hold_run(Path(args.output)))
     existing_path = Path(args.output) / "verification.yaml"
     if not args.resume and not args.overwrite and report_exists(args.output):
         return _blocked(
@@ -1350,6 +1359,17 @@ def _preflight_result(args, checks: list[Check], out, plan: list[str]) -> int:
         print(json.dumps({"kind": "preflight", "ok": ok, "verification": "not_run",
                           "checks": [c.as_dict() for c in checks]}, sort_keys=True))
     return EXIT_OK if ok else EXIT_BLOCKED
+
+
+def _days(value: str) -> int:
+    """`runs --remove-older-than`: a whole number of days, 0 or more (VER-064)."""
+    try:
+        days = int(value)
+    except ValueError:
+        days = -1
+    if days < 0:
+        raise argparse.ArgumentTypeError("expected a whole number of days, 0 or more")
+    return days
 
 
 def screenshot_option(value: str) -> str:
@@ -2037,6 +2057,7 @@ def _banner(st: Style) -> str:
         "  preflight  check assessment, scope, target, logins and model; verifies nothing\n"
         "  scope      resolve and validate an authorisation scope file\n"
         "  export     re-emit verdicts for AppSec Analyzer\n"
+        "  runs       list earlier runs, or remove them after your yes\n"
         "  update     update a pipx installation of the Verifier, after your yes\n\n"
         "Examples:\n"
         "  appsec-verifier appsec-assessment.yaml\n"
@@ -2164,6 +2185,20 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--verification", metavar="FILE", required=True, help="verification.yaml of a finished run")
     ex.add_argument("--output", metavar="FILE", help="file to write (default: analyzer-verification.json)")
     ex.add_argument("--format", dest="fmt", choices=["json", "yaml"], default="json", help="default: json")
+
+    rn = sub.add_parser(
+        "runs", help="list earlier runs, or remove them after your yes",
+        description=_wrap("Lists the runs written without --output, by project and newest first, with target, "
+                          "mode, verdicts, whether the run finished, and size. With --remove or --remove-older-than "
+                          "it lists the runs to remove and removes them after you confirm. A run in progress stays. "
+                          "Contacts nothing."),
+        epilog="Examples:\n"
+               "  appsec-verifier runs\n"
+               "  appsec-verifier runs --remove dvwa/2026-11-13T14-30-05\n"
+               "  appsec-verifier runs --remove-older-than 30")
+    rn.add_argument("--remove", nargs="+", metavar="PROJECT/RUN", help="remove these runs, named as the list shows")
+    rn.add_argument("--remove-older-than", type=_days, metavar="DAYS",
+                    help="remove the runs that wrote nothing for more than DAYS days")
 
     sub.add_parser("update", help="update a pipx installation of the Verifier, after your yes",
                    description=_wrap("Reinstalls the Verifier with pipx from the source it was installed from, "
@@ -2380,7 +2415,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     )
 
 
-COMMANDS = ("scope", "verify", "preflight", "export", "update")
+COMMANDS = ("scope", "verify", "preflight", "export", "runs", "update")
 
 
 def _stdin_is_terminal() -> bool:
@@ -2413,6 +2448,9 @@ def _main(argv: list[str] | None) -> int:
         return cmd_preflight(args)
     if args.command == "export":
         return cmd_export(args)
+    if args.command == "runs":
+        from .runs import runs_command
+        return runs_command(args.remove, args.remove_older_than)
     if args.command == "update":
         from .update import UpdateError, update_installation
         try:

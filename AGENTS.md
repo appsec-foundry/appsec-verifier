@@ -48,7 +48,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 
 | Path | Role |
 | --- | --- |
-| `appsec_verifier/cli.py` | argparse entry point: `scope`, `verify`, `preflight`, `export`, `update`; without a command the guided run (`guided.py`) |
+| `appsec_verifier/cli.py` | argparse entry point: `scope`, `verify`, `preflight`, `export`, `runs`, `update`; without a command the guided run (`guided.py`) |
 | `loader.py`, `matchkey.py` | read the assessment, classify and select findings (offline) |
 | `scope/guard.py` | `ScopeGuard`: allows or refuses each host, port, path and scheme |
 | `preflight.py` | confirmation gate (VER-002) and the pre-flight checks before the first finding (VER-032) |
@@ -56,7 +56,7 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 | `write_prompt.py` | in an interactive run the question for write requests safe mode does not send (VER-052) |
 | `term_style.py` | console colour and logo, adapted from AppSec Analyzer; colour only after `printable` |
 | `progress.py` | `RunProgress`: the run's progress grid and live status line during `verify`, as in AppSec Analyzer |
-| `run_dirs.py` | without `--output`, each run's own private directory in the user data directory, and the run `--resume` continues (VER-058) |
+| `run_dirs.py`, `runs.py` | without `--output`, each run's own private directory in the user data directory, and the run `--resume` continues (VER-058); the lock of a run in progress, and `runs`: list and remove runs after a yes (VER-064) |
 | `update.py`, `version_info.py` | `update`: pipx reinstall after a yes (VER-033); `--version` from the build stamp `build-info.json` (written by `setup.py`) or Git |
 | `tools/http.py` | `GuardedHttpClient`: every target request goes through scope and budget |
 | `auth/` | sessions per test identity (`sessions.py`); sign-ins in the operator's browser (`interactive.py`); the login program (`program.py`); pasted sessions and hidden input (`paste.py`) |
