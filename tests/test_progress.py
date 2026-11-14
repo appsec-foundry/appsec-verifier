@@ -385,26 +385,151 @@ def test_a_result_a_proof_needs_is_highlighted_in_its_step(monkeypatch):
     assert st("no script executed", "ok", "bold") not in _rows(out)[-1]
 
 
-def test_generated_controls_are_named_instead_of_showing_requests_that_look_alike(monkeypatch):
-    """As in a DVWA run: ten controls of one experiment showed the same cut-off URL. The series' first row shows
-    the request; the others say which control they are. A later request of the agent shows its URL again."""
+_BOOLEAN_PLAN = {"kind": "boolean", "path": "/brute/", "method": "GET", "input_location": "query",
+                 "input_name": "username", "baseline": "admin", "sql_template": "admin' AND {{predicate}} -- -"}
+_BOOLEAN_CONTROLS = (("baseline", "admin", 4399), ("true", "admin' AND (1=1) -- -", 4463),
+                     ("false", "admin' AND (1=2) -- -", 4399), ("true, second pair", "admin' AND (2<>1) -- -", 4463),
+                     ("false, second pair", "admin' AND (2<>2) -- -", 4399))
+
+
+def _experiment(progress, plan, controls, *, first=5, role="account-2", feedback=None):
+    """The records agent/loop.py logs for an accepted plan: the plan, its controls, then the check's feedback."""
+    progress.step({"step": first - 1, "tool": "plan_test", "args": plan, "result": {"accepted": True}})
+    step = first
+    for label, value, result in controls:
+        args = {"path": plan["path"], "method": "GET", **({"role": role} if role else {}),
+                "params": {"password": "x", plan["input_name"]: value}}
+        if not isinstance(result, dict):
+            result = {"status": 200, "length": result}
+        progress.step({"step": step, "tool": "http_request", "args": args, "control": label, "result": result})
+        step += 1
+    if feedback is not None:
+        progress.step({"step": step, "tool": "experiment", "args": {}, "result": feedback})
+
+
+def _shown(out) -> str:
+    """The grid without colour, a wrapped entry read as one text."""
+    return " ".join(SGR.sub("", "\n".join(_rows(out))).split())
+
+
+def _started(monkeypatch, cls="injection", **kwargs):
     monkeypatch.setenv("COLUMNS", "400")
     out = Tty()
-    progress = RunProgress(out, clock=Clock(), env={}, live=False)
-    progress.begin([_plan(cls="injection")])
-    progress.finding(_plan(cls="injection"))
-    args = {"path": "/brute/", "params": {"username": "x' AND 1=1 -- -"}, "role": "account-2"}
-    for step, control in enumerate(("baseline #1", "true #1", "false #1"), 5):
-        progress.step({"step": step, "tool": "http_request", "args": args, "control": control,
-                       "result": {"status": 200, "length": 4399}})
-    shown = " ".join(SGR.sub("", "\n".join(_rows(out))).split())
-    assert "step 5 · control baseline #1 · GET /brute/?username=" in shown
-    assert "step 6 · control true #1 as account-2 → 200 · 4399 B" in shown
-    assert "step 7 · control false #1 as account-2 → 200 · 4399 B" in shown
-    assert shown.count("/brute/") == 1                                 # only the series' first row shows the URL
-    progress.step({"step": 8, "tool": "http_request", "args": args, "result": {"status": 200, "length": 4399}})
-    shown = " ".join(SGR.sub("", "\n".join(_rows(out))).split())
-    assert "step 8 · GET /brute/?username=" in shown and shown.count("/brute/") == 2
+    progress = RunProgress(out, clock=Clock(), env={}, live=False, **kwargs)
+    progress.begin([_plan(cls=cls)])
+    progress.finding(_plan(cls=cls))
+    return out, progress
+
+
+def test_an_experiments_controls_stand_as_a_block_that_says_what_is_tested(monkeypatch):
+    """As in a DVWA run: ten controls showed a cut-off URL each and ended in `experiment → done`. The block says
+    what the experiment tests and asks, each control what it is and the value it sends, a second round with the
+    first round's answers is one entry, and the check's outcome closes the block."""
+    out, progress = _started(monkeypatch)
+    controls = [(f"{name} #{n}", value, length) for n in (1, 2) for name, value, length in _BOOLEAN_CONTROLS]
+    _experiment(progress, _BOOLEAN_PLAN, controls, feedback={"proof": "holds", "steps": list(range(5, 15))})
+    shown = _shown(out)
+    assert "boolean test of username (query) as account-2, each control twice:" in shown
+    assert "do the true and false conditions answer differently" in shown
+    assert "step 5 · normal · admin → 200 · 4399 B" in shown
+    assert "step 6 · true · admin' AND (1=1) -- - → 200 · 4463 B" in shown
+    assert "step 9 · false · admin' AND (2<>2) -- - → 200 · 4399 B" in shown
+    assert "steps 10–14 · round 2: same answers as round 1" in shown
+    assert "step 15 · ✓ the controls give the proof" in shown
+    assert "step 10 ·" not in shown and "#1" not in shown and "/brute/?" not in shown
+    assert "experiment" not in shown
+
+
+def test_a_second_round_with_other_answers_shows_each_of_its_controls(monkeypatch):
+    out, progress = _started(monkeypatch)
+    controls = [(f"{name} #1", value, length) for name, value, length in _BOOLEAN_CONTROLS]
+    controls += [("baseline #2", "admin", 4399), ("true #2", "admin' AND (1=1) -- -", 4399)]
+    _experiment(progress, _BOOLEAN_PLAN, controls, feedback={"proof": "missing",
+                                                             "reason": "the selected observation is unstable"})
+    shown = _shown(out)
+    assert "round 2" not in shown
+    assert "step 10 · normal · admin → 200 · 4399 B" in shown
+    assert "step 11 · true · admin' AND (1=1) -- - → 200 · 4399 B" in shown
+    assert "step 12 · ✗ the controls give no proof: the selected observation is unstable" in shown
+
+
+def test_a_block_cut_short_by_a_limit_shows_its_held_controls_before_the_stop(monkeypatch):
+    out, progress = _started(monkeypatch)
+    controls = [(f"{name} #1", value, length) for name, value, length in _BOOLEAN_CONTROLS] + [
+        ("baseline #2", "admin", 4399)]
+    _experiment(progress, _BOOLEAN_PLAN, controls)
+    progress.step({"step": 11, "stopped": "time", "reason": "run time limit reached"})
+    shown = _shown(out)
+    assert 0 <= shown.index("step 10 · round 2: same answers as round 1") < shown.index("run time limit reached")
+
+
+def test_the_comparison_names_who_reads_which_path(monkeypatch):
+    """VER-057: the account's GET, the same GET without credentials and a random path; the identity belongs to a
+    control, not to the block, and nothing is folded into a round."""
+    out, progress = _started(monkeypatch, cls="access-control")
+    plan = {"kind": "access-control", "path": "/api/v1/user/", "method": "GET", "signed_in": "account-1"}
+    progress.step({"step": 1, "tool": "plan_test", "args": plan, "result": {"accepted": True}})
+    for step, label, path, role, status in ((2, "as the account", "/api/v1/user/", "account-1", 200),
+                                            (3, "without credentials", "/api/v1/user/", None, 200),
+                                            (4, "random path", "/api/v1/vrf39/", None, 404)):
+        progress.step({"step": step, "tool": "http_request", "control": label, "result": {"status": status},
+                       "args": {"method": "GET", "comparison": True, "path": path, **({"role": role} if role else {})}})
+    progress.step({"step": 5, "tool": "experiment", "args": {}, "result": {
+        "proof": "missing", "reason": "access observed, but no independent access restriction is established"}})
+    shown = _shown(out)
+    assert "comparison of /api/v1/user/ signed in and without credentials:" in shown
+    assert "does the request without credentials get the account's answer, unlike a random path?" in shown
+    assert "step 2 · signed in as account-1 · /api/v1/user/ → 200" in shown
+    assert "step 3 · without credentials · /api/v1/user/ → 200" in shown
+    assert "step 4 · random path · /api/v1/vrf39/ → 404" in shown
+    assert "✗ the controls give no proof: access observed" in shown
+
+
+def test_the_engine_error_sweep_names_breaks_and_their_balanced_counterparts(monkeypatch):
+    """VER-053: a break and a balance per metacharacter; the labels carry the metacharacter, the value shows it."""
+    out, progress = _started(monkeypatch)
+    plan = {**_BOOLEAN_PLAN, "error_probe": True}
+    plan.pop("sql_template")
+    controls = [("break ' #1", "admin'", {"status": 500, "body_withheld": True}),
+                ("balance ' #1", "admin''", 4399)]
+    _experiment(progress, plan, controls, feedback={"proof": "negative-only"})
+    shown = _shown(out)
+    assert "engine-error test of username (query) as account-2, each control twice:" in shown
+    assert "does a syntax-breaking character raise an engine error that its balanced counterpart does not?" in shown
+    assert "step 5 · break · admin' → 500 · body withheld" in shown
+    assert "step 6 · balanced · admin'' → 200 · 4399 B" in shown
+    assert "step 7 · the controls can support a negative verdict only: the agent chose their values" in shown
+
+
+def test_a_control_shows_no_credential_value(monkeypatch):
+    """VER-016: the value a control sends and the plan's fields pass the run's redaction like any other step."""
+    secret = "Zq8-cred-71x"
+    out, progress = _started(monkeypatch, redact=lambda value: _redact_all(value, secret))
+    plan = {**_BOOLEAN_PLAN, "baseline": secret}
+    _experiment(progress, plan, [("baseline #1", secret, 4399), ("true #1", secret + "' AND (1=1) -- -", 4463)],
+                feedback={"proof": "missing", "reason": f"the baseline {secret} answered differently"})
+    shown = _shown(out)
+    assert secret not in shown
+    assert "step 5 · normal · [account-1 password] → 200" in shown
+    assert "step 6 · true · [account-1 password]' AND (1=1) -- -" in shown
+
+
+def _redact_all(value, secret):
+    if isinstance(value, str):
+        return value.replace(secret, "[account-1 password]")
+    if isinstance(value, dict):
+        return {_redact_all(k, secret): _redact_all(v, secret) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_all(v, secret) for v in value]
+    return value
+
+
+def test_a_request_of_the_agent_after_a_block_shows_its_url_again(monkeypatch):
+    out, progress = _started(monkeypatch)
+    _experiment(progress, _BOOLEAN_PLAN, [("baseline #1", "admin", 4399)])
+    progress.step({"step": 6, "tool": "http_request", "result": {"status": 200, "length": 4399},
+                   "args": {"path": "/brute/", "params": {"username": "admin"}, "role": "account-2"}})
+    assert "step 6 · GET /brute/?username=admin as account-2 → 200 · 4399 B" in _shown(out)
 
 
 def test_the_evidence_reviewer_has_agent_entries_for_its_start_and_end():

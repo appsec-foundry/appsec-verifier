@@ -12,7 +12,11 @@ form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act as
 source code. A finding an earlier run-wide limit stopped gets no agent entries, since no agent starts for
 it. A step entry gives the agent's note on what the step checks, then the request it tested with its
 query and body, the result and how long the model took to propose the step; a result that a proof needs
-(a script executed, the marker file read, a callback hit) is highlighted. A ``proof`` entry says when the
+(a script executed, the marker file read, a callback hit) is highlighted. The controls the Verifier sends for an
+accepted experiment (VER-011, VER-049, VER-053, VER-057) form a block: an entry with what the experiment tests and
+the question its controls answer, then one entry per control with what it is (``normal``, ``true``, ``false``,
+``break`` …), the value it sends and the result; a second round that repeats the first one's answers is one entry,
+and a ``proof`` entry says whether the controls give the proof. A ``proof`` entry also says when the
 proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
 entry says so, then a ``proof`` entry says whether the proof was checked (VER-009 to VER-013) or why
 there is none. The evidence reviewer of VER-042 gets ``agent`` entries for its start and end as well.
@@ -54,6 +58,7 @@ import time
 from collections import Counter
 from contextlib import contextmanager
 
+from .agent.experiments import agent_controls
 from .preflight import printable
 from .term_style import Style, columns
 from .verify.probes import proof_shown
@@ -178,6 +183,69 @@ def _action(tool: str, args: dict) -> str:
     else:
         text = _clip(tool, 40)
     return text + (f" as {_clip(args['role'], 40)}" if args.get("role") else "")
+
+
+# An experiment's form by the first plan field it sets: what it tests and the question its controls answer.
+_EXPERIMENT_FORMS = (
+    ("exposure", "exposure check of {path}",
+     "is the declared content served without credentials, unlike the path next to it?"),
+    ("signed_in", "comparison of {path} signed in and without credentials",
+     "does the request without credentials get the account's answer, unlike a random path?"),
+    ("error_probe", "engine-error test of {input}",
+     "does a syntax-breaking character raise an engine error that its balanced counterpart does not?"),
+    ("auth_artifact", "login bypass test of {input}",
+     "does the true condition get a login artifact that opens the protected resource, and the false one not?"),
+    ("sql_marker", "marker test of {input}",
+     "does each condition's computed marker come back in its own answer only?"),
+    ("expression_template", "expression test of {input}",
+     "does each answer show the value its own expression computes?"),
+)
+# A control's label in the action log (AgentTools.control_labels) as the block names it; the value it sends tells
+# a second pair from the first.
+_CONTROL_NAMES = {"baseline": "normal", "true, second pair": "true", "false, second pair": "false",
+                  "delayed, second pair": "delayed", "anonymous": "without credentials"}
+_CONTROL_INPUTS = {"query": "params", "path": "path_inputs"}     # where a plan's input sits in the request
+_ROUND = re.compile(r"(.*) #(\d+)")
+
+
+def _experiment_title(plan: dict, role: str) -> list[str]:
+    """What an experiment tests, with its input and identity, and the question its controls answer."""
+    where = {"path": _clip(plan.get("path", "")),
+             "input": f"{_clip(plan.get('input_name', ''), 40)} ({_clip(plan.get('input_location', ''), 10)})"}
+    form = next(((field, title, question) for field, title, question in _EXPERIMENT_FORMS if plan.get(field)), None)
+    timing = plan.get("kind") == "timing"
+    if form:
+        field, title, question = form
+    elif agent_controls(plan):
+        field, title = "", ("timing" if timing else "boolean") + " test of {input} with values the agent chose"
+        question = ("does the delayed value answer later?" if timing
+                    else "do the true and false values answer differently?")
+    else:
+        field, title = "", ("timing" if timing else "boolean") + " test of {input}"
+        question = ("does the delayed condition answer 2 to 5 seconds later than the normal one?" if timing else
+                    "do the true and false conditions answer differently, each alike in every round?")
+    title = title.format(**where)
+    if field not in ("exposure", "signed_in"):
+        title += f" as {_clip(role, 40)}" if role else ""
+        title += "" if field == "auth_artifact" else ", each control twice"
+    return [title + ":", question]
+
+
+def _control_value(plan: dict, args: dict) -> str:
+    """The value a control sends in the experiment's input; for a comparison, the path it reads."""
+    if plan.get("exposure") or plan.get("signed_in") or not plan.get("input_name"):
+        return _clip(args.get("path", "")) if plan else _action("http_request", args)
+    name = str(plan["input_name"])
+    location = _CONTROL_INPUTS.get(plan.get("input_location"), plan.get("input_location"))
+    values = args.get(location) if isinstance(args.get(location), dict) else {}
+
+    def text(value):
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    if name in values:
+        return _clip(text(values[name]), 100)
+    shown = [f"{key}={text(value)}" for key, value in values.items() if str(key).startswith(name + "[")]
+    return _clip("&".join(shown), 100) if shown else _action("http_request", args)
 
 
 def _outcome(result: dict) -> list[tuple]:
@@ -343,7 +411,8 @@ class RunProgress:
         self._explained = False         # a proof entry said why the finding has no proof
         self._reviewing = False         # an evidence reviewer started and has not finished
         self._planned = False           # a plan of the current finding was already accepted
-        self._in_controls = False       # the last step was a generated control of an experiment
+        self._plan: dict = {}           # the finding's latest accepted plan, whose controls a block shows
+        self._series: dict | None = None    # the control block being shown: its rows, and a later round's held back
         self._review_from = None        # when the current evidence review started
         self._review_time = 0.0         # time of the finding's evidence review, kept off its done line
         self._activity, self._activity_at = "", 0.0
@@ -380,6 +449,7 @@ class RunProgress:
     def finding(self, plan, *, agent: bool = True) -> None:
         """The finding's ``start`` entry; ``agent`` off when no agent starts for it."""
         with self._lock:
+            self._end_series()
             if self.number:
                 self._write("")         # sets the finding apart from the one before
             if plan.id != self._numbered:   # another variant of the same finding keeps its number
@@ -387,7 +457,7 @@ class RunProgress:
                 self._numbered = plan.id
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted, self._explained = 0, "", False, False
-            self._planned = self._in_controls = False
+            self._planned, self._plan = False, {}
             self._review_from, self._review_time = None, 0.0
             self._asked = self._took = None
             self._finding_at = self._clock()
@@ -423,6 +493,14 @@ class RunProgress:
             if isinstance(number, int):
                 self._steps = number
             head = f"step {number}"
+            control = record.get("control") if isinstance(record.get("control"), str) else ""
+            if control and record.get("tool") == "http_request":
+                self._control(head, control, record)
+                return
+            self._end_series()
+            if record.get("tool") == "experiment":
+                self._experiment_result(head, record)
+                return
             note = _clip(record["note"]) if isinstance(record.get("note"), str) else ""
             args = record.get("args") if isinstance(record.get("args"), dict) else {}
             action = _action(str(record["tool"]), args) if "tool" in record else ""
@@ -460,18 +538,10 @@ class RunProgress:
                     # plan (Test planning, verify/report.py).
                     reason = (args.get("strategy") or {}).get("revision_reason") or args.get("note") or ""
                     label = "plan revised" if self._planned else "test plan"
-                    self._planned = True
+                    self._planned, self._plan = True, args
                     self._record("plan", _line(label, _clip(args.get("path", "")),
                                                _clip(reason, 180) if reason else ""))
                     return
-                control = record.get("control") if isinstance(record.get("control"), str) else ""
-                if control:
-                    # A generated control (agent/loop.py): the series' first row shows the request, the others
-                    # only which control they are, since they differ in a value the row would cut off.
-                    role = f" as {_clip(args['role'], 40)}" if args.get("role") else ""
-                    action = (f"control {_clip(control, 40)} · {action}" if not self._in_controls
-                              else f"control {_clip(control, 40)}{role}")
-                self._in_controls = bool(control)
                 tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
                 tested = _line([tested, (" → ",), *_outcome(result)], (took, "muted"), cost)
                 hang = len(head) + 3
@@ -479,6 +549,73 @@ class RunProgress:
                     self._record("·", _line(head, note), tested, hang=hang)
                 else:
                     self._record("·", _line(head, tested), hang=hang)
+
+    def _control(self, head: str, label: str, record: dict) -> None:
+        """One control the Verifier generated and sent for the accepted plan (agent/loop.py), in the plan's block:
+        the block's first control opens it with what the experiment tests. A control of a later round is held back
+        until the block ends, where one entry stands for a round that repeats the first one's answers."""
+        args = record.get("args") if isinstance(record.get("args"), dict) else {}
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        match = _ROUND.fullmatch(label)
+        name, round_ = (match.group(1), int(match.group(2))) if match else (label, 1)
+        role = _clip(args["role"], 40) if args.get("role") else ""
+        if name == "as the account":
+            name = f"signed in as {role}" if role else "signed in"
+        else:
+            name = ("break" if name.startswith("break ") else "balanced" if name.startswith("balance ")
+                    else _CONTROL_NAMES.get(name, name))
+        outcome = _outcome(result)
+        if self._plan.get("kind") == "timing" and type(result.get("elapsed_ms")) is int:
+            outcome = _line(outcome, f"{result['elapsed_ms'] / 1000:.1f}s")
+        row = {"head": head, "round": round_, "name": _clip(name, 60), "value": _control_value(self._plan, args),
+               "outcome": outcome}
+        if self._series is None:
+            self._series = {"rows": [], "held": []}
+            title = (_experiment_title(self._plan, role) if self._plan
+                     else ["controls the Verifier generated for the accepted plan:"])
+            self._record("·", _line(title[0]), *([[(title[1], "muted")]] if len(title) > 1 else []))
+        if self._series["held"] or round_ > 1:
+            self._series["held"].append(row)
+        else:
+            self._series["rows"].append(row)
+            self._control_row(row)
+
+    def _control_row(self, row: dict) -> None:
+        self._record("·", _line(row["head"], [(row["name"], "agent")], [(row["value"],), (" → ",), *row["outcome"]]),
+                     hang=len(row["head"]) + 3)
+
+    def _end_series(self) -> None:
+        """Close the control block: the held rows of a later round, or one entry when they repeat the first round."""
+        series, self._series = self._series, None
+        if not series or not series["held"]:
+            return
+        held, first = series["held"], series["rows"]
+
+        def shown(row):
+            return row["name"], row["value"], "".join(segment[0] for segment in row["outcome"])
+
+        if (len(held) <= len(first) and all(row["round"] > 1 for row in held)
+                and all(shown(a) == shown(b) for a, b in zip(held, first, strict=False))):
+            start, end = held[0]["head"].split()[-1], held[-1]["head"].split()[-1]
+            steps = f"step {start}" if len(held) == 1 else f"steps {start}–{end}"
+            self._record("·", _line(steps, f"round {held[0]['round']}: same answers as round 1"))
+            return
+        for row in held:
+            self._control_row(row)
+
+    def _experiment_result(self, head: str, record: dict) -> None:
+        """Whether the controls just sent give the proof, as the Verifier's check told the agent (VER-011)."""
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        if result.get("proof") == "holds":
+            self._record("proof", _line(head, [("✓ the controls give the proof", "ok", "bold")]), role="ok")
+            return
+        if result.get("proof") == "negative-only":
+            text = [("the controls can support a negative verdict only", "warn", "bold"),
+                    (": the agent chose their values", "warn")]
+        else:
+            reason = _clip(str(result.get("reason") or "the class's proof is missing"), 200)
+            text = [("✗ the controls give no proof", "warn", "bold"), (f": {reason}", "warn")]
+        self._record("proof", _line(head, text), role="warn")
 
     def evidence_review(self, finding: str, stage: str, round_: int, detail: str) -> None:
         """Presentation work has its own rows; it never counts as a target test step (VER-042)."""
@@ -517,6 +654,7 @@ class RunProgress:
     def agent_finished(self, plan, result) -> None:
         """The test agent's end, then whether its verdict's proof was checked or why there is none (VER-013)."""
         with self._lock:
+            self._end_series()
             self._activity = ""
             steps = f"{self._steps} step" + ("s" if self._steps != 1 else "") if self._steps else ""
             self._record("agent", _line(("■ test agent finished", "agent", "bold"), steps,
