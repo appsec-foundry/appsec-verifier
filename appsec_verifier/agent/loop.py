@@ -327,11 +327,12 @@ class AgentProbe:
                 controller.observe("http_request", request, result)
                 if ctx.sessions is not None:
                     result = ctx.sessions.redact(result)
-                history.append({"tool": "http_request", "args": request, "result": result, "experiment": True})
                 # Which control of the series this is: the requests differ only in a value the console cuts off.
+                label = {"control": labels[position]} if position < len(labels) else {}
+                history.append({"tool": "http_request", "args": request, "result": result, "experiment": True,
+                                **label})
                 _log(ctx, step_n, tool="http_request", args=request,
-                     result={k: result[k] for k in _LOGGED_RESULT if k in result},
-                     **({"control": labels[position]} if position < len(labels) else {}))
+                     result={k: result[k] for k in _LOGGED_RESULT if k in result}, **label)
                 sent_steps.append(step_n)
                 if _control_failed(tools, result):
                     break

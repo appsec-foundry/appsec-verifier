@@ -117,7 +117,11 @@ def test_controls_built_on_a_credential_value_still_prove_injection(tmp_path):
     assert result.verdict == "confirmed"
     assert history[0]["result"]["experiment"]["baseline"] == "[customer-a token]"   # the planner's copy stays redacted
     assert ctx.accepted_plans[1]["baseline"] == "apple"
-    assert all(set(h) <= {"tool", "args", "result", "experiment"} for h in history)   # nothing beside the steps
+    # nothing beside the steps; a generated control also carries which control of the series it is
+    assert all(set(h) <= {"tool", "args", "result", "experiment", "control"} for h in history)
+    assert {h["control"] for h in history if "control" in h} == {
+        f"{name} #{n}" for name in ("baseline", "true", "false", "true, second pair", "false, second pair")
+        for n in (1, 2)}
 
 
 def test_variants_keep_independent_coverage():

@@ -146,6 +146,24 @@ def test_target_response_reaches_the_model_only_as_json_data():
     assert len(steps) == 1 and steps[0]["result"] == {"body_excerpt": injected}
 
 
+def test_a_generated_control_is_shown_without_its_answer_text_and_another_step_keeps_it():
+    """VER-011: the code compares the controls' answers; the agent reads one with read_response when it needs it."""
+    answer = {"role": "a", "status": 200, "length": 4399, "body_sha256": "f" * 64, "body_excerpt": "<html>page</html>",
+              "elapsed_ms": 7, "engine_error": True}
+    history = [{"tool": "http_request", "args": {"path": "/x"}, "result": dict(answer)},
+               {"tool": "http_request", "args": {"path": "/x"}, "result": dict(answer), "experiment": True,
+                "control": "true #1"},
+               {"tool": "http_request", "args": {"path": "/x"}, "result": {"error": "refused", "error_kind": "refused"},
+                "experiment": True}]
+    text = prompt(_ctx(), history)
+    steps = json.loads(text.split("Steps so far (JSON):\n", 1)[1].split("\n\nController budget", 1)[0])
+    assert steps[0]["result"] == answer                                  # the agent's own request keeps its excerpt
+    assert steps[1]["result"] == {"control": "true #1", "role": "a", "status": 200, "length": 4399, "elapsed_ms": 7,
+                                  "engine_error": True}
+    assert steps[2]["result"] == {"error": "refused", "error_kind": "refused"}   # a control that was not answered
+    assert history[1]["result"] == answer                                # the recorded step itself is unchanged
+
+
 def test_each_step_prompt_begins_with_the_previous_one_up_to_its_last_step():
     """What changes with every call, the controller budget, follows the steps, so the previous prompt up to its last
     step is the next prompt's prefix, which a host's prompt cache can reuse."""
@@ -268,8 +286,9 @@ def test_a_finding_prompt_carries_only_its_own_class():
     # Fixed bounds, so the prompts cannot silently grow back (characters, not tokens). The injection bound grew by
     # 250 for the text observation of page answers (VER-055), by 50 for read_response's text window of an HTML
     # answer, which a pointer cannot read, by 2,100 for the presentation of the proof of concept (VER-059), and by
-    # 150 for where the agent reads the answer text it quotes there.
-    assert len(text) < 16_000 and len(injection) < 23_550
+    # 150 for where the agent reads the answer text it quotes there, and by 250 for what a plan with fixed or
+    # without baseline needs, what a pointer reads, and that a generated control's step shows no excerpt (VER-011).
+    assert len(text) < 16_000 and len(injection) < 23_800
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():
