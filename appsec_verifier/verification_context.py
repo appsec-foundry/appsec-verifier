@@ -1,4 +1,4 @@
-"""Bounded, source-grounded planning context, never authority (VER-005, VER-008, VER-019)."""
+"""Bounded, source-grounded planning context, never authority (VER-005, VER-008, VER-019, VER-026)."""
 
 from __future__ import annotations
 
@@ -133,6 +133,15 @@ def proof_limitations(plan) -> list[str]:
     return notes
 
 
+# The input locations the Verifier's requests can carry; a header, a cookie or any other location they cannot.
+SENDABLE_INPUTS = ("query", "json", "form", "path")
+
+
+def unsendable_input(variant: dict) -> bool:
+    """Whether a variant declares an input the Verifier cannot send, such as a custom header (VER-026)."""
+    return any(i.get("location") not in SENDABLE_INPUTS for i in (variant.get("request") or {}).get("inputs", []))
+
+
 def missing_capabilities(variant: dict, *, safe: bool, browser: bool, identities: bool) -> list[str]:
     """What a variant needs that this run lacks. With a test identity (`identities`), the "header" capability is
     the authentication header its session sends, unless one of the variant's inputs is itself a header: the
@@ -142,7 +151,7 @@ def missing_capabilities(variant: dict, *, safe: bool, browser: bool, identities
     required.update(i["location"] for i in request.get("inputs", []))
     if request["method"] not in ("GET", "HEAD", "OPTIONS"):
         required.add("state-change")
-    supported = {"query", "json", "form", "path"}
+    supported = set(SENDABLE_INPUTS)
     if not safe:
         supported.add("state-change")
     if browser:

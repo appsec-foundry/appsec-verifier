@@ -9,7 +9,7 @@ import unicodedata
 from dataclasses import replace
 from urllib.parse import urlsplit
 
-from .verification_context import bounded
+from .verification_context import bounded, unsendable_input
 
 TEXT = {"type": "string", "minLength": 10, "maxLength": 1000}
 STRATEGY_SCHEMA = {
@@ -185,13 +185,20 @@ def add_quick(selected, eligible):
 
 
 def severity_order(plans):
-    """Quick findings first, then the others (VER-026); within each group most severe first, and within one
-    severity findings with a named read request before those whose named requests all write, and those before
-    findings without a named request; finding number as a stable tiebreaker. Ordering only, never selection:
-    under a limit the budget reaches the inexpensive findings before heavier ones spend it. `quick` depends only
-    on what a finding's variants share, so they stay together. `dependency_order` runs after this and only
-    hoists prerequisites, so a prerequisite still precedes what depends on it."""
-    return sorted(plans, key=lambda p: (not quick(p), -_SEVERITY_RANK.get((p.severity or "").lower(), 0),
+    """Quick findings first, then the others, and last the findings whose every variant declares an input the
+    Verifier cannot send (VER-026); within each group most severe first, and within one severity findings with a
+    named read request before those whose named requests all write, and those before findings without a named
+    request; finding number as a stable tiebreaker. Ordering only, never selection: under a limit the budget reaches
+    the inexpensive findings before heavier ones spend it. `quick` depends only on what a finding's variants share,
+    and the last group is decided over all plans of one finding, so its variants stay together. `dependency_order`
+    runs after this and only hoists prerequisites, so a prerequisite still precedes what depends on it."""
+    unsendable = {}
+    for p in plans:
+        variants = (getattr(p, "verification_context", None) or {}).get("variants", [])
+        unsendable[p.id] = (unsendable.get(p.id, True) and bool(variants)
+                            and all(unsendable_input(v) for v in variants))
+    return sorted(plans, key=lambda p: (unsendable[p.id], not quick(p),
+                                        -_SEVERITY_RANK.get((p.severity or "").lower(), 0),
                                         _ease(p), _finding_number(p.id), p.id or ""))
 
 
@@ -234,14 +241,15 @@ def _needs_write(variant) -> bool:
 
 
 def expand_variants(plans):
-    """One plan per variant. Within a finding, variants that need no write come first, otherwise in assessment
-    order; equivalent completed tests alone permit reuse (VER-026, VER-039)."""
+    """One plan per variant. Within a finding, variants that need no write come first and variants whose declared
+    input the Verifier cannot send last, otherwise in assessment order; equivalent completed tests alone permit
+    reuse (VER-026, VER-039)."""
     out = []
     for p in plans:
         variants = p.verification_context.get("variants", [])
         if not variants:
             out.append(p)
-        for v in sorted(variants, key=_needs_write):
+        for v in sorted(variants, key=lambda v: (unsendable_input(v), _needs_write(v))):
             out.append(
                 replace(
                     p,

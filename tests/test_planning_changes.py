@@ -252,6 +252,35 @@ def test_within_one_severity_findings_a_read_can_reach_come_first():
     assert [q.id for q in ordered] == ["T-3", "T-3", "T-1"]           # the variants are not split up
 
 
+def test_findings_and_variants_with_an_input_the_verifier_cannot_send_come_last():
+    """VER-026, as in a DVWA run: findings whose every variant declares a custom header were tested early, took about
+    a third of the run time and never confirmed, while findings after them were not reached. Such findings come after
+    all others and such variants after the rest of their finding, also after a write; a finding with one sendable
+    variant keeps its place, and its variants stay together when severity_order sees them expanded."""
+    from appsec_verifier.endpoints import Endpoint
+
+    doc = {"threats": [
+        {"id": "T-1", "cwe": "CWE-79", "severity": "critical", "evidence": {"file": "a", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-89", "severity": "high", "evidence": {"file": "b", "line": 1}},
+        {"id": "T-3", "cwe": "CWE-639", "severity": "low", "evidence": {"file": "c", "line": 1}},
+    ]}
+    by_id = {p.id: p for p in plans_from(doc)}
+    read = (Endpoint("GET", "/search", None),)
+    header = {"id": "h", "request": {"method": "GET", "path": "/x",
+                                     "inputs": [{"location": "header", "name": "X-Test"}]}}
+    write = {"id": "w", "request": {"method": "POST", "path": "/y", "inputs": [{"location": "form", "name": "q"}]}}
+    query = {"id": "q", "request": {"method": "GET", "path": "/z", "inputs": [{"location": "query", "name": "q"}]}}
+    t1 = replace(by_id["T-1"], endpoints=read)       # quick and critical, but its only variant needs a header
+    t1.verification_context = {"variants": [header]}
+    t2 = replace(by_id["T-2"], endpoints=read)       # quick; one of its variants needs a header
+    t2.verification_context = {"variants": [header, write, query]}
+    t3 = by_id["T-3"]                                 # neither quick nor severe, no variants
+    assert [p.id for p in severity_order([t1, t2, t3])] == ["T-2", "T-3", "T-1"]
+    assert [v.variant_id for v in expand_variants([t2])] == ["q", "w", "h"]
+    ordered = severity_order([t3, *expand_variants([t2])])
+    assert [(p.id, p.variant_id) for p in ordered] == [("T-2", "q"), ("T-2", "w"), ("T-2", "h"), ("T-3", None)]
+
+
 def test_quick_findings_are_tested_before_more_severe_heavier_ones():
     """VER-026: quick findings first, each group most severe first; a quick finding's variants stay together and a
     prerequisite it depends on still runs before it, whatever the prerequisite's class."""
