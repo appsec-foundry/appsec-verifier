@@ -314,7 +314,9 @@ def _system(ctx) -> str:
         "needs a write, declare the plan or send the write anyway: the Verifier asks the operator, who may allow "
         "writes for this finding; until then, and if declined, writes are refused. Once allowed, " + write_rules
         if getattr(ctx, "ask_writes", None) is not None
-        else "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing)"
+        else "SAFE (read-only; GET/HEAD/OPTIONS only; bounded benign controls; no noisy probing). If this finding "
+        "can be tested only with a write, request that write once: it is refused and kept for the report; then "
+        "submit_verdict not-attempted"
     )
     return _common(ctx, mode, roles) + _class_rules(ctx) + _closing() + _marker_hint(ctx)
 

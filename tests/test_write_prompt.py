@@ -408,8 +408,8 @@ def test_a_refused_write_is_kept_for_the_finding_and_the_agent_told_how_to_end_i
 
 
 def test_a_finding_that_needs_a_refused_write_ends_not_tested_in_this_mode(tmp_path):
-    """The agent's not-attempted after a refused write is the run's 'needs intrusive mode', naming the write; any
-    other verdict, or one without a refused write, stays as it is."""
+    """After a refused write, a test that ends without a checked result is the run's 'needs intrusive mode', naming
+    the write, whether the agent says not-attempted or inconclusive; without a refused write the verdict stays."""
     from test_agent_probe import ScriptedPlanner
 
     from appsec_verifier.agent.loop import AgentProbe
@@ -424,8 +424,22 @@ def test_a_finding_that_needs_a_refused_write_ends_not_tested_in_this_mode(tmp_p
     assert result.verdict == "not-attempted" and result.limits_hit == "safe-mode"
     assert result.rationale == ("not tested: safe mode; the finding needs PUT /rest/basket/2, which this run does "
                                 "not send; run with --allow-intrusive to test it")
-    assert run(write, {"verdict": {"verdict": "inconclusive", "rationale": "partly seen"}}).limits_hit is None
+    # As in a DVWA run: the same refused write ended as inconclusive in one run and as not tested in the next.
+    partly = run(write, {"verdict": {"verdict": "inconclusive", "rationale": "partly seen"}})
+    assert (partly.verdict, partly.limits_hit, partly.rationale) == ("not-attempted", "safe-mode", result.rationale)
     assert run({"verdict": {"verdict": "not-attempted", "rationale": "nothing to read"}}).limits_hit is None
+    unrelated = run({"verdict": {"verdict": "inconclusive", "rationale": "nothing to read"}})
+    assert (unrelated.verdict, unrelated.limits_hit) == ("inconclusive", None)
+
+
+def test_safe_mode_tells_the_agent_to_name_a_needed_write_once(tmp_path):
+    """VER-052: without anyone to ask, the instructions say how a needed write reaches the report."""
+    from appsec_verifier.agent.prompts import _system
+
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp())
+    assert "request that write once: it is refused and kept for the report" in _system(ctx)
+    ctx.safe = False
+    assert "request that write once" not in _system(ctx)
 
 
 def test_the_console_and_the_report_list_it_under_intrusive_mode():

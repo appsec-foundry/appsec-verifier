@@ -1,4 +1,4 @@
-"""The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-036,
+"""The agent loop that drives a probe (VER-001, VER-008, VER-011, VER-013, VER-015, VER-017, VER-019, VER-024, VER-036,
 VER-043, VER-046, VER-047, VER-052, VER-053, VER-055, VER-057, VER-059).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
@@ -79,6 +79,9 @@ class Planner(Protocol):
         ...
 
 
+MODEL_CALL_FAILED = "Model call failed: "      # an observation the code adds; the report's reason line reads it
+
+
 def _result_from_verdict(v: dict) -> ProbeResult:
     verdict = v.get("verdict")
     if verdict not in _VERDICTS:
@@ -92,21 +95,25 @@ def _result_from_verdict(v: dict) -> ProbeResult:
         identities_used=v.get("identities_used", []),
         state_changes=v.get("state_changes", []),
         deviation=v.get("deviation"),
-        observations=v.get("observations", []),
+        # An observation with the code's own prefix is the code's alone (VER-024).
+        observations=[o for o in v.get("observations", []) if not str(o).startswith(MODEL_CALL_FAILED)],
         # The model's own account of evidence is not taken over: the code records it (VER-034).
     )
 
 
 def untested_write(ctx, result: ProbeResult) -> ProbeResult:
-    """VER-052: a finding that ends not-attempted after this run refused a write it would send with
-    --allow-intrusive is not tested in this mode, like a finding whose named requests all write: the report names
-    the refused writes and how to allow them, and the console lists it under intrusive mode (limits_hit
-    safe-mode). Any other result is returned as it is."""
+    """VER-052: a finding whose test ends without a checked result after this run refused a write it would send
+    with --allow-intrusive is not tested in this mode, whichever of not-attempted and inconclusive the agent
+    chose, like a finding whose named requests all write: the report names the refused writes and how to allow
+    them, and the console lists it under intrusive mode (limits_hit safe-mode). A result the proof check
+    accepted, one a limit stopped, and one without a refused write are returned as they are."""
     refused = getattr(ctx, "refused_writes", None)
-    if result.verdict != "not-attempted" or not isinstance(refused, list) or not refused:
+    if (result.verdict not in ("not-attempted", "inconclusive") or (result.proof or {}).get("checked") is True
+            or result.limits_hit or not isinstance(refused, list) or not refused):
         return result
     writes = ", ".join(refused[:3]) + (f" and {len(refused) - 3} more" if len(refused) > 3 else "")
-    return replace(result, limits_hit="safe-mode",
+    # The unmet proof of an inconclusive verdict goes with it: the reason is the mode, not a missing citation.
+    return replace(result, verdict="not-attempted", proof=None, limits_hit="safe-mode",
                    rationale=f"not tested: safe mode; the finding needs {writes}, which this run does not send; "
                              "run with --allow-intrusive to test it")
 
@@ -165,6 +172,10 @@ class AgentProbe:
                 if (checked.proof or {}).get("observed_access"):
                     result.proof, result.evidence = checked.proof, checked.evidence
                     result.observations = checked.observations
+        # VER-024: a failed model call that ended the test is the reason the report gives, in the code's own words.
+        failed = getattr(ctx, "model_call_failed", None)
+        if failed and result.verdict == "inconclusive" and not result.limits_hit and result.rationale == failed:
+            result.observations = [*result.observations, MODEL_CALL_FAILED + failed]
         result.technical_review = getattr(ctx, "technical_review_result", None)
         if result.technical_review and result.technical_review["status"] != "not-reviewed":
             _log(ctx, None, tool="technical_review", note="Technical QA: " + result.technical_review["status"],

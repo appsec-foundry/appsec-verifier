@@ -211,6 +211,7 @@ _CLASS = {"xss": "XSS", "ssrf": "SSRF", "access-control": "access control", "ope
           "path-traversal": "path traversal"}
 _MAX_STEP_ROWS = 15
 # A verdict the proof check lowered names its reason before the agent's claim (agent/proof.py, _downgrade).
+_MODEL_CALL_FAILED = "Model call failed: "     # agent/loop.py MODEL_CALL_FAILED: the code's own observation (VER-024)
 _LOWERED = re.compile(r"indicative, not (?:proven|executed): (.*?)\. Agent's claim:", re.S)
 # A recorded step (verify/poc.py, _line): tool, method, URL or opened page, identity and answer.
 _STEP = re.compile(r"(\S+) (\S+) (.+) as (\S+) → (.*)", re.S)
@@ -438,7 +439,8 @@ def _not_tested(rationale) -> str:
 
 def _why_not(r: dict) -> str | None:
     """Why a tested finding is not confirmed, as the code knows it: what the proof check missed, the limit
-    that stopped the test, why the check lowered the agent's verdict, or which comparison is missing."""
+    that stopped the test, why the check lowered the agent's verdict, a failed model call (VER-024), or which
+    comparison is missing."""
     if r["verdict"] not in ("inconclusive", "not-attempted"):
         return None
     proof = r.get("proof") or {}
@@ -452,6 +454,9 @@ def _why_not(r: dict) -> str | None:
     lowered = _LOWERED.match(r.get("rationale") or "")
     if lowered:
         return lowered.group(1)
+    failed = next((o for o in r.get("observations") or [] if o.startswith(_MODEL_CALL_FAILED)), None)
+    if failed:                                     # VER-024: a failed model call, not a test without proof
+        return "a model call failed: " + failed.removeprefix(_MODEL_CALL_FAILED)
     accounts = {s["role"] for s in _steps(r) if s["role"] and s["status"] is not None} - {"anonymous"}
     if r.get("class") == "access-control" and len(accounts) == 1:
         return f"only {next(iter(accounts))} sent requests; the comparison with another account is missing"
@@ -728,7 +733,8 @@ def _details(r: dict) -> list[str]:
     if r.get("rationale") and not r.get("limits_hit"):
         out += ["", "**Test agent's explanation** (not proof)", "", _fenced(str(r["rationale"]), "text")]
     notes = [o for o in r.get("observations") or []
-             if not o.startswith(("Application screenshot unavailable:", "Deviation:", COMPOSED_NOTE))]
+             if not o.startswith(("Application screenshot unavailable:", "Deviation:", COMPOSED_NOTE,
+                                  _MODEL_CALL_FAILED))]
     if notes:
         out += ["", "**Other observations** (not verified)", "", _fenced("\n".join(notes), "text")]
     return out + _review_markdown(r, 4)

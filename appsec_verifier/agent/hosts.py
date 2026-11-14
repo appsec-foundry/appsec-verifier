@@ -205,6 +205,10 @@ class HostPlanner:
             action = parse_step(self._request(ctx, system_prompt(ctx), prompt(ctx, history), schema=step_schema(ctx)))
         except HostCallError as exc:
             action = inconclusive(str(exc))
+            try:
+                ctx.model_call_failed = str(exc)     # VER-024: the report names it as the reason
+            except AttributeError:
+                pass
         if isinstance(action.get("verdict"), Unusable):
             try:
                 ctx.model_failure = action["verdict"]["rationale"]

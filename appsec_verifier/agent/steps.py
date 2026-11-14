@@ -115,7 +115,11 @@ def _offered_schema(tool: dict, ctx=None) -> dict:
         schema = {**schema, "properties": {k: v for k, v in schema.get("properties", {}).items() if k not in hidden}}
     if tool["name"] == "submit_verdict":     # VER-059: offered precisely, asked for after the verdict, any object kept
         presentation = {**PRESENTATION_SCHEMA, "description": PRESENTATION_HELP}
-        schema = {**schema, "properties": {**schema.get("properties", {}), "presentation": presentation}}
+        # confidence, proof and evidence are accepted but not offered: the code sets the confidence from the checked
+        # proof and records the evidence itself (VER-013, VER-034), so the model is not prompted to write them.
+        schema = {**schema, "properties": {**{k: v for k, v in schema.get("properties", {}).items()
+                                              if k not in ("confidence", "proof", "evidence")},
+                                           "presentation": presentation}}
     return schema
 
 

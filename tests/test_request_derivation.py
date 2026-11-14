@@ -113,6 +113,18 @@ def test_an_unseen_input_or_a_failed_response_cannot_supply_a_request(tmp_path):
         derive(ctx)
 
 
+def test_a_refused_derivation_says_what_the_cited_step_does_not_show(tmp_path):
+    """Refused case, as in a DVWA run: the agent added an input the page form does not carry and got only a general
+    refusal. The refusal names the input, or says that the step shows no such request."""
+    ctx = context(tmp_path)
+    response(ctx, '<form action="/go/next"><input name="q"></form>')
+    with pytest.raises(ToolError, match=r"shows no input named 'token' for this request"):
+        derive(ctx, inputs=[{"location": "query", "name": "q"}, {"location": "query", "name": "token"}])
+    with pytest.raises(ToolError, match=r"shows no GET request to this path"):
+        derive(ctx, path="/go/other", inputs=[{"location": "query", "name": "q"}])
+    assert not getattr(ctx, "derived_requests", [])
+
+
 def test_scope_path_restriction_also_applies_to_recorded_forms(tmp_path):
     ctx = context(tmp_path)
     ctx.scope = {**ctx.scope, "path_prefixes": ["/go/allowed"]}
@@ -348,6 +360,29 @@ def test_a_form_of_the_page_above_a_script_supplies_its_request(tmp_path):
     response(ctx, PAGE, path="/vulnerabilities/sqli/")
     assert derive(ctx, "/vulnerabilities/sqli/", inputs=[{"location": "query", "name": "id"}])["accepted"]
     Controller(ctx).before("http_request", {"path": "/vulnerabilities/sqli/", "params": {"id": "1' AND 1=1"}})
+
+
+def test_the_form_s_request_may_carry_a_further_input_the_script_names(tmp_path):
+    """VER-056, as in a DVWA run: the weakness hangs on `token`, which the included script reads and the page's
+    form does not carry. The form names the request; the script's literals may join it, nothing else may."""
+    gated = "<?php\nif (isset($_GET['id'])) {\n  if ($_GET['token'] == 'x') { show($_GET['id']); }\n}\n"
+    query = lambda *names: [{"location": "query", "name": n} for n in names]  # noqa: E731
+    ctx = page_script(tmp_path, text=gated)
+    response(ctx, PAGE, path="/vulnerabilities/sqli/")
+    assert derive(ctx, "/vulnerabilities/sqli/", inputs=query("id", "token"))["accepted"]
+    Controller(ctx).before("http_request", {"path": "/vulnerabilities/sqli/", "params": {"id": "1", "token": "x"}})
+    refused = page_script(tmp_path, text=gated)
+    response(refused, PAGE, path="/vulnerabilities/sqli/")
+    with pytest.raises(ToolError, match="shows no input named 'role'"):
+        derive(refused, "/vulnerabilities/sqli/", inputs=query("id", "role"))       # the script never names it
+    with pytest.raises(ToolError, match="carries these inputs together"):
+        derive(refused, "/vulnerabilities/sqli/", inputs=query("id", "admin"))      # another link's input
+    response(refused, '<form action="#"><input name="admin"></form>', path="/vulnerabilities/sqli/")
+    with pytest.raises(ToolError):
+        derive(refused, "/vulnerabilities/sqli/", inputs=query("token"))            # no form names the request
+    with pytest.raises(ToolError):
+        derive(refused, "/vulnerabilities/brute/", inputs=query("token"))           # not the form's request
+    assert not getattr(refused, "derived_requests", [])
 
 
 @pytest.mark.parametrize(("page", "body", "path", "name"), [

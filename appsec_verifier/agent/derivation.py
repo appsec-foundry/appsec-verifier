@@ -596,9 +596,11 @@ def _page_roots(ctx, h, forms) -> tuple[list[dict], list[dict]]:
         own = {"method": "GET", "path": page, "inputs": [], "names": literals, "placeholders": set()}
         return [own], [own]
     directory = urlsplit(resolve(ctx, page)).path
-    return [r for r in forms if same_origin(r["path"], ctx.target_base)
-            and urlsplit(r["path"]).path.startswith(directory)
-            and any(i["name"] in literals for i in r.get("inputs", []))], []
+    # Such a form or link names the request; it may carry further inputs the evidence file names as literals.
+    named = [{**r, "names": literals} for r in forms if same_origin(r["path"], ctx.target_base)
+             and urlsplit(r["path"]).path.startswith(directory)
+             and any(i["name"] in literals for i in r.get("inputs", []))]
+    return named, named
 
 
 def _source_candidates(ctx, history, h):
@@ -716,8 +718,17 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
                 and all(_offers(r, i) for i in inputs)]
     if not matching or not (any(related(resolve(ctx, r["path"]), url) for r in roots)
                             or any(r in workflow for r in matching)):
-        raise ValueError(_hinted("request or inputs lack recorded evidence for the finding's original resource", ctx,
-                                 history))
+        # Say what the cited step does not show, so the next proposal can drop or evidence it.
+        routed = [r for r in candidates if r["method"] in (method, "ALL")
+                  and planned_route(resolve(ctx, r["path"]), url)]
+        unshown = [str(i.get("name"))[:40] for i in inputs if not any(_offers(r, i) for r in routed)]
+        detail = (f": the cited step shows no {method} request to this path" if not routed
+                  else ": the cited step shows no input named " + ", ".join(repr(n) for n in unshown[:3])
+                  + " for this request" if unshown
+                  else ": no single form, link or declaration of the cited step carries these inputs together"
+                  if not matching else "")      # a matching request that is not related to the finding's own
+        raise ValueError(_hinted("request or inputs lack recorded evidence for the finding's original resource"
+                                 + detail, ctx, history))
     if source:
         # Source paths are relative to the operator's base URL; browser links are already absolute.
         origin = {k: v for k, v in matching[0].items() if k.startswith("source_")}

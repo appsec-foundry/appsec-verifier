@@ -134,6 +134,8 @@ class ProbeContext:
     # answer was unusable; only the debug file of a failed verification reads them (verify/failure_debug.py)
     model_exchanges: list[dict] = field(default_factory=list)
     model_failure: str | None = None
+    # VER-024: the fixed reason of a failed model call that ended this finding, for the report's reason line
+    model_call_failed: str | None = None
 
 
 @runtime_checkable

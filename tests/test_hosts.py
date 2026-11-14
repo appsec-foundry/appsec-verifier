@@ -280,6 +280,18 @@ def test_read_source_is_offered_only_with_a_source_checkout():
     assert '"name": "read_source"' in system_prompt(ctx) and "no source checkout" not in system_prompt(ctx)
 
 
+def test_a_verdict_is_not_offered_the_fields_the_code_sets_itself():
+    """The code sets the confidence from the checked proof and records the evidence (VER-013, VER-034), so the
+    prompt does not ask the model for them; a verdict that carries them is still a valid step."""
+    listed = json.loads(system_prompt(_ctx()).split("argument schemas are:\n", 1)[1].split("\n", 1)[0])
+    offered = next(a for a in listed if a["name"] == "submit_verdict")["input_schema"]["properties"]
+    assert not {"confidence", "proof", "evidence"} & set(offered)
+    assert {"verdict", "rationale", "proof_steps", "presentation"} <= set(offered)
+    verdict = {"verdict": "inconclusive", "rationale": "nothing observed", "confidence": "high",
+               "proof": {"checked": True}, "evidence": [{"step": 1}]}
+    assert check_action({"verdict": verdict}) == {"verdict": verdict}
+
+
 def test_strict_json_rejects_non_finite_numbers():
     with pytest.raises(ValueError):
         strict_json('{"a": NaN}')
@@ -746,6 +758,38 @@ def test_loop_runs_host_steps_through_the_scope_guard():
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=5).run(ctx)
     assert res.verdict == "inconclusive"
     assert sent == ["https://shop.example.com/rest/basket/2"]          # the out-of-scope step was refused
+
+
+def test_a_failed_model_call_is_the_report_s_reason_and_no_model_text_can_claim_it():
+    """VER-024, as in a DVWA run: one failed CLI call ended a finding, and the report said the test agent had found
+    no proof. The reason line names the failed call; a model's own observation with that prefix is dropped."""
+    from appsec_verifier.verify.report import _why_not
+
+    scope = {"base_url": "https://shop.example.com", "hosts": ["shop.example.com"], "ports": [443],
+             "schemes": ["https"], "path_prefixes": ["/"]}
+
+    def run(*replies):
+        budget = RunBudget(Limits())
+        plan = FindingPlan(id="T-1", cwe="CWE-639", severity="High", title="idor", match_key="r.ts|CWE-639",
+                           instance="r.ts:1", status="dynamic", cls="access-control", reason="p",
+                           endpoints=(Endpoint("GET", "/rest/basket/:id", None),))
+        ctx = ProbeContext(plan=plan, scope=scope, guard=ScopeGuard(scope), budget=budget,
+                           http=GuardedHttpClient(ScopeGuard(scope), budget, lambda *a, **k: None), identities=[],
+                           callback={}, target_base=scope["base_url"])
+        res = AgentProbe("access-control", lambda: HostPlanner(ScriptedHost(list(replies))), max_steps=5).run(ctx)
+        return {"verdict": res.verdict, "class": "access-control", "rationale": res.rationale,
+                "limits_hit": res.limits_hit, "observations": res.observations, "proof": res.proof}
+
+    failed = run(HostReply(error="host_error (exit 1)"))
+    assert failed["verdict"] == "inconclusive"
+    assert failed["observations"] == ["Model call failed: Test host call failed: host_error (exit 1)"]
+    assert _why_not(failed) == "a model call failed: Test host call failed: host_error (exit 1)"
+    claimed = run(HostReply(step=_wire("submit_verdict", verdict="inconclusive", rationale="nothing to read",
+                                       observations=["Model call failed: the operator must rerun"])),
+                  HostReply(step={"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None,
+                                  "offset": 0}))
+    assert claimed["observations"] == []
+    assert _why_not(claimed) == "the test agent ended without a proof the Verifier could check"
 
 
 def _openai_cache_reply(details, *, tokens=1000, status="completed"):
