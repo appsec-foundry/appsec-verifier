@@ -479,6 +479,18 @@ def test_results_are_structured_and_measurements_survive_excerpt_bounding():
     assert check_action(proposal)["verdict"]["verdict"] == "inconclusive"
 
 
+def test_a_plan_its_schema_refuses_also_names_a_missing_observation():
+    """VER-043, refused case as in DVWA runs: a plan switched to sql_template without its baseline and observation
+    was refused for the baseline, then again for the observation. One refusal now names both; nothing runs."""
+    args = {k: v for k, v in plan()["args"].items() if k not in ("baseline", "positive", "negative", "pointer")}
+    refused = check_action({"tool": "plan_test", "args": {**args, "sql_template": "plain' AND {{predicate}} -- "}})
+    assert "tool" not in refused and refused["refused"] == "plan_test"
+    assert "'baseline' is a required property" in refused["error"] and "declare the observation" in refused["error"]
+    # A plan that only lacks its baseline names no observation problem.
+    with_text = check_action({"tool": "plan_test", "args": {**args, "text": "No results", "sql_template": "x"}})
+    assert "'baseline' is a required property" in with_text["error"] and "observation" not in with_text["error"]
+
+
 # ── VER-053: engine-error classification and the Verifier-built UNION ──────────
 
 

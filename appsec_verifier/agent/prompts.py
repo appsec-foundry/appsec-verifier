@@ -63,8 +63,9 @@ def _tool_defs() -> list[dict]:
             "name": "plan_test",
             "description": "Declare the input and controls the Verifier must generate itself: an injection "
             "experiment, or an access-control or session proof. Other classes need no plan. "
-            "Use boolean with a sink input and an observation: pointer for JSON, text for HTML/text; it needs "
-            "baseline unless error_probe, sql_marker or oob_template is set. When the plan is "
+            "Use boolean with a sink input, a baseline (not needed for sql_marker, oob_template or a NoSQL "
+            "error_probe) and, unless error_probe, sql_marker or oob_template is set, an observation: pointer for "
+            "JSON, text for HTML/text. When the plan is "
             "accepted the Verifier sends the generated read controls at once; on a write, call send_controls. "
             "sql_template and expression_template may be a list of up to three candidates; the first whose "
             "controls the target answers without a server error is used. fixed gives the request's other inputs, "

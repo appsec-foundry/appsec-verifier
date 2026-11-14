@@ -1,4 +1,4 @@
-"""The step contract every host-backed planner shares (VER-011, VER-017, VER-019).
+"""The step contract every host-backed planner shares (VER-011, VER-017, VER-019, VER-043).
 
 A host (an agent CLI or a tool-less API) gets no tools of its own. Each call
 answers with one step, {"action": ..., "args_json": ..., "note": ...}, which is
@@ -20,6 +20,7 @@ from jsonschema import Draft202012Validator
 from ..auth.accounts import FIELDS_ACTION
 from ..verification_context import bounded
 from ..verify.presentation import PRESENTATION_HELP, PRESENTATION_SCHEMA
+from .experiments import observation_problem
 from .prompts import _seed, _system, _tool_defs
 
 STEP_SCHEMA = {
@@ -268,7 +269,11 @@ def _validated(name: str, args) -> dict:
     error = next(iter(sorted(_ARG_VALIDATORS[name].iter_errors(args), key=str)), None)
     if error is not None:
         if name != "submit_verdict":
-            return {"refused": name, "args": args, "error": f"invalid {name} arguments: {error.message}"[:ERROR_CAP]}
+            message = error.message
+            if name == "plan_test" and (problem := observation_problem(args)):
+                # The observation is checked after the schema; name it now, so one revision fixes both (VER-043).
+                message += "; " + problem
+            return {"refused": name, "args": args, "error": f"invalid {name} arguments: {message}"[:ERROR_CAP]}
         return inconclusive(f"agent proposed invalid {name} arguments: {error.message}")
     if name == "submit_verdict":
         return {"verdict": args}

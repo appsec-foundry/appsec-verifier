@@ -89,6 +89,7 @@ from .experiments import (
     fixed_forms,
     generates_controls,
     normal_roles,
+    observation_problem,
     pointer_value,
     privileged_roles,
     token,
@@ -354,16 +355,28 @@ class AgentTools:
                 problems.append("an experiment sends every control twice; a write needs --allow-intrusive")
             elif is_write and asking:
                 needs_writes.append(f"{plan.get('method')} {plan.get('path')}, each control twice")
-        if plan["kind"] == "boolean" and not any(plan.get(k) for k in ("oob_template", "sql_marker", "error_probe")):
-            # VER-011, VER-055: one observation, a JSON field or a text of a page answer; arithmetic may read its
-            # results from the answer itself, and a login bypass observes its artifact's field.
-            if plan.get("pointer") and plan.get("text"):
-                problems.append("observe either a JSON field (pointer) or a text of the answer (text), not both")
-            elif plan.get("auth_artifact") and not plan.get("pointer"):
-                problems.append("an auth-artifact proof needs pointer at the token or session field")
-            elif not (plan.get("pointer") or plan.get("text") or plan.get("expression_template")):
-                problems.append("declare the observation: pointer for a JSON field, or text for a literal text a "
-                                "recorded page or text answer shows")
+        if problem := observation_problem(plan):
+            problems.append(problem)
+        if plan.get("fixed") and not (plan["kind"] == "access-control" and plan.get("signed_in")):
+            # A comparison without credentials (VER-057) takes its query inputs from fixed; checked below.
+            cwe = getattr(self.ctx.plan, "cwe", "")
+            if cwe == "CWE-78":
+                # Command probes send nothing but the harmless arithmetic controls (_check_steering).
+                problems.append("command injection probes carry no other values, so fixed is not available")
+            elif not generates_controls(plan) and plan["kind"] not in ("boolean", "timing"):
+                problems.append("fixed applies to generated injection controls and to the comparison without "
+                                "credentials (signed_in); omit it here")
+            elif not generates_controls(plan):
+                # VER-043: name the declarations that take fixed and what they keep, so the next plan is accepted.
+                forms = fixed_forms(cwe, plan.get("input_location"))
+                problems.append(
+                    "fixed gives the request's other inputs to controls the Verifier generates; controls you choose "
+                    "carry none and support only a negative verdict. "
+                    + (f"Declare a boolean plan with {' or '.join(forms)} and fixed instead of your own controls, and "
+                       "keep the baseline and the observation (error_probe needs no observation)" if forms else
+                       "This finding's CWE has no generated controls through this input; omit fixed"))
+            elif plan.get("input_name") in (plan["fixed"].get(plan.get("input_location")) or {}):
+                problems.append("fixed must not set the injected input; the generated controls supply it")
         if problems:
             raise ToolError("; ".join(problems))
         from .experiments import (
@@ -421,12 +434,14 @@ class AgentTools:
         if plan.get("expression_template"):
             if self.ctx.plan.cwe == "CWE-78":
                 baseline = plan.get("baseline")
-                if (
-                    not isinstance(baseline, str)
-                    or not re.fullmatch(r"[A-Za-z0-9_. -]{1,100}", baseline)
-                    or plan["expression_template"] != baseline + "; printf '%s' \"$(({{expression}}))\""
-                ):
-                    raise ToolError("command proof uses only a plain baseline followed by harmless printf arithmetic")
+                if not isinstance(baseline, str) or not re.fullmatch(r"[A-Za-z0-9_. -]{1,100}", baseline):
+                    raise ToolError("command proof uses only a plain baseline: up to 100 letters, digits, spaces, '_', "
+                                    "'.' or '-'")
+                expected = baseline + "; printf '%s' \"$(({{expression}}))\""
+                if plan["expression_template"] != expected:
+                    # VER-011: the one accepted form, spelled out with the agent's own baseline so it can be copied.
+                    raise ToolError("command proof uses only the plain baseline followed by harmless printf "
+                                    f"arithmetic: set expression_template to exactly {jsonlib.dumps(expected)}")
             if (self.ctx.plan.cwe not in ("CWE-78", "CWE-94", "CWE-95", "CWE-1336", "CWE-643")
                     or plan["kind"] != "boolean"):
                 raise ToolError("expression challenges need a command, code-evaluation, template or XPath "
@@ -494,24 +509,6 @@ class AgentTools:
             # VER-049: generated SQL/NoSQL controls obtain artifacts; a declared protected read tests their use.
             raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
                             "(sql_template for CWE-89 or operator_challenge for CWE-943)")
-        if plan.get("fixed") and not (plan["kind"] == "access-control" and plan.get("signed_in")):
-            # A comparison without credentials (VER-057) takes its query inputs from fixed; checked below.
-            cwe = getattr(self.ctx.plan, "cwe", "")
-            if cwe == "CWE-78":
-                # Command probes send nothing but the harmless arithmetic controls (_check_steering).
-                raise ToolError("command injection probes carry no other values, so fixed is not available")
-            if not generates_controls(plan) and plan["kind"] not in ("boolean", "timing"):
-                raise ToolError("fixed applies to generated injection controls and to the comparison without "
-                                "credentials (signed_in); omit it here")
-            if not generates_controls(plan):
-                # VER-043: name the declarations that take fixed, so the next plan can be accepted.
-                forms = fixed_forms(cwe, plan.get("input_location"))
-                raise ToolError("fixed gives the request's other inputs to controls the Verifier generates; controls "
-                                "you choose carry none and support only a negative verdict. "
-                                + (f"Declare a boolean plan with {' or '.join(forms)} and fixed instead" if forms else
-                                   "This finding's CWE has no generated controls through this input; omit fixed"))
-            if plan["input_name"] in (plan["fixed"].get(plan.get("input_location")) or {}):
-                raise ToolError("fixed must not set the injected input; the generated controls supply it")
         if plan.get("error_set"):
             # VER-053: the engine-error sweep's controls are its break/balance set, not the five fixed groups.
             values = [v for e in plan["error_set"] for v in (e["break"], e["balance"])]

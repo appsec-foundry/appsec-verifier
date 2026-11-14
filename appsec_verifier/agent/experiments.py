@@ -178,6 +178,22 @@ def revisable_observation(plan) -> bool:
         plan.get(k) for k in ("auth_artifact", "error_probe", "sql_marker", "oob_template"))
 
 
+def observation_problem(plan) -> str | None:
+    """What a boolean plan's observation lacks (VER-011, VER-055): one observation, a JSON field or a text of a page
+    answer. Arithmetic may read its results from the answer itself, a login bypass observes its artifact's field, and
+    the engine-error, returned-marker and out-of-band forms observe in code."""
+    if plan.get("kind") != "boolean" or any(plan.get(k) for k in ("oob_template", "sql_marker", "error_probe")):
+        return None
+    if plan.get("pointer") and plan.get("text"):
+        return "observe either a JSON field (pointer) or a text of the answer (text), not both"
+    if plan.get("auth_artifact") and not plan.get("pointer"):
+        return "an auth-artifact proof needs pointer at the token or session field"
+    if not (plan.get("pointer") or plan.get("text") or plan.get("expression_template")):
+        return ("declare the observation: pointer for a JSON field, or text for a literal text a recorded page or "
+                "text answer shows")
+    return None
+
+
 def generates_controls(plan) -> bool:
     """Whether the Verifier generates this accepted plan's controls itself (VER-011, VER-053)."""
     return plan.get("kind") == "boolean" and bool(

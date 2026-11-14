@@ -394,6 +394,26 @@ def test_session_observations_before_the_plan_count_only_for_a_confirmation(tmp_
         assert result.verdict == "confirmed"
 
 
+@pytest.mark.parametrize(("baseline", "template", "message"), [
+    ("plain", "plain; printf '%d' \"$(({{expression}}))\"",
+     "set expression_template to exactly " + json.dumps("plain; printf '%s' \"$(({{expression}}))\"")),
+    ("plain:1", "plain:1; printf '%s' \"$(({{expression}}))\"", "plain baseline: up to 100 letters"),
+])
+def test_a_refused_command_template_names_the_one_accepted_form(tmp_path, baseline, template, message):
+    """VER-011, refused case as in a DVWA run: a command plan whose template differed from the one accepted form was
+    refused twice with the same message and no form to copy. The refusal now spells out the accepted template with
+    the plan's own baseline, or says what a plain baseline is; nothing is sent."""
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    sent = []
+    ctx = _ctx(tmp_path, lambda *a, **k: sent.append(a) or Resp())
+    ctx.plan = replace(ctx.plan, cwe="CWE-78", cls="injection")
+    declaration = plan()["args"] | {"baseline": baseline, "expression_template": template}
+    with pytest.raises(ToolError) as exc:
+        AgentTools(ctx).plan_test(**declaration)
+    assert message in str(exc.value) and sent == []
+
+
 @pytest.mark.parametrize("cwe", ["CWE-78", "CWE-1336", "CWE-643"])
 @pytest.mark.parametrize("evaluate", [False, True])
 def test_expression_challenges_require_computed_results(tmp_path, cwe, evaluate):

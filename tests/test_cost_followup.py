@@ -314,6 +314,28 @@ def test_fixed_on_controls_the_agent_chose_names_the_forms_that_take_it(tmp_path
     assert sent == []
 
 
+def test_one_refusal_names_the_missing_observation_and_what_the_forms_that_take_fixed_keep(tmp_path):
+    """VER-043, refused case as in DVWA runs: a plan with own controls, fixed and no observation was refused for
+    one problem at a time, and the next plan dropped its baseline. One refusal now names both problems and says
+    that the named forms keep the baseline and the observation."""
+    from appsec_verifier.agent.tools import AgentTools, ToolError
+
+    sent = []
+    ctx = _search_ctx(tmp_path, sent)
+    ctx.plan = replace(ctx.plan, cwe="CWE-89")
+    args = {"kind": "boolean", "hypothesis": "The search term is concatenated into the query",
+            "path": "/rest/products/search", "input_location": "params", "input_name": "q", "baseline": "zzz",
+            "positive": "zzz' OR '1'='1' -- ", "negative": "zzz' OR '1'='2' -- ",
+            "fixed": {"params": {"sort": "name"}}}
+    with pytest.raises(ToolError) as exc:
+        AgentTools(ctx).plan_test(**args)
+    message = str(exc.value)
+    assert "declare the observation" in message
+    assert "Declare a boolean plan with error_probe or sql_template and fixed instead of your own controls" in message
+    assert "keep the baseline and the observation (error_probe needs no observation)" in message
+    assert sent == []
+
+
 @pytest.mark.parametrize("form", [{"error_probe": True}, {"sql_template": "zzz' AND {{predicate}} -- "}])
 def test_each_form_the_refusal_names_takes_fixed_and_its_controls_carry_it(tmp_path, form):
     """The forms named above are accepted with fixed, and every generated control carries the fixed values."""
