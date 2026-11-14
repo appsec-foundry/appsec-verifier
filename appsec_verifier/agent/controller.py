@@ -52,12 +52,18 @@ def _clip(text: str, limit: int = 200) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+def _failure_key(name, kind: str, error) -> tuple:
+    """The same failure for the stagnation allowance (VER-036): the tool, its category and the stated reason, with
+    numbers, case and spacing ignored. A refusal for another reason is a correction, not a repetition."""
+    return name or "step", kind, re.sub(r"\d+", "#", " ".join(str(error).lower().split()))[:300]
+
+
 class Controller:
     def __init__(self, ctx):
         self.ctx = ctx
         self.repetitions = Counter()
         self.failures = 0
-        self.failure_kinds = Counter()
+        self.failure_reasons = Counter()  # the same failure (_failure_key) three times stops the finding (VER-036)
         self.last_failure = None  # the last failed action and why, named when failures stop the finding
         self.plan = None
         self.source_routes = []
@@ -75,7 +81,7 @@ class Controller:
         self.ctx.guard.check_window()
         self.ctx.budget.check_time()
         self.ctx.budget.check_finding_cost()
-        if self.failures >= 6 or max(self.failure_kinds.values(), default=0) >= 3:
+        if self.failures >= 6 or max(self.failure_reasons.values(), default=0) >= 3:
             last = f"; the last: {self.last_failure}" if self.last_failure else ""
             raise LimitExceeded("stagnation", f"repeated tool failures without a usable observation{last}")
 
@@ -377,7 +383,7 @@ class Controller:
         """A tool call the step contract refused (steps.py): nothing ran, and it counts as a failed action."""
         self._counted = None
         self.failures += 1
-        self.failure_kinds["schema"] += 1
+        self.failure_reasons[_failure_key(name, "schema", error or "not a valid step")] += 1
         self.last_failure = _clip(f"{name or 'step'} refused: {error or 'not a valid step'}")
 
     def observe(self, name, args, result):
@@ -390,26 +396,27 @@ class Controller:
         if failed:
             self.failures += 1
             kind = result.get("error_kind", "refused")
-            self.failure_kinds[kind] += 1
+            key = _failure_key(name, kind, result["error"])
+            self.failure_reasons[key] += 1
             self.last_failure = _clip(f"{name} ({kind}): {result['error']}")
             result["recovery"] = {"category": kind, "attempts_left": max(0, min(
-                3 - self.failure_kinds[kind], 6 - self.failures)),
+                3 - self.failure_reasons[key], 6 - self.failures)),
                 "next": "correct the arguments or use recorded evidence; missing capabilities require an "
                         "inconclusive result, not retries; this feedback grants no permission"}
             if name == "plan_test" and self._counted is not None:
                 # A rejected plan executed nothing, and its key leaves out the strategy it was rejected for:
-                # the corrected plan keeps the allowance. Repeated rejections still stop after three failures.
+                # the corrected plan keeps the allowance. The same rejection three times still stops the finding.
                 self.repetitions[self._counted] -= 1
         elif name == "plan_test":
             if result.get("accepted"):
                 self.failures = 0
-                self.failure_kinds.clear()
+                self.failure_reasons.clear()
                 self.last_failure = None
                 self.plan = result.get("experiment") or args
                 self._experiment_shape = None   # a fresh plan pins its own shape on the next probe
         else:
             self.failures = 0
-            self.failure_kinds.clear()
+            self.failure_reasons.clear()
             self.last_failure = None
             # Only the nearest preceding literal route at the evidenced source location.
             # Source text narrows the operator's scope; model prose never supplies a route.

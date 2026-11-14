@@ -41,17 +41,38 @@ def test_repeat_errors_stop_before_third_execution(tmp_path):
     assert sum(bool(r.get("result", {}).get("error")) for r in logs) == 2
 
 
-def test_three_distinct_failures_stop_before_next_model_call(tmp_path):
+def test_six_distinct_failures_stop_before_next_model_call(tmp_path):
     ctx = context(tmp_path)
     calls = []
 
     class Planner:
         def next_step(self, ctx, history):
             calls.append(1)
-            return {"tool": "read_source", "args": {"path": f"missing{len(calls)}.py"}}
+            return {"tool": "read_source", "args": {"path": f"missing{chr(96 + len(calls))}.py"}}
 
     result = AgentProbe(ctx.plan.cls, Planner).run(ctx)
-    assert result.limits_hit == "stagnation" and len(calls) == 3
+    assert result.limits_hit == "stagnation" and len(calls) == 6
+
+
+def test_corrected_refusals_leave_room_and_the_same_one_three_times_stops(tmp_path):
+    """VER-036: a refusal the agent answers with a different action is a correction, not a repetition. Three
+    different refusals in a row (an unknown context field, a request without the variant's inputs, a plan the
+    Verifier refuses) leave the finding running and its recovery counts down toward six; the same refusal three
+    times stops it, also when only a number in its text differs."""
+    c = Controller(context(tmp_path))
+    c.observe("read_context", {"field": "auth_checks"}, {"error": "that context field is unavailable"})
+    c.observe("http_request", {"path": "/search"},
+              {"error": "request must carry the finding's declared variant inputs: query:q"})
+    answer = {"error": "fixed gives the request's other inputs to controls the Verifier generates"}
+    c.observe("plan_test", {"kind": "boolean"}, answer)
+    c.check()
+    assert answer["recovery"]["attempts_left"] == 2
+    c.observe("plan_test", {"kind": "boolean"}, {"accepted": True, "experiment": {"path": "/search"}})
+    assert c.failures == 0 and not c.failure_reasons
+    for n in (12, 13, 14):
+        c.observe("plan_test", {}, {"error": f"step {n} is not an answered request"})
+    with pytest.raises(LimitExceeded, match="repeated tool failures"):
+        c.check()
 
 
 def test_accepted_plan_clears_schema_failures_but_does_not_reset_repetition_budget(tmp_path):
@@ -59,7 +80,7 @@ def test_accepted_plan_clears_schema_failures_but_does_not_reset_repetition_budg
     controller.refuse("plan_test", "missing observation")
     controller.refuse("plan_test", "invalid observation")
     controller.observe("plan_test", {}, {"accepted": True, "experiment": {"path": "/search"}})
-    assert controller.failures == 0 and not controller.failure_kinds
+    assert controller.failures == 0 and not controller.failure_reasons
     controller.refuse("plan_test", "invalid again")
     controller.check()
     assert controller.failures == 1
@@ -835,15 +856,17 @@ def test_5xx_during_an_accepted_injection_experiment_is_an_observation_not_a_fai
 
 
 def test_a_stop_after_failed_actions_names_the_last_one_and_is_not_called_a_limit(tmp_path):
-    """VER-036: three failed actions in a row stop the finding; the stop names the last failure, so the operator
+    """VER-036: the same failure three times stops the finding; the stop names the last failure, so the operator
     sees why, and it reads as a stop, not as a budget the run reached."""
     c = Controller(context(tmp_path))
     c.observe("read_source", {"path": "a.ts"}, {"lines": 3})
     c.refuse("fetch_url", "unknown action 'fetch_url'")
-    c.observe("plan_test", {"kind": "boolean"}, {"error": "path input needs exactly one placeholder"})
-    c.check()  # distinct failure categories still leave room to recover
+    reason = "path input needs exactly one\nplaceholder " + "x" * 300
+    c.observe("plan_test", {"kind": "boolean"}, {"error": reason})
     c.observe("plan_test", {}, {"error": "another refused plan"})
-    c.observe("plan_test", {"kind": "boolean"}, {"error": "path input needs exactly one\nplaceholder " + "x" * 300})
+    c.check()  # distinct failures still leave room to recover
+    c.observe("plan_test", {"kind": "boolean"}, {"error": reason})
+    c.observe("plan_test", {"kind": "boolean"}, {"error": reason})
     with pytest.raises(LimitExceeded) as exc:
         c.check()
     detail = str(exc.value)
