@@ -385,6 +385,28 @@ def test_a_result_a_proof_needs_is_highlighted_in_its_step(monkeypatch):
     assert st("no script executed", "ok", "bold") not in _rows(out)[-1]
 
 
+def test_generated_controls_are_named_instead_of_showing_requests_that_look_alike(monkeypatch):
+    """As in a DVWA run: ten controls of one experiment showed the same cut-off URL. The series' first row shows
+    the request; the others say which control they are. A later request of the agent shows its URL again."""
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    progress.begin([_plan(cls="injection")])
+    progress.finding(_plan(cls="injection"))
+    args = {"path": "/brute/", "params": {"username": "x' AND 1=1 -- -"}, "role": "account-2"}
+    for step, control in enumerate(("baseline #1", "true #1", "false #1"), 5):
+        progress.step({"step": step, "tool": "http_request", "args": args, "control": control,
+                       "result": {"status": 200, "length": 4399}})
+    shown = " ".join(SGR.sub("", "\n".join(_rows(out))).split())
+    assert "step 5 · control baseline #1 · GET /brute/?username=" in shown
+    assert "step 6 · control true #1 as account-2 → 200 · 4399 B" in shown
+    assert "step 7 · control false #1 as account-2 → 200 · 4399 B" in shown
+    assert shown.count("/brute/") == 1                                 # only the series' first row shows the URL
+    progress.step({"step": 8, "tool": "http_request", "args": args, "result": {"status": 200, "length": 4399}})
+    shown = " ".join(SGR.sub("", "\n".join(_rows(out))).split())
+    assert "step 8 · GET /brute/?username=" in shown and shown.count("/brute/") == 2
+
+
 def test_the_evidence_reviewer_has_agent_entries_for_its_start_and_end():
     out = io.StringIO()
     progress = RunProgress(out, clock=Clock(), env={})

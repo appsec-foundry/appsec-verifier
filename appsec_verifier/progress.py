@@ -343,6 +343,7 @@ class RunProgress:
         self._explained = False         # a proof entry said why the finding has no proof
         self._reviewing = False         # an evidence reviewer started and has not finished
         self._planned = False           # a plan of the current finding was already accepted
+        self._in_controls = False       # the last step was a generated control of an experiment
         self._review_from = None        # when the current evidence review started
         self._review_time = 0.0         # time of the finding's evidence review, kept off its done line
         self._activity, self._activity_at = "", 0.0
@@ -386,7 +387,7 @@ class RunProgress:
                 self._numbered = plan.id
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted, self._explained = 0, "", False, False
-            self._planned = False
+            self._planned = self._in_controls = False
             self._review_from, self._review_time = None, 0.0
             self._asked = self._took = None
             self._finding_at = self._clock()
@@ -463,6 +464,14 @@ class RunProgress:
                     self._record("plan", _line(label, _clip(args.get("path", "")),
                                                _clip(reason, 180) if reason else ""))
                     return
+                control = record.get("control") if isinstance(record.get("control"), str) else ""
+                if control:
+                    # A generated control (agent/loop.py): the series' first row shows the request, the others
+                    # only which control they are, since they differ in a value the row would cut off.
+                    role = f" as {_clip(args['role'], 40)}" if args.get("role") else ""
+                    action = (f"control {_clip(control, 40)} · {action}" if not self._in_controls
+                              else f"control {_clip(control, 40)}{role}")
+                self._in_controls = bool(control)
                 tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
                 tested = _line([tested, (" → ",), *_outcome(result)], (took, "muted"), cost)
                 hang = len(head) + 3

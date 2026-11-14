@@ -328,6 +328,12 @@ def test_each_form_the_refusal_names_takes_fixed_and_its_controls_carry_it(tmp_p
     assert tools.plan_test(**args)["accepted"] is True
     requests = tools.experiment_requests()
     assert requests and all(r["params"]["sort"] == "name" for r in requests)
+    # Each control has a label for the console and the action log, in the order it is sent.
+    labels = tools.control_labels()
+    assert len(labels) == len(requests) == len(set(labels))
+    if "sql_template" in form:
+        assert labels[:5] == ["baseline #1", "true #1", "false #1", "true, second pair #1", "false, second pair #1"]
+        assert labels[5] == "baseline #2"
 
 
 def test_command_injection_probes_carry_no_fixed_values(tmp_path):

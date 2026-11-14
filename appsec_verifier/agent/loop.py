@@ -308,7 +308,8 @@ class AgentProbe:
                     _log(ctx, step_n, tool="send_controls", result=result)
                     history.append({"tool": "send_controls", "args": {}, "result": result})
                 return sent_steps, None
-            for request in requests:
+            labels = tools.control_labels()
+            for position, request in enumerate(requests):
                 step_n = len(history) + 1
                 try:
                     ctx.budget.check_time()
@@ -327,8 +328,10 @@ class AgentProbe:
                 if ctx.sessions is not None:
                     result = ctx.sessions.redact(result)
                 history.append({"tool": "http_request", "args": request, "result": result, "experiment": True})
+                # Which control of the series this is: the requests differ only in a value the console cuts off.
                 _log(ctx, step_n, tool="http_request", args=request,
-                     result={k: result[k] for k in _LOGGED_RESULT if k in result})
+                     result={k: result[k] for k in _LOGGED_RESULT if k in result},
+                     **({"control": labels[position]} if position < len(labels) else {}))
                 sent_steps.append(step_n)
                 if _control_failed(tools, result):
                     break

@@ -803,6 +803,21 @@ class AgentTools:
             self._controls_sent.add(token(plan))
         return requests
 
+    def control_labels(self) -> list[str]:
+        """What each request of experiment_requests is, in its order, for the console and the action log: the
+        comparison's three reads, or each generated control by its group and its round, such as `true #1`."""
+        plan = getattr(self, "_experiment", {})
+        if plan.get("exposure"):
+            return ["anonymous #1", "anonymous #2", "neighbouring path"]
+        if plan.get("kind") == "access-control" and plan.get("signed_in"):
+            return ["as the account", "without credentials", "random path"]
+        positive = "delayed" if plan.get("kind") == "timing" else "true"
+        words = {"baseline": "baseline", "positive": positive, "negative": "false",
+                 "positive_other": f"{positive}, second pair", "negative_other": "false, second pair"}
+        names = [words.get(name, name.replace(":", " ", 1)) for name in control_values(plan)]
+        rounds = 1 if plan.get("auth_artifact") else 2
+        return [name if rounds == 1 else f"{name} #{n}" for n in range(1, rounds + 1) for name in names]
+
     def release_controls(self):
         """A write plan none of whose controls reached the target, all refused before sending, counts as not sent,
         so a second send_controls names the refusal instead of claiming the controls ran."""

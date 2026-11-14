@@ -213,6 +213,7 @@ def test_only_the_answer_without_credentials_is_kept_and_only_the_plan_sends_a_r
     requests = tools.experiment_requests()
     assert [(r["path"], r.get("role")) for r in requests] == [(PATH, "account-1"), (PATH, None),
                                                               (plan["control_path"], None)]
+    assert tools.control_labels() == ["as the account", "without credentials", "random path"]
     seen = []
     for request in requests:
         out = tools.http_request(**request)
