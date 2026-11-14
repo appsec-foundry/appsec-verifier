@@ -130,6 +130,10 @@ class ProbeContext:
     evidence_panels: list[dict] = field(default_factory=list)
     recapture: object | None = None   # another page for an unclear screenshot after a review issue (VER-042)
     represent: object | None = None   # the test agent's revised presentation after a review issue (VER-059)
+    # VER-063: every model call of this finding as sent and answered (agent/hosts.py), and why a call failed or its
+    # answer was unusable; only the debug file of a failed verification reads them (verify/failure_debug.py)
+    model_exchanges: list[dict] = field(default_factory=list)
+    model_failure: str | None = None
 
 
 @runtime_checkable

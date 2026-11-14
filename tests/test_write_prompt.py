@@ -303,7 +303,7 @@ def _verify_asking(tmp_path, monkeypatch, answer, *extra, scope=None, agent_asks
         monkeypatch.setattr(test_endpoints, "SCOPE", {**test_endpoints.SCOPE, **scope})
     original = runner._verify_one
 
-    def seeing(plan, registry, ctx_factory, log=None):      # the mode each finding's context starts in
+    def seeing(plan, registry, ctx_factory, log=None, failures=None):      # the mode each finding's context starts in
         def factory(p):
             ctx = ctx_factory(p)
             seen.append((p.id, ctx.safe, ctx.read_only, ctx.ask_writes is not None))
@@ -311,7 +311,7 @@ def _verify_asking(tmp_path, monkeypatch, answer, *extra, scope=None, agent_asks
                 ctx.ask_writes(["POST /rest/products/search"], "the search also takes a POST", "")
             return ctx
 
-        return original(plan, registry, factory, log)
+        return original(plan, registry, factory, log, failures)
 
     monkeypatch.setattr(runner, "_verify_one", seeing)
     rc, asked, sent, results = test_endpoints._verify(tmp_path, monkeypatch, *extra)

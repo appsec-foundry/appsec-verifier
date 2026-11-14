@@ -7,6 +7,8 @@ is reached or a confinement check has failed, bounds each call by the remaining
 run time, charges the reported cost (VER-015), and validates the step
 (steps.py, VER-019). Each call's cost and the token counts a host reports are
 kept as numbers for the action log (VER-017), never any prompt or answer text.
+Each call's instructions, prompt and answer stay with the finding's context, for
+the debug file of a failed verification only (VER-063).
 A failed call ends only its finding, but after
 MAX_FAILED_CALLS failed calls in a row (an exhausted quota, a rejected login, a
 provider that is down) the host makes no further call in the run. A host only
@@ -18,6 +20,7 @@ call that carries them, later reviews of the run send text only (VER-042).
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import selectors
@@ -25,9 +28,10 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from ..limits import LimitExceeded, execution_deadline
-from .steps import inconclusive, parse_step, prompt, step_schema, system_prompt
+from .steps import Unusable, inconclusive, parse_step, prompt, step_schema, system_prompt
 
 CALL_TIMEOUT_S = 300.0
 MAX_OUTPUT_BYTES = 1_048_576
@@ -38,6 +42,10 @@ MAX_FAILED_CALLS = 3
 NETWORK_ENV = ("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
                "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS")
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class HostUnavailable(Exception):
@@ -191,11 +199,18 @@ class HostPlanner:
         self._host = host
 
     def next_step(self, ctx, history: list[dict]) -> dict:
-        """The finding's next step; structured output offers only the actions its prompt offers."""
+        """The finding's next step; structured output offers only the actions its prompt offers. A failed call or
+        an answer that is no usable step ends the finding inconclusive, and the context keeps why (VER-063)."""
         try:
-            return parse_step(self._request(ctx, system_prompt(ctx), prompt(ctx, history), schema=step_schema(ctx)))
+            action = parse_step(self._request(ctx, system_prompt(ctx), prompt(ctx, history), schema=step_schema(ctx)))
         except HostCallError as exc:
-            return inconclusive(str(exc))
+            action = inconclusive(str(exc))
+        if isinstance(action.get("verdict"), Unusable):
+            try:
+                ctx.model_failure = action["verdict"]["rationale"]
+            except AttributeError:   # a context that takes no new attributes keeps no failure
+                pass
+        return action
 
     @property
     def supports_images(self) -> bool:
@@ -223,6 +238,14 @@ class HostPlanner:
             window = ctx.guard.remaining_time()
             if window is not None:
                 timeout = min(timeout, window)
+        # VER-063: the call as sent, kept with the finding's context; only the debug file of a failed verification
+        # reads it. The answer is encoded at once, so what the loop makes of it later cannot change it.
+        exchange = {"call": "review" if review else "step", "started": _now(), "instructions": system,
+                    "schema": schema, "prompt": payload, **({"images": len(images)} if images else {})}
+        exchanges = getattr(ctx, "model_exchanges", None)
+        if isinstance(exchanges, list):
+            exchanges.append(exchange)
+        began = time.monotonic()
         try:
             with execution_deadline(timeout, kind="model-timeout"):
                 reply = host.call(system, payload, timeout, ctx.budget, schema=schema,
@@ -232,6 +255,12 @@ class HostPlanner:
                 raise
             ctx.budget.check_time()
             reply = HostReply(error="timeout")
+        exchange["seconds"] = round(time.monotonic() - began, 3)
+        if reply.step is not None:
+            exchange["answer"] = json.dumps(reply.step, default=str)
+        if reply.breach or reply.error:
+            exchange["failure"] = reply.breach or reply.error
+        exchange.update({**({"usd": reply.usd} if reply.usd is not None else {}), **(reply.usage or {})})
         if reply.breach:
             host.broken = reply.breach
         if reply.usd is not None:

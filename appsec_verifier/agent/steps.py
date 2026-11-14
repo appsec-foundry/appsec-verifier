@@ -148,8 +148,13 @@ def prompt(ctx, history: list[dict]) -> str:
             + json.dumps(getattr(ctx, "controller_state", {})) + "\n\nReply with the next step.")
 
 
+class Unusable(dict):
+    """The inconclusive verdict the Verifier sets in place of a failed call or an answer it cannot use. It compares
+    and serialises like any verdict; only the debug file of a failed verification tells it apart (VER-063)."""
+
+
 def inconclusive(reason: str) -> dict:
-    return {"verdict": {"verdict": "inconclusive", "rationale": reason}}
+    return {"verdict": Unusable(verdict="inconclusive", rationale=reason)}
 
 
 def strict_json(text: str):

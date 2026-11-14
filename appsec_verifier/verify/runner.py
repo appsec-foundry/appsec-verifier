@@ -9,10 +9,12 @@ its results redacted of every credential value the sessions know (VER-016).
 
 A probe that fails ends its finding inconclusive; the action log gets the
 exception type and the place in this package where it passed, never its
-message. Once a run-wide limit (requests, cost, time, model calls, window) has
-stopped a finding, the remaining findings are not tested and say so (VER-015,
-VER-024). Ctrl-C ends the run the same way: the finding under test ends
-inconclusive, the rest are not tested, and the document is still returned with
+message. An optional `failures` (failure_debug.FailureDebug) keeps each finding
+whose verification failed, with its error and model calls (VER-063). Once a
+run-wide limit (requests, cost, time, model calls, window) has stopped a
+finding, the remaining findings are not tested and say so (VER-015, VER-024).
+Ctrl-C ends the run the same way: the finding under test ends inconclusive,
+the rest are not tested, and the document is still returned with
 `meta.interrupted` set, so the results gathered so far reach the report.
 A finding the run cannot confirm (cli._blocker) is not tested and says why,
 also one that only safe mode keeps from being tested. In a terminal the test
@@ -104,26 +106,32 @@ def _result_entry(idx: int, plan: FindingPlan, res: ProbeResult) -> dict:
     }
 
 
-def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory, log=None) -> ProbeResult:
+def _verify_one(plan: FindingPlan, registry: ProbeRegistry, ctx_factory, log=None, failures=None) -> ProbeResult:
     """Decide one finding's outcome. Non-dynamic findings, and dynamic ones with
     no registered probe, are `not-attempted` with a reason — never refuted. A
     probe that fails ends that finding inconclusive; the run and the results
-    already gathered go on to the report."""
+    already gathered go on to the report. `failures` keeps the finding when its
+    verification failed (VER-063)."""
     if plan.status != "dynamic":
         return ProbeResult(verdict="not-attempted", rationale=plan.reason)
     probe = registry.get(plan.cls)
     if probe is None:
         return ProbeResult(verdict="not-attempted", rationale=f"no probe implemented for class '{plan.cls}' yet")
+    ctx = error = None
     try:
-        res = probe.run(ctx_factory(plan))
+        ctx = ctx_factory(plan)
+        res = probe.run(ctx)
     except LimitExceeded as exc:
-        return ProbeResult(verdict="inconclusive", rationale=exc.rationale(), limits_hit=exc.kind)
+        res = ProbeResult(verdict="inconclusive", rationale=exc.rationale(), limits_hit=exc.kind)
     except Exception as exc:  # noqa: BLE001 - one failed probe must not lose the run; only the type is reported
         if log is not None:     # the message can carry target data or credentials; type and place cannot
             log({"finding": plan.id, "step": None, "probe_failed": type(exc).__name__, "at": _failure_site(exc)})
-        return ProbeResult(verdict="inconclusive", rationale=f"probe failed: {type(exc).__name__}")
-    if res.verdict not in _VERDICTS:
-        raise ValueError(f"probe for {plan.cls} returned invalid verdict {res.verdict!r}")
+        error, res = exc, ProbeResult(verdict="inconclusive", rationale=f"probe failed: {type(exc).__name__}")
+    else:
+        if res.verdict not in _VERDICTS:
+            raise ValueError(f"probe for {plan.cls} returned invalid verdict {res.verdict!r}")
+    if failures is not None:
+        failures.record(plan, ctx, res, error)
     return res
 
 
@@ -157,9 +165,12 @@ def run_verification(
     progress=None,
     skipped: dict[str, str] | None = None,
     ask_writes=None,
+    failures=None,
 ) -> dict:
     """`skipped` maps a finding id to why this run cannot confirm it; such a
     finding is not tested and reports that reason (not-attempted).
+
+    `failures` (failure_debug.FailureDebug) keeps each finding whose verification failed (VER-063).
 
     `ask_writes` (write_prompt.WritePrompt), in an interactive run that may ask, decides write requests safe
     mode does not send (VER-052): the test agent of a finding can ask while it tests. A finding the operator
@@ -278,7 +289,7 @@ def run_verification(
                 progress.finding(plan)
             budget.begin_finding()  # VER-051: this finding's per-finding spend cap starts here
             try:
-                res = _verify_one(plan, registry, ctx_factory, log)
+                res = _verify_one(plan, registry, ctx_factory, log, failures)
             except KeyboardInterrupt:
                 interrupted = True
                 if log is not None:

@@ -134,6 +134,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 - `verification.md`: the report, with verdict, confidence and evidence per finding, and the proof of concept: the requests the verdict rests on as raw HTTP, with the parts the test agent chose to show what the attacker sent and obtained, each checked against the record, and for UI findings a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
+- `failed-findings.json`, only when the test of a finding failed: its model calls and the error, to find the cause yourself or with a model.
 - `evidence/`: the recorded requests and responses of each finding (`<finding>-poc.har`) and the screenshots; `--screenshots` chooses the classes. They can show target data, so check them before sharing.
 - `console.log`, with `--console-log`: what the run printed ([console output](docs/cli.md#console-output)).
 

@@ -968,13 +968,21 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     if console is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         console.start(out_dir / "console.log", append=existing is not None)
-    action_log = progress = write_prompt = None
+    action_log = progress = write_prompt = debug_file = None
     started = time.monotonic()
     if contact:
         from .verify.actionlog import ActionLog
+        from .verify.failure_debug import FailureDebug, run_identity
 
         out_dir.mkdir(parents=True, exist_ok=True)
         action_log = ActionLog(out_dir / "agent-log.jsonl", redact=sessions.redact, append=existing is not None)
+        debug_file = FailureDebug(       # VER-063: why the test of a finding failed, private
+            out_dir,
+            run=run_identity(verifier_version=version_string(), agent=agent_info, assessment=assessment,
+                             target=target, safe=safe, read_only=read_only),
+            redact=sessions.redact,
+            hidden=(scope.get("marker_file") or {}).get("content"),
+        )
         priced = show_costs and agent_info["profile"] not in SUBSCRIPTION_PROFILES  # these report no amount
         progress = RunProgress(
             model=agent_info.get("model"),
@@ -1033,6 +1041,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             progress=progress,
             skipped=skipped,
             ask_writes=write_prompt,
+            failures=debug_file,
         )
     finally:
         if progress is not None:
@@ -1061,6 +1070,9 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         extra.append(("Run", _run_usage(budget, time.monotonic() - started, agent_info, show_costs)))
     if action_log is not None:
         extra.append(("Action log", str(action_log.path)))
+    if debug_file is not None and debug_file.written:
+        extra.append(("Debug file", f"{debug_file.path} (private: why the test of "
+                                    f"{_count(debug_file.written, 'finding')} failed)"))
     if console is not None:
         extra.append(("Console", str(console.path)))
     if args.annotate and source is None:    # the results above are written; only the copies are missing
