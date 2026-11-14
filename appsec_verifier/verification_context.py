@@ -117,6 +117,22 @@ def record_segment(template: str, path: str | None = None) -> str | None:
     return next(iter(record_segments(template, path)), None)
 
 
+def proof_limitations(plan) -> list[str]:
+    """Known limits of declared paths, not blockers of evidenced alternatives (VER-008, VER-043)."""
+    variants = getattr(plan, "verification_context", {}).get("variants", [])
+    notes = []
+    if any(i.get("location") == "header" for v in variants for i in v["request"].get("inputs", [])):
+        notes.append("The declared input needs a custom header, which the test tools cannot set; "
+                     "an evidenced alternative is needed.")
+    methods = {v["request"].get("method", "GET") for v in variants}
+    if not variants:
+        methods.update(e.method for e in getattr(plan, "endpoints", ()))
+    if getattr(plan, "cls", None) == "xss" and methods & {"POST", "PUT", "PATCH"}:
+        notes.append("The proof browser navigates with GET only; a write response cannot be executed directly. "
+                     "Stored payloads need an evidenced GET page that renders them.")
+    return notes
+
+
 def missing_capabilities(variant: dict, *, safe: bool, browser: bool, identities: bool) -> list[str]:
     """What a variant needs that this run lacks. With a test identity (`identities`), the "header" capability is
     the authentication header its session sends, unless one of the variant's inputs is itself a header: the

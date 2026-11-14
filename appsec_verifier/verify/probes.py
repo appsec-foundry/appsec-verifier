@@ -122,6 +122,7 @@ class ProbeContext:
     accepted_plans: dict = field(default_factory=dict)
     derived_requests: list[dict] = field(default_factory=list)  # checked provenance for related requests
     technical_review_budget: dict = field(default_factory=dict)  # shared by all variants (VER-046)
+    variant_status: list[dict] = field(default_factory=list)  # bounded coverage summary, never another proof
     created: set = field(default_factory=set)  # identifiers the owner's creating answers returned (VER-010)
     owned: set = field(default_factory=set)    # of those, the ones the owner's read showed with its marker
     prior_results: list[dict] = field(default_factory=list)

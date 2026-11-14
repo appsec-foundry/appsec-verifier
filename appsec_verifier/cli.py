@@ -1741,6 +1741,15 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
                            for i in req.get("inputs") or [])
         return f"{method} {path}".strip(), inputs
 
+    def limitations(group):
+        from .verification_context import proof_limitations
+
+        for vp in group:
+            label = printable(vp.variant_id or vp.id)
+            for note in proof_limitations(vp):
+                lines.extend(f"{indent}{line}" for line in _wrap_whole(
+                    f"{label}: {note}", max(columns() - 1 - width, 40)))
+
     for fid in order:
         group = groups[fid]
         p = group[0]
@@ -1772,6 +1781,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
                 if st.enabled and not full:
                     body = _fit(body, max(columns() - 1 - width, 20))
                 lines.append(f"{indent}{st(body, 'muted')}")
+        limitations(group)
         if p.selection_reason:
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
@@ -1848,7 +1858,7 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
     if guided and floor:
         selection += " (--min-severity to change)"
     elif not guided and selected > dyn:
-        selection += f" (another {selected - dyn} selected cannot be tested at runtime)"
+        selection += f" (another {selected - dyn} selected are outside supported runtime verification)"
     rows = [
         *([] if guided else [("Assessment", str(assessment))]),
         ("Selection", selection),

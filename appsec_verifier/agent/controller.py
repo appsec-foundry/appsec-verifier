@@ -74,6 +74,7 @@ class Controller:
     def check(self):
         self.ctx.guard.check_window()
         self.ctx.budget.check_time()
+        self.ctx.budget.check_finding_cost()
         if self.failures >= 6 or max(self.failure_kinds.values(), default=0) >= 3:
             last = f"; the last: {self.last_failure}" if self.last_failure else ""
             raise LimitExceeded("stagnation", f"repeated tool failures without a usable observation{last}")

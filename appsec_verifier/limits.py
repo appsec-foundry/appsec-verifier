@@ -1,4 +1,4 @@
-"""Execution bounds enforced outside the model (VER-015): total requests, cost,
+"""Execution bounds enforced outside the model (VER-015, VER-051): total requests, cost,
 model calls, wall-clock time and the request rate. Reaching a bound raises
 LimitExceeded so the caller stops the affected work rather than pressing on;
 the rate is kept by waiting, not by refusing. `max_attempts` bounds the agent
@@ -141,13 +141,16 @@ class RunBudget:
         self.calls = 0
         self._next_request_at: float | None = None
         self._cost_unknown = False
-        self._finding_start_cost = 0.0  # run cost when the finding under test began (VER-051)
+        self._finding_id = None
+        self._finding_costs = {}  # VER-051: all variants and reviews share the finding's spend.
         self.ask_ceiling = None         # interactive run: budget -> a higher ceiling the operator typed, or None
         self.ceiling_raises: list[dict] = []    # {"from": USD, "to": USD} per raise the operator approved
 
-    def begin_finding(self) -> None:
-        """Start a new finding's per-finding cost accounting (VER-051). Call it before each tested finding."""
-        self._finding_start_cost = self.cost
+    def begin_finding(self, finding_id: str | None = None) -> None:
+        """Activate a finding's cumulative accounting, including interleaved variants and reviews (VER-051).
+        Without an id, start a fresh anonymous finding for standalone callers."""
+        self._finding_id = finding_id if finding_id is not None else object()
+        self._finding_costs.setdefault(self._finding_id, 0.0)
 
     def finding_cost_cap(self) -> float | None:
         """USD a single finding may spend: a share of the run ceiling, never below the floor, or None when the
@@ -160,7 +163,7 @@ class RunBudget:
     def check_finding_cost(self) -> None:
         """Stop the finding under test, not the run, once it has spent its per-finding share (VER-051)."""
         cap = self.finding_cost_cap()
-        if cap is not None and (self.cost - self._finding_start_cost) >= cap:
+        if cap is not None and self._finding_costs.get(self._finding_id, 0.0) >= cap:
             raise LimitExceeded("finding-cost", f"per-finding spend cap ${cap:.2f} reached")
 
     def pace(self) -> None:
@@ -179,6 +182,7 @@ class RunBudget:
         """Count one model call; refuse it once the run's call cap is reached."""
         if self.limits.max_calls and self.calls >= self.limits.max_calls:
             raise LimitExceeded("calls", f"model call cap {self.limits.max_calls} reached")
+        self.check_finding_cost()
         self.calls += 1
 
     def remaining_cost(self) -> float | None:
@@ -199,6 +203,8 @@ class RunBudget:
             raise LimitExceeded("cost", "a model call reported no usable cost, so the spending can no longer "
                                         "be bounded")
         self.cost += usd
+        if self._finding_id is not None:
+            self._finding_costs[self._finding_id] += usd
         if self.limits.cost_limit_usd and self.cost > self.limits.cost_limit_usd:
             self._ceiling_reached(f"cost ceiling ${self.limits.cost_limit_usd:.2f} exceeded")
 

@@ -228,20 +228,20 @@ def test_the_report_records_each_raise():
 
 
 def _verify(tmp_path, monkeypatch, *answers):
-    """One interactive `verify` run of two findings whose fake planner spends USD 0.30 per step under a USD 1
-    ceiling: each finding stays under its own cap (VER-051), the second one reaches the run's ceiling."""
+    """Three findings spend USD 0.20 per step under a USD 1 ceiling: each stays under its USD 0.50
+    finding cap (VER-051), and the third reaches the run ceiling without bypassing the finding cap."""
     scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "tester"},
              "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
     (tmp_path / "scope.yaml").write_text(yaml.safe_dump(scope))
     (tmp_path / "assessment.yaml").write_text(yaml.safe_dump({"threats": [
         {"id": f"T-{n}", "cwe": "CWE-639", "severity": "high", "title": "idor", "scenario": f"GET /rest/basket/{n}",
-         "evidence": {"file": "routes/basket.ts", "line": n}} for n in (1, 2)]}))
+         "evidence": {"file": "routes/basket.ts", "line": n}} for n in (1, 2, 3)]}))
 
     class Planner:
         def next_step(self, ctx, history):
-            ctx.budget.note_cost(0.30)
+            ctx.budget.note_cost(0.20)
             if not history:
-                return {"tool": "http_request", "args": {"path": "/rest/basket/2"}}
+                return {"tool": "http_request", "args": {"path": ctx.plan.endpoints[0].path}}
             return {"verdict": {"verdict": "inconclusive", "rationale": "rejection alone is insufficient"}}
 
     def transport(method, url, headers, **k):
@@ -267,7 +267,7 @@ def test_a_run_that_reaches_its_ceiling_goes_on_after_a_raise(tmp_path, monkeypa
     assert code == cli.EXIT_OK and not left
     assert doc["meta"]["limits"]["cost_limit_usd"] == 2.0
     assert doc["meta"]["limits"]["cost_limit_raises"] == [{"from": 1.0, "to": 2.0}]
-    assert [r["verdict"] for r in doc["results"]] == ["inconclusive", "inconclusive"]
+    assert [r["verdict"] for r in doc["results"]] == ["inconclusive"] * 3
     assert not any(r.get("limits_hit") for r in doc["results"])
     assert "Cost limit raised from $1.00 to $2.00." in capsys.readouterr().err
 
@@ -275,6 +275,6 @@ def test_a_run_that_reaches_its_ceiling_goes_on_after_a_raise(tmp_path, monkeypa
 def test_a_run_whose_ceiling_is_kept_stops_with_the_limit_exit(tmp_path, monkeypatch, capsys):
     code, doc, left = _verify(tmp_path, monkeypatch, "\n")
     assert code == cli.EXIT_LIMIT and not left
-    assert [r.get("limits_hit") for r in doc["results"]] == [None, "cost"]
+    assert [r.get("limits_hit") for r in doc["results"]] == [None, None, "cost"]
     assert "cost_limit_raises" not in doc["meta"]["limits"] and doc["meta"]["limits"]["cost_limit_usd"] == 1.0
     assert "Cost limit stays at $1.00; the run stops testing" in capsys.readouterr().err

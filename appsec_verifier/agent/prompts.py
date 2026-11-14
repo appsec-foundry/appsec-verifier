@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 
 from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
-from ..verification_context import missing_capabilities
+from ..verification_context import missing_capabilities, proof_limitations
 from ..verify.presentation import PRESENTATION_HELP
 from .derivation import page_candidates, page_source
 from .experiments import EXPOSURE_CWES, OBSERVATION_SCHEMA, PLAN_SCHEMA, access_methods
@@ -648,6 +648,7 @@ def _seed(ctx) -> str:
     pinned = variants[0] if getattr(p, "variant_id", None) and len(variants) == 1 else None
     resources = [r for r in (getattr(ctx, "scope", {}) or {}).get("test_resources", []) if r["finding_id"] == p.id]
     extra = {
+        "proof_limitations": proof_limitations(p),
         "analysis": summary,
         "context_fields": list(context),
         "variants": variants,

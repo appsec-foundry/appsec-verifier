@@ -172,6 +172,7 @@ def _validate(raw, schema):
 def _call(planner, ctx, system, payload, schema, state, counter, images=()):
     before = ctx.budget.calls
     try:
+        ctx.budget.check_finding_cost()
         return planner.structured(ctx, system, json.dumps(payload), schema,
                                   **({"images": images} if images else {}))
     finally:
@@ -304,9 +305,11 @@ def _checks(variants, presentable=frozenset()):
         composed = v.get("composed_presentation") or {}
         if composed.get("composed_by") == "verifier" and composed.get("reason") and v["variant"] in presentable:
             # VER-059: the test agent can compose a presentation the Verifier accepts, so this goes back to it.
-            issues.append({"variant": v["variant"], "code": "excerpt",
+            repairable = composed["reason"] != "the verdict cites no step"
+            issues.append({"variant": v["variant"], "code": "excerpt" if repairable else "missing-evidence",
                            "detail": ("The HTTP proof of concept was composed by the Verifier because "
-                                      f"{composed['reason']}. Compose a presentation it can accept.")[:600]})
+                                      f"{composed['reason']}. " + ("Compose a presentation it can accept." if repairable
+                                      else "Presentation corrections cannot change the verdict's citations."))[:600]})
         for image in v["images"]:
             detail = None
             if not image["available"]:
@@ -458,7 +461,14 @@ def review_finding(group, *, stop=None):
                 raise ValueError("foreign variant")
             for c, _ in group:
                 reply = _clean(c, reply)
-            state["issues"] = checks + [issue for issue in reply["issues"] if issue not in checks]
+            # A presentation correction cannot supply citations omitted from the fixed technical verdict.
+            # Apply this to model-raised excerpt issues too, not just our deterministic check (VER-042).
+            unrepairable = {v["variant"] for v in variants if
+                            (v.get("composed_presentation") or {}).get("reason") == "the verdict cites no step"}
+            issues = [{**issue, "code": "missing-evidence"}
+                      if issue["code"] == "excerpt" and issue["variant"] in unrepairable else issue
+                      for issue in reply["issues"]]
+            state["issues"] = checks + [issue for issue in issues if issue not in checks]
             if not state["issues"]:
                 seen = f"{len(attached)} screenshot{'' if len(attached) == 1 else 's'} reviewed" if attached \
                     else f"no screenshot shown to the model ({unseen})"

@@ -1,4 +1,4 @@
-"""The step contract every host-backed planner shares (VER-017, VER-019).
+"""The step contract every host-backed planner shares (VER-011, VER-017, VER-019).
 
 A host (an agent CLI or a tool-less API) gets no tools of its own. Each call
 answers with one step, {"action": ..., "args_json": ..., "note": ...}, which is
@@ -160,7 +160,44 @@ def prompt(ctx, history: list[dict]) -> str:
               "result": bounded(_shown(h))} for n, h in enumerate(history, 1)]
     return (_seed(ctx) + "\nSteps so far (JSON):\n" + json.dumps(steps)
             + "\n\nController budget (including this decision): "
-            + json.dumps(getattr(ctx, "controller_state", {})) + "\n\nReply with the next step.")
+            + json.dumps(getattr(ctx, "controller_state", {}))
+            + "\n\nExperiment state (not proof or request permission): "
+            + json.dumps(_experiment_state(ctx, history)) + "\n\nReply with the next step.")
+
+
+def _experiment_state(ctx, history):
+    """Explain the accepted injection plan's execution state without exposing control answers (VER-011)."""
+    from .experiments import agent_controls, confirming_form, generates_controls, latest_plan
+
+    start, plan = latest_plan(history)
+    if not start or getattr(getattr(ctx, "plan", None), "cls", None) != "injection":
+        return {"accepted_plan": None}
+    tail = list(enumerate(history[start:], start + 1))
+    answered = [n for n, h in tail if h.get("tool") == "http_request"
+                and type((h.get("result") or {}).get("status")) is int]
+    generated_attempts = [n for n, h in tail if h.get("experiment") is True]
+    feedback = next((h["result"] for _, h in reversed(tail) if h.get("tool") == "experiment"
+                     and (h.get("result") or {}).get("plan_step") == start), {})
+    own = agent_controls(plan)
+    state = {"accepted_plan": start, "answered_requests_since_plan": answered,
+             "generated_control_attempts": generated_attempts,
+             "confirmation": "negative-only" if own else "requires checked proof",
+             "proof": feedback.get("proof", "not checked"),
+             "plan_has_http_response": False}
+    if own:
+        form = confirming_form(getattr(ctx.plan, "cwe", None), plan.get("input_location"))
+        state["next"] = ("These agent-chosen controls cannot confirm; send_controls cannot send a write plan "
+                         "with these controls. " + (f"For confirmation revise the plan using {form}." if form else
+                         "No confirming form is available for this input."))
+    elif generates_controls(plan) and plan.get("method", "GET") not in ("GET", "HEAD", "OPTIONS") \
+            and not generated_attempts:
+        state["next"] = "No controls sent: call send_controls once to request the accepted write controls."
+    elif feedback:
+        state["next"] = feedback.get("next", "Inspect the recorded experiment feedback.")
+    else:
+        state["next"] = ("Use only answered request steps with read_response, never the plan step. "
+                         "Inspect failures before revising a plan; acceptance alone is not execution or proof.")
+    return state
 
 
 class Unusable(dict):

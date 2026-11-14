@@ -489,9 +489,10 @@ def test_variants_alike_in_request_and_inputs_share_the_finding_s_line(monkeypat
     header = {**search, "inputs": [{"location": "header", "name": "X-Search"}]}
     rows = cli._test_cases(cli.Style(False), variants({"id": "variant-001", "request": search},
                                                       {"id": "variant-002", "request": header}), {})
-    assert rows[-3] == "  T-1  high  injection  SQL injection in product search"
-    assert rows[-2].endswith("  variant-001  GET /rest/products/search  q (query)")
-    assert rows[-1].endswith("  variant-002  GET /rest/products/search  X-Search (header)")
+    assert rows[2] == "  T-1  high  injection  SQL injection in product search"
+    assert rows[3].endswith("  variant-001  GET /rest/products/search  q (query)")
+    assert rows[4].endswith("  variant-002  GET /rest/products/search  X-Search (header)")
+    assert "custom header" in " ".join(rows[5:])
     nothing = cli._test_cases(cli.Style(False), [_plan("xss")], {})
     assert nothing[-1] == "  T-1  high  xss  t · no request in the assessment"
 

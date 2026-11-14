@@ -1,5 +1,5 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
-VER-020, VER-037, VER-046). Pure, injectable logic: the probe registry, HTTP client, budget, and
+VER-020, VER-037, VER-046, VER-051). Pure, injectable logic: the probe registry, HTTP client, budget, and
 clock are all passed in, so the whole flow is tested offline. An optional
 `progress` (progress.RunProgress) shows each finding with a probe, its
 steps, its proof and, once its last variant is done, a changed rating
@@ -221,6 +221,19 @@ def run_verification(
             evidence_dir=evidence_dir,
             progress=progress,
             technical_review_budget=technical_review_budgets.setdefault(plan.id, {}),
+            variant_status=[
+                {"variant": p.variant_id or evidence_id(p), "active": n == len(results),
+                 "request": [v["request"] for v in p.verification_context.get("variants", [])],
+                 "hypothesis": [v.get("hypothesis", "") for v in p.verification_context.get("variants", [])],
+                 "prerequisites": [v.get("prerequisites", []) for v in p.verification_context.get("variants", [])],
+                 "identities_used": results[n].get("identities_used", []) if n < len(results) else [],
+                 "reason": results[n].get("rationale") if n < len(results) else None,
+                 "status": results[n]["verdict"] if n < len(results) else
+                           "active" if n == len(results) else "pending",
+                 "proof_checked": bool((results[n].get("proof") or {}).get("checked"))
+                                  if n < len(results) else False}
+                for n, p in enumerate(plans) if p.id == plan.id
+            ][:32],
             prior_results=[
                 {
                     "finding": r["finding_ref"]["id"],
@@ -265,6 +278,12 @@ def run_verification(
     interrupted = False
     for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
         started = _iso(datetime.now(timezone.utc))
+        budget.begin_finding(plan.id)
+        finding_exhausted = False
+        try:
+            budget.check_finding_cost()
+        except LimitExceeded:
+            finding_exhausted = True
         if evidence_id(plan) in skipped:
             res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[evidence_id(plan)]}")
         elif shown and _variant_signature(plan) in tested_signatures.get(plan.id, set()):
@@ -284,10 +303,14 @@ def run_verification(
             )
             if progress is not None:
                 progress.finding(plan, agent=False)  # no agent starts for it
+        elif shown and finding_exhausted:
+            res = ProbeResult(verdict="not-attempted", limits_hit="finding-cost",
+                              rationale="not tested: the finding's cost limit was reached by an earlier variant")
+            if progress is not None:
+                progress.finding(plan, agent=False)
         else:
             if shown and progress is not None:
                 progress.finding(plan)
-            budget.begin_finding()  # VER-051: this finding's per-finding spend cap starts here
             try:
                 res = _verify_one(plan, registry, ctx_factory, log, failures)
             except KeyboardInterrupt:

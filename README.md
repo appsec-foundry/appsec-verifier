@@ -67,7 +67,7 @@ Each finding ends with one of these verdicts. A negative verdict covers only the
 - Only the hosts, ports, paths and schemes in the scope are contacted, only within its test period, and never cloud metadata addresses.
 - The run shows its test plan and waits for your confirmation before the first request.
 - Only GET, HEAD and OPTIONS by default. Write requests, needed for stored XSS and some access-control tests, require `--allow-intrusive` or your yes in the terminal; DELETE is never sent. Records the Verifier creates stay on the target, so allow writes only on an instance you can reset.
-- Requests, request rate, model calls, cost and run time are capped ([defaults](data/limits.yaml)).
+- Requests, request rate, model calls, cost and run time are capped ([defaults](data/limits.yaml)); all variants and reviews of a finding share its cost allowance.
 - Passwords and tokens come from environment variables or hidden input. They are not stored and never reach the model, the logs or the report.
 - The agent proposes one step at a time, and the Verifier checks each step before it runs it. The agent has no shell and cannot write files; with `--source` it reads the target's source code, but not `.env` files, keys or `.git/`. It sees the target's responses and screenshots, which can contain target data.
 
