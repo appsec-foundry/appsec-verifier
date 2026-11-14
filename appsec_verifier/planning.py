@@ -185,13 +185,14 @@ def add_quick(selected, eligible):
 
 
 def severity_order(plans):
-    """Most severe first; within one severity, findings with a named read request before those whose named
-    requests all write, and those before findings without a named request; finding number as a stable
-    tiebreaker (VER-026). Ordering only, never selection: under a limit the budget is spent on the
-    highest-severity findings it can reach. `dependency_order` runs after this and only hoists prerequisites,
-    so a lower-severity prerequisite still precedes what depends on it."""
-    return sorted(plans, key=lambda p: (-_SEVERITY_RANK.get((p.severity or "").lower(), 0), _ease(p),
-                                        _finding_number(p.id), p.id or ""))
+    """Quick findings first, then the others (VER-026); within each group most severe first, and within one
+    severity findings with a named read request before those whose named requests all write, and those before
+    findings without a named request; finding number as a stable tiebreaker. Ordering only, never selection:
+    under a limit the budget reaches the inexpensive findings before heavier ones spend it. `quick` depends only
+    on what a finding's variants share, so they stay together. `dependency_order` runs after this and only
+    hoists prerequisites, so a prerequisite still precedes what depends on it."""
+    return sorted(plans, key=lambda p: (not quick(p), -_SEVERITY_RANK.get((p.severity or "").lower(), 0),
+                                        _ease(p), _finding_number(p.id), p.id or ""))
 
 
 def dependency_order(plans):

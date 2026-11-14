@@ -229,8 +229,8 @@ def test_severity_order_is_most_severe_first_but_keeps_prerequisites_ahead():
 
 
 def test_within_one_severity_findings_a_read_can_reach_come_first():
-    """VER-026: within one severity a named read request first, then named writes only, then no request; a
-    critical finding without a request still precedes a high one with a read; variants stay together."""
+    """VER-026: within one severity a named read request first, then named writes only, then no request; the
+    high XSS a read reaches is quick and so precedes the critical findings that are not; variants stay together."""
     from appsec_verifier.endpoints import Endpoint
 
     doc = {"threats": [
@@ -244,12 +244,47 @@ def test_within_one_severity_findings_a_read_can_reach_come_first():
              replace(by_id["T-2"], endpoints=(Endpoint("POST", "/rest/user/login", None),)),   # write only
              replace(by_id["T-3"], endpoints=(Endpoint("GET", "/rest/products/search", None),)),  # read
              replace(by_id["T-4"], endpoints=(Endpoint("GET", "/#/search", None),))]
-    assert [p.id for p in severity_order(plans)] == ["T-3", "T-2", "T-1", "T-4"]
+    assert [p.id for p in severity_order(plans)] == ["T-3", "T-4", "T-2", "T-1"]
     p = replace(by_id["T-3"], endpoints=(Endpoint("GET", "/rest/products/search", None),))
     p.verification_context = {"variants": [{"id": "a", "request": {"method": "GET", "path": "/x"}},
                                            {"id": "b", "request": {"method": "POST", "path": "/y"}}]}
     ordered = severity_order([by_id["T-1"], *expand_variants([p])])
     assert [q.id for q in ordered] == ["T-3", "T-3", "T-1"]           # the variants are not split up
+
+
+def test_quick_findings_are_tested_before_more_severe_heavier_ones():
+    """VER-026: quick findings first, each group most severe first; a quick finding's variants stay together and a
+    prerequisite it depends on still runs before it, whatever the prerequisite's class."""
+    from appsec_verifier.endpoints import Endpoint
+
+    doc = {"threats": [
+        {"id": "T-1", "cwe": "CWE-78", "severity": "critical", "evidence": {"file": "a", "line": 1}},
+        {"id": "T-2", "cwe": "CWE-79", "severity": "medium", "evidence": {"file": "b", "line": 1}},
+        {"id": "T-3", "cwe": "CWE-89", "severity": "high", "evidence": {"file": "c", "line": 1}},
+        {"id": "T-4", "cwe": "CWE-79", "severity": "high", "evidence": {"file": "d", "line": 1}},
+    ]}
+    by_id = {p.id: p for p in plans_from(doc)}
+    read = (Endpoint("GET", "/search", None),)
+    plans = [replace(by_id["T-1"], endpoints=read),   # critical, but command injection is not quick
+             replace(by_id["T-2"], endpoints=read),   # quick, medium
+             replace(by_id["T-3"], endpoints=read),   # quick, high
+             replace(by_id["T-4"], endpoints=(Endpoint("POST", "/comment", None),))]  # XSS, but its request writes
+    assert [p.id for p in severity_order(plans)] == ["T-3", "T-2", "T-1", "T-4"]
+
+    quick_xss = replace(by_id["T-2"], endpoints=read)
+    quick_xss.verification_context = {"variants": [{"id": "a", "request": {"method": "GET", "path": "/x"}},
+                                                   {"id": "b", "request": {"method": "POST", "path": "/y"}}]}
+    ordered = severity_order([plans[0], *expand_variants([quick_xss])])
+    assert [q.id for q in ordered] == ["T-2", "T-2", "T-1"]
+
+    dep = {"threats": [
+        {"id": "T-5", "cwe": "CWE-79", "severity": "medium", "verification_dependencies": ["T-6"],
+         "evidence": {"file": "e", "line": 1}},
+        {"id": "T-6", "cwe": "CWE-639", "severity": "low", "evidence": {"file": "f", "line": 1}},
+        {"id": "T-7", "cwe": "CWE-78", "severity": "critical", "evidence": {"file": "g", "line": 1}},
+    ]}
+    dep_plans = [replace(p, endpoints=read) for p in plans_from(dep)]
+    assert [p.id for p in dependency_order(severity_order(dep_plans))] == ["T-6", "T-5", "T-7"]
 
 
 @pytest.mark.parametrize("frame_kind", ["main", "child", "foreign", "old-page", "isolated"])
