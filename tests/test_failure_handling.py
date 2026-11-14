@@ -609,7 +609,7 @@ def test_a_failed_write_of_the_annotated_copy_leaves_no_partial_file(tmp_path, m
     real_replace = os.replace
 
     def replace(src, dst):
-        if Path(dst).name == "security-assessment.annotated.yaml":
+        if Path(dst).name == "a.annotated.yaml":
             raise OSError(errno.ENOSPC, "No space left on device")
         return real_replace(src, dst)
 
@@ -618,7 +618,7 @@ def test_a_failed_write_of_the_annotated_copy_leaves_no_partial_file(tmp_path, m
         _verify(tmp_path, monkeypatch, Checked, "--annotate")
     assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": THREATS}
     out = tmp_path / "out"
-    assert not (out / "security-assessment.annotated.yaml").exists()
+    assert not (out / "a.annotated.yaml").exists()
     assert not [p for p in [*tmp_path.iterdir(), *out.iterdir()] if p.name.endswith(".tmp")]
 
 
@@ -640,7 +640,7 @@ def test_an_assessment_that_cannot_be_read_again_gets_no_copy_but_the_run_finish
 
     assert _verify(tmp_path, monkeypatch, Unreadable, "--annotate")[0] == cli.EXIT_OK
     out = tmp_path / "out"
-    assert (out / "verification.yaml").exists() and not (out / "security-assessment.annotated.yaml").exists()
+    assert (out / "verification.yaml").exists() and not (out / "a.annotated.yaml").exists()
     assert "not written: a.yaml could not be read again" in capsys.readouterr().out
 
 
@@ -653,19 +653,19 @@ def test_annotate_writes_copies_and_leaves_the_analyzers_files_alone(tmp_path, m
     assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": threats}
     assert (tmp_path / "a.md").read_text() == report_md
     out = tmp_path / "out"
-    annotated = yaml.safe_load((out / "security-assessment.annotated.yaml").read_text())
+    annotated = yaml.safe_load((out / "a.annotated.yaml").read_text())
     assert [t["verification"] for t in annotated["threats"]] == [block] * len(THREATS)
     assert all(t["dynamic_verification"]["verdict"] == "not-attempted" for t in annotated["threats"])
     assert annotated["dynamic_verification"]["verification_report"] == str(out / "verification.yaml")
-    copy = (out / "security-assessment.annotated.md").read_text()
+    copy = (out / "a.annotated.md").read_text()
     assert copy.index("## Dynamic verification") < copy.index("## Findings Register")
     assert "0 findings tested" in copy and "4 not tested" in copy
 
 
 def test_annotate_without_the_analyzers_report_says_so(tmp_path, monkeypatch, capsys):
     assert _verify(tmp_path, monkeypatch, Checked, "--annotate")[0] == cli.EXIT_OK
-    assert (tmp_path / "out" / "security-assessment.annotated.yaml").is_file()
-    assert not (tmp_path / "out" / "security-assessment.annotated.md").exists()
+    assert (tmp_path / "out" / "a.annotated.yaml").is_file()
+    assert not (tmp_path / "out" / "a.annotated.md").exists()
     assert "not written: no file a.md next to the assessment" in capsys.readouterr().out
 
 

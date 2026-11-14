@@ -4,7 +4,7 @@ title: Dynamic verification report
 description: |
   Output written to `$OUTPUT_DIR/verification.yaml` by `appsec-verifier verify`.
   It records the result of actively testing the findings of a
-  `security-assessment.yaml` against a running target. Every result is keyed to
+  `appsec-assessment.yaml` against a running target. Every result is keyed to
   exactly one source finding by id and fingerprint (VER-007), so it can be traced
   back and re-matched after the assessment is regenerated. The source assessment
   is never modified (VER-020).
@@ -49,7 +49,7 @@ properties:
           AppSec Analyzer). Null when no agent ran.
       source_assessment:
         type: string
-        description: Path to the security-assessment.yaml that was verified.
+        description: Path to the appsec-assessment.yaml that was verified.
       source_assessment_sha256:
         type: [string, "null"]
         description: Digest of the assessment input, to detect drift.

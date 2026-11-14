@@ -42,7 +42,7 @@ properties:
       verifier_version: { type: string }
       source_assessment:
         type: string
-        description: Path to the security-assessment.yaml these annotations verify.
+        description: Path to the appsec-assessment.yaml these annotations verify.
       source_assessment_sha256:
         type: [string, "null"]
         description: Digest of the assessment the verification ran against, for drift detection.

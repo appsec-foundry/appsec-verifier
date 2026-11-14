@@ -2,8 +2,9 @@ $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://appsec-verifier/schemas/annotated-assessment.schema.yaml
 title: Verification fields of an annotated assessment
 description: |
-  The fields `verify --annotate` adds to its copy of a `security-assessment.yaml`,
-  written as `security-assessment.annotated.yaml` next to the report (VER-027).
+  The fields `verify --annotate` adds to its copy of an `appsec-assessment.yaml`,
+  written under the assessment's name with `.annotated`, e.g. `appsec-assessment.annotated.yaml`,
+  next to the report (VER-027).
   The copy is the Analyzer's document with two additions and nothing else
   changed: a top-level `dynamic_verification` record of the run, and a
   `dynamic_verification` block on each finding the run tested. Both are allowed

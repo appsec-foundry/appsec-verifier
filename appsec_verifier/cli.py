@@ -140,7 +140,7 @@ def _load_assessment(path: Path) -> tuple[dict | None, list, list[str]]:
         return None, [], exc.errors
     except (OSError, yaml.YAMLError) as exc:
         if path.suffix.lower() in (".md", ".markdown"):
-            return None, [], ["this is a Markdown report; give the security-assessment.yaml next to it"]
+            return None, [], [f"this is a Markdown report; give {path.with_suffix('.yaml').name} next to it"]
         return None, [], [f"cannot read it as YAML: {type(exc).__name__}"]
     except ValueError as exc:                       # not a mapping at the top level
         return None, [], [str(exc)]
@@ -1078,10 +1078,10 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     if args.annotate and source is None:    # the results above are written; only the copies are missing
         extra.append(("Annotated", f"not written: {assessment.name} could not be read again"))
     elif args.annotate:
-        from .verify.annotated_report import write_annotated_report
+        from .verify.annotated_report import annotated_name, write_annotated_report
 
         annotated = annotate_assessment(source, doc, verification_report=str(paths["yaml"]))
-        dest = out_dir / "security-assessment.annotated.yaml"
+        dest = out_dir / annotated_name(assessment, ".yaml")
         write_text_atomically(dest, yaml.safe_dump(annotated, sort_keys=False, allow_unicode=True))
         extra.append(("Annotated", str(dest)))
         extra.append(("Annotated report", write_annotated_report(assessment, annotated, doc, out_dir)))
@@ -2007,7 +2007,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-_FILES = "--assessment security-assessment.yaml --scope scope.yaml"
+_FILES = "--assessment appsec-assessment.yaml --scope scope.yaml"
 
 
 def _banner(st: Style) -> str:
@@ -2024,7 +2024,7 @@ def _banner(st: Style) -> str:
         "  export     re-emit verdicts for AppSec Analyzer\n"
         "  update     update a pipx installation of the Verifier, after your yes\n\n"
         "Examples:\n"
-        "  appsec-verifier security-assessment.yaml\n"
+        "  appsec-verifier appsec-assessment.yaml\n"
         f"  appsec-verifier preflight {_FILES} --offline\n"
         f"  appsec-verifier verify {_FILES} \\\n"
         "      --identities identities.yaml --min-severity high --profile claude\n\n"
@@ -2116,7 +2116,7 @@ def build_parser() -> argparse.ArgumentParser:
                "  Also the target, the logins and the model, after one confirmation:\n"
                f"    appsec-verifier preflight {_FILES} \\\n"
                "      --identities identities.yaml --profile claude")
-    pf.add_argument("--assessment", metavar="FILE", required=True, help="security-assessment.yaml to check")
+    pf.add_argument("--assessment", metavar="FILE", required=True, help="appsec-assessment.yaml to check")
     pf.add_argument("--scope", metavar="FILE", help="scope file; without it, --url alone")
     pf.add_argument("--url", "--target", dest="target", metavar="URL",
                     help="URL to check (default: base_url of the scope); must lie inside the scope")
@@ -2169,9 +2169,9 @@ def build_guided_parser() -> argparse.ArgumentParser:
                           "or with --non-interactive, nothing is asked."),
         epilog="Examples:\n"
                "  Ask for the target URL, everything else by default:\n"
-               "    appsec-verifier security-assessment.yaml\n\n"
+               "    appsec-verifier appsec-assessment.yaml\n\n"
                "  This target, medium and above, another model; only the confirmation is asked:\n"
-               "    appsec-verifier security-assessment.yaml --target http://localhost:3000 \\\n"
+               "    appsec-verifier appsec-assessment.yaml --target http://localhost:3000 \\\n"
                "      --min-severity medium --profile codex-cli")
     _add_run_options(p, guided=True)
     return p
@@ -2200,7 +2200,11 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     the assessment as its argument and asks for the scope when it is missing."""
     src = vf.add_argument_group("target and input")
     if guided:
-        src.add_argument("assessment", metavar="ASSESSMENT", help="security-assessment.yaml from AppSec Analyzer")
+        src.add_argument(
+            "assessment",
+            metavar="ASSESSMENT",
+            help="appsec-assessment.yaml from AppSec Analyzer (older names work too)",
+        )
         src.add_argument(
             "--scope",
             metavar="FILE",
@@ -2209,7 +2213,10 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         )
     else:
         src.add_argument(
-            "--assessment", metavar="FILE", required=True, help="security-assessment.yaml from AppSec Analyzer"
+            "--assessment",
+            metavar="FILE",
+            required=True,
+            help="appsec-assessment.yaml from AppSec Analyzer (older names work too)",
         )
         src.add_argument("--scope", metavar="FILE", help="scope file: what may be contacted, until when, by whom")
     src.add_argument(

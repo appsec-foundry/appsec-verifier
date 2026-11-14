@@ -1,6 +1,6 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://appsec-verifier/schemas/assessment.schema.yaml
-title: The fields the Verifier reads from a security-assessment.yaml
+title: The fields the Verifier reads from an appsec-assessment.yaml
 description: |
   Not the AppSec Analyzer output schema: only the fields the Verifier reads,
   with the types it needs (VER-005, VER-032). Other fields pass unchecked. A

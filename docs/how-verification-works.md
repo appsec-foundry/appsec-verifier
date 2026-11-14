@@ -1,6 +1,6 @@
 # How verification works
 
-AppSec Analyzer finds weaknesses by reading code, so each finding in its `security-assessment.yaml` is a well-founded suspicion. The Verifier tests that suspicion against the running application: a language model plans the test one step at a time, and the Verifier's code runs every step and decides the result. A finding counts as `confirmed` only when the code has found the proof in the recorded steps, never on the model's word. This page explains the mechanism and then follows one XSS finding through it. Flags, file formats and the exact proof rules of every class are in [cli.md](cli.md); the links below lead to the section concerned.
+AppSec Analyzer finds weaknesses by reading code, so each finding in its `appsec-assessment.yaml` is a well-founded suspicion. The Verifier tests that suspicion against the running application: a language model plans the test one step at a time, and the Verifier's code runs every step and decides the result. A finding counts as `confirmed` only when the code has found the proof in the recorded steps, never on the model's word. This page explains the mechanism and then follows one XSS finding through it. Flags, file formats and the exact proof rules of every class are in [cli.md](cli.md); the links below lead to the section concerned.
 
 Three terms recur. The *model* is the language model of the profile chosen with `--profile`. The *host* is what runs it: an agent CLI (`claude`, `codex-cli`, `copilot-cli`) or a provider API (`codex`, `anthropic-api`). The *agent* is the model together with the loop in the Verifier that asks it for steps and runs them.
 
@@ -8,7 +8,7 @@ Three terms recur. The *model* is the language model of the profile chosen with 
 
 ```mermaid
 flowchart LR
-    A["security-assessment.yaml<br/>from AppSec Analyzer"] --> B["Select findings<br/>and order them"]
+    A["appsec-assessment.yaml<br/>from AppSec Analyzer"] --> B["Select findings<br/>and order them"]
     B --> C["Show settings and test plan<br/>ask once"]
     C --> D["Pre-flight checks<br/>target, logins, model"]
     D --> E["Test each finding<br/>agent loop and proof check"]

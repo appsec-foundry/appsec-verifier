@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from appsec_verifier.verify import annotated_report
 from appsec_verifier.verify.annotated_report import annotate_report, copy_figures, write_annotated_report
 from appsec_verifier.verify.report import annotate_assessment
@@ -192,15 +194,17 @@ def test_an_anchor_inside_a_code_block_does_not_count():
     assert "#### F-004 · Not in the report" in _copy(report=fenced)
 
 
-def test_the_copy_is_written_next_to_the_report_and_the_original_stays(tmp_path):
+@pytest.mark.parametrize("stem", ["appsec-assessment", "security-assessment", "threat-model"])
+def test_the_copy_is_written_next_to_the_report_and_the_original_stays(tmp_path, stem):
     src, out = tmp_path / "src", tmp_path / "out"
     src.mkdir(), out.mkdir()
-    (src / "security-assessment.yaml").write_text("threats: []\n")
-    (src / "security-assessment.md").write_text(REPORT)
-    line = write_annotated_report(src / "security-assessment.yaml", _annotated(), DOC, out)
-    assert line == f"{out / 'security-assessment.annotated.md'} (may show target data; review before sharing)"
-    assert (src / "security-assessment.md").read_text() == REPORT
-    assert "##### Dynamic verification" in (out / "security-assessment.annotated.md").read_text()
+    (src / f"{stem}.yaml").write_text("threats: []\n")
+    (src / f"{stem}.md").write_text(REPORT)
+    line = write_annotated_report(src / f"{stem}.yaml", _annotated(), DOC, out)
+    assert line == f"{out / f'{stem}.annotated.md'} (may show target data; review before sharing)"
+    assert (src / f"{stem}.md").read_text() == REPORT
+    assert "##### Dynamic verification" in (out / f"{stem}.annotated.md").read_text()
+    assert [p.name for p in out.iterdir()] == [f"{stem}.annotated.md"]
 
 
 def test_an_oversized_or_missing_report_is_not_copied(tmp_path, monkeypatch):
@@ -212,7 +216,7 @@ def test_an_oversized_or_missing_report_is_not_copied(tmp_path, monkeypatch):
     monkeypatch.setattr(annotated_report, "MAX_REPORT_BYTES", 100)
     assert write_annotated_report(tmp_path / "a.yaml", _annotated(), DOC, out).startswith(
         "not written: a.md is larger than")
-    assert not (out / "security-assessment.annotated.md").exists()
+    assert not (out / "a.annotated.md").exists()
 
 
 def test_only_plain_figure_names_next_to_the_report_are_copied(tmp_path):

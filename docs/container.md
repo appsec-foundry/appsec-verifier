@@ -51,7 +51,7 @@ docker run --rm --name appsec-verification \
   --volume /path/to/input:/input:ro \
   --volume "$HOME/verifications":/output \
   appsec-verifier verify --non-interactive --yes --profile claude \
-  --assessment /input/security-assessment.yaml \
+  --assessment /input/appsec-assessment.yaml \
   --scope /input/scope.yaml --identities /input/identities.yaml \
   --min-severity high --cost-limit 5 --output /output/project
 ```
@@ -60,7 +60,7 @@ Replace `/path/to/input` with the directory that holds the three files. `--cap-d
 
 Further options:
 
-- For questions, hidden password input and the guided run, add `-it`, for example `docker run --rm -it … appsec-verifier /input/security-assessment.yaml --output /output/project`.
+- For questions, hidden password input and the guided run, add `-it`, for example `docker run --rm -it … appsec-verifier /input/appsec-assessment.yaml --output /output/project`.
 - To give the test agent the source code, mount it read-only and pass it: `--volume /path/to/project:/source:ro` and `--source /source`.
 - A login program runs in the container, from the directory of the identities file, with the image's Python 3.12. Keep it next to the identities file.
 - `preflight` checks the same files before a run, `preflight --offline` without contacting anything.
@@ -76,7 +76,7 @@ docker run --rm --network host \
   --volume /path/to/input:/input:ro \
   --volume "$HOME/verifications":/output \
   appsec-verifier verify --non-interactive --yes --profile claude \
-  --assessment /input/security-assessment.yaml --url http://localhost:3000 \
+  --assessment /input/appsec-assessment.yaml --url http://localhost:3000 \
   --cost-limit 5 --output /output/project
 ```
 

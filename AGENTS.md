@@ -1,6 +1,6 @@
 # AGENTS.md
 
-AppSec Verifier is a Python CLI that tests the findings of an AppSec Analyzer `security-assessment.yaml` against a running application and reports per finding whether the weakness reproduces. It is an active security test tool, so its safety controls are part of the product, not optional hardening.
+AppSec Verifier is a Python CLI that tests the findings of an AppSec Analyzer `appsec-assessment.yaml` against a running application and reports per finding whether the weakness reproduces. It is an active security test tool, so its safety controls are part of the product, not optional hardening.
 
 User-facing overview: `README.md`. Command reference: `docs/cli.md`. Requirements and their VER-IDs: `requirements.md`. Internal analyses and handoffs: `docs/internal/analysis/<topic>-<YYYY-MM-DD>.md` (not packaged).
 
@@ -68,11 +68,11 @@ Only the maintainer releases a version. Coding agents do not change `ENGINE_VERS
 
 ## Relation to AppSec Analyzer
 
-The Verifier reads the Analyzer's `security-assessment.yaml` and mirrors parts of its code and data. The Analyzer is the reference: where the two differ, the Verifier follows, and the Analyzer repository is not changed for the Verifier unless the maintainer asks for it. The Analyzer does not mention the Verifier, so a change there raises no flag here. When you work on a row below, compare it with the Analyzer's current file. For the `annotate_assessment` row, `APPSEC_VERIFIER_ANALYZER_SCHEMA=<analyzer>/schemas/threat-model.output.schema.yaml python -m pytest -q tests/test_report.py -k analyzers_schema` does that check. Deliberate differences are noted in the Verifier file's docstring or comment.
+The Verifier reads the Analyzer's `appsec-assessment.yaml` and mirrors parts of its code and data. The Analyzer is the reference: where the two differ, the Verifier follows, and the Analyzer repository is not changed for the Verifier unless the maintainer asks for it. The Analyzer does not mention the Verifier, so a change there raises no flag here. When you work on a row below, compare it with the Analyzer's current file. For the `annotate_assessment` row, `APPSEC_VERIFIER_ANALYZER_SCHEMA=<analyzer>/schemas/threat-model.output.schema.yaml python -m pytest -q tests/test_report.py -k analyzers_schema` does that check. Deliberate differences are noted in the Verifier file's docstring or comment.
 
 | Verifier | AppSec Analyzer (reference) |
 | --- | --- |
-| `loader.py`, `schemas/assessment.schema.yaml` (only the fields read) | `schemas/threat-model.output.schema.yaml`, published as `security-assessment.yaml` |
+| `loader.py`, `schemas/assessment.schema.yaml` (only the fields read) | `schemas/threat-model.output.schema.yaml`, published as `appsec-assessment.yaml` |
 | `matchkey.py` | `_match_key` and `_CWE_FAMILIES` in `scripts/model/build_threat_model_yaml.py` (`MATCH_KEY_VERSION` 2) |
 | `data/model-catalog.yaml` | `data/model-catalog.yaml`: same models and prices |
 | `agent/host_codex_cli.py`, `agent/host_copilot_cli.py` | `appsec_analyzer/codex_cli.py`, `appsec_analyzer/copilot_cli.py`: same flags, versions and environment |

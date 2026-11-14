@@ -1,6 +1,6 @@
 # AppSec Verifier: command reference
 
-`appsec-verifier` reads a finished `security-assessment.yaml`, tests the selected findings one at a time against a running target inside an authorised scope, and writes a verification report. It does not re-run or re-score the static assessment. Installation and quick start: [README](../README.md). How the agent and the Verifier's code reach a verdict, with an XSS finding as example: [How verification works](how-verification-works.md). The requirement IDs (VER-…) refer to [`requirements.md`](../requirements.md).
+`appsec-verifier` reads a finished `appsec-assessment.yaml`, tests the selected findings one at a time against a running target inside an authorised scope, and writes a verification report. It does not re-run or re-score the static assessment. Installation and quick start: [README](../README.md). How the agent and the Verifier's code reach a verdict, with an XSS finding as example: [How verification works](how-verification-works.md). The requirement IDs (VER-…) refer to [`requirements.md`](../requirements.md).
 
 ## Commands
 
@@ -30,7 +30,7 @@ Enter accepts the default shown in brackets.
 | Allow intrusive probes? | no; asked only when the scope has `allow_state_change: true` | `--allow-intrusive` |
 | Existing report in the output directory | asked only when `--output` names a directory that holds a report, e.g. `There is already a report in ./verification. Overwrite it? [y/N]`; no stops the run before anything is contacted. Not asked with `--overwrite` or `--resume`, nor without a terminal, where the run stops as `verify` does. Without `--output` the run writes to a directory of its own (see [Outputs](#outputs)) | `--output`, `--overwrite`, `--resume` |
 
-Each answer goes through the same check as its option and is asked again when invalid: a URL without http or https, with a user name or password, or with an ambiguous path, or an identities file that cannot be used. Options given on the command line are not asked, e.g. `appsec-verifier ./security-assessment.yaml --target http://localhost:3000` asks nothing but the confirmation. A credential variable that the identities file names but the environment lacks is asked for without echo, e.g. `alice: VERIFIER_ALICE_PASS (password_env) is not set; enter its value (hidden):`; Enter alone leaves it unset. The value is kept only for this run, never written and never put into the environment.
+Each answer goes through the same check as its option and is asked again when invalid: a URL without http or https, with a user name or password, or with an ambiguous path, or an identities file that cannot be used. Options given on the command line are not asked, e.g. `appsec-verifier ./appsec-assessment.yaml --target http://localhost:3000` asks nothing but the confirmation. A credential variable that the identities file names but the environment lacks is asked for without echo, e.g. `alice: VERIFIER_ALICE_PASS (password_env) is not set; enter its value (hidden):`; Enter alone leaves it unset. The value is kept only for this run, never written and never put into the environment.
 
 A `scope.yaml` next to the assessment, else in the working directory, is used without a question, and the run prints its path. If it cannot be used, for instance because its window has closed, the run stops with exit 2 and says why; correct the file, or move it away to enter a target URL instead. Without a scope file the run asks for the target URL, which has no default and is never taken from the assessment. It then tests only that URL's scheme, host and port, as `verify --url` does without `--scope`, and writes no scope file.
 
@@ -41,7 +41,7 @@ Without an identities file, when the selection holds access-control findings for
 After the questions the run shows the `verify` settings and the equivalent non-interactive command line, e.g.
 
 ```
-appsec-verifier verify --assessment ./security-assessment.yaml \
+appsec-verifier verify --assessment ./appsec-assessment.yaml \
   --url http://localhost:3000 --min-severity high \
   --profile claude --non-interactive --yes
 ```
@@ -58,7 +58,7 @@ and then asks the one confirmation of VER-002 as `[Y/n]`: Enter starts the run. 
 # verify every High+ XSS and access-control finding of an assessment,
 # against a local target, capped at USD 5, writing a standalone report
 appsec-verifier verify \
-  --assessment ./security-assessment.yaml \
+  --assessment ./appsec-assessment.yaml \
   --scope ./scope.yaml \
   --identities ./identities.yaml \
   --url https://localhost:3000 \
@@ -99,7 +99,7 @@ Before the confirmation, `Test plan` names how many of the selected findings the
 
 | Flag | Meaning | Req. |
 | --- | --- | --- |
-| `--assessment PATH` | `security-assessment.yaml` to verify, as the Analyzer wrote it. | VER-005 |
+| `--assessment PATH` | `appsec-assessment.yaml` to verify, as the Analyzer wrote it; an assessment under an older name such as `security-assessment.yaml` is read the same way. | VER-005 |
 | `--scope PATH` | Authorisation scope file (`schemas/scope.schema.yaml`): the target boundary, the declared proxy and auth hosts, the test window and the owner. Without it, `--url` alone sets the boundary. | VER-001 |
 | `--url URL` (alias `--target`) | Start URL of the target. With `--scope` it must fall inside the scope, and without `--url` the scope's `base_url` is used. Without `--scope` it is required and is the whole boundary: its scheme, host and port, with no window and no owner. | VER-001/004 |
 | `--identities PATH` | Test identities (`schemas/identities.schema.yaml`): per role a bearer token, basic, form, copied browser headers, an OIDC flow or a login program. Secret values come from environment variables, or are asked hidden in an interactive run, never from this file. | VER-016/028/040 |
@@ -352,7 +352,7 @@ On a terminal the output is in colour and starts with the logo. A confirmed find
 ## `preflight` — check before a run (VER-032)
 
 ```
-appsec-verifier preflight --assessment ./security-assessment.yaml --scope ./scope.yaml \
+appsec-verifier preflight --assessment ./appsec-assessment.yaml --scope ./scope.yaml \
   [--url URL] [--identities ./identities.yaml] [--source DIR] [--profile P] [--model M] \
   [--offline] [--json] [--yes] [--non-interactive] \
   [--test-model (--cost-limit USD | --max-calls 1) [--show-costs]]
@@ -607,7 +607,7 @@ Credential and token values are used only to obtain and send a session. They are
 For a login that `form` handles, an HTML login form or a JSON POST answered with a token such as OWASP Juice Shop's, you can name the accounts on the command line instead of writing an identities file:
 
 ```sh
-appsec-verifier ./security-assessment.yaml --target http://localhost:3000 \
+appsec-verifier ./appsec-assessment.yaml --target http://localhost:3000 \
   --account jim@juice-sh.op --account bender@juice-sh.op=VERIFIER_BENDER_PASS --admin-account admin@juice-sh.op
 ```
 
@@ -635,7 +635,7 @@ Written to `--output` or the run's own directory:
 - `failed-findings.json`: written only when the test of a finding failed, owner-only, to find the cause yourself or with a model (VER-063). A test failed when it ended inconclusive because of an error in the Verifier, a failed model call, a model answer that was no usable step, a breach of the model host's confinement, or because the test agent was stopped after repeated failed actions without a usable observation. A reached limit, Ctrl-C and a test that found no sufficient proof are not failures. For each failed finding the file holds every model call of its test with system instructions, output schema, prompt and answer, or why the call failed; the error with its message, traceback and the source of the Verifier function where it occurred; and the finding's evidence files. Its tool actions are the finding's records in `agent-log.jsonl`. The file also names the Verifier version, profile, model, mode, target and assessment, and its `reading_guide` tells a model how to read it; its structure is that of AppSec Analyzer's `failed-jobs.json`. Target responses and source excerpts are in it only as the model received them, and credential values and the marker file's content are replaced; giving the file to a model sends that data to the model's provider. It never enters the report or the export. A run removes the file an earlier run left in the directory, also with `--resume`, so it names only that run's failures.
 - `console.log`: with `--console-log`, owner-only. What the run printed on standard output and standard error, from the run settings to `Done`, without the live status line; what you type at a question is not in it. It has no colour codes; with `--console-log color` it has the console's colour: `less -R console.log` shows it, an editor shows the colour codes as text. Colour needs a terminal or `FORCE_COLOR=1`, as on the console. A run that stops before it writes a report writes no log. `--resume` continues it; otherwise each run starts it fresh.
 - `evidence/`, owner-only: `<finding>-poc.har` for every tested finding, the proof records `<finding>-exchanges.json` and `<finding>-callback-hits.json`, and the images, named after the finding and its title, such as `T-042-product-update-route-has-no-authorization-guard` for "Product update route has no authorization guard — server.ts:369": the application screenshot `<name>.png` of an executed XSS, an application page or an access-control page (more than one: `<name>-2.png`), for an executed XSS marker its record `<name>.json`, the HTTP screenshots `<name>-http-<n>.png` and the evidence review's explanation panels `<name>-explanation-<n>.png` (see [Proof of concept and evidence](#proof-of-concept-and-evidence-ver-034-ver-035)). The title becomes lowercase ASCII words joined by hyphens, at most 60 characters, without the file and line at its end; a finding with variants keeps its variant key after the finding id.
-- With `--annotate`: `security-assessment.annotated.yaml` and `security-assessment.annotated.md`, with the figures of the Analyzer's report (see below; VER-027, VER-038).
+- With `--annotate`: `appsec-assessment.annotated.yaml` and `appsec-assessment.annotated.md`, named after the assessment, so `security-assessment.yaml` gives `security-assessment.annotated.yaml` and `.md`, with the figures of the Analyzer's report (see below; VER-027, VER-038).
 
 Recorded responses and retained screenshots can show target data. Live application screenshots are subject to the [credential check](#identities-file--identitiesyaml-sessions-ver-016028040). The report marks them for review before you share them (VER-022). The `export` command writes `analyzer-verification.json` for AppSec Analyzer (VER-021).
 
@@ -643,9 +643,9 @@ Recorded responses and retained screenshots can show target data. Live applicati
 
 With `--annotate` the run writes two copies next to its report. The assessment and the Analyzer's report stay unchanged, also because AppSec Analyzer records a SHA-256 of each file it saved and refuses `export` and `review` of an assessment whose files changed.
 
-`security-assessment.annotated.yaml` is the assessment with a top-level `dynamic_verification` entry for the run (schema version, time, Verifier version, path of `verification.yaml`) and a `dynamic_verification` block on each finding of the report: verdict, confidence, when its result was tested, result id, what the checked proof covers, the rating after verification, and the paths of the proof of concept (HAR) and of the screenshots, relative to the report. A finding is found by its id, and by its `match_key` only when the tested finding has another id in this assessment and no other untested finding carries that key, so a finding that merely shares the key of a tested one gets no block. A finding with variants gets the verdict `verification.md` gives it: the variants' verdict when they agree, confirmed when one of them was confirmed, otherwise inconclusive; its block also lists each variant's verdict and whether every declared variant has a checked result. The block carries no requests, responses, text observed in them or images. Schema: `schemas/annotated-assessment.schema.yaml`. Nothing else in the document changes, so it stays valid against the Analyzer's schema, and the Analyzer's own `verification` field is kept.
+`appsec-assessment.annotated.yaml` is the assessment with a top-level `dynamic_verification` entry for the run (schema version, time, Verifier version, path of `verification.yaml`) and a `dynamic_verification` block on each finding of the report: verdict, confidence, when its result was tested, result id, what the checked proof covers, the rating after verification, and the paths of the proof of concept (HAR) and of the screenshots, relative to the report. A finding is found by its id, and by its `match_key` only when the tested finding has another id in this assessment and no other untested finding carries that key, so a finding that merely shares the key of a tested one gets no block. A finding with variants gets the verdict `verification.md` gives it: the variants' verdict when they agree, confirmed when one of them was confirmed, otherwise inconclusive; its block also lists each variant's verdict and whether every declared variant has a checked result. The block carries no requests, responses, text observed in them or images. Schema: `schemas/annotated-assessment.schema.yaml`. Nothing else in the document changes, so it stays valid against the Analyzer's schema, and the Analyzer's own `verification` field is kept.
 
-`security-assessment.annotated.md` is written when the Analyzer's Markdown report lies next to the assessment under the same name, `security-assessment.md` for `security-assessment.yaml`. It is a copy of that report with three additions. A `Dynamic verification` section before the Management Summary names the target, counts the verdicts and lists each tested finding, by the id the report shows (`F-005` for `T-005`), with the Analyzer's severity and the severity after verification. The changelog table gets a row for the verification run at the top; a report without that table gets the entry in the new section instead. Each tested finding gets a `Dynamic verification` section at its end with the verdict, the rating after verification, the test agent's explanation as plain text marked as not proof, the proof of concept and the screenshots. Findings that were not tested, including those none of whose variants was tested, get no section.
+`appsec-assessment.annotated.md` is written when the Analyzer's Markdown report lies next to the assessment under the same name, `appsec-assessment.md` for `appsec-assessment.yaml`. It is a copy of that report with three additions. A `Dynamic verification` section before the Management Summary names the target, counts the verdicts and lists each tested finding, by the id the report shows (`F-005` for `T-005`), with the Analyzer's severity and the severity after verification. The changelog table gets a row for the verification run at the top; a report without that table gets the entry in the new section instead. Each tested finding gets a `Dynamic verification` section at its end with the verdict, the rating after verification, the test agent's explanation as plain text marked as not proof, the proof of concept and the screenshots. Findings that were not tested, including those none of whose variants was tested, get no section.
 
 A finding whose anchor in the report is missing or appears more than once is listed at the end of the copy. Figures the report names by a plain file name are copied next to the copy. A report larger than 32 MiB is not copied, and the `Annotated report` line in `Done` says why when no copy is written. When the assessment can no longer be read at the end of the run, neither copy is written and the `Annotated` line says so; the run's own report is written as usual. The copy contains recorded responses and screenshots; review it before sharing (VER-022).
 

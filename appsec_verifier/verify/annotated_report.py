@@ -1,6 +1,6 @@
 """The Analyzer's report with the verification results (VER-038).
 
-`verify --annotate` also writes `security-assessment.annotated.md`: a copy of the Markdown report that
+`verify --annotate` also writes `<assessment>.annotated.md`: a copy of the Markdown report that
 AppSec Analyzer saved next to the assessment, in which each tested finding gets a verification section
 (verdict, rationale, rating after verification of VER-039, proof of concept and screenshots), a summary of
 the verification precedes the findings, and the changelog table gets a row for the verification run. The
@@ -36,7 +36,6 @@ from .report import (
     write_text_atomically,
 )
 
-ANNOTATED_REPORT = "security-assessment.annotated.md"
 MAX_REPORT_BYTES = 32 * 1024 * 1024
 MAX_FIGURE_BYTES = 16 * 1024 * 1024
 
@@ -45,6 +44,12 @@ _HEADING = re.compile(r"^(#{1,6}) ")
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _FIGURE_REF = re.compile(r'(?:src|srcset)="([^"]+)"|!\[[^\]]*\]\(([^)\s]+)\)')
 _FIGURE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(?:svg|png|jpe?g)", re.IGNORECASE)
+
+
+def annotated_name(assessment: Path, suffix: str) -> str:
+    """The name of an annotated copy: the assessment's name with `.annotated`, so `appsec-assessment.yaml` gives
+    `appsec-assessment.annotated.yaml` and an assessment under an older name keeps that name (VER-027, VER-038)."""
+    return f"{Path(assessment).stem}.annotated{suffix}"
 
 
 def write_annotated_report(assessment: Path, annotated: dict, doc: dict, out_dir: Path) -> str:
@@ -57,7 +62,7 @@ def write_annotated_report(assessment: Path, annotated: dict, doc: dict, out_dir
     if len(body) > MAX_REPORT_BYTES:
         return f"not written: {source.name} is larger than {MAX_REPORT_BYTES // (1024 * 1024)} MiB"
     markdown = body.decode("utf-8", errors="replace")
-    dest = Path(out_dir) / ANNOTATED_REPORT
+    dest = Path(out_dir) / annotated_name(assessment, ".md")
     write_text_atomically(dest, annotate_report(markdown, annotated, doc))
     copy_figures(markdown, source.parent, Path(out_dir))
     return f"{dest} ({TARGET_DATA_NOTE})"

@@ -158,14 +158,15 @@ def test_verify_without_a_scope_file_and_a_valid_url_blocks_before_any_contact(t
     assert not (tmp_path / "out").exists()
 
 
-def test_the_markdown_report_given_as_assessment_is_named_as_such(tmp_path, monkeypatch, capsys):
-    report = tmp_path / "security-assessment.md"
+@pytest.mark.parametrize("stem", ["appsec-assessment", "security-assessment"])
+def test_the_markdown_report_given_as_assessment_is_named_as_such(tmp_path, monkeypatch, capsys, stem):
+    report = tmp_path / f"{stem}.md"
     report.write_text("---\ntitle: x\n---\n# Report\n\n---\n| a | b |\n")
     target = Target()
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
     rc = cli.main(["verify", "--assessment", str(report), "--url", URL, "--yes", "--output", str(tmp_path / "o")])
     err = capsys.readouterr().err
-    assert rc == cli.EXIT_BLOCKED and "Markdown report; give the security-assessment.yaml" in err
+    assert rc == cli.EXIT_BLOCKED and f"Markdown report; give {stem}.yaml next to it" in err
     assert target.calls == []
 
 

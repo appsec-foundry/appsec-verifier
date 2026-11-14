@@ -8,7 +8,7 @@
 > [!NOTE]
 > **Alpha.** Early version, actively developed. Feedback from real-world projects welcome.
 
-AppSec Verifier tests whether the findings of a static security assessment hold up in the running application. It reads the `security-assessment.yaml` written by [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer), tests the selected findings against a target you are authorised to test, and reports for each finding whether the weakness can be reproduced.
+AppSec Verifier tests whether the findings of a static security assessment hold up in the running application. It reads the `appsec-assessment.yaml` written by [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer), tests the selected findings against a target you are authorised to test, and reports for each finding whether the weakness can be reproduced.
 
 An AI agent plans the test steps. The Verifier sends every request itself, only within the scope you define, and counts a finding as confirmed only when the proof passes a check in code. It tests only the findings it is given: it does not search for new weaknesses, chain exploits or extract data.
 
@@ -22,7 +22,7 @@ You need Python 3.10 or later, [pipx](https://pipx.pypa.io/stable/), an assessme
 
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-appsec-verifier ./out/security-assessment.yaml
+appsec-verifier ./out/appsec-assessment.yaml
 ```
 
 The guided run asks for the target URL, shows which findings it can test and what the others still need, and starts after your confirmation. By default it tests findings of severity high and above with the `claude` profile. Each run writes its report to a new private directory, which the run names at its start and end ([Output](#output)).
@@ -122,7 +122,7 @@ The guided run prints the matching `verify` command before it asks for confirmat
 
 ```sh
 appsec-verifier verify --non-interactive --yes --profile claude \
-  --assessment ./out/security-assessment.yaml \
+  --assessment ./out/appsec-assessment.yaml \
   --scope ./scope.yaml --identities ./identities.yaml \
   --min-severity high --cost-limit 5 --output ./verification
 ```
