@@ -23,6 +23,9 @@ from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.verify.probes import ProbeResult
 from appsec_verifier.verify.report import _entry, _review_markdown
 
+# VER-059: after its verdict the agent answers the Verifier's presentation request; this answer has none.
+NO_PRESENTATION = {"verdict": {"verdict": "inconclusive", "rationale": "no presentation"}}
+
 CLEAR = {"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0}
 
 
@@ -185,7 +188,7 @@ def scripted_factory(actions, replies):
     class TestPlanner(HostPlanner):
         def next_step(self, ctx, history):
             histories.append(copy.deepcopy(history))
-            return actions.pop(0)
+            return actions.pop(0) if actions else NO_PRESENTATION
 
     def factory():
         planner = TestPlanner(host) if not instances else HostPlanner(host)

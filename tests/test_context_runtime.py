@@ -16,6 +16,9 @@ from appsec_verifier.agent.loop import AgentProbe
 from appsec_verifier.agent.tools import AgentTools, ToolError
 from appsec_verifier.cli import _blocker
 
+# VER-059: after its verdict the agent answers the Verifier's presentation request; this answer has none.
+NO_PRESENTATION = {"verdict": {"verdict": "inconclusive", "rationale": "no presentation"}}
+
 
 def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
     db = sqlite3.connect(":memory:")
@@ -81,7 +84,7 @@ def test_filter_order_drives_a_repeatable_query_experiment(tmp_path):
             if history:
                 assert history[0]["result"]["context"]["processing"][0]["operation"] == "filter"
                 assert history[0]["result"]["context"]["mechanism"]["binding"] == "concatenated"
-            return actions.pop(0)
+            return actions.pop(0) if actions else NO_PRESENTATION
 
     try:
         result = AgentProbe("injection", Planner).run(ctx)
@@ -133,7 +136,7 @@ def test_feedback_allows_a_missing_plan_to_be_repaired(tmp_path):
     class Planner:
         def next_step(self, context, history):
             histories.append(copy.deepcopy(history))
-            action = actions.pop(0)
+            action = actions.pop(0) if actions else NO_PRESENTATION
             return action(history) if callable(action) else action
 
     result = AgentProbe("injection", Planner).run(ctx)

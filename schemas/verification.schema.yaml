@@ -385,6 +385,7 @@ properties:
                   request_excerpt: { type: string, description: Relevant request excerpt with labelled proof marks. }
                   response_excerpt: { type: string, description: Relevant response excerpt with labelled proof marks. }
                   facts: { type: array, items: { type: string }, description: Recorded observations for this step. }
+                  composed_by: { enum: [verifier], description: Beside the test agent's presentation, a step it does not show, as the Verifier shows it (VER-059). }
             presentation:
               type: object
               description: |
@@ -397,6 +398,8 @@ properties:
                 composed_by: { enum: [test-agent, verifier] }
                 summary: { type: string, description: The test agent's sentence; model text, never proof. }
                 reason: { type: string }
+                left_out: { type: array, items: { type: string }, description: What the Verifier left out of the test agent's presentation, by step and part. }
+                not_shown: { type: array, items: { type: integer }, description: Steps the verdict rests on that the test agent's image does not show; they follow in shown as the Verifier shows them. }
 
         evidence_review:
           anyOf:

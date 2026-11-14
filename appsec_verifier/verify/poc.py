@@ -30,8 +30,9 @@ recorded response without a new request and marks the values the verdict
 names. Live application observations are attached before this renderer. The
 report displays application images and marked HTTP excerpts; exchange images
 are saved for later use, not embedded. Every finding with decisive steps also gets an image of those
-exchanges: as the test agent presents them where verify/presentation.py accepts its presentation (VER-059),
-otherwise as described here, with the reason in its header and in the observations. One whose verdict
+exchanges: as the test agent presents them, with what verify/presentation.py left out and the steps it does not
+show named, the report showing those steps after the agent's (VER-059); where the Verifier shows its own presentation
+instead, as described here, with the reason in its header and in the observations. One whose verdict
 cites none (a limit stopped it) gets an image of its answered requests after the last test plan, whose
 header says it proves nothing: request and response side by side, built here as escaped HTML with
 what the code can locate marked, each kind labelled by a red tag: the
@@ -1626,7 +1627,7 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
 
 def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None, presentation=None):
     """Bound final rendering; retain recorded exchanges after a stop (VER-036). `presentation` is the test agent's
-    (VER-059), used where verify/presentation.py accepts it.
+    (VER-059), used as far as verify/presentation.py takes it.
 
     Saving existing evidence has a separate five-second shutdown allowance.
     It never starts a browser, model call or target request.
@@ -1667,6 +1668,25 @@ def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight
         return result
 
 
+def verifier_rows(ctx, history: list[dict], steps: list[dict], numbers: set[int], har_path, highlight=None, *,
+                  composed: bool = False) -> list[dict]:
+    """The report's rows of the steps marked decisive whose numbers are in `numbers`, as the Verifier shows them
+    (VER-034, VER-035): the normal requests first, raw request and answer, the decisive part marked, and whether no
+    model read the answer (VER-053). `composed` marks them as the Verifier's beside the test agent's presentation,
+    which leaves them out (VER-059)."""
+    withheld = withheld_steps(history)
+    entries = [(s["step"], e) for s in steps if s.get("decisive") and (e := _shown_entry(s)) is not None]
+    roles = step_roles(ctx, history, entries)
+    entries = by_role(entries, roles)
+    others = [e for _, e in entries]
+    return [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
+             "response": _raw_response(e, _focus(ctx, others, e), har_path),
+             **_report_excerpts(ctx, history, n, e, entries, highlight, har_path, roles),
+             **({"withheld": True} if n in withheld else {}),
+             **({"composed_by": "verifier"} if composed else {})}
+            for n, e in entries if n in numbers]
+
+
 def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None, presentation=None):
     for number, step in enumerate(history, 1):
         if step.get("tool") == "browser_check":
@@ -1695,7 +1715,6 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     # The images describe the plan the checked steps ran under, not one accepted after them (plan_view).
     cited = (result.proof or {}).get("steps") or cited
     history = plan_view(history, cited)
-    withheld = withheld_steps(history)
     decisive = set(decisive_steps(ctx, history, result.verdict, cited))
     for step in steps:
         step["decisive"] = step["step"] in decisive
@@ -1704,24 +1723,20 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     har_path = har[0]["path"] if har else None
     shown_entries = [(s["step"], _shown_entry(s)) for s in steps if s["decisive"]]
     shown_entries = [(n, e) for n, e in shown_entries if e is not None]
-    roles = step_roles(ctx, history, shown_entries)
-    shown_entries = by_role(shown_entries, roles)       # the normal requests before the attacks (VER-035)
-    others = [e for _, e in shown_entries]
-    from .presentation import COMPOSED_NOTE, assess, shown_steps
+    shown_entries = by_role(shown_entries, step_roles(ctx, history, shown_entries))   # normal requests first
+    from .presentation import COMPOSED_NOTE, assess, saved, shown_steps
     from .presentation import screenshots as composed_screenshots
 
-    # VER-059: the test agent's presentation where the code accepts it, else the Verifier's own and why.
-    accepted, why = assess(ctx, history, steps, result, cited, presentation) if decisive else (None, None)
+    # VER-059: the test agent's presentation as the code takes it, the steps it leaves out after it as the Verifier
+    # shows them; else the Verifier's own presentation and why.
+    accepted, why, _ = assess(ctx, history, steps, result, cited, presentation) if decisive else (None, None, ())
     result.poc = {
         "file": har_path,
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
-        "shown": shown_steps(ctx, history, steps, accepted, har_path) if accepted else [
-            {"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
-             "response": _raw_response(e, _focus(ctx, others, e), har_path),
-             **_report_excerpts(ctx, history, n, e, shown_entries, highlight, har_path, roles),
-             **({"withheld": True} if n in withheld else {})}     # no model reads its answer (VER-053)
-            for n, e in shown_entries],
-        **({"presentation": {"composed_by": "test-agent", "summary": accepted["summary"]}} if accepted
+        "shown": shown_steps(ctx, history, steps, accepted, har_path) + verifier_rows(
+            ctx, history, steps, set(accepted["not_shown"]), har_path, highlight, composed=True) if accepted
+        else verifier_rows(ctx, history, steps, decisive, har_path, highlight),
+        **({"presentation": saved(accepted)} if accepted
            else {"presentation": {"composed_by": "verifier", "reason": why}} if why else {}),
     }
     if why:

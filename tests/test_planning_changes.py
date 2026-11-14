@@ -20,6 +20,9 @@ from appsec_verifier.planning import dependency_order, expand_variants, severity
 from appsec_verifier.tools.browser import execution_context
 from appsec_verifier.verify.report import merge_reports, remaining_variants
 
+# VER-059: after its verdict the agent answers the Verifier's presentation request; this answer has none.
+NO_PRESENTATION = {"verdict": {"verdict": "inconclusive", "rationale": "no presentation"}}
+
 
 @pytest.mark.parametrize("vulnerable", [False, True])
 def test_parameter_binding_and_real_query_injection(tmp_path, vulnerable):
@@ -313,7 +316,7 @@ def test_session_attributes_and_secret_redaction(tmp_path, secure):
     class Planner:
         def next_step(self, context, history):
             assert cookie not in str(history)
-            return actions.pop(0)
+            return actions.pop(0) if actions else NO_PRESENTATION
 
     result = AgentProbe("session", Planner).run(ctx)
     assert result.verdict == ("not-reproducible" if secure else "confirmed")
@@ -343,7 +346,7 @@ def test_session_observations_before_the_plan_count_only_for_a_confirmation(tmp_
 
     class Planner:
         def next_step(self, context, history):
-            return actions.pop(0)
+            return actions.pop(0) if actions else NO_PRESENTATION
 
     result = AgentProbe("session", Planner).run(ctx)
     if secure:

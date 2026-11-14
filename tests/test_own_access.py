@@ -25,6 +25,9 @@ from appsec_verifier.verification_context import record_segment
 from appsec_verifier.verify.probes import ProbeResult
 from appsec_verifier.verify.report import to_markdown
 
+# VER-059: after its verdict the agent answers the Verifier's presentation request; this answer has none.
+NO_PRESENTATION = {"verdict": {"verdict": "inconclusive", "rationale": "no presentation"}}
+
 MARKER = ("vrf1a2b3c4d", "5e6f7a8b")
 M = "".join(MARKER)
 ROLES = [{"role": "account-1"}, {"role": "account-2"}, {"role": "admin-1", "privileged": True}]
@@ -407,7 +410,7 @@ def test_a_write_proof_runs_through_the_loop_and_changes_only_the_created_record
                 {"tool": "http_request", "args": {"role": "account-1", "path": "/api/Feedbacks/7"}},
                 {"verdict": {"verdict": "confirmed", "rationale": "changed", "proof_steps": [2, 3, 5, 6]}},
             ]
-            return steps[n]
+            return steps[n] if n < len(steps) else NO_PRESENTATION
 
     ctx = _ctx(tmp_path, transport, safe=False, read_only=False, env=ENV, idents=IDENTITIES)
     ctx.plan = replace(ctx.plan, endpoints=(Endpoint("POST", "/api/Feedbacks", None),

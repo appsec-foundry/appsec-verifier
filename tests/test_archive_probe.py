@@ -18,6 +18,9 @@ from appsec_verifier.limits import LimitExceeded
 from appsec_verifier.verify import poc
 from appsec_verifier.verify.probes import ProbeResult
 
+# VER-059: after its verdict the agent answers the Verifier's presentation request; this answer has none.
+NO_PRESENTATION = {"verdict": {"verdict": "inconclusive", "rationale": "no presentation"}}
+
 CHECK = {"id": "zip-test", "finding_id": "T-1", "upload_path": "/upload", "field": "file",
          "extraction_directory": "/test-area/extract", "read_path": "/test-area/{marker}.txt",
          "cleanup_path": "/cleanup/{marker}"}
@@ -157,7 +160,7 @@ def test_agent_archive_result_keeps_requests_and_cleanup(tmp_path):
 
     class Planner:
         def next_step(self, ctx, history):
-            return actions.pop(0)
+            return actions.pop(0) if actions else NO_PRESENTATION
 
     result = AgentProbe("path-traversal", Planner).run(tools.ctx)
     assert result.verdict == "confirmed"

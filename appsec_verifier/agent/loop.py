@@ -212,9 +212,10 @@ class AgentProbe:
         last_rejected = None
         last_cited = None
         repairs = 0
-        # VER-059: one chance to fix a presentation the Verifier cannot use. `presented` holds the result and verdict
-        # whose presentation went back to the agent; they stand, and the answer adds only its presentation.
-        presentation_repaired = False
+        # VER-059: after a verdict that cites steps the agent composes its presentation from the recorded steps, and
+        # may correct it once before the Verifier leaves anything out. `presented` holds the result and verdict whose
+        # presentation is awaited; they stand, and the answer adds only its presentation.
+        presentation_requested = presentation_repaired = False
         presented = None
         qa_candidate = None
 
@@ -241,6 +242,15 @@ class AgentProbe:
             ctx.recapture = partial(recapture, ctx, tools, history, sent, result, cited)
             ctx.represent = partial(present, ctx, history, sent, result, cited)
             return _finish(ctx, step, result)
+
+        def ask_presentation(step: int, tool: str, result, verdict, message: dict) -> None:
+            """Send the agent the redacted record of the steps its verdict rests on with `message` (VER-059). The
+            excerpts are model context, not action-log content."""
+            from ..verify.presentation import repair_context
+
+            evidence = repair_context(ctx, history, sent, result, verdict.get("proof_steps"))
+            _log(ctx, step, tool=tool, result={**message, "required_steps": evidence["required_steps"]})
+            history.append({"tool": tool, "args": {}, "result": {**message, **evidence}})
 
         def attach_stopped(stopped):
             # A follow-up cannot erase an already checked observation when its budget ends.
@@ -394,13 +404,29 @@ class AgentProbe:
                         proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP],
                     )
                 verdict = action["verdict"]
+                from ..verify.presentation import assess
+
                 if presented is not None:
-                    # VER-059: the answer to a presentation feedback adds its presentation only; the result and
-                    # verdict that got the feedback stand, whatever else the answer says. An answer without one,
-                    # such as a host error, keeps the first, so the report gives its reason.
+                    # VER-059: the answer to a presentation request or correction adds its presentation only; the
+                    # result and verdict stand, whatever else the answer says. An answer without one, such as a host
+                    # error, keeps the earlier one. Before the Verifier leaves anything out of one, the agent may
+                    # correct it once, while a step is left; an answer without any is not asked for again.
                     (result, kept), presented = presented, None
                     again = verdict.get("presentation")
-                    return conclude(step, result, {**kept, **({"presentation": again} if again is not None else {})})
+                    verdict = {**kept, **({"presentation": again} if again is not None else {})}
+                    checked = assess(ctx, history, sent, result, verdict.get("proof_steps"),
+                                     verdict.get("presentation"))
+                    problems = [*([f"it would leave out {'; '.join(checked.left_out)}"] if checked.left_out else []),
+                                *([checked.why] if checked.why else [])]
+                    if problems and verdict.get("presentation") is not None and not presentation_repaired \
+                            and decision < self._max_steps:
+                        presentation_repaired, presented = True, (result, verdict)
+                        ask_presentation(step, "presentation_feedback", result, verdict, {
+                            "status": "presentation needs a correction", "reason": "; ".join(problems),
+                            "next": "submit the same verdict again with a corrected presentation; only the "
+                                    "presentation of that answer is used"})
+                        continue
+                    return conclude(step, result, verdict)
                 result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
                 if ((result.proof or {}).get("checked") is False and not (result.proof or {}).get("observed_access")
                         and repairs < 2 and decision < self._max_steps):
@@ -442,23 +468,17 @@ class AgentProbe:
                     _log(ctx, step, tool="qa_feedback", note="Technical QA requests a follow-up", result=feedback)
                     history.append({"tool": "qa_feedback", "args": {}, "result": feedback})
                     continue
-                from ..verify.presentation import assess, repair_context
-
-                # VER-059: a presentation the Verifier cannot render goes back to the agent once, with the reason,
-                # while a step is left; the verdict and its checked proof stay as they are. A missing one is not
-                # asked for here: the offered schema requires it, and an evidence review asks for it (VER-042).
-                _, why = assess(ctx, history, sent, result, verdict.get("proof_steps"), verdict.get("presentation"))
-                if why and verdict.get("presentation") is not None and why != "the verdict cites no step" \
-                        and not presentation_repaired and decision < self._max_steps:
-                    presentation_repaired, presented = True, (result, verdict)
-                    feedback = {"status": "presentation not accepted", "reason": why,
-                                **repair_context(ctx, history, sent, result, verdict.get("proof_steps")),
-                                "next": "submit the same verdict again with a corrected presentation; only the "
-                                        "presentation of that answer is used"}
-                    # Response excerpts are model context, not action-log content.
-                    _log(ctx, step, tool="presentation_feedback",
-                         result={k: v for k, v in feedback.items() if k != "recorded_evidence"})
-                    history.append({"tool": "presentation_feedback", "args": {}, "result": feedback})
+                # VER-059: after a verdict that cites steps, while a step is left, the agent receives the redacted
+                # record of the steps it rests on and composes its presentation from it; the verdict and its checked
+                # proof stay as they are. Without a step left, the verdict's own presentation counts.
+                cites = assess(ctx, history, sent, result, verdict.get("proof_steps"), None).why \
+                    != "the verdict cites no step"
+                if cites and not presentation_requested and decision < self._max_steps:
+                    presentation_requested, presented = True, (result, verdict)
+                    ask_presentation(step, "presentation_request", result, verdict, {
+                        "status": "verdict recorded; compose its presentation",
+                        "next": "submit the same verdict again with presentation, quoting only recorded_evidence; "
+                                "only the presentation of that answer is used"})
                     continue
                 return conclude(step, result, verdict)
             name, args = action["tool"], action["args"]

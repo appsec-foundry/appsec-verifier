@@ -210,7 +210,7 @@ def test_confirmed_idor_writes_the_cited_exchanges_owner_only_and_hides_them_fro
                                                "the identical answer, compared in code over the whole body."]
     assert result.poc["shown"][0]["request"].startswith("GET /rest/basket/2 HTTP/1.1\nHost: shop.example.com\n")
     assert "HTTP/1.1 200 OK" in result.poc["shown"][0]["response"]
-    assert all("_step" not in seen and "headers" not in seen for seen in planner.seen)   # history stays as it was
+    assert all('"_step"' not in seen and '"headers"' not in seen for seen in planner.seen)  # no raw exchange
 
 
 def test_a_refuted_finding_still_gets_its_proof_of_concept(tmp_path):

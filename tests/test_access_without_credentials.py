@@ -333,8 +333,11 @@ def test_the_agent_can_quote_the_answer_without_credentials_but_not_the_account_
     refused = presentation(2)
     refused["steps"][0]["excerpt"] = '"secret":"s3cr3t-config-value"'          # the account's answer
     result, _, _ = _run(tmp_path, target, presentation=refused)
-    assert result.poc["presentation"]["composed_by"] == "verifier"
-    assert "the answer of step 2 is withheld or not kept" in result.poc["presentation"]["reason"]
+    assert result.poc["presentation"]["composed_by"] == "test-agent"        # only the quotes are left out
+    assert result.poc["presentation"]["left_out"] == [
+        "the excerpt of step 2, whose answer is withheld or not kept",
+        "the excerpt of step 4, whose answer is withheld or not kept"]               # VER-057: compared in code
+    assert "s3cr3t" not in {s["step"]: s for s in result.poc["shown"]}[2]["response_excerpt"]
 
 
 def test_a_target_that_answers_every_path_alike_confirms_nothing(tmp_path):

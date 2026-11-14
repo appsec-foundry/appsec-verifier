@@ -87,7 +87,7 @@ def test_login_bypass_confirms_with_send_controls_in_few_model_calls(tmp_path):
     script = Script([_login_plan(), {"tool": "send_controls", "args": {}}, _confirm])
     result = AgentProbe("injection", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.proof["checked"] is True
-    assert script.calls == 3                                   # plan, send_controls, verdict
+    assert script.calls == 4                                   # plan, send_controls, verdict, presentation
     assert len(sent) == 5                                      # five controls, each once: no repetition needed
     statuses = [h["result"]["status"] for h in script.history if h.get("experiment")]
     assert sorted(statuses) == [200, 200, 401, 401, 401]       # the 401-to-200 flip is the proof (VER-049)
@@ -171,7 +171,7 @@ def test_template_candidates_find_the_working_one_in_one_plan(tmp_path):
     script = Script([_search_plan(templates), _confirm])
     result = AgentProbe("injection", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.proof["checked"] is True
-    assert script.calls == 2                                   # plan and verdict: no revision call
+    assert script.calls == 3                                   # plan, verdict, presentation: no revision call
     plans = [h for h in script.history if h.get("tool") == "plan_test"]
     assert len(plans) == 3 and plans[-1]["args"]["sql_template"] == templates[2]
 
@@ -250,7 +250,7 @@ def test_a_login_variant_with_two_inputs_confirms_with_a_fixed_password(tmp_path
     plan = _login_plan(variant="variant-001", fixed={"json": {"password": "not-a-secret"}})
     script = Script([plan, {"tool": "send_controls", "args": {}}, _confirm])
     result = AgentProbe("injection", lambda: script).run(ctx)
-    assert result.verdict == "confirmed" and script.calls == 3, result.rationale
+    assert result.verdict == "confirmed" and script.calls == 4, result.rationale   # with the presentation
     controls = [h["args"]["json"] for h in script.history if h.get("experiment")]
     assert len(controls) == 5 and {c["password"] for c in controls} == {"not-a-secret"}
     assert len({c["email"] for c in controls}) == 5

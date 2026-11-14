@@ -811,23 +811,28 @@ def _poc_markdown(r: dict, level: int = 4, *, steps: bool = True, limitations: b
     # VER-059: the test agent's presentation, its words fenced as model text, or why the Verifier composed it.
     composed = poc.get("presentation") or {}
     agent = composed.get("composed_by") == "test-agent"
-    if agent and composed.get("summary"):
-        out += ["", "The test agent chose the steps, excerpts and marks below; the Verifier found each in the record.",
-                "", _fenced(f"Test agent's account: {composed['summary']}", "text")]
+    if agent:
+        left_out, not_shown = composed.get("left_out") or [], composed.get("not_shown") or []
+        out += ["", "The test agent chose the steps, excerpts and marks below; the Verifier found each in the record."
+                + (f" It left out {_inline('; '.join(left_out), 600)}." if left_out else "")
+                + (" After them follow, as the Verifier shows them, the steps the verdict also rests on that the "
+                   f"test agent left out: {', '.join(_inline(n, 8) for n in not_shown)}." if not_shown else "")]
+        out += ["", _fenced(f"Test agent's account: {composed['summary']}", "text")] if composed.get("summary") else []
     elif composed.get("reason"):
         out += ["", _fenced(f"Excerpts composed by the Verifier: {composed['reason']}.", "text")]
     parsed = {s["step"]: s for s in _steps(r)}
     for shown in poc.get("shown") or []:
         s = parsed.get(shown["step"]) or {}
+        mine = agent and shown.get("composed_by") != "verifier"     # a step the agent's presentation shows
         title = f"**Step {_inline(shown['step'], 8)}**"
         if shown.get("role") in ROLE_TITLES:     # the normal requests come first, then the attacks (VER-035)
             title = (f"**{ROLE_TITLES[shown['role']]} · step {_inline(shown['step'], 8)}**"
-                     + (f" ({_inline(shown['role_label'], 80)})" if shown.get("role_label") and not agent else ""))
+                     + (f" ({_inline(shown['role_label'], 80)})" if shown.get("role_label") and not mine else ""))
         if s.get("method"):
             title += (f" · {_code(s['method'] + ' ' + s['path'])} as {_inline(s['role'], 60)} → "
                       f"{_inline(s['answer'], 80)}")
         facts = shown.get("facts") or []
-        if agent and shown.get("role_label"):      # model text stays in the fence
+        if mine and shown.get("role_label"):       # model text stays in the fence
             facts = [f"Test agent: {shown['role_label']}", *facts]
         out += ["", title]
         if facts:

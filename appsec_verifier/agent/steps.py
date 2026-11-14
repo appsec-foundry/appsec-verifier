@@ -113,10 +113,9 @@ def _offered_schema(tool: dict, ctx=None) -> dict:
                           rule["if"].get("properties", {}).get("kind", {}).get("const") == "access-control"
                           or rule["if"].get("required") == ["change"])]}
         schema = {**schema, "properties": {k: v for k, v in schema.get("properties", {}).items() if k not in hidden}}
-    if tool["name"] == "submit_verdict":     # VER-059: offered precisely and as required, accepted as any object
+    if tool["name"] == "submit_verdict":     # VER-059: offered precisely, asked for after the verdict, any object kept
         presentation = {**PRESENTATION_SCHEMA, "description": PRESENTATION_HELP}
-        schema = {**schema, "properties": {**schema.get("properties", {}), "presentation": presentation},
-                  "required": [*schema.get("required", []), "presentation"]}
+        schema = {**schema, "properties": {**schema.get("properties", {}), "presentation": presentation}}
     return schema
 
 
