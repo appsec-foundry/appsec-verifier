@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from appsec_verifier.agent import AgentProbe, AgentTools, ToolError
-from appsec_verifier.agent.prompts import _system
+from appsec_verifier.agent.prompts import _marker_task, _system
 from appsec_verifier.cli import _proof_browser, screenshot_option
 from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.limits import LimitExceeded, Limits, RunBudget
@@ -141,27 +141,39 @@ def test_marker_parts_are_random_and_the_page_hook_reports_dialogs_without_knowi
     assert "__appsecVerifierReport(name, text)" in script
 
 
-def test_system_prompt_gives_the_marker_only_for_xss_and_open_redirect():
+def test_the_task_gives_the_marker_only_for_xss_and_open_redirect():
     plan = SimpleNamespace(cls="xss")
     ctx = SimpleNamespace(plan=plan, identities=[], safe=True, marker=("vrfaa", "bb"))
-    assert "alert('vrfaa'.concat('bb'))" in _system(ctx) and "'vrfaa'+'bb'" not in _system(ctx)
+    assert "alert('vrfaa'.concat('bb'))" in _marker_task(ctx) and "'vrfaa'+'bb'" not in _marker_task(ctx)
     ctx.plan = SimpleNamespace(cls="open-redirect")
-    assert "https://vrfaabb.invalid/" in _system(ctx) and "alert(" not in _system(ctx)
+    assert "https://vrfaabb.invalid/" in _marker_task(ctx) and "alert(" not in _marker_task(ctx)
     ctx.plan = SimpleNamespace(cls="access-control")
-    assert "vrfaa" not in _system(ctx)
+    assert "vrfaa" not in _marker_task(ctx) + _system(ctx)
 
 
-def test_system_prompt_names_the_traversal_and_ssrf_markers_but_never_the_file_content():
+def test_the_system_prompt_is_the_same_for_every_marker_and_the_task_names_the_marker_a_write_carries():
+    listener = SimpleNamespace(url_for=lambda m: f"http://localhost:4444/{m}")
+    for cls in ("xss", "open-redirect", "ssrf", "injection", "access-control", "path-traversal"):
+        for mode in ({"safe": False}, {"safe": True, "ask_writes": lambda *a: False}, {"safe": True}):
+            one, other = (SimpleNamespace(plan=SimpleNamespace(cls=cls, id="T-1", cwe="CWE-1"), identities=[],
+                                          marker=marker, listener=listener, scope={}, **mode)
+                          for marker in (("vrfaa", "bb"), ("vrfcc", "dd")))
+            assert _system(one) == _system(other) and "vrf" not in _system(one)
+            told = "The finding's marker, which every write must carry: vrfaa" in _marker_task(one)
+            assert told == (mode != {"safe": True})     # safe mode without a question speaks of no write to send
+
+
+def test_prompts_name_the_traversal_and_ssrf_markers_but_never_the_file_content():
     content = "vrfMarkerContent0123456789"
     listener = SimpleNamespace(url_for=lambda m: f"http://localhost:4444/{m}")
     ctx = SimpleNamespace(plan=SimpleNamespace(cls="path-traversal"), identities=[], safe=True,
                           marker=("vrfaa", "bb"), listener=listener,
                           scope={"marker_file": {"path": "/srv/verifier-marker.txt", "content": content}})
-    assert "/srv/verifier-marker.txt" in _system(ctx) and content not in _system(ctx)
+    assert "/srv/verifier-marker.txt" in _system(ctx) and content not in _system(ctx) + _marker_task(ctx)
     ctx.plan = SimpleNamespace(cls="ssrf")
-    assert "http://localhost:4444/vrfaabb" in _system(ctx) and content not in _system(ctx)
+    assert "http://localhost:4444/vrfaabb" in _marker_task(ctx) and content not in _system(ctx) + _marker_task(ctx)
     ctx.scope, ctx.listener = {}, None
-    assert "no callback listener" in _system(ctx)
+    assert "no callback listener" in _system(ctx) and _marker_task(ctx) == ""
     ctx.plan = SimpleNamespace(cls="path-traversal")
     assert "names no marker file" in _system(ctx)
 

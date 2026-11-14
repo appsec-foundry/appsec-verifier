@@ -6,9 +6,11 @@ tools (http_request, read_source, find_source, search_source, browser_check,
 plan_test, send_controls and the others) plus submit_verdict — and steps.py
 builds the strict step contract from them and offers each finding only the
 actions its class uses. `_system()` carries a common part and the proof rules of
-the finding's own class only; `_seed()` describes the task and the run mode and
+the finding's own class only, without the finding's marker, so it is the same
+for every finding of a class; `_seed()` describes the task and the run mode and
 carries the requests and the description the assessment gives for the finding,
-marked as data. No credential and no target content is part of them.
+marked as data, and the marker with the proof instruction that names it. No
+credential and no target content is part of them.
 """
 
 from __future__ import annotations
@@ -307,9 +309,8 @@ def _system(ctx) -> str:
     if privileged:
         roles += (f". Privileged roles, read-only and the reference for privileged functions: "
                   f"{', '.join(privileged)}")
-    part = (getattr(ctx, "marker", None) or ("",))[0]
-    write_rules = ("every write (POST, PUT, PATCH) must carry " + (part or "the finding's marker")
-                   + " in its path or a value, must not name an existing record by its identifier in the URL path, "
+    write_rules = ("every write (POST, PUT, PATCH) must carry the finding's marker"
+                   " in its path or a value, must not name an existing record by its identifier in the URL path, "
                    "and must not name another account's record in its body: create, never change what may belong "
                    "to someone else (VER-014)")
     mode = (
@@ -555,26 +556,10 @@ def _access_hint(ctx) -> str:
 
 
 def _marker_hint(ctx) -> str:
-    plan, marker = getattr(ctx, "plan", None), getattr(ctx, "marker", ("", ""))
-    cls = getattr(plan, "cls", None)
+    """The proof instructions of a class that name no marker value; they are part of the system prompt."""
+    cls = getattr(getattr(ctx, "plan", None), "cls", None)
     if cls == "access-control":
         return _access_hint(ctx)
-    if cls == "xss" and all(marker):
-        return (
-            f"\nXSS proof: your payload must call alert('{marker[0]}'.concat('{marker[1]}')) — the two parts joined "
-            "at runtime (quotes may change to fit the context). Do not join them with +: many applications read + "
-            "in a query string as a space. Only that evaluated value counts as execution, and "
-            "only browser_check observes it; confirmed without an executed marker is downgraded. Never send the "
-            "joined value itself: a request that carries it voids the proof, since a page could merely echo it."
-        )
-    host = redirect_host(marker)
-    if cls == "open-redirect" and host:
-        return (
-            f"\nOpen-redirect proof: make the target redirect to a URL whose host is exactly {host}, e.g. "
-            f"https://{host}/ placed where the finding takes the destination (wrap it as the target's "
-            "validation requires, but keep that host). The host never resolves and the redirect is not followed. "
-            "Cite in proof_steps the http_request answered 301/302/303/307/308 with that host in its location."
-        )
     if cls == "path-traversal" and any(
         r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("archive_checks", [])
     ):
@@ -596,15 +581,45 @@ def _marker_hint(ctx) -> str:
             "separators. You will not see the file's content (it shows as [marker-file]); http_request reports "
             "marker_read. Cite in proof_steps the http_request with marker_read true."
         )
-    if cls == "ssrf":
-        listener = getattr(ctx, "listener", None)
-        if listener is None or not all(marker):
-            return (
-                "\nSSRF cannot be confirmed in this run: there is no callback listener. Do not point the "
-                "target at any URL; report what you observe as inconclusive."
-            )
+    if cls == "ssrf" and (getattr(ctx, "listener", None) is None or not all(getattr(ctx, "marker", None) or ("",))):
         return (
-            f"\nSSRF proof: make the target request {listener.url_for(''.join(marker))} (a further path or "
+            "\nSSRF cannot be confirmed in this run: there is no callback listener. Do not point the "
+            "target at any URL; report what you observe as inconclusive."
+        )
+    return ""
+
+
+def _marker_task(ctx) -> str:
+    """What names the finding's own marker: the marker a write must carry, where the run mode speaks of writes, and
+    the proof instruction of XSS, open redirect and SSRF. It is part of the seed, so the system prompt is the same
+    for every finding of a class and a host reads it from its prompt cache."""
+    plan, marker = getattr(ctx, "plan", None), getattr(ctx, "marker", None) or ("", "")
+    cls = getattr(plan, "cls", None)
+    writes = not getattr(ctx, "safe", True) or getattr(ctx, "ask_writes", None) is not None
+    return (f"\nThe finding's marker, which every write must carry: {marker[0]}" if marker[0] and writes else "") \
+        + _marker_proof(ctx, cls, marker)
+
+
+def _marker_proof(ctx, cls, marker) -> str:
+    if cls == "xss" and all(marker):
+        return (
+            f"\nXSS proof: your payload must call alert('{marker[0]}'.concat('{marker[1]}')) — the two parts joined "
+            "at runtime (quotes may change to fit the context). Do not join them with +: many applications read + "
+            "in a query string as a space. Only that evaluated value counts as execution, and "
+            "only browser_check observes it; confirmed without an executed marker is downgraded. Never send the "
+            "joined value itself: a request that carries it voids the proof, since a page could merely echo it."
+        )
+    host = redirect_host(marker)
+    if cls == "open-redirect" and host:
+        return (
+            f"\nOpen-redirect proof: make the target redirect to a URL whose host is exactly {host}, e.g. "
+            f"https://{host}/ placed where the finding takes the destination (wrap it as the target's "
+            "validation requires, but keep that host). The host never resolves and the redirect is not followed. "
+            "Cite in proof_steps the http_request answered 301/302/303/307/308 with that host in its location."
+        )
+    if cls == "ssrf" and getattr(ctx, "listener", None) is not None and all(marker):
+        return (
+            f"\nSSRF proof: make the target request {ctx.listener.url_for(''.join(marker))} (a further path or "
             "query may follow). That is the Verifier's listener; a URL in a parameter or body must point "
             "there and nowhere else. http_request reports callback_hit once a request with your marker has "
             "arrived; the Verifier checks the listener itself, so no proof_steps are needed."
@@ -697,4 +712,5 @@ def _seed(ctx) -> str:
            f"{pinned['request'].get('path', '')}); the finding's other variants are verified in their own runs, "
            "so plan and test only this one.\n" if pinned else "")
         + "Plan and execute the verification, then submit_verdict."
+        + _marker_task(ctx)
     )
