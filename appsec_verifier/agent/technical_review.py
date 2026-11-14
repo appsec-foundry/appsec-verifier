@@ -2,7 +2,9 @@
 
 The reviewer has no target tools. It can read this variant's recorded redacted
 responses or return questions to the original loop. Three judgments, two evidence
-selections and two correction rounds are shared by all variants of a finding.
+selections and two correction rounds are shared by all variants of a finding; a
+variant gets at most one of those rounds, and none when its verdict is that the
+run's mode does not send the request the finding needs.
 Neither QA nor its feedback changes authorization, proof checks or run limits.
 An access-control confirmation whose proof check passed is judged only for
 whether the access violates the independently established restriction (`intent=True`).
@@ -63,7 +65,7 @@ pointer null and offset 0. Return clear with issues [] or needs-attention with c
 has a category code, the technical concern in detail and a useful question for the test agent. Presentation
 and screenshots are reviewed separately; you have not seen image pixels. Do not require new tests merely
 to improve presentation. Follow-ups retain all history, repetition limits and budgets; at most two rounds
-are shared by all variants. Your feedback never grants permission and never confirms a finding.
+are shared by all variants, one per variant. Your feedback never grants permission and never confirms a finding.
 """
 QA_INTENT = """The recorded comparison and an operator-established restriction support this proposed
 access-control confirmation. Check whether the observed access actually violates the application's
@@ -149,11 +151,13 @@ class TechnicalReview:
         self.state = {"status": "not-reviewed", "rounds": 0, "reviews": 0, "inspected_steps": [],
                       "reason": "No proposed conclusion was reviewed.", "issues": []}
 
-    def consider(self, history, result, tools, controller, remaining, *, intent=False):
+    def consider(self, history, result, tools, controller, remaining, *, intent=False, follow_up=True):
         """Return questions for the existing loop, or None; never return a verdict. With `intent`, QA judges
         whether a checked access-control comparison violates its established restriction, within the shared
-        correction rounds (VER-046)."""
+        correction rounds. Without `follow_up` the judgment is recorded and no question is returned (VER-046)."""
         ctx = self.ctx
+        # Two rounds for the finding, one of them for this variant.
+        rounds_left = min(2 - self.shared.get("rounds", 0), 1 - self.state["rounds"]) if follow_up else 0
         try:
             if not callable(getattr(self.original, "structured", None)):
                 self.state["reason"] = "The selected planner does not support technical QA."
@@ -181,7 +185,7 @@ class TechnicalReview:
                 "capabilities": {"source": ctx.source is not None, "browser": ctx.browser is not None,
                                  "callback": ctx.listener is not None},
                 "remaining_test_steps": remaining,
-                "remaining_correction_rounds": min(max(remaining, 0), 2 - self.shared.get("rounds", 0)),
+                "remaining_correction_rounds": max(min(remaining, rounds_left), 0),
                 "proposed": {"verdict": result.verdict, "rationale": result.rationale, "proof": result.proof},
                 "steps": [{"step": n, "tool": h.get("tool"), "args": bounded(clean(ctx, h.get("args"))),
                            "result": bounded(clean(ctx, h.get("result")))} for n, h in enumerate(history, 1)][-64:],
@@ -227,7 +231,7 @@ class TechnicalReview:
                     self.state["reason"] = "No unresolved technical objections in the reviewed attempts."
                     return None
                 issues = reply["issues"]
-                if self.shared.get("rounds", 0) >= 2 or remaining <= 0:
+                if rounds_left <= 0 or remaining <= 0:
                     self.state["reason"] = "Technical objections remain; correction rounds or test steps are exhausted."
                     return None
                 self.shared["rounds"] = self.shared.get("rounds", 0) + 1

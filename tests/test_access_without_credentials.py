@@ -453,7 +453,7 @@ def test_qa_sends_a_public_resource_objection_back_once_and_a_checked_confirmati
     assert result.verdict == "confirmed" and result.proof["tested_path"] == "/keys/secret.key"
     feedback = [h for h in histories[-1] if h["tool"] == "qa_feedback"]
     assert len(feedback) == 1 and feedback[0]["result"]["issues"] == [PUBLIC_RESOURCE, INTENDED]
-    assert [call[1]["remaining_correction_rounds"] for call in host.calls] == [2, 1]
+    assert [call[1]["remaining_correction_rounds"] for call in host.calls] == [1, 0]   # one round per variant
     assert result.technical_review["status"] == "clear" and result.technical_review["rounds"] == 1
 
 

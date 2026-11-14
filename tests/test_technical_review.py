@@ -239,17 +239,42 @@ def test_qa_question_returns_to_same_loop_and_follow_up_produces_checked_proof(t
 def test_follow_up_cannot_reset_repetitions_and_retains_already_checked_proof(tmp_path):
     sent = []
     ctx = context(tmp_path, redirect_target(sent))
-    # QA engages on the first inconclusive verdict, so it still reviews the later confirmed proof (VER-046); its
+    # QA engaged the finding on an earlier variant, so it reviews this variant's confirmed proof (VER-046); its
     # follow-up cannot reset the repetition allowance, and the already-checked proof is retained when the
     # follow-up stops at stagnation.
-    actions = [{"verdict": {"verdict": "inconclusive", "rationale": "no redirect observed yet"}},
-               attempt(), conclusion(2), attempt(), attempt()]
-    factory, _, _, _ = scripted_factory(actions, [question(), question()])
+    ctx.technical_review_budget["reviews"] = 1
+    actions = [attempt(), conclusion(1), attempt(), attempt()]
+    factory, _, _, _ = scripted_factory(actions, [question()])
     result = AgentProbe("open-redirect", factory, max_steps=6).run(ctx)
     assert len(sent) == 2 and result.limits_hit == "stagnation"
     assert result.verdict == "confirmed" and result.proof["checked"]
-    assert result.technical_review["status"] == "needs-attention" and result.technical_review["rounds"] == 2
+    assert result.technical_review["status"] == "needs-attention" and result.technical_review["rounds"] == 1
     assert "follow-up stopped" in " ".join(result.observations)
+
+
+def test_a_variant_gets_one_correction_round_and_a_second_objection_is_only_reported(tmp_path):
+    ctx = context(tmp_path)
+    qa, host = reviewer(ctx, [question(), question("Still only one payload.")])
+    assert consider(ctx, qa)["round"] == 1
+    assert consider(ctx, qa) is None                       # judged again, but no second question for this variant
+    assert len(host.calls) == 2 and host.calls[1][1]["remaining_correction_rounds"] == 0
+    assert qa.state["status"] == "needs-attention" and qa.state["rounds"] == 1
+    assert qa.state["issues"][0]["detail"] == "Still only one payload."
+    assert ctx.technical_review_budget["rounds"] == 1      # the finding's second round stays for another variant
+
+
+def test_a_test_the_mode_does_not_send_is_reviewed_without_a_question_to_the_agent(tmp_path):
+    sent = []
+    ctx = context(tmp_path, redirect_target(sent))
+    ctx.refused_writes = ["POST /go"]
+    actions = [{"verdict": {"verdict": "inconclusive", "rationale": "The write was refused"}}]
+    factory, host, _, histories = scripted_factory(actions, [question()])
+    result = AgentProbe("open-redirect", factory, max_steps=4).run(ctx)
+    assert result.verdict == "not-attempted" and result.limits_hit == "safe-mode" and not sent
+    assert len(host.calls) == 1 and host.calls[0][1]["remaining_correction_rounds"] == 0
+    assert not any(h.get("tool") == "qa_feedback" for history in histories for h in history)
+    assert result.technical_review["status"] == "needs-attention" and result.technical_review["rounds"] == 0
+    assert ctx.technical_review_budget.get("rounds", 0) == 0
 
 
 def test_a_checked_confirmation_of_another_class_than_access_control_is_not_reviewed(tmp_path):

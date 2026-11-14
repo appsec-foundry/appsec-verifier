@@ -487,8 +487,10 @@ class AgentProbe:
                 if confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
                     qa.state["reason"] = "A confirmed verdict whose proof check passed is not reviewed (VER-046)."
                 else:
+                    # VER-046: no question about a test this run's mode does not send (VER-052).
                     feedback = qa.consider(history, result, tools, controller, self._max_steps - decision,
-                                           intent=intent_only)
+                                           intent=intent_only,
+                                           follow_up=untested_write(ctx, result).limits_hit != "safe-mode")
                 if feedback is not None:
                     if (result.proof or {}).get("checked") is True:
                         qa_candidate = (result, verdict.get("proof_steps"))
