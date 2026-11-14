@@ -27,7 +27,7 @@ def cookie_observations(response, sessions=None):
             continue
         for name, cookie in cookies.items():
             if sessions is not None and cookie.value:
-                sessions.remember_secret(cookie.value)
+                sessions.remember_secret(cookie.value, "session cookie")
             active = bool(cookie.value)
             try:
                 if cookie["max-age"]:

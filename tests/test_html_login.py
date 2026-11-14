@@ -39,7 +39,7 @@ class Dvwa:
         self.calls.append((method, url, dict(headers), kw))
         sent = dict(p.strip().split("=", 1) for p in headers.get("Cookie", "").split(";") if "=" in p)
         self.n += 1
-        sid = f"sid{self.n:04d}"
+        sid = f"sid{self.n:04d}k7q2x9"         # a session id, not a setting
         state = self.sessions[sid] = dict(self.sessions.get(sent.get("PHPSESSID"), {}))
         cookies = [("set-cookie", f"PHPSESSID={sid}; expires=Fri, 13-Nov-2099 20:00:00 GMT; Max-Age=86400; "
                                   "path=/; domain=localhost; HttpOnly; SameSite=Strict")]
@@ -77,15 +77,15 @@ def manager(target, identities=(ADMIN,), password=PASSWORD, url=None):
 def test_a_login_form_is_submitted_with_its_hidden_fields_and_its_cookies_become_the_session():
     target = Dvwa()
     sessions = manager(target)
-    assert sessions.headers_for("admin") == {"Cookie": "PHPSESSID=sid0003; security=impossible"}
+    assert sessions.headers_for("admin") == {"Cookie": "PHPSESSID=sid0003k7q2x9; security=impossible"}
     (page, _, page_headers, _), (post, url, headers, kw), (follow, index, follow_headers, follow_kw) = target.calls
     assert (page, post, url, follow, index) == ("GET", "POST", LOGIN, "GET", URL + "/index.php")
     assert "Cookie" not in page_headers                              # nothing was set before the first answer
     assert kw["data"] == {"username": "admin", "password": PASSWORD, "Login": "Login", "user_token": f"{1:032x}"}
-    assert headers["Cookie"] == "PHPSESSID=sid0001; security=impossible"   # Domain=localhost does not drop it
-    assert follow_headers["Cookie"] == "PHPSESSID=sid0002; security=impossible" and "data" not in follow_kw
+    assert headers["Cookie"] == "PHPSESSID=sid0001k7q2x9; security=impossible"   # Domain=localhost does not drop it
+    assert follow_headers["Cookie"] == "PHPSESSID=sid0002k7q2x9; security=impossible" and "data" not in follow_kw
     assert all(PASSWORD not in str(call) for call in target.calls if call[0] == "GET")
-    assert sessions.redact("session sid0003 and sid0001") == "session [admin session] and [redacted]"
+    assert sessions.redact("session sid0003k7q2x9 and sid0001k7q2x9") == "session [admin session] and [session cookie]"
 
 
 def test_a_login_that_ends_on_the_login_form_again_is_refused_and_not_tried_again():
@@ -127,7 +127,7 @@ def test_an_account_named_on_the_command_line_uses_the_fields_the_form_names():
                                                               "password_env": "DP"}}
     sessions = manager(target, [ident])
     assert sessions.sign_in_with_fields("account-1", [("email", "pass")]) == ("username", "password")
-    assert sessions.headers_for("account-1") == {"Cookie": "PHPSESSID=sid0003; security=impossible"}
+    assert sessions.headers_for("account-1") == {"Cookie": "PHPSESSID=sid0003k7q2x9; security=impossible"}
 
 
 def test_a_login_page_without_a_content_type_is_read_as_html():
@@ -138,7 +138,7 @@ def test_a_login_page_without_a_content_type_is_read_as_html():
         return httpx.Response(resp.status_code, headers=[h for h in resp.headers.multi_items()
                                                          if h[0] != "content-type"], content=resp.content)
 
-    assert manager(untyped).headers_for("admin") == {"Cookie": "PHPSESSID=sid0003; security=impossible"}
+    assert manager(untyped).headers_for("admin") == {"Cookie": "PHPSESSID=sid0003k7q2x9; security=impossible"}
 
 
 def test_a_page_without_a_password_form_falls_back_to_the_json_login():

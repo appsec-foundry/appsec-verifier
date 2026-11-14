@@ -95,7 +95,7 @@ def test_redirects_are_reported_not_followed(tmp_path):
     env = {"TA": "A-token-1234"}
     out = AgentTools(_ctx(tmp_path, transport, env=env)).http_request(role="customer-a", path="/redirect")
     assert sent == ["https://app.example.com/redirect"]
-    assert out["status"] == 302 and out["location"] == "https://evil.example/landing?t=[redacted]"
+    assert out["status"] == 302 and out["location"] == "https://evil.example/landing?t=[customer-a token]"
 
 
 def test_elapsed_time_is_reported_when_the_transport_measured_it(tmp_path):
@@ -179,7 +179,7 @@ def test_echoed_token_is_redacted_before_the_excerpt_is_cut(tmp_path):
     tools = AgentTools(_ctx(tmp_path, lambda m, u, h, **k: Resp(200, body), env=env))
     out = tools.http_request(role="customer-a", path="/whoami")
     assert out["length"] == len(body)
-    assert token[:10] not in out["body_excerpt"] and out["body_excerpt"].startswith("x" * 590 + "[redac")
+    assert token[:10] not in out["body_excerpt"] and out["body_excerpt"].startswith("x" * 590 + "[custo")
 
 
 def test_forbidden_answer_never_triggers_a_new_login(tmp_path):

@@ -39,7 +39,7 @@ class FakeTransport:
         if url == "https://sso.example.com/token":
             return FakeResp(200, {"access_token": "OIDCTOK"})
         if url == "https://app.example.com/rest/user/login":
-            return FakeResp(200, {"authentication": {"token": "FORMTOK"}})
+            return FakeResp(200, {"authentication": {"token": "FORMTOK7f3a"}})
         return FakeResp(200, {})
 
 
@@ -68,7 +68,7 @@ def test_form_login_posts_json_to_login_url_and_returns_only_token():
         "username_field": "email", "username_env": "AU", "password_env": "AP"}}
     mgr, tr = _mgr([ident], {"AU": "a@x.test", "AP": "secretpw"})
     headers = mgr.headers_for("a")
-    assert headers == {"Authorization": "Bearer FORMTOK"}           # only the token travels onward
+    assert headers == {"Authorization": "Bearer FORMTOK7f3a"}           # only the token travels onward
     (page, page_url, _, page_kw), (method, url, _, kw) = tr.calls    # the page holds no login form: a JSON login
     assert page == "GET" and page_url == url and not {"json", "data"} & page_kw.keys()
     assert method == "POST" and url == "https://app.example.com/rest/user/login"
@@ -124,10 +124,10 @@ def test_redact_replaces_env_values_and_obtained_tokens_in_every_form():
     mgr.headers_for("a")
     mgr.headers_for("b")
     basic = base64.b64encode(b"bob:hunter22").decode()
-    text = (f'token FORMTOK user alice@shop.test pw pa ss/wörd"1 json "pa ss/w\\u00f6rd\\"1" '
+    text = (f'token FORMTOK7f3a user alice@shop.test pw pa ss/wörd"1 json "pa ss/w\\u00f6rd\\"1" '
             f"url pa%20ss%2Fw%C3%B6rd%221 form pa+ss%2Fw%C3%B6rd%221 basic {basic} hunter22 name bob")
     out = mgr.redact({"body": text, "list": [text], "n": 3, "flag": True})
-    for secret in ("FORMTOK", "wörd", "w\\u00f6rd", "w%C3%B6rd", basic, "hunter22"):
+    for secret in ("FORMTOK7f3a", "wörd", "w\\u00f6rd", "w%C3%B6rd", basic, "hunter22"):
         assert secret not in out["body"] and secret not in out["list"][0]
     assert "user alice@shop.test pw" in out["body"]        # a user name is no secret (VER-016)
     assert out["n"] == 3 and out["flag"] is True
@@ -138,8 +138,8 @@ def test_redact_masks_a_credential_that_keys_a_json_object():
     """VER-016: an answer keyed by a session or token, such as {"<session id>": {...}}, shows no credential."""
     mgr, _ = _mgr([FORM, BASIC], ENV)
     mgr.headers_for("a")
-    out = mgr.redact({"sessions": {"FORMTOK": {"user": "alice@shop.test"}, "hunter22": 1}, 7: "x"})
-    assert "FORMTOK" not in str(out) and "hunter22" not in str(out)
+    out = mgr.redact({"sessions": {"FORMTOK7f3a": {"user": "alice@shop.test"}, "hunter22": 1}, 7: "x"})
+    assert "FORMTOK7f3a" not in str(out) and "hunter22" not in str(out)
     assert out["sessions"]["[a session]"] == {"user": "alice@shop.test"} and out[7] == "x"
 
 
@@ -147,14 +147,14 @@ def test_redact_keeps_masking_a_token_after_invalidate():
     mgr, _ = _mgr([FORM], ENV)
     mgr.headers_for("a")
     mgr.invalidate("a")
-    assert mgr.redact("old FORMTOK") == "old [a session]"
+    assert mgr.redact("old FORMTOK7f3a") == "old [a session]"
 
 
 def test_a_user_name_that_equals_a_secret_of_the_run_stays_redacted():
     """VER-016: a user name is no secret, unless it is the value of one, here another identity's password."""
     env = {**ENV, "AU": "hunter22"}
     mgr, _ = _mgr([FORM, BASIC], env)
-    assert mgr.redact("Welcome hunter22") == "Welcome [redacted]"
+    assert mgr.redact("Welcome hunter22") == "Welcome [test credential]"
     mgr, _ = _mgr([FORM], env)                             # without that identity it is a user name only
     assert mgr.redact("Welcome hunter22") == "Welcome hunter22"
 
@@ -163,23 +163,62 @@ def test_a_placeholder_names_the_account_and_the_kind_of_the_secret():
     bearer = {"role": "c", "method": "bearer", "auth": {"token_env": "CT"}}
     mgr, _ = _mgr([FORM, BASIC, bearer], {**ENV, "CT": "tok-c-123456"})
     mgr.headers_for("a")
-    out = mgr.redact('pw pa ss/wörd"1 basic hunter22 bearer tok-c-123456 session FORMTOK')
+    out = mgr.redact('pw pa ss/wörd"1 basic hunter22 bearer tok-c-123456 session FORMTOK7f3a')
     assert out == "pw [a password] basic [b password] bearer [c token] session [a session]"
-    assert mgr.holds_placeholder("x [b password]") and mgr.holds_placeholder("[redacted]")
+    assert mgr.holds_placeholder("x [b password]") and mgr.holds_placeholder("[test credential]")
     assert not mgr.holds_placeholder("x [b passwd]")
 
 
 @pytest.mark.parametrize("env, text, out", [
-    ({**ENV, "BP": 'pa ss/wörd"1'}, 'pw pa ss/wörd"1', "pw [redacted]"),                     # two accounts share it
-    ({**ENV, "AU": "hunter22"}, "user hunter22", "user [redacted]"),                       # also a user name
-    ({**ENV, "AU": "pa ss/wörd\"1"}, 'pw pa ss/wörd"1', "pw [redacted]"),                  # user name = password
-    ({**ENV, "BP": "word"}, 'pw pa ss/wörd"1 and word', 'pw [redacted] and [redacted]'),   # in a label: neutral
+    ({**ENV, "BP": 'pa ss/wörd"1'}, 'pw pa ss/wörd"1', "pw [a/b password]"),                 # two accounts share it
+    ({**ENV, "AU": "hunter22"}, "user hunter22", "user [test credential]"),                # also a user name
+    ({**ENV, "AU": "pa ss/wörd\"1"}, 'pw pa ss/wörd"1', "pw [test credential]"),           # user name = password
+    ({**ENV, "BP": "a pass"}, 'pw pa ss/wörd"1 and a pass', 'pw [test credential] and [b password]'),  # in a label
 ])
-def test_a_placeholder_that_would_tell_more_than_that_a_secret_stood_there_is_neutral(env, text, out):
-    """A shared value, a user name that equals a secret, and a secret that a label would carry read [redacted];
-    the one pass never replaces inside a placeholder."""
+def test_a_placeholder_says_what_it_hides_without_telling_more(env, text, out):
+    """VER-016: a value two accounts share names both; a user name that equals a secret, and a secret whose label
+    would carry another secret, read [test credential]. The one pass never replaces inside a placeholder."""
     mgr, _ = _mgr([FORM, BASIC], env)
     assert mgr.redact(text) == out
+
+
+def test_a_password_that_is_a_plain_word_is_masked_only_where_it_stands_as_a_value():
+    """VER-016: DVWA's password `password`, shared by two accounts. It is masked as a query, form or cookie value
+    and as a JSON or dict value, never in the page's text or in a name, where masking it would mask the word and
+    tell the password."""
+    mgr, _ = _mgr([FORM, BASIC], {**ENV, "AP": "password", "BP": "password"})
+    label = "[a/b password]"
+    for text in ("Username and/or password incorrect.", '<input type="password" name="password">',
+                 '{"field": "password reset"}'):
+        assert mgr.redact(text) == text
+    assert (mgr.redact("GET /brute/?username=admin&password=password HTTP/1.1")
+            == f"GET /brute/?username=admin&password={label} HTTP/1.1")
+    assert mgr.redact("user=admin&password=password") == f"user=admin&password={label}"
+    assert mgr.redact('{"password": "password"}') == f'{{"password": "{label}"}}'
+    assert (mgr.redact({"params": {"password": "password"}, "input_name": "password", "inputs": ["password"]})
+            == {"params": {"password": label}, "input_name": "password", "inputs": ["password"]})
+    assert mgr.holds_placeholder(label)
+
+
+def test_a_token_that_is_not_a_word_stays_masked_in_any_text():
+    """VER-016: only a plain word gets the value rule; a token or a password with digits is masked anywhere."""
+    mgr, _ = _mgr([FORM, BASIC], ENV)
+    mgr.headers_for("a")
+    assert mgr.redact("your token FORMTOK7f3a and hunter22") == "your token [a session] and [b password]"
+
+
+def test_only_a_cookie_value_that_can_be_a_session_is_a_secret():
+    """VER-016: a pasted session's `security=low` is a setting and stays readable, also inside other words; its
+    session id is masked. A cookie observed during the run counts only when it can be a session."""
+    ident = {"role": "s", "method": "session", "auth": {"headers_env": {"Cookie": "SC"}}}
+    mgr, _ = _mgr([ident], {"SC": "PHPSESSID=k3j4h5g6f7d8s9a0q1w2; security=low"})
+    mgr.headers_for("s")
+    assert mgr.redact("allowing a follow-up below") == "allowing a follow-up below"
+    assert mgr.redact("Cookie: PHPSESSID=k3j4h5g6f7d8s9a0q1w2; security=low") == "Cookie: [s session]"
+    assert mgr.redact("id k3j4h5g6f7d8s9a0q1w2, level low") == "id [s session], level low"
+    mgr.remember_secret("medium", "session cookie")
+    mgr.remember_secret("a1b2c3d4e5", "session cookie")
+    assert mgr.redact("medium a1b2c3d4e5") == "medium [session cookie]"
 
 
 def test_a_page_with_a_user_name_may_reach_a_model_and_one_with_a_password_may_not():

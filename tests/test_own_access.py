@@ -601,9 +601,10 @@ def test_exposure_findings_keep_needing_an_operator_resource(tmp_path):
         tools.plan_test(**_plan_args(owner="account-2"))
 
 
-def test_the_digest_tells_apart_answers_that_redaction_made_alike(tmp_path):
-    """Each account's answer names its own credential: the same after redaction, different underneath. A list
-    naming both is the same for both. Neither the value nor a plain hash of it is kept."""
+def test_the_digest_is_of_the_answer_and_keeps_no_credential(tmp_path):
+    """Each account's answer names its own credential, which redaction replaces by that account's placeholder; the
+    digest is of the answer itself. A list naming both is the same for both. Neither the value nor a plain hash of
+    it is kept (VER-016)."""
     def own(m, u, h, **k):
         return Resp(200, '{"user":"token-admin-1"}' if "token-admin-1" in str(h) else '{"user":"token-account-1"}')
 
@@ -616,7 +617,8 @@ def test_the_digest_tells_apart_answers_that_redaction_made_alike(tmp_path):
         return out
 
     mine, theirs = answers(own)
-    assert mine["body"] == theirs["body"] and mine["digest"] != theirs["digest"]
+    assert mine["body"] == '{"user":"[account-1 token]"}' and theirs["body"] == '{"user":"[admin-1 token]"}'
+    assert mine["digest"] != theirs["digest"]
     assert "token-account-1" not in str(mine) and hashlib.sha256(b'{"user":"token-account-1"}').hexdigest() \
         not in str(mine)
     listing = answers(lambda *a, **k: Resp(200, '{"users":["token-account-1","token-admin-1"]}'))

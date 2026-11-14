@@ -1247,7 +1247,7 @@ class AgentTools:
 
                 obtained = artifact(_body_text(resp), active.get("pointer"))
                 if obtained and self.ctx.sessions is not None:
-                    self.ctx.sessions.remember_secret(obtained)
+                    self.ctx.sessions.remember_secret(obtained, "login artifact")
             omit = ("body withheld: authentication artifact (VER-049)" if active.get("auth_artifact") else
                     "body not kept: compared in code only (VER-057)" if comparison and not exposed else None)
             self._record(self._sent(resp, m, url, headers, params, json, form), role, headers, omit=omit)

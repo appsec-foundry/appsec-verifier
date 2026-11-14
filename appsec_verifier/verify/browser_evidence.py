@@ -20,7 +20,7 @@ from ..agent.tools import ToolError
 from ..limits import LimitExceeded, execution_deadline
 from ..planning import evidence_id, evidence_name
 from ..tools.browser import BrowserError
-from .poc import decisive_steps
+from .poc import MASKS, decisive_steps
 
 PAGE_CLASSES = ("access-control", "injection")
 
@@ -46,7 +46,11 @@ def capture_application(ctx, tools, history, sent, result, proposal, cited):
                       and 200 <= e["response"]["status"] < 300), None)
         values = list(proposal["values"])
         text = entry["response"]["content"].get("text", "") if entry is not None else ""
-        masked = ctx.sessions.holds_placeholder if ctx.sessions is not None else (lambda v: "[redacted]" in v)
+
+        def masked(value):
+            return any(mask in value for mask in MASKS) or (ctx.sessions is not None
+                                                            and ctx.sessions.holds_placeholder(value))
+
         if entry is None or any(v not in text or masked(v) for v in values):
             raise ToolError("the selected visible values are not in a successful recorded GET response")
         role = proposal.get("role") or entry.get("_role")

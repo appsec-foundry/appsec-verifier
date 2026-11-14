@@ -347,7 +347,7 @@ def test_presentation_repairs_receive_exact_redacted_records_but_no_withheld_ans
     result = SimpleNamespace(verdict="confirmed", proof={"checked": True, "steps": [1, 2]})
     feedback = pres.repair_context(ctx, history, steps, result, [1, 2])
     assert feedback["required_steps"] == [1, 2]
-    assert feedback["recorded_evidence"][0]["body_excerpt"] == "<p>[redacted]</p>"
+    assert feedback["recorded_evidence"][0]["body_excerpt"] == "<p>[credential]</p>"
     assert feedback["recorded_evidence"][1]["response_withheld"] is True
     assert "fixture-sensitive-value" not in json.dumps(feedback)
     assert "withheld-answer" not in json.dumps(feedback)
@@ -370,7 +370,7 @@ def test_repair_excerpt_focuses_on_the_checked_text_after_redaction(tmp_path):
     steps[0]["step"] = 2
     result = SimpleNamespace(verdict="confirmed", proof={"checked": True, "steps": [2]})
     feedback = pres.repair_context(ctx, history, steps, result, [2])
-    assert "Welcome [redacted] to the protected resource" in feedback["recorded_evidence"][0]["body_excerpt"]
+    assert "Welcome [credential] to the protected resource" in feedback["recorded_evidence"][0]["body_excerpt"]
     assert "fixture-sensitive-value" not in json.dumps(feedback)
 
 

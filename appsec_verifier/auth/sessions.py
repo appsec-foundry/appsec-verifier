@@ -34,13 +34,15 @@ answer to that request, not an expired session, and the role is not logged in
 again until one of its requests is accepted.
 
 `redact()` replaces every credential value the run knows (the identities'
-`*_env` values but their user names, which are no secret, and every header
-value, cookie value and token obtained from them, also JSON-escaped and
-URL-encoded) with a placeholder naming its account and kind, such as
-"[account-1 password]", or "[redacted]" where no single one does. The agent loop
-applies it to every tool result before the planner sees it, and the runner to
-the results before the report is written (VER-016). Values shorter than 4
-characters are not replaced, because they would mask ordinary text.
+`*_env` values but their user names, which are no secret, every header value
+and token obtained from them, and each cookie value that can be a session,
+also JSON-escaped and URL-encoded) with a placeholder naming its accounts and
+kind, such as "[account-1 password]" or "[account-1/account-2 password]". The
+agent loop applies it to every tool result before the planner sees it, and the
+runner to the results before the report is written (VER-016). Values shorter
+than 4 characters are not replaced, because they would mask ordinary text, and
+a secret that is a plain word only where it stands as a value. Other cookie
+values, such as `security=low`, are settings, not secrets.
 
 `accounts()` names the account a role's token belongs to (`iss` and `sub` of
 an unverified JWT), so the pre-flight check can refuse two roles that are the
@@ -59,8 +61,9 @@ from urllib.parse import quote, quote_plus, urljoin, urlsplit
 
 from ..tools.http import same_origin
 
-REDACTED = "[redacted]"
+MIXED_CREDENTIAL = "[test credential]"     # a value that is also a user name, or a secret of several kinds
 _MIN_SECRET_LEN = 4
+_WORD_LEN = 16                              # a letters-only secret shorter than this can be an ordinary word
 RENEW_MARGIN_S = 60                      # renew a session this long before it expires
 _FORM_REDIRECTS = 5                      # redirects an HTML form login follows within its origin
 _HTML_ACCEPT = "text/html,application/xhtml+xml,*/*;q=0.8"
@@ -178,7 +181,7 @@ class SessionManager:
         self._refresh: dict[str, str] = {}     # role -> refresh token, kept across invalidate()
         self._accounts: dict[str, tuple[str, str]] = {}
         self._discovery: dict[str, dict] = {}
-        self._cookie_secrets: set[str] = set()
+        self._observed: dict[str, str] = {}    # credential observed during the run -> its kind, for its placeholder
         self._issued: set[str] = set()         # header values and tokens obtained, kept after invalidate()
         self._issued_by: dict[str, str] = {}   # issued value -> the role whose session it is, for its placeholder
         self._refused: dict[str, str] = {}     # role -> why its session could not be obtained
@@ -259,10 +262,14 @@ class SessionManager:
     def invalidate(self, role: str) -> None:
         self._cache.pop(role, None)
 
-    def remember_secret(self, value: str) -> None:
-        """Keep observed session values out of later responses, prompts and evidence (VER-016)."""
+    def remember_secret(self, value: str, kind: str = "credential") -> None:
+        """Keep a credential observed during the run out of later responses, prompts and evidence (VER-016): a login
+        artifact, or a `session cookie` whose value can be a session (`session_like`). Other cookie values are
+        settings such as `security=low`, not secrets."""
+        if kind == "session cookie" and not session_like(value):
+            return
         self._issued.add(value)
-        self._cookie_secrets.add(value)
+        self._observed[value] = kind
 
     def renew(self, role: str) -> bool:
         """After a 401 for `role`: drop its session so the next headers_for() logs in again, and return True;
@@ -284,16 +291,30 @@ class SessionManager:
 
     def redact(self, value):
         """`value` (str, or dicts and lists of them) with every credential value replaced by its placeholder
-        (VER-016), in one pass, so no replacement is made inside a placeholder. Other types pass unchanged."""
-        placeholders = self._placeholders()
-        pattern = re.compile("|".join(map(re.escape, sorted(placeholders, key=len, reverse=True)))) \
-            if placeholders else None       # longest first, so no fragment of a value is left
+        (VER-016), in one pass, so no replacement is made inside a placeholder. Other types pass unchanged.
 
-        def walk(v):
+        A secret that is a plain word (`plain_word`), such as the password `password`, is replaced only where it
+        stands as a value: after `=` in a query, form or cookie, as a JSON member's string value, and as a dict
+        value other than an input's name. In other text and in names it is an ordinary word, and masking it there
+        would mask that word and tell the secret."""
+        placeholders = self._placeholders()
+        words = {form: label for form, label in placeholders.items() if plain_word(form)}
+        anywhere = "|".join(map(re.escape, sorted(set(placeholders) - set(words), key=len, reverse=True)))
+        alternatives = [anywhere] if anywhere else []       # longest first, so no fragment of a value is left
+        if words:
+            names = "|".join(map(re.escape, sorted(words, key=len, reverse=True)))
+            alternatives += [rf"(?<==)(?:{names})(?=$|[&;#\s\"'])", rf"(?:(?<=:\")|(?<=: \"))(?:{names})(?=\")"]
+        pattern = re.compile("|".join(alternatives)) if alternatives else None
+        in_names = re.compile(anywhere) if anywhere else None   # keys: a target may key its answer by a token
+
+        def text(v, p):
+            return p.sub(lambda m: placeholders[m.group(0)], v) if p else v
+
+        def walk(v, key=None):
             if isinstance(v, str):
-                return pattern.sub(lambda m: placeholders[m.group(0)], v) if pattern else v
-            if isinstance(v, dict):     # keys too: a target may key its answer by a token or session id
-                return {walk(k): walk(x) for k, x in v.items()}
+                return words[v] if v in words and key is not None and key not in _NAME_KEYS else text(v, pattern)
+            if isinstance(v, dict):
+                return {(text(k, in_names) if isinstance(k, str) else k): walk(x, k) for k, x in v.items()}
             if isinstance(v, list | tuple):
                 return [walk(x) for x in v]
             return v
@@ -311,9 +332,11 @@ class SessionManager:
     def _keep(self, role: str, session: Session) -> None:
         values = set()
         for name, value in session.headers.items():
-            values.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
-            if name.lower() == "cookie":
-                values.update(part.partition("=")[2].strip() for part in value.split(";"))
+            if name.lower() == "cookie":    # only a value that can be a session; `security=low` is a setting
+                values.update(v for v in (part.partition("=")[2].strip() for part in value.split(";"))
+                              if session_like(v))
+            else:
+                values.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
         if session.refresh_token:
             self._refresh[role] = session.refresh_token
             values.add(session.refresh_token)
@@ -340,36 +363,41 @@ class SessionManager:
         return max(session.expires_at - RENEW_MARGIN_S, now + (session.expires_at - now) / 2)
 
     def _placeholders(self) -> dict[str, str]:
-        """Each form of each secret value the run knows (as is, JSON-escaped, URL-encoded) -> its placeholder
-        (VER-016): `[<role> <kind>]` where one account holds it as one kind of secret, such as `[account-1
-        password]` or `[account-1 session]` for what its session obtained, else `[redacted]`: for a value several
-        accounts or kinds share, one no account obtained, one that is also a user name (its label would tell that
-        user name and secret are equal) and one whose label would carry a secret."""
-        found: dict[str, set[str]] = {}
-        for value in self._issued:
-            role = self._issued_by.get(value)
-            found.setdefault(value, set()).add(f"[{role} session]" if role else REDACTED)
+        """Each form of each secret value the run knows (as is, JSON-escaped, URL-encoded) -> its placeholder, which
+        names what the value is (VER-016): `[<roles> <kind>]` for the accounts that hold it as one kind of secret,
+        such as `[account-1 password]`, `[account-1/account-2 password]` or `[account-1 session]` for what a session
+        obtained; `[<kind>]` for a credential observed without an account, such as `[session cookie]`; and
+        `[test credential]` for a value of several kinds, one that is also a user name (its label would tell that
+        user name and secret are equal) and one whose label would carry another secret."""
+        found: dict[str, set[tuple[str, str]]] = {}
         users = set()
         for role, ident in self._by_role.items():
             auth = ident.get("auth") or {}
             users.add(self._env.get(auth.get("username_env") or "") or "")
             for key, name in _secret_vars(auth):
                 if self._env.get(name):
-                    found.setdefault(self._env[name], set()).add(f"[{role} {_KINDS.get(key, 'secret')}]")
-        values = {v for v in found if len(v) >= _MIN_SECRET_LEN or v in self._cookie_secrets}
+                    found.setdefault(self._env[name], set()).add((role, _KINDS.get(key, "secret")))
+        for value in self._issued:      # what a session carries; a declared token keeps its own kind
+            role = self._issued_by.get(value)
+            if role and not any(owner == role for owner, _ in found.get(value, ())):
+                found.setdefault(value, set()).add((role, "session"))
+            elif not role and value not in found:
+                found[value] = {("", self._observed.get(value, "credential"))}
+        values = {v for v in found if len(v) >= _MIN_SECRET_LEN}
         out: dict[str, str] = {}
         for value in values:
-            labels = found[value]
-            label = labels.pop() if len(labels) == 1 else REDACTED
-            if value in users or any(v in label for v in values):
-                label = REDACTED
+            kinds = sorted({kind for _, kind in found[value]})
+            roles = "/".join(sorted({role for role, _ in found[value]})) if all(r for r, _ in found[value]) else ""
+            label = f"[{roles} {kinds[0]}]" if roles else f"[{kinds[0]}]"
+            if len(kinds) > 1 or value in users or any(v in label for v in values if not plain_word(v)):
+                label = MIXED_CREDENTIAL
             for form in (value, json.dumps(value)[1:-1], quote(value, safe=""), quote_plus(value)):
-                out[form] = label if out.get(form, label) == label else REDACTED
+                out[form] = label if out.get(form, label) == label else MIXED_CREDENTIAL
         return out
 
     def holds_placeholder(self, text: str) -> bool:
         """Whether `text` holds a placeholder of a secret value, so it does not show the value (VER-016)."""
-        return REDACTED in text or any(label in text for label in set(self._placeholders().values()))
+        return MIXED_CREDENTIAL in text or any(label in text for label in set(self._placeholders().values()))
 
     def _env_get(self, name: str | None) -> str:
         value = self._env.get(name) if name else None
@@ -459,7 +487,7 @@ class SessionManager:
                 return self._grant(auth, data)
             resp = interactive.device_code(self._http, auth, endpoints, self._client_fields(auth), self._ui,
                                            role=role, sleep=self._sleep, clock=self._clock,
-                                           remember=self._issued.add)
+                                           remember=lambda code: self.remember_secret(code, "device code"))
             return self._token_session(resp, auth, "device_code")
         if method == "command":
             from . import program
@@ -672,7 +700,7 @@ class SessionManager:
         session.refresh_token = refresh if isinstance(refresh, str) and refresh else None
         id_claims = jwt_claims(body.get("id_token")) if isinstance(body.get("id_token"), str) else None
         if isinstance(body.get("id_token"), str):
-            self._issued.add(body["id_token"])
+            self.remember_secret(body["id_token"], "ID token")
         session.account = _account(id_claims or {})
         return self._with_token_facts(session)
 
@@ -696,3 +724,20 @@ def _secret_vars(auth: dict) -> list[tuple[str, str]]:
     names += [("headers_env", name) for name in (auth.get("headers_env") or {}).values()
               if isinstance(name, str) and name]
     return names
+
+
+# Dict keys whose string value names an input, which a secret that is a plain word does not replace (VER-016).
+_NAME_KEYS = frozenset({"input_name", "name"})
+
+
+def session_like(value: str) -> bool:
+    """Whether a cookie value can be a session credential (VER-016): at least 16 characters, or at least 8 with
+    letters and digits mixed. A word or a short number, such as `low` or `1`, is a setting, not a session."""
+    return len(value) >= 16 or (len(value) >= 8 and any(c.isalpha() for c in value)
+                                and any(c.isdigit() for c in value))
+
+
+def plain_word(value: str) -> bool:
+    """Whether a secret is a plain word, letters only and shorter than 16 characters, such as the password
+    `password`, which ordinary text holds as a word (VER-016)."""
+    return value.isalpha() and len(value) < _WORD_LEN

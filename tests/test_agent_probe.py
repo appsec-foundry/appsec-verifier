@@ -203,7 +203,7 @@ def test_planner_and_report_never_see_a_credential_value(tmp_path):
     assert seen and all("SECRET-TOKEN" not in h for h in seen)
     assert "[customer-a session]" in seen[1]
     assert "SECRET-TOKEN" not in json.dumps(doc)
-    assert doc["results"][0]["rationale"] == "saw token [redacted] echoed"
+    assert doc["results"][0]["rationale"] == "saw token [customer-a token] echoed"
 
 
 def test_every_step_is_logged_with_its_outcome_and_refusals(tmp_path):

@@ -426,7 +426,7 @@ def test_the_device_flow_shows_the_code_and_polls_at_the_providers_pace():
                       "code_challenge_method": "S256"}
     assert polls == 3 * [{"client_id": "cli", "device_code": "DEV-SECRET-1", "code_verifier": verifier,
                           "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}]
-    assert sessions.redact("DEV-SECRET-1") == "[redacted]"
+    assert sessions.redact("DEV-SECRET-1") == "[device code]"
 
 
 @pytest.mark.parametrize("error", ["access_denied", "expired_token"])

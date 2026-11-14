@@ -133,20 +133,34 @@ def _raw(**over):
 
 
 def test_entry_redacts_credentials_and_keeps_what_the_proof_needs():
-    sessions = SimpleNamespace(redact=lambda v: v.replace(TA, "[redacted]") if isinstance(v, str) else v)
+    sessions = SimpleNamespace(redact=lambda v: v.replace(TA, "[customer-a token]") if isinstance(v, str) else v)
     e = poc.entry(_raw(), redact=sessions.redact, identity={"Authorization": f"Bearer {TA}"}, role="customer-a")
     headers = {h["name"]: h["value"] for h in e["request"]["headers"]}
     assert headers["Authorization"] == "[identity customer-a]"
-    assert headers["Cookie"] == "sid=[redacted]; theme=[redacted]"        # names stay, values go
-    assert headers["X-Api-Key"] == "[redacted]" and headers["Accept"] == "application/json"
-    assert "access_token=%5Bredacted%5D" in e["request"]["url"] and "id=2" in e["request"]["url"]
+    assert headers["Cookie"] == "sid=[customer-a token]; theme=dark"     # names and a setting stay, a session goes
+    assert headers["X-Api-Key"] == "[credential]" and headers["Accept"] == "application/json"
+    assert "access_token=%5Btoken%5D" in e["request"]["url"] and "id=2" in e["request"]["url"]
     res = {h["name"]: h["value"] for h in e["response"]["headers"]}
-    assert res["Set-Cookie"] == "sid=[redacted]; Path=/; HttpOnly"
+    assert res["Set-Cookie"] == "sid=[session cookie]; Path=/; HttpOnly"   # a session the target issued
     assert res["WWW-Authenticate"] == 'Bearer realm="api"'          # a challenge, no credential
     assert TA not in res["Location"] and TA not in e["response"]["redirectURL"]
     text = e["response"]["content"]["text"]
     assert TA not in text and JWT not in text and "bob@shop.test" in text  # target data stays: it is the proof
     assert TA not in json.dumps(e) and "newsession99" not in json.dumps(e) and "k-999999" not in json.dumps(e)
+
+
+def test_a_setting_cookie_and_the_agents_own_password_value_stay_readable():
+    """VER-016: only real credentials are masked. `security=low` is a setting; `password=x` is the agent's own value,
+    since the agent never knows a password (a known one is masked by its placeholder); an Authorization header the
+    identity did not add keeps its scheme."""
+    raw = _raw(url="https://shop.example.com/brute/?username=admin&password=x&Login=Login",
+               headers=[("Cookie", "PHPSESSID=k3j4h5g6f7d8s9a0q1w2; security=low"),
+                        ("Authorization", "Basic YWRtaW46eA==")])
+    e = poc.entry(raw, redact=lambda v: v, identity=None, role=None)
+    headers = {h["name"]: h["value"] for h in e["request"]["headers"]}
+    assert headers["Cookie"] == "PHPSESSID=[session cookie]; security=low"
+    assert headers["Authorization"] == "Basic [credential]"
+    assert e["request"]["url"].endswith("?username=admin&password=x&Login=Login")
 
 
 def test_entry_cuts_long_bodies_after_redaction_and_omits_binary_ones():

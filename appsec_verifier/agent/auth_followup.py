@@ -35,7 +35,7 @@ def followup(tools, body, plan):
     value = artifact(body, plan.get("pointer"))
     headers = {}
     if value:
-        ctx.sessions.remember_secret(value)
+        ctx.sessions.remember_secret(value, "login artifact")
         if check.get("artifact_kind", "bearer") == "cookie":
             if any(c in value for c in ';,\r\n\x00'):
                 raise ToolError("invalid cookie artifact")

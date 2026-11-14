@@ -65,7 +65,7 @@ def test_qa_selects_only_recorded_redacted_evidence_without_network(tmp_path):
     assert qa.state["status"] == "clear" and qa.state["inspected_steps"] == [1]
     serialized = json.dumps(host.calls)
     assert "fixture-credential-value" not in serialized and "fixture-marker-file" not in serialized
-    assert "[redacted]" in serialized and "[marker-file]" in serialized
+    assert "[customer-a token]" in serialized and "[marker-file]" in serialized
     assert ctx.budget.requests == 0 and ctx.budget.calls == 2
 
 
@@ -73,14 +73,14 @@ def test_qa_redacts_before_truncating_context_and_history(tmp_path):
     ctx = context(tmp_path)
     secret = "fixture-credential-crossing-the-context-boundary"
     ctx.sessions.remember_secret(secret)
-    text = "x" * 2990 + secret
+    text = "x" * 2980 + secret       # crosses the 3,000-character cut; its placeholder does not
     ctx.plan.context = {"scenario": text}
     ctx.plan.verification_context = {"description": text}
     ctx.agent_history = [{"tool": "read_source", "args": {"path": text}, "result": {"text": text}}]
     qa, host = reviewer(ctx, [CLEAR])
     assert consider(ctx, qa) is None
     serialized = json.dumps(host.calls)
-    assert "fixture-cr" not in serialized and "[redacted]" in serialized
+    assert "fixture-cr" not in serialized and "[credential]" in serialized
 
 
 def test_qa_gets_the_proof_contract_its_follow_ups_must_fit(tmp_path):

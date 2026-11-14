@@ -6,12 +6,15 @@ it, by the code from what was sent and received: by `http_request`, and by
 The model sees none of it beyond its own tool results, and its own account of
 evidence is not taken over.
 
-Each exchange is redacted when it is recorded: headers the identity added
-read `[identity <role>]`; Authorization, cookies and other headers whose name
-names a credential, query parameters named like a token and every JWT read
-`[redacted]`, every credential value the sessions know its placeholder, such as
-`[account-1 password]` (auth/sessions.py). Cookie names and
-Set-Cookie attributes stay. Bodies are kept as text up to `MAX_BODY_CHARS`, cut
+Each exchange is redacted when it is recorded, each mask naming what it hides:
+headers the identity added read `[identity <role>]`, every credential value the
+sessions know its placeholder, such as `[account-1 password]`
+(auth/sessions.py), an Authorization header its scheme and `[credential]`, a
+cookie value that can be a session (`session_like`) `[session cookie]`, another
+header named like a credential `[credential]`, a query parameter named like a
+token `[token]`, and every JWT `[JWT]`. A parameter named like a password keeps
+its value unless the sessions know it: the agent never knows a password. Other cookie values are settings, not
+secrets, and stay, as do cookie names and Set-Cookie attributes. Bodies are kept as text up to `MAX_BODY_CHARS`, cut
 after redaction, and up to `MAX_FINDING_BODY_CHARS` for all bodies of a
 finding together; binary bodies only by type, length and hash. A browser keeps
 bodies only for documents, XHR and fetch.
@@ -71,9 +74,12 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlencode, urlsplit, 
 
 import httpx
 
+from ..auth.sessions import session_like
 from ..planning import evidence_id, evidence_name
 
-REDACTED = "[redacted]"
+# What a mask hides, where the sessions know no placeholder for the value (VER-016).
+JWT_MASK, SESSION_COOKIE_MASK, TOKEN_MASK, CREDENTIAL_MASK = "[JWT]", "[session cookie]", "[token]", "[credential]"
+MASKS = (JWT_MASK, SESSION_COOKIE_MASK, TOKEN_MASK, CREDENTIAL_MASK)
 TARGET_DATA_NOTE = "may show target data; review before sharing"
 MAX_BODY_CHARS = 256 * 1024
 MAX_FINDING_BODY_CHARS = 4 * 1024 * 1024        # all bodies of one finding together
@@ -83,8 +89,10 @@ _MAX_HEADERS = 100
 _MAX_VALUE = 8192
 MAX_BROWSER_EXCHANGES = 50
 _MAX_HIGHLIGHTS = 3
-_SECRET_NAME = re.compile(r"^(?:proxy-)?authorization$|^cookie$|^set-cookie$|token|secret|passw|api[-_]?key|"
-                          r"session|credential|(?:^|[-_])auth(?:$|[-_])", re.I)
+_AUTHORIZATION = re.compile(r"^(?:proxy-)?authorization$", re.I)
+# A query parameter named like a token; a header so named, or named like a password, carries a credential.
+_TOKEN_NAME = re.compile(r"token|secret|api[-_]?key|session|credential|(?:^|[-_])auth(?:$|[-_])", re.I)
+_CREDENTIAL_HEADER = re.compile(_TOKEN_NAME.pattern + "|passw", re.I)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*")
 _TEXT_TYPES = ("text/", "json", "xml", "javascript", "x-www-form-urlencoded")
 BODY_RESOURCE_TYPES = ("document", "xhr", "fetch")
@@ -154,7 +162,7 @@ class _Redactor:
         self._role = role
 
     def text(self, value: str) -> str:
-        return _JWT.sub(REDACTED, self._redact(value))
+        return _JWT.sub(JWT_MASK, self._redact(value))
 
     def header(self, name: str, value: str) -> str:
         low = name.lower()
@@ -162,15 +170,25 @@ class _Redactor:
         if own and own in value:
             return f"[identity {self._role}]"
         if low == "cookie":
-            return "; ".join(f"{part.split('=', 1)[0].strip()}={REDACTED}" if "=" in part else REDACTED
-                             for part in value.split(";"))
+            return "; ".join(self._cookie(part.strip()) for part in value.split(";"))
         if low == "set-cookie":
             first, sep, attributes = value.partition(";")
-            name_part = first.split("=", 1)[0].strip() if "=" in first else ""
-            return f"{name_part}={REDACTED}" + (sep + self.text(attributes) if sep else "")
-        if _SECRET_NAME.search(low):
-            return REDACTED
+            return self._cookie(first.strip()) + (sep + self.text(attributes) if sep else "")
+        if _AUTHORIZATION.match(low):
+            scheme, _, credential = value.strip().partition(" ")
+            return f"{self.text(scheme[:40])} {CREDENTIAL_MASK}" if credential else CREDENTIAL_MASK
+        if _CREDENTIAL_HEADER.search(low):
+            return CREDENTIAL_MASK
         return self.text(value)[:_MAX_VALUE]
+
+    def _cookie(self, pair: str) -> str:
+        """`name=value` with the value's placeholder, `[session cookie]` for a value that can be a session, or the
+        value itself: another cookie, such as `security=low`, is a setting (VER-016)."""
+        name, sep, value = pair.partition("=")
+        if not sep:
+            return self.text(pair)
+        shown = self.text(value)
+        return f"{name.strip()}={SESSION_COOKIE_MASK if shown == value and session_like(value) else shown}"
 
     def url(self, url: str) -> str:
         try:
@@ -178,8 +196,8 @@ class _Redactor:
             pairs = parse_qsl(parts.query, keep_blank_values=True)
         except ValueError:
             return self.text(url)[:_MAX_VALUE]
-        if any(_SECRET_NAME.search(k) for k, _ in pairs):
-            query = urlencode([(k, REDACTED if _SECRET_NAME.search(k) else v) for k, v in pairs])
+        if any(_TOKEN_NAME.search(k) for k, _ in pairs):
+            query = urlencode([(k, TOKEN_MASK if _TOKEN_NAME.search(k) else v) for k, v in pairs])
             url = urlunsplit(parts._replace(query=query))
         return self.text(url)[:_MAX_VALUE]
 
