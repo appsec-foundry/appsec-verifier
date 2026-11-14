@@ -9,7 +9,8 @@ run time, charges the reported cost (VER-015), and validates the step
 kept as numbers for the action log (VER-017), never any prompt or answer text.
 Each call's instructions, prompt and answer stay with the finding's context, for
 the debug file of a failed verification only (VER-063).
-A failed call ends only its finding, but after
+A call that failed for a reason that may pass is tried once more within the
+same limits (VER-015). A failed call ends only its finding, but after
 MAX_FAILED_CALLS failed calls in a row (an exhausted quota, a rejected login, a
 provider that is down) the host makes no further call in the run. A host only
 sends the request and returns a HostReply. For an evidence review a host that
@@ -34,6 +35,13 @@ from ..limits import LimitExceeded, execution_deadline
 from .steps import Unusable, inconclusive, parse_step, prompt, step_schema, system_prompt
 
 CALL_TIMEOUT_S = 300.0
+# VER-015: failures that may pass, tried once more: a host or server error, a timeout, a lost connection. Quota,
+# rate limit, login, budget, model and answer-format failures are not repeated.
+_PASSING = ("host_error", "server_error", "timeout", "connection_failed", "no answer within ")
+
+
+def _passing(error: str) -> bool:
+    return error.startswith(_PASSING)
 MAX_OUTPUT_BYTES = 1_048_576
 MAX_FAILED_CALLS = 3
 # Network settings a host may need to reach its provider. Everything else a host
@@ -191,6 +199,10 @@ class HostCallError(Exception):
     """A bounded host call failed; its fixed reason is safe to report."""
 
 
+class _PassingFailure(HostCallError):
+    """A failed call whose reason may pass; the planner tries it once more (VER-015)."""
+
+
 class HostPlanner:
     """Planner protocol over a host. Holds no conversation state: every call is
     rebuilt from the finding and the loop's history."""
@@ -229,6 +241,17 @@ class HostPlanner:
                              images=tuple(images) if self.supports_images else ())
 
     def _request(self, ctx, system: str, payload: str, *, schema=None, review=False, images=()):
+        """One call, tried once more after a failure that may pass (VER-015). The second call passes every check
+        of the first and counts against the same call, cost and time limits; a call with images is not repeated,
+        since later reviews then send text only (VER-042)."""
+        try:
+            return self._call(ctx, system, payload, schema=schema, review=review, images=images)
+        except _PassingFailure:
+            if images:
+                raise
+        return self._call(ctx, system, payload, schema=schema, review=review, images=images)
+
+    def _call(self, ctx, system: str, payload: str, *, schema=None, review=False, images=()):
         host = self._host
         if host.broken:
             raise HostCallError(f"{host.label} stopped for this run: {host.broken}")
@@ -290,7 +313,8 @@ class HostPlanner:
             host.failed_calls = getattr(host, "failed_calls", 0) + 1
             if host.failed_calls >= MAX_FAILED_CALLS:
                 host.broken = f"{host.failed_calls} calls in a row failed, the last with {reply.error}"
-            raise HostCallError(f"{host.label} call failed: {reply.error}")
+            failure = _PassingFailure if _passing(reply.error) and not host.broken else HostCallError
+            raise failure(f"{host.label} call failed: {reply.error}")
         host.failed_calls = 0
         return reply.step
 

@@ -138,7 +138,7 @@ The selected findings are tested most severe first. Within one severity, finding
 | `--cost-limit USD` | Model spend for the run. Reaching it stops the run (exit 3), in a terminal after the question below, and so does a model call that reports no usable cost. Rejected with `codex-cli` and `copilot-cli`, which report no cost. |
 | `--max-requests N` | Total requests to the target. Refused requests are not counted. |
 | `--max-attempts N` | Agent steps per finding; each step is one model call that proposes a tool call or the verdict. Default 12. Reaching it ends unfinished testing with `limits_hit: attempts`; a previously checked result survives an unfinished QA follow-up, with its open objections. |
-| `--max-calls N` | Model calls for the run, for every profile. |
+| `--max-calls N` | Model calls for the run, for every profile. A call tried once more after a host or server error, a timeout or a lost connection counts as a call. |
 | `--max-duration S` | Run time in seconds. |
 | `--rate RPS` | Requests per second to the target and its login endpoints, redirect hops and the proof browser included. `0` turns the rate limit off. |
 

@@ -56,7 +56,7 @@ The answer is exactly one step:
 
 ### When a call goes wrong
 
-A reply that is not one step, or that names an unknown action, counts as an `inconclusive` verdict. Arguments that break the action's schema are refused: nothing runs, the model gets the error in the next prompt, and the refusal counts as a failed step. A failed call, such as a timeout or a provider error, also counts as an `inconclusive` verdict; after three failed calls in a row the run makes no further model call. When the `claude` or `codex-cli` CLI reports a tool, an MCP server or any other event a tool-less answer does not produce, the confinement is breached and the run makes no further model call. `copilot-cli` reports no tool use; its pinned version and its flags carry the isolation.
+A reply that is not one step, or that names an unknown action, counts as an `inconclusive` verdict. Arguments that break the action's schema are refused: nothing runs, the model gets the error in the next prompt, and the refusal counts as a failed step. A call that fails for a reason that may pass (a host or server error, a timeout, a lost connection) is tried once more within the same limits. A call that fails again, or for another reason such as a quota or a login, counts as an `inconclusive` verdict; after three failed calls in a row the run makes no further model call. When the `claude` or `codex-cli` CLI reports a tool, an MCP server or any other event a tool-less answer does not produce, the confinement is breached and the run makes no further model call. `copilot-cli` reports no tool use; its pinned version and its flags carry the isolation.
 
 ## One step, from proposal to result
 

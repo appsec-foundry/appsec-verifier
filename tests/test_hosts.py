@@ -324,6 +324,44 @@ def test_failed_call_ends_only_this_finding():
     assert HostPlanner(host).next_step(_ctx(), [])["tool"] == "http_request"
 
 
+@pytest.mark.parametrize("error", ["host_error (exit 1)", "server_error (HTTP 503)", "timeout", "connection_failed",
+                                   "no answer within 300s"])
+def test_a_passing_failure_is_tried_once_more_within_the_same_limits(error):
+    """VER-015, as in a DVWA run: one failed CLI call cost a finding its whole test. A failure that may pass is
+    tried once more, and no more than that; each call counts."""
+    step = HostReply(step=_wire("http_request", path="/x"), usd=0.02)
+    host, ctx = ScriptedHost([HostReply(error=error, usd=0.01), step]), _ctx()
+    assert HostPlanner(host).next_step(ctx, [])["tool"] == "http_request"
+    assert (len(host.calls), ctx.budget.calls, round(ctx.budget.cost, 2)) == (2, 2, 0.03)
+    assert host.failed_calls == 0
+    again, ctx = ScriptedHost([HostReply(error=error)] * 2 + [step]), _ctx()
+    failed = HostPlanner(again).next_step(ctx, [])
+    assert failed["verdict"]["verdict"] == "inconclusive" and error in failed["verdict"]["rationale"]
+    assert (len(again.calls), ctx.budget.calls) == (2, 2)             # the third reply is never asked for
+
+
+@pytest.mark.parametrize("error", ["quota_exhausted (exit 1)", "rate_limit (exit 1)", "authentication_failed (exit 1)",
+                                   "budget_exhausted (exit 1)", "model_unavailable (exit 1)", "invalid_response",
+                                   "could not run: FileNotFoundError", "output is not JSON lines"])
+def test_a_failure_that_does_not_pass_is_not_repeated(error):
+    host = ScriptedHost([HostReply(error=error), HostReply(step=_wire("http_request", path="/x"))])
+    assert HostPlanner(host).next_step(_ctx(), [])["verdict"]["verdict"] == "inconclusive"
+    assert len(host.calls) == 1
+
+
+def test_the_second_try_needs_a_call_left_and_a_host_that_still_runs():
+    """Refused: no retry beyond the model call cap, and none once the host is stopped for the run."""
+    step = HostReply(step=_wire("http_request", path="/x"))
+    host, ctx = ScriptedHost([HostReply(error="timeout"), step]), _ctx(Limits(max_calls=1))
+    with pytest.raises(LimitExceeded) as stopped:
+        HostPlanner(host).next_step(ctx, [])
+    assert stopped.value.kind == "calls" and len(host.calls) == 1
+    host = ScriptedHost([HostReply(error="timeout"), step])
+    host.failed_calls = 2                                             # this failure is the third in a row
+    assert HostPlanner(host).next_step(_ctx(), [])["verdict"]["verdict"] == "inconclusive"
+    assert len(host.calls) == 1 and "3 calls in a row failed" in host.broken
+
+
 @pytest.mark.parametrize("cls", ["xss", "injection", "access-control"])
 def test_a_findings_structured_output_offers_only_the_actions_its_prompt_offers(cls):
     """Refused case, as in a DVWA run: the prompt did not offer login_fields, but the step schema's action enum
@@ -780,7 +818,7 @@ def test_a_failed_model_call_is_the_report_s_reason_and_no_model_text_can_claim_
         return {"verdict": res.verdict, "class": "access-control", "rationale": res.rationale,
                 "limits_hit": res.limits_hit, "observations": res.observations, "proof": res.proof}
 
-    failed = run(HostReply(error="host_error (exit 1)"))
+    failed = run(*[HostReply(error="host_error (exit 1)")] * 2)       # tried once more, failed again (VER-015)
     assert failed["verdict"] == "inconclusive"
     assert failed["observations"] == ["Model call failed: Test host call failed: host_error (exit 1)"]
     assert _why_not(failed) == "a model call failed: Test host call failed: host_error (exit 1)"

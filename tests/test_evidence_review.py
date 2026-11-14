@@ -547,7 +547,7 @@ def test_a_failed_host_call_names_its_fixed_reason_in_the_review_status():
     """A review a host failure stopped says which failure, as the test agent's verdict does (agent/hosts.py), so a
     recurring one can be traced; the technical verdict stays."""
     reason = "host_error (error_max_structured_output_retries, exit 1)"
-    ctx, res, host, *_ = pair([HostReply(error=reason, usd=0.03)])
+    ctx, res, host, *_ = pair([HostReply(error=reason, usd=0.03)] * 2)      # tried once more, failed again (VER-015)
     review_finding([(ctx, res)])
     assert res.evidence_review["status"] == "stopped" and res.verdict == "confirmed"
     assert res.evidence_review["reason"] == f"Evidence review stopped: offline fake call failed: {reason}."
