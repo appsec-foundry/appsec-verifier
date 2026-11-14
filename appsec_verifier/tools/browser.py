@@ -22,12 +22,15 @@ text shows the expression, not its value. Without execution the check reports
 `markup_break`: whether a marker part parsed into an injected <script> element
 or event-handler attribute, which is indicative only. On execution a JSON event record is
 saved owner-only under evidence/, with a screenshot when screenshots are on for
-XSS (VER-035): the elements that carry the payload are outlined, and what of
-the page covered the payload (a dialog, a backdrop) or floats over it
+XSS (VER-035): the element that carries the payload is outlined, or where the
+page does not draw it (a <script>, an <option> of a closed list) the nearest
+element it draws, with a red note beside or below it inserted into the page;
+what of the page covered the payload (a dialog, a backdrop) or floats over it
 (notifications, confetti) is hidden. The image (xss_frame) shows an address bar
-with the URL, the dialog drawn from the recorded call, the page section around
-the outlined payload, and below it a caption that names finding, identity,
-time, the payload element and what was hidden. Each request
+with the URL and the marker parts highlighted, the dialog drawn from the
+recorded call, framed, with a note that it proves execution, the page section
+around the outlined payload, and below it a caption that names finding,
+identity, time, the payload element, what was hidden and what was added. Each request
 the guarded client answered is handed back for the proof of concept (VER-034),
 bodies only for documents, XHR and fetch.
 
@@ -107,6 +110,13 @@ _EXCHANGE_PAGE = "https://exchange.appsec-verifier.invalid/"   # never resolves;
 MASKED_NOTE = "Known credentials masked for this screenshot; each placeholder names its account and kind."
 _PAGE_KINDS = ("xss", "application", "access-control")          # application screenshots, named after the finding
 _HIGHLIGHT = "#b00020"
+# VER-035: the notes of the XSS image. A red note points at what it names; the caption says what was added.
+_CARRIER_NOTES = ("this element carries the XSS payload", "the XSS payload sits inside this element")
+_DIALOG_NOTE = ("XSS executed: the injected script opened this dialog. Its text is the two marked parts of the "
+                "address bar joined together, which only running script code produces.")
+_DIALOG_NOTE_UNSEEN = ("XSS executed: the injected script opened this dialog. Its text is the finding's random "
+                       "marker, which the script joins from two parts only when it runs.")
+_ADDED_NOTE = "Added by AppSec Verifier: yellow highlights, red frames, arrows and labels."
 
 
 def _leave_unconnected(ws) -> None:
@@ -316,24 +326,30 @@ _MARKUP_BREAK_SCRIPT = """(parts) => {
 
 
 # Marks what a screenshot proves (VER-035): elements whose attributes or script text carry `part` (the XSS
-# payload), text that equals one of `values` (access control), and a caption that says what is marked
-# (`label`). The page moves clear of the caption, so it hides no mark; whatever of the page still covers the
-# first mark (a dialog, a backdrop) is hidden and named in the caption. All text is set as text, never parsed as
-# HTML. Returns the number of marks and what was hidden, as JSON. Without `lines` (XSS, whose frame draws the
-# caption outside the page, see xss_frame) no caption is added; floating layers that do not hold the mark
-# (notifications, banners, confetti) are hidden too, a bar along the top edge (the application's header) stays,
-# and `crop` gives the viewport rows of the page section around the mark.
-_MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
+# payload), each outlined where the page draws it, else its nearest ancestor the page draws; the first gets a red
+# note (`notes`: for the element itself, for an ancestor) inserted after it, beside an inline box and below a block,
+# so it pushes content aside instead of covering it. Text that equals one of `values` (access control), and a
+# caption that says what is marked (`label`). The page moves clear of the caption, so it hides no mark; whatever
+# of the page still covers the first mark (a dialog, a backdrop) is hidden and named in the caption. All text is
+# set as text, never parsed as HTML. Returns the number of marks and what was hidden, as JSON. Without `lines`
+# (XSS, whose frame draws the caption outside the page, see xss_frame) no caption is added; floating layers that
+# do not hold the mark (notifications, banners, confetti) are hidden too, a bar along the top edge (the
+# application's header) stays, and `crop` gives the viewport rows of the page section around the mark and its note.
+_MARK_SCRIPT = """({part, values, lines, none, color, label, notes}) => {
   const marks = [];
   const root = document.body || document.documentElement;
   const ours = (el) => el.hasAttribute('data-appsec-verifier');
   const PANEL = 640, MIN_PANEL = 280, MAX_PANEL = 760;
-  let carrier = null;
+  let carrier = null, note = null;
   const outline = (el) => {
     if (!el || el === root || marks.includes(el) || marks.length >= 20) return;
     el.style.setProperty('outline', '4px solid ' + color, 'important');
     el.style.setProperty('outline-offset', '2px', 'important');
     marks.push(el);
+  };
+  const drawn = (el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
   };
   if (part) {
     for (const el of root.querySelectorAll('*')) {
@@ -341,8 +357,22 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
       const inAttr = Array.from(el.attributes || []).some((a) => String(a.value).includes(part));
       const inScript = el.tagName === 'SCRIPT' && (el.textContent || '').includes(part);
       if (!inAttr && !inScript) continue;
-      if (carrier === null) carrier = el.outerHTML;
-      outline(el.tagName === 'SCRIPT' ? el.parentElement : el);
+      let box = el;
+      while (box && box !== root && !drawn(box)) box = box.parentElement;
+      if (carrier === null) {
+        carrier = el.outerHTML;
+        if (notes && box && box !== root) {
+          const block = ['block', 'flex', 'grid', 'table', 'list-item'].includes(getComputedStyle(box).display);
+          note = document.createElement('span');
+          note.setAttribute('data-appsec-verifier', 'note');
+          note.textContent = (block ? '\\u25B2 ' : '\\u25C0 ') + String(notes[box === el ? 0 : 1]).slice(0, 120);
+          note.style.cssText = 'all:initial;display:'
+            + (block ? 'block;margin:8px 0 0 0' : 'inline-block;margin:0 10px')
+            + ';color:' + color + ';font:bold 15px/1.3 sans-serif;vertical-align:middle;white-space:normal';
+          box.insertAdjacentElement('afterend', note);
+        }
+      }
+      outline(box);
     }
   }
   if (values && values.length) {
@@ -441,8 +471,9 @@ _MARK_SCRIPT = """({part, values, lines, none, color, label}) => {
     let top = 0, bottom = Math.min(innerHeight, PANEL);
     if (section) {
       const s = section.getBoundingClientRect(), m = target.getBoundingClientRect();
+      const n = note ? note.getBoundingClientRect() : m;      // the note below a block belongs to the section
       top = Math.max(0, Math.min(s.top, m.top) - 16);
-      bottom = Math.min(innerHeight, Math.max(s.bottom, m.bottom) + 16, top + MAX_PANEL);
+      bottom = Math.min(innerHeight, Math.max(s.bottom, m.bottom, n.bottom) + 16, top + MAX_PANEL);
       if (bottom - top < MIN_PANEL) {
         top = Math.max(0, Math.min(top - (MIN_PANEL - (bottom - top)) / 2, innerHeight - MIN_PANEL));
         bottom = Math.min(innerHeight, top + MIN_PANEL);
@@ -476,9 +507,12 @@ _FRAME_CSS = (
     "body{margin:0;width:1280px;background:#fff;color:#1f1f1f;font:14px/1.45 system-ui,sans-serif}"
     ".bar{padding:8px 12px;background:#dee1e6}"
     ".url{background:#fff;border-radius:16px;padding:5px 14px;font:13px/1.45 monospace;word-break:break-all}"
-    ".sheet{background:#dee1e6;padding:2px 0 14px}"
+    ".url mark{background:#ffeb3b;color:#000;outline:2px solid " + _HIGHLIGHT + "}"
+    ".sheet{position:relative;background:#dee1e6;padding:2px 0 14px}"
     ".dialog{width:460px;margin:0 auto;background:#fff;border-radius:8px;padding:16px 22px 14px;"
-    "box-shadow:0 2px 8px rgba(0,0,0,.25)}"
+    "box-shadow:0 2px 8px rgba(0,0,0,.25);outline:3px solid " + _HIGHLIGHT + ";outline-offset:4px}"
+    ".note{position:absolute;left:calc(50% + 266px);top:40px;max-width:340px;padding-left:1.1em;"
+    "text-indent:-1.1em;color:" + _HIGHLIGHT + ";font:bold 15px/1.35 sans-serif}"
     ".from{font-weight:600;margin-bottom:8px}.msg{font:13px/1.45 monospace;word-break:break-all}"
     ".field{border:1px solid #747775;border-radius:4px;height:22px;margin-top:8px}"
     ".buttons{text-align:right;margin-top:14px}.btn{display:inline-block;margin-left:8px;padding:4px 18px;"
@@ -491,22 +525,30 @@ _FRAME_CSS = (
 
 
 def xss_frame(*, url: str, image: bytes, crop: dict | None, dialog: tuple[str, str, str] | None,
-              lines: list[str]) -> str:
-    """The XSS evidence image as a page of its own (VER-035): an address bar with the URL the browser opened, the
-    dialog the payload opened, drawn from the recorded call (`dialog` = kind, origin, message), the page section
-    around the outlined payload from `image` (a 1280 by 900 viewport screenshot; `crop` gives its rows), and a
-    caption below the page, so nothing covers it. All text is escaped; the page loads nothing but its image."""
+              lines: list[str], marker: tuple[str, str] | None = None) -> str:
+    """The XSS evidence image as a page of its own (VER-035): an address bar with the URL the browser opened and the
+    `marker` parts in it highlighted, the dialog the payload opened, drawn from the recorded call (`dialog` = kind,
+    origin, message), framed, with a note that it shows the payload ran, the page section around the outlined
+    payload from `image` (a 1280 by 900 viewport screenshot; `crop` gives its rows), and a caption below the page,
+    so nothing covers it. All text is escaped; the page loads nothing but its image."""
     top, height = (crop["top"], crop["height"]) if crop else (0, 900)
-    parts = [f'<div class=bar><div class=url>{escape(url[:2000])}</div></div>']
+    shown = escape(url[:2000])
+    found = [escape(p) for p in marker or () if p and escape(p) in shown]
+    if found:
+        shown = re.sub("|".join(map(re.escape, found)), lambda m: f"<mark>{m.group(0)}</mark>", shown)
+    note = _DIALOG_NOTE if marker and len(found) == len(marker) else _DIALOG_NOTE_UNSEEN
+    parts = [f'<div class=bar><div class=url>{shown}</div></div>']
     if dialog:
         kind, origin, message = dialog
         buttons = '<span class="btn alt">Cancel</span><span class=btn>OK</span>' if kind != "alert" \
             else "<span class=btn>OK</span>"
         parts.append(
-            f"<div class=sheet><div class=dialog><div class=from>{escape(origin)} says</div>"
+            f"<div class=sheet><div class=note>◀ {escape(note)}</div>"
+            f"<div class=dialog><div class=from>{escape(origin)} says</div>"
             f"<div class=msg>{escape(message)}</div>{'<div class=field></div>' if kind == 'prompt' else ''}"
             f"<div class=buttons>{buttons}</div></div>"
-            f"<div class=drawn>Drawn by AppSec Verifier from the recorded {escape(kind)}() call</div></div>")
+            f"<div class=drawn>Drawn by AppSec Verifier from the recorded {escape(kind)}() call, because a browser "
+            "dialog never appears in a screenshot</div></div>")
     parts.append(f'<div class=page style="height:{int(height)}px"><img alt="" width=1280 height=900 '
                  f'style="margin-top:-{int(top)}px" src="data:image/png;base64,{base64.b64encode(image).decode()}">'
                  "</div>")
@@ -796,16 +838,18 @@ class ProofBrowser:
 
     @staticmethod
     def _mark(page, lines: list[str] | None, *, part: str = "", values=(), none: str | None = None,
-              label: str | None = None) -> dict | None:
+              label: str | None = None, notes: tuple[str, str] | None = None) -> dict | None:
         """Caption and highlights drawn over the page before its screenshot, as
         {"marks": n, "hidden": [what was hidden for the screenshot], "clip", "crop", "carrier"}; None if the page
-        refused them or did not answer in time. Without `lines` no caption is drawn (see _MARK_SCRIPT). Unlike
-        evaluate(), wait_for_function() has a timeout, so a page script that never returns cannot hold the check;
-        the script's result is a JSON string, never falsy. The page may alter it, so every value is bounded."""
+        refused them or did not answer in time. Without `lines` no caption is drawn, with `notes` the payload
+        element gets a note (see _MARK_SCRIPT). Unlike evaluate(), wait_for_function() has a timeout, so a page
+        script that never returns cannot hold the check; the script's result is a JSON string, never falsy. The
+        page may alter it, so every value is bounded."""
         try:
             done = page.wait_for_function(f"(arg) => ({_MARK_SCRIPT})(arg)",
                                           arg={"part": part, "values": list(values), "lines": lines, "none": none,
-                                               "color": _HIGHLIGHT, "label": label},
+                                               "color": _HIGHLIGHT, "label": label,
+                                               "notes": list(notes) if notes else None},
                                           timeout=EVIDENCE_TIMEOUT_MS)
             out = json.loads(done.json_value())
             clip = out.get("clip")
@@ -848,7 +892,7 @@ class ProofBrowser:
             masked, problem = mask_credentials(page, self.redact, protected=(*marker, joined),
                                                timeout=EVIDENCE_TIMEOUT_MS)
             # The page gets only the outline; address bar, dialog and caption are drawn around it (xss_frame).
-            marked = self._mark(page, None, part=marker[0]) if not problem else None
+            marked = self._mark(page, None, part=marker[0], notes=_CARRIER_NOTES) if not problem else None
             data["marked_elements"] = marked["marks"] if marked else None
             if marked and marked["hidden"]:
                 data["hidden_for_screenshot"] = marked["hidden"]
@@ -856,13 +900,11 @@ class ProofBrowser:
                            if c.get("verified") and c.get("is_marker")), url)
             lines = [f"AppSec Verifier · {finding_id} · XSS · as {role or 'anonymous'} · HTTP {status} · "
                      f"captured {shown_time(captured)}"]
-            if via:
-                lines.append("The dialog shows a random value the payload assembled at runtime; a page that "
-                             "only echoed the payload would show the expression.")
-            lines.append(f"Outlined: payload element {marked['carrier']}" if marked and marked["carrier"]
-                         else "(the element that carries the payload was not found in the page)")
+            lines.append(f"XSS payload element in the page source: {marked['carrier']}" if marked and marked["carrier"]
+                         else "The element that carries the XSS payload was not found in the page.")
             if marked and marked["hidden"]:
                 lines.append("Hidden for the screenshot: " + ", ".join(marked["hidden"]))
+            lines.append(_ADDED_NOTE)
             image = None
             # Decode before redaction: the displayed URL must not decode a masked value back into a secret.
             display = [unquote(url), origin, *lines]
@@ -886,7 +928,7 @@ class ProofBrowser:
                 frame = xss_frame(url=display_url, image=image, crop=marked["crop"] if marked else None,
                                   dialog=(via[0], urlsplit(display_origin).netloc or display_origin, joined)
                                   if via else None,
-                                  lines=lines)
+                                  lines=lines, marker=marker)
                 reviewable = self._reviewable(marked, display_url, display_origin, joined, *lines)
                 shot = self._dir / f"{stem}.png"
                 try:

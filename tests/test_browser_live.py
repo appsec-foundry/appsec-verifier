@@ -242,6 +242,40 @@ def test_screenshot_marks_the_payload_and_names_the_proof(browser):
     assert len(pages) == 1 and pages[0]["status"] == 200 and b"Results for" in pages[0]["content"]
 
 
+@pytest.mark.parametrize("payload, note", [
+    (f"<script>alert({marker_expression(MARKER)})</script>", "▲ the XSS payload sits inside this element"),
+    (f"<svg width=40 height=20 onload=alert({marker_expression(MARKER)})></svg>",
+     "◀ this element carries the XSS payload"),
+])
+def test_the_payload_element_or_the_element_holding_it_gets_a_note(browser, monkeypatch, payload, note):
+    """VER-035: the outline goes on the payload element where the page draws it, else on the nearest element that
+    holds it (a <script>), with a red note beside an inline element or below a block; the caption names the
+    element's source and what the Verifier added, and the frame gets the marker to highlight."""
+    from appsec_verifier.tools import browser as module
+
+    b, _, _ = browser
+    texts, frames = [], []
+    real_capture, real_frame = module.capture_masked, module.xss_frame
+
+    def capture(page, *args, **kwargs):
+        if page.url.startswith(BASE):
+            texts.append(page.locator("body").inner_text())
+        return real_capture(page, *args, **kwargs)
+
+    def frame(**kwargs):
+        frames.append(kwargs)
+        return real_frame(**kwargs)
+
+    monkeypatch.setattr(module, "capture_masked", capture)
+    monkeypatch.setattr(module, "xss_frame", frame)
+    result = _check(b, "/reflect?q=" + quote(payload, safe=""))
+    assert result["executed"] is True
+    assert texts and note in texts[0] and texts[0].count("XSS payload") == 1
+    lines = frames[0]["lines"]
+    assert lines[1].startswith("XSS payload element in the page source: <") and module._ADDED_NOTE in lines
+    assert frames[0]["marker"] == MARKER
+
+
 def test_a_dialog_over_the_payload_is_hidden_for_the_screenshot_and_named(browser):
     """VER-035: the payload runs under the page's own dialog; the screenshot shows the payload element,
     says what it hid, and the event record lists it."""

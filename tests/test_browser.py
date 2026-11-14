@@ -547,7 +547,7 @@ def test_xss_frame_draws_the_recorded_dialog_and_escapes_every_text():
     payload = "<img src=x onerror=alert('m1'.concat('m2'))>"
     page = xss_frame(url="https://shop.example.com/#/search?q=" + payload, image=b"\x89PNG-bytes",
                      crop={'top': 418, 'height': 470}, dialog=("alert", "shop.example.com", "m1m2</div><b>"),
-                     lines=["AppSec Verifier · T-1 · XSS", "Outlined: payload element " + payload])
+                     lines=["AppSec Verifier · T-1 · XSS", "XSS payload element in the page source: " + payload])
     assert "<img src=x" not in page and "<b>" not in page
     assert page.count("&lt;img src=x onerror=alert(&#x27;m1&#x27;.concat(&#x27;m2&#x27;))&gt;") == 2
     assert "shop.example.com says" in page and "m1m2&lt;/div&gt;&lt;b&gt;" in page
@@ -566,7 +566,22 @@ def test_xss_frame_draws_the_kind_of_dialog_that_ran(kind, cancel, field):
 
 def test_xss_frame_without_a_dialog_draws_none():
     page = xss_frame(url="https://shop.example.com/", image=b"x", crop=None, dialog=None, lines=["c"])
-    assert "class=dialog" not in page and "Drawn by" not in page
+    assert "class=dialog" not in page and "Drawn by" not in page and "XSS executed" not in page
+
+
+def test_xss_frame_highlights_the_marker_parts_and_says_the_framed_dialog_proves_execution():
+    """VER-035: the marker parts in the address bar are highlighted, and the note beside the framed dialog says its
+    text joins them; where the URL does not carry them (stored XSS), the note says what the text is instead."""
+    url = "https://shop.example.com/?q=<script>alert('vrf1a'.concat('2b3c'))</script>"
+    page = xss_frame(url=url, image=b"x", crop=None, dialog=("alert", "shop.example.com", "vrf1a2b3c"), lines=["c"],
+                     marker=("vrf1a", "2b3c"))
+    assert "&lt;script&gt;alert(&#x27;<mark>vrf1a</mark>&#x27;.concat(&#x27;<mark>2b3c</mark>&#x27;))" in page
+    assert "<div class=msg>vrf1a2b3c</div>" in page and "<script" not in page
+    assert ("<div class=note>◀ XSS executed: the injected script opened this dialog. Its text is the two marked "
+            "parts of the address bar joined together") in page
+    stored = xss_frame(url="https://shop.example.com/reviews", image=b"x", crop=None,
+                       dialog=("alert", "shop.example.com", "vrf1a2b3c"), lines=["c"], marker=("vrf1a", "2b3c"))
+    assert "<mark>" not in stored and "Its text is the finding&#x27;s random marker" in stored
 
 
 @pytest.mark.parametrize("title, digest, name", [

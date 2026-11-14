@@ -35,7 +35,8 @@ otherwise as described here, with the reason in its header and in the observatio
 cites none (a limit stopped it) gets an image of its answered requests after the last test plan, whose
 header says it proves nothing: request and response side by side, built here as escaped HTML with
 what the code can locate marked, each kind labelled by a red tag: the
-identities an access-control proof compares, the XSS or SSRF marker, the
+identities an access-control proof compares, the XSS payload (in a request
+URL-decoded; in an answer its HTML source lines), the SSRF marker, the
 redirect host and Location header, the marker file and its content, the input
 and answer that differ between injection requests, the session cookie's
 Set-Cookie line. Facts about a step, such as the page a browser check opened
@@ -563,11 +564,11 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
         payload = {"xss": marker[0], "open-redirect": redirect_host(marker),
                    "path-traversal": str(marker_file.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1],
                    "ssrf": "".join(marker)}[cls]
+        noun = "the XSS payload" if cls == "xss" else "the payload"
         if payload:
             for n, _ in shown:
                 sent = unquote(json.dumps(args[n], ensure_ascii=False))
-                roles[n] = ("attack", "carries the payload") if payload in sent else (
-                    "normal", "without the payload")
+                roles[n] = ("attack", f"carries {noun}") if payload in sent else ("normal", f"without {noun}")
     return roles
 
 
@@ -981,7 +982,8 @@ def _report_excerpts(ctx, history, n, entry, shown, highlight, har_path, roles=N
     ref_label = roles[ref[0]][1] if ref and roles.get(ref[0], ("",))[0] == "attack" else None
     reason = _split_reason(ctx, history, shown, roles) if ref_label and opposite else None
     role = {"role": roles[n][0], "role_label": roles[n][1]} if roles and n in roles else {}
-    return {**role, "request_excerpt": _code_excerpt(_image_request(entry, req), req),
+    decoded = getattr(ctx.plan, "cls", None) == "xss"
+    return {**role, "request_excerpt": _code_excerpt(_image_request(entry, req, decoded=decoded), req),
             "response_excerpt": _code_excerpt(response, res, lines),
             "facts": [fact for fact, decisive in facts if decisive]
             + ([difference(ctx, history, entry, ref, ref_label, reason, step=n)] if ref else [])}
@@ -1008,8 +1010,10 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
     if cls == "access-control" and e.get("_role"):      # elsewhere the step heading names the identity
         req_marks.append(("identity", f"[identity {e['_role']}]"))
     if cls == "xss" and marker[0]:
-        req_marks.append(("payload", marker[0]))
-        res_marks.append(("payload in the answer", marker[0]))
+        payload = _xss_payload(e, marker[0])
+        req_marks.append(("XSS payload", payload))
+        res_marks.append(("XSS payload in the answer", payload) if payload in _text(e)
+                         else ("XSS marker in the answer, not the full payload", marker[0]))
         if step.get("tool") == "browser_check":     # a fragment (#/search?q=…) never reaches the server
             facts.append((f"opened in the browser: {unquote(str((step.get('args') or {}).get('path', '')))[:300]}",
                           True))
@@ -1073,7 +1077,7 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
 # VER-013, VER-048, VER-049, VER-053): the classes whose proof reads it, the fact the image states, and the Result
 # line's words for yes and no. Such a step is shown by this observation, not by its status or answer difference.
 _OBSERVATIONS = {
-    "executed": (("xss",), "marker executed in the browser", "marker executed", "marker not executed"),
+    "executed": (("xss",), "XSS payload ran in the browser", "marker executed", "marker not executed"),
     "marker_read": (("path-traversal",), "marker file read", "marker file read", "marker file not read"),
     "callback_hit": (("ssrf", "injection"), "callback listener received the marker", "callback received",
                      "no callback"),
@@ -1218,12 +1222,30 @@ def _image_excerpt(text: str, needles=(), *, limit=700) -> str:
         "\n[…] excerpt; full record in HAR" if start + limit < len(text) else "")
 
 
-def _image_request(e, marks):
+def _xss_payload(e: dict, part: str) -> str:
+    """The XSS payload as a reader finds it in the URL-decoded request: the query or form value that carries the
+    marker part, else the part itself (a payload in the path or a JSON body, or in a fragment the server never
+    receives)."""
     req = e["request"]
-    lines = [f"{req['method']} {_target(req['url'])} HTTP/1.1"]
-    lines += [f"{h['name']}: {h['value']}" for h in req["headers"]
-              if h["name"].lower() in ("authorization", "content-type")]
-    body = (req.get("postData") or {}).get("text") or ""
+    pairs = parse_qsl(urlsplit(req["url"]).query, keep_blank_values=True)
+    post = req.get("postData") or {}
+    if "x-www-form-urlencoded" in str(post.get("mimeType", "")).lower():
+        pairs += parse_qsl(post.get("text") or "", keep_blank_values=True)
+    return next((value for _, value in pairs if part in value), part)
+
+
+def _image_request(e, marks, *, decoded: bool = False):
+    """A request for an image or the report; `decoded` shows its line and a form body URL-decoded, as an XSS
+    payload is read (presentation.request_text)."""
+    from .presentation import request_text
+
+    req = e["request"]
+    if decoded:
+        line, _, body = request_text(e).partition("\n\n")
+    else:
+        line, body = f"{req['method']} {_target(req['url'])} HTTP/1.1", (req.get("postData") or {}).get("text") or ""
+    lines = [line] + [f"{h['name']}: {h['value']}" for h in req["headers"]
+                      if h["name"].lower() in ("authorization", "content-type")]
     return _image_excerpt("\n".join(lines), marks, limit=450) + "\n\n" + _image_excerpt(body, marks, limit=350)
 
 
@@ -1254,6 +1276,36 @@ def _json_fields(value, marks):
         f"{path}: {_image_excerpt(value, marks, limit=180)}" for _, path, value in chosen)
 
 
+_SOURCE_SPAN = 150      # characters of HTML source an XSS image keeps on each side of the reflected payload
+
+
+def _xss_source(text: str, marks) -> str | None:
+    """The HTML source around the first reflected XSS payload or marker that `marks` locates in `text` (VER-034):
+    its line, cut to _SOURCE_SPAN characters on each side, and the nearest non-blank line before and after it,
+    indentation removed; None if the answer does not contain it."""
+    needle = next((v for _, v in marks if isinstance(v, str) and v and v in text), None)
+    if needle is None:
+        return None
+    i = text.index(needle)
+    j = i + len(needle)
+    lo, hi = text.rfind("\n", 0, i) + 1, text.find("\n", j)
+    hi = len(text) if hi < 0 else hi
+    a, b = max(lo, i - _SOURCE_SPAN), min(hi, j + _SOURCE_SPAN)
+    line = ("…" + text[a:i] if a > lo else text[lo:i].lstrip()) + needle + (
+        text[j:b] + "…" if b < hi else text[j:hi].rstrip())
+
+    def cut(s: str) -> str:
+        s = s.strip()
+        return s if len(s) <= _SOURCE_SPAN else s[:_SOURCE_SPAN] + "…"
+
+    before, after = text[:lo].rstrip(), text[hi:].lstrip()
+    k, m = before.rfind("\n"), after.find("\n")
+    shown = ([cut(before[k + 1:])] if before else []) + [line] + ([cut(after[:m if m >= 0 else None])] if after else [])
+    more_before, more_after = bool(before[:max(k, 0)].strip()), m >= 0 and bool(after[m:].strip())
+    return ("HTML source around the XSS payload, indentation removed:\n" + ("[…]\n" if more_before else "")
+            + "\n".join(shown) + ("\n[…] excerpt; full record in HAR" if more_after else ""))
+
+
 def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
     res = e["response"]
     lines = [f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()]
@@ -1267,7 +1319,11 @@ def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
     mime = res["content"].get("mimeType", "").lower()
     if "html" in mime:
         if getattr(ctx.plan, "cls", None) == "xss":
-            text = "Application HTML omitted here. The browser execution observation above decides the XSS test."
+            source = None if res["content"].get("_omitted") else _xss_source(text, marks)
+            if source is not None:
+                return _image_excerpt("\n".join(lines), limit=450) + "\n\n" + source
+            text = ("HTML omitted: the XSS payload does not appear unchanged in this answer. The browser observation "
+                    "above decides whether it ran; the full answer is in the HAR.")
         else:
             parser = _VisibleText()
             parser.feed(text[:MAX_BODY_CHARS])
@@ -1356,7 +1412,8 @@ def _test_line(ctx, history: list[dict]) -> str:
             return (f"{target} as {plan['signed_in']}, without login, and without login to a random path next to it; "
                     "compared in code: whether the answers are identical")
     if cls == "xss":
-        return "the page opened with a payload that calls alert() with the finding's marker; proof: the marker runs"
+        return ("the page opened in a browser with an XSS payload that calls alert() with a random marker; "
+                "proof: the script runs and the dialog shows the marker")
     if cls == "open-redirect" and (host := redirect_host(marker)):
         return f"a request that names {host} as the redirect target; proof: a redirect to that host"
     if cls == "path-traversal":
@@ -1460,7 +1517,8 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
              f"<span class=k>Shown:</span> {html.escape(_shown_line(shown, roles))}",
              *([f"<small>Composed by the Verifier: {html.escape(composed)}.</small>"] if composed else []),
              f"<small>AppSec Verifier · recorded and redacted{' in ' + html.escape(har_path) if har_path else ''}"
-             f" at {html.escape(shown_time(captured))}; nothing sent again. Excerpts shortened; yellow marks what "
+             f" at {html.escape(shown_time(captured))}; nothing sent again. "
+             f"{'Requests shown URL-decoded, excerpts' if cls == 'xss' else 'Excerpts'} shortened; yellow marks what "
              "a request sent, a red frame what an answer shows.</small>"]
     pointer = latest_plan(history)[1].get("pointer")
     # VER-011: a boolean experiment's value is framed only where its proof counts the split, never against the
@@ -1483,7 +1541,7 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
             res_lines = [*res_lines, *view_lines]
         if ref and cls == "access-control":       # e.g. the owner's UserId in another account's answer
             res_lines = [*res_lines, *_same_owner_fields(e, ref)]
-        req_html, a = _marked(_image_request(e, req_marks), req_marks, sent=True)
+        req_html, a = _marked(_image_request(e, req_marks, decoded=cls == "xss"), req_marks, sent=True)
         res_html, b = _marked(_image_response(ctx, e, res_marks, res_lines, view), res_marks, res_lines)
         fact_html = " · ".join(f"<b>{html.escape(t)}</b>" if decides else html.escape(t) for t, decides in facts)
         total += a + b

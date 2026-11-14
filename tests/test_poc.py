@@ -498,7 +498,49 @@ def test_an_executed_xss_gets_the_exchange_image_beside_the_page_with_the_opened
         "<b>opened in the browser: /#/search?q=&lt;iframe src=&quot;javascript:alert(&#x27;vrfaa11&#x27;+"
         "&#x27;bb22&#x27;)&quot;&gt;</b>"
     ) in html
-    assert "<b>marker executed in the browser: yes</b>" in html
+    assert "<b>XSS payload ran in the browser: yes</b>" in html
+    assert "HTML omitted: the XSS payload does not appear unchanged in this answer." in html   # never sent
+
+
+def test_a_reflected_xss_image_shows_the_decoded_payload_and_where_the_answer_reflects_it(tmp_path):
+    """VER-034, VER-035: the request URL-decoded with the whole XSS payload marked, and the answer's HTML source
+    around the reflected payload, framed, instead of the rest of the page."""
+    from urllib.parse import quote
+
+    payload = "<script>alert('vrfaa11'.concat('bb22'))</script>"
+    body = ("<html><body>\n" + "<p>filler</p>\n" * 200 + "\t<form>\n\t\t<pre>Hello " + payload + "</pre>\n"
+            + "\t</form>\n\n" + "<p>more</p>\n" * 50 + "</body></html>")
+    raw = poc.capture(Resp(200, body, {"content-type": "text/html"}), method="GET",
+                      url="https://shop.example.com/rest/basket/1?name=" + quote(payload, safe=""))
+    page = {"executed": True, "context_verified": True,
+            "evidence": [{"kind": "screenshot", "path": "evidence/T-001-xss-1.png"}],
+            "_exchanges": [{**raw, "navigation": True}]}
+    browser = RenderBrowser()
+    browser.check = lambda url, **kw: {**page, "_exchanges": list(page["_exchanges"])}
+    ctx = _ctx(tmp_path, None, cls="xss", browser=browser)
+    path = "/rest/basket/1?name=" + quote(payload, safe="")
+    result, _ = _run(ctx, [{"tool": "browser_check", "args": {"path": path}},
+                           {"verdict": {"verdict": "confirmed", "rationale": "r"}}])
+    assert result.verdict == "confirmed", (result.rationale, result.observations)
+    html_page = browser.exchanges[0]["html"]
+    shown = html.escape(payload)
+    assert ('GET /rest/basket/1?name=<span class="hit sent"><span class=tag>XSS payload ▸</span>'
+            f"<mark>{shown}</mark></span>") in html_page
+    assert ("HTML source around the XSS payload, indentation removed:\n[…]\n&lt;form&gt;\n&lt;pre&gt;Hello "
+            f"<span class=hit><mark>{shown}</mark><span class=note>◀ XSS payload in the answer</span></span>"
+            "&lt;/pre&gt;\n&lt;/form&gt;\n[…] excerpt; full record in HAR") in html_page
+    assert "filler" not in html_page and "more</p>" not in html_page and "carries the XSS payload" in html_page
+    assert "nothing sent again. Requests shown URL-decoded, excerpts shortened;" in html_page
+
+
+def test_the_xss_source_excerpt_stays_short_in_minified_html():
+    payload = "<img src=x onerror=alert('vrfaa11'.concat('bb22'))>"
+    span = poc._SOURCE_SPAN
+    text = "<div>" + "x" * 5000 + payload + "y" * 5000 + "</div>"
+    shown = poc._xss_source(text, [("XSS payload in the answer", payload)])
+    assert shown == ("HTML source around the XSS payload, indentation removed:\n"
+                     "…" + "x" * span + payload + "y" * span + "…")
+    assert poc._xss_source("<p>encoded &lt;img&gt;</p>", [("XSS payload in the answer", payload)]) is None
 
 
 def _session_image(cwe, history):
