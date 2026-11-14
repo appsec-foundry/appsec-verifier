@@ -379,7 +379,9 @@ def _class_rules(ctx) -> str:
                 "record its owner created, and the evidenced preparation route on which the owner creates its own "
                 "test resource. For access-control, follow the access-control proof instructions below. ")
     if cls == "session":
-        return ("For session: use a session plan with the configured session_checks resource id; repeat its GET "
+        return ("For session: with source login, plan_test observes the configured login and returns value-free "
+                "login_observations; cite that plan step, never replay credentials yourself. With source read, "
+                "use a session plan with the configured session_checks resource id; repeat its GET "
                 "with the declared role twice and cite both steps. Only attributes of that declared active cookie "
                 "are supported. Fixation, expiry, logout and token validation need their own lifecycle proof; "
                 "never infer them from cookie attributes. ")
@@ -452,7 +454,8 @@ def _injection_rules() -> str:
         "you need not revise the plan for each. "
         "Where the injection changes authentication or authorisation, such as a login bypass, set auth_artifact "
         "true with pointer at the token or session field: the proof is that the true-predicate controls yield "
-        "the authenticated artifact and the false-predicate controls and the baseline do not, so a 401-to-200 "
+        "an artifact that accesses the operator-declared auth_checks protected resource, while false controls "
+        "and the baseline cannot access it. A nonempty token alone is insufficient. A 401-to-200 "
         "flip is expected and each control is sent once. "
         "Use the recorded controls unchanged. "
         "Legacy boolean differences and timing alone cannot confirm injection; "
@@ -471,11 +474,15 @@ def _access_hint(ctx) -> str:
                              writes=not (getattr(ctx, "safe", True) or getattr(ctx, "read_only", True)))
     if "resource" in methods:
         return ("\nAccess-control proof: use the configured test_resource: show its declared protected value to "
-                "both an allowed and a denied independent identity.")
+                "both an allowed and a denied independent identity. If the declaration has anonymous_only true, "
+                "plan with its resource id: the Verifier runs two anonymous reads and a neighbouring control "
+                "automatically. No reference account is needed; cite all comparison steps.")
     if not methods:
         return ("\nAccess-control cannot be confirmed in this run: there is no configured test_resource and no "
                 "accounts this finding's proof can use. Report the missing prerequisite.")
-    hint = ("\nAccess comparisons establish observed access only. Confirmation additionally requires an "
+    hint = ("\nAn access_policies observation selects a declared field or text marker instead of the whole "
+            "response; the engine checks it.\nAccess comparisons establish observed access only. "
+            "Confirmation additionally requires an "
             "independent operator-declared test resource or access_policies restriction, never a finding claim.")
     if "owner" in methods:
         hint += (
@@ -639,6 +646,8 @@ def _seed(ctx) -> str:
         "context_fields": list(context),
         "variants": variants,
         "test_resources": resources,
+        "auth_checks": [r for r in (getattr(ctx, "scope", {}) or {}).get("auth_checks", [])
+                        if r["finding_id"] == p.id],
         "access_policies": [r for r in (getattr(ctx, "scope", {}) or {}).get("access_policies", [])
                             if r["finding_id"] == p.id],
         "session_checks": [

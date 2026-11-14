@@ -61,8 +61,16 @@ PROOF_FORMS = {
                     "The target sent the control's nonce to the Verifier's listener, and not the complementary "
                     "control's"),
     "auth-artifact": ("true controls yielded an authenticated artifact",
-                      "The true-predicate controls yielded an authenticated artifact; the false ones and the baseline "
-                      "did not"),
+                      "The true-predicate controls yielded an authenticated artifact; "
+                      "the false ones and baseline did not"),
+    "auth-resource": ("positive artifacts accessed the protected resource",
+                      "Positive-control artifacts accessed the declared protected resource; baseline and negative "
+                      "controls did not"),
+    "selected-access": ("the declared protected observation matched across identities",
+                        "The operator-declared protected field or text marker was accessible to a denied identity"),
+    "declared-exposure": ("protected marker exposed in repeated anonymous reads",
+                          "Two anonymous reads exposed the declared protected marker; "
+                          "the neighbouring control did not"),
     "identity-contrast": ("access differs between identities", "Access differed between the identities"),
     "record-marker": ("another account read the owner's marked record",
                       "Another account read the record the owner created, with its marker"),

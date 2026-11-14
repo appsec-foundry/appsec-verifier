@@ -203,10 +203,13 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(fh)
 
 
-def _validate_scope(scope: dict) -> list[str]:
+def _validate_scope(scope: dict, *, url_only: bool = False) -> list[str]:
     """Validate against schemas/scope.schema.yaml with jsonschema when present,
     else a minimal required-key check so the command still works."""
     schema = _load_yaml(resource_root() / "schemas" / "scope.schema.yaml")
+    if url_only:
+        # VER-001: the already resolved URL-only scope has no owner/window; validate every declaration normally.
+        schema["required"] = [k for k in schema["required"] if k not in ("owner", "window")]
     try:
         from jsonschema.validators import validator_for
 
@@ -229,6 +232,23 @@ def _validate_scope(scope: dict) -> list[str]:
             )
             if not ScopeGuard(scope).authorize(url, "target").allowed:
                 errors.append("session_checks: a cookie observation is outside the target scope")
+        guard = ScopeGuard(scope)
+        from .tools.http import same_origin
+
+        for key, paths in (("auth_checks", ("login_path", "path")), ("access_policies", ("path",))):
+            declarations = scope.get(key, [])
+            seen = set()
+            for item in declarations:
+                identity = (item["finding_id"], item.get("login_path", item["path"]), item.get("method", "GET"))
+                if identity in seen:
+                    errors.append(f"{key}: duplicate declaration for the same finding and request")
+                seen.add(identity)
+                for field in paths:
+                    url = scope["base_url"].rstrip("/") + "/" + item[field].lstrip("/")
+                    if not guard.authorize(url, "target").allowed or not same_origin(url, scope["base_url"]):
+                        errors.append(f"{key}: declared request is outside the target scope")
+                if key == "access_policies" and set(item["allowed_roles"]) & set(item["denied_roles"]):
+                    errors.append("access_policies: allowed and denied roles must be disjoint")
         resources = scope.get("test_resources", [])
         ids = [r["id"] for r in resources]
         if len(ids) != len(set(ids)):
@@ -682,6 +702,11 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
                 "give --url as http(s)://host[:port], or a scope file with --scope",
             )
 
+    if getattr(args, "_guided_resources", None):
+        scope = {**scope, "test_resources": [*scope.get("test_resources", []), *args._guided_resources]}
+        errors = _validate_scope(scope, url_only=not args.scope)
+        if errors:
+            return _blocked("The run's access declarations cannot be used", errors)
     guard = ScopeGuard(scope)
     win = guard.within_window()
     if not win.allowed:
@@ -868,6 +893,8 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         )
     )
     print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing), full=False)))
+    for hint in _access_setup_hints(probed, scope):
+        print(hint)
     if probed and not contact:
         return _blocked(
             "Nothing to test in this run; no report was written",
@@ -1225,6 +1252,7 @@ def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | 
         )
     }
     lines = _test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing))
+    lines.extend(_access_setup_hints(probed, scope))
     if not probed:
         return None, lines
     # `probed` holds one entry per variant; the check counts findings, one tested when any variant can be.
@@ -1514,13 +1542,23 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
     A finding that names no request is tried only with `source`, the run's SourceReader, where a literal
     route near its location can supply one (agent/controller.py); in safe mode not when every route the source
     registers for its handlers writes (VER-008), the routes its test agent would start from (agent/loop.py)."""
-    from .agent.experiments import RECORD_CWES, access_methods
+    from .agent.experiments import EXPOSURE_CWES, RECORD_CWES, access_methods
     from .endpoints import WRITE_METHODS
     from .verification_context import missing_capabilities, record_segment
 
     if plan.cls == "session" and not any(r["finding_id"] == plan.id for r in scope.get("session_checks", [])):
         return "resource", "no operator-identified session cookie in session_checks"
-    if plan.cls == "access-control" and not identities:
+    if plan.cls == "session":
+        login_checks = [r for r in scope.get("session_checks", [])
+                        if r["finding_id"] == plan.id and r.get("source") == "login"]
+        if login_checks:
+            if not any(i.get("role") == r["role"] and i.get("method") == "form"
+                       for r in login_checks for i in identities):
+                return "resource", "login cookie observation needs the declared role with a configured form login"
+            return None  # Configured authentication, not a model-selected write probe (VER-062).
+    if plan.cls == "access-control" and not identities and not any(
+            r["finding_id"] == plan.id and r.get("anonymous_only") and plan.cwe in EXPOSURE_CWES
+            for r in scope.get("test_resources", [])):
         return "identity", "no test identity; the proof compares two identities"
     if plan.cls == "access-control":
         # VER-010: the operator's test resource first; else one a normal account creates, a privileged reference,
@@ -1537,7 +1575,10 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
         roles = {i["role"] for i in identities} | {"anonymous"}
         resources = [r for r in scope.get("test_resources", []) if r["finding_id"] == plan.id]
         if "resource" in methods and not any(
-            set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles for r in resources
+            (r.get("anonymous_only") and plan.cwe in EXPOSURE_CWES)
+            or (not r.get("anonymous_only")
+                and set(r["allowed_roles"]) <= roles and set(r["denied_roles"]) <= roles)
+            for r in resources
         ):
             return "resource", "a declared test resource names roles unavailable in this run"
         # Without one, the comparison reads with a GET request of the finding; an account creates its resource
@@ -1619,6 +1660,19 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
 def _wrap_whole(text: str, width: int) -> list[str]:
     """Wrap at spaces only, so a path, command or finding id stays whole and can be copied."""
     return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False)
+
+
+def _access_setup_hints(plans, scope):
+    """Actionable offline preparation for missing access declarations (VER-031)."""
+    declared = {r["finding_id"] for key in ("test_resources", "access_policies") for r in scope.get(key, [])}
+    missing = sorted({p.id for p in plans if p.cls == "access-control" and p.id not in declared})
+    if not missing:
+        return []
+    return ["Access restriction missing for " + ", ".join(printable(p) for p in missing) + ".",
+            "  Add access_policies: [{finding_id: ID, path: /protected, allowed_roles: [account-1], "
+            "denied_roles: [anonymous], restriction: 'Sign-in is required', source: 'Operator access policy'}] "
+            "to the scope; use test_resources with pointer and value for a harmless field or text marker. "
+            "These declarations describe expected access, not additional request permissions."]
 
 
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,

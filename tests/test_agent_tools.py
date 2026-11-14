@@ -443,6 +443,8 @@ def test_oob_plan_needs_a_listener_and_an_accepted_injection_class(tmp_path):
 def _auth_tools(tmp_path, status, body):
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(status, body), safe=False, read_only=False)
     ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
+    ctx.scope = {**ctx.scope, "auth_checks": [{"finding_id": "T-1", "login_path": "/rest/user/login",
+                 "path": "/protected", "pointer": "/marker", "value": "owned-test-marker"}]}
     tools = AgentTools(ctx)
     tools._experiment = {"auth_artifact": True, "pointer": "/authentication/token", "kind": "boolean",
                          "input_location": "json", "input_name": "email", "path": "/rest/user/login",
@@ -482,6 +484,8 @@ def test_auth_artifact_plan_needs_a_sql_or_nosql_challenge(tmp_path):
     from test_experiments import STRATEGY
     ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False)
     ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
+    ctx.scope = {**ctx.scope, "auth_checks": [{"finding_id": "T-1", "login_path": "/rest/user/login",
+                 "path": "/protected", "pointer": "/marker", "value": "owned-test-marker"}]}
     base = {"kind": "boolean", "hypothesis": "email is spliced into the login SQL query",
             "path": "/rest/user/login", "method": "POST", "input_location": "json", "input_name": "email",
             "baseline": "nobody@x", "pointer": "/authentication/token", "strategy": STRATEGY, "auth_artifact": True}

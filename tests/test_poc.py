@@ -891,6 +891,17 @@ def test_a_login_bypass_image_states_the_artifact_its_proof_reads_not_the_status
     assert "baseline input: no authenticated artifact · true condition: authenticated artifact." in page
 
 
+def test_login_bypass_image_distinguishes_usable_from_unusable_artifact():
+    plan = {**_EXPERIMENT, "path": "/login", "pointer": "/token", "auth_artifact": True}
+    for matched in (True, False):
+        history = [_accepted(**plan), {**_sent("/login", q="x"), "result": {
+            "status": 200, "auth_artifact": True, "auth_access": {"matched": matched}}}]
+        shown = [(2, _probe_exchange("x", 200, "body withheld", "text/plain"))]
+        page, _ = poc.exchange_document(_role_ctx("injection"), history, shown, "inconclusive", None)
+        assert f"<b>declared protected resource accessed: {'yes' if matched else 'no'}</b>" in page
+        assert "authenticated artifact in the answer" not in page
+
+
 def test_a_returned_marker_image_frames_each_steps_own_marker():
     """VER-053: the returned-marker form reads each control's own generated marker from its answer; another
     control's marker is not its proof."""

@@ -27,7 +27,7 @@ appsec-verifier ./out/security-assessment.yaml
 
 The guided run asks for the target URL, shows which findings it can test and what the others still need, and starts after your confirmation. By default it tests findings of severity high and above with the `claude` profile. Each run writes its report to a new private directory, which the run names at its start and end ([Output](#output)).
 
-XSS findings also need the proof browser ([Install](#install)), access-control findings need test accounts ([Scope and test accounts](#scope-and-test-accounts)). To try the Verifier, run OWASP Juice Shop locally (`docker run --rm -p 3000:3000 bkimminich/juice-shop`) and use the files in [`examples/juice-shop/`](examples/juice-shop/).
+XSS findings also need the proof browser ([Install](#install)), access-control comparisons usually need test accounts ([Scope and test accounts](#scope-and-test-accounts)). To try the Verifier, run OWASP Juice Shop locally (`docker run --rm -p 3000:3000 bkimminich/juice-shop`) and use the files in [`examples/juice-shop/`](examples/juice-shop/).
 
 ## What it verifies
 
@@ -44,7 +44,7 @@ The agent takes request details the assessment leaves open from the source code 
 | SSRF | the target calls a callback listener |
 | Session cookie without Secure, HttpOnly or SameSite | the session cookie repeatedly lacks the attribute (SameSite: Lax or Strict) |
 
-Some classes need preparation: XSS the proof browser, access control test accounts and an established access restriction in the scope, SSRF and blind injection a listener the target can reach (started automatically for a `localhost` target), path traversal a marker file, session cookies the cookie's name in the scope. The guided run and `preflight` say what a finding still needs. The exact rules are in [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs of each class in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
+Some classes need preparation: XSS the proof browser, access control test accounts and an established access restriction in the scope, SSRF and blind injection a listener the target can reach (started automatically for a `localhost` target), path traversal a marker file, session cookies the cookie's name in the scope. The guided run can collect access declarations for this run; `preflight` names missing preparation. Declared anonymous exposure needs no reference account, cookie checks can observe form-login responses, and login-bypass injection needs a protected follow-up resource. The exact rules are in [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013), the CWEs of each class in [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
 
 The agent can resolve missing requests from recorded source and application evidence, including browser request workflows and literal page includes ([request derivation](docs/cli.md#continuous-control-ver-036)); the report shows the requests each verdict rests on. The evidence image of the NoSQL injection above:
 

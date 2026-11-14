@@ -43,6 +43,8 @@ class Script:
 
     def __call__(self, prompt):
         self.prompts.append(prompt)
+        if prompt.startswith("Prepare access rules"):
+            return "no"  # Existing scenarios explicitly decline optional preparation; tested separately below.
         if not self.answers:
             raise EOFError
         answer = self.answers.pop(0)
@@ -81,15 +83,18 @@ def env(tmp_path, monkeypatch):
         e.hidden, e.pasted = Script(*hidden), Script(*pasted)
         rc = guided.run_guided(args, interactive=interactive, ask=script, out=lines.append,
                                environ={} if environ is None else environ, ask_secret=e.hidden, ask_block=e.pasted)
-        return rc, args, script.prompts, "\n".join(lines)
+        e.preparation_prompts = [p for p in script.prompts if p.startswith("Prepare access rules")]
+        prompts = [p for p in script.prompts if not p.startswith("Prepare access rules")]
+        return rc, args, prompts, "\n".join(lines)
 
     e.go = go
     return e
 
 
-def test_with_a_scope_file_nothing_is_asked_and_the_defaults_apply(env):
+def test_with_a_scope_file_only_optional_preparation_is_asked_and_defaults_apply(env):
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
+    assert len(env.preparation_prompts) == 1
     assert "3 runtime candidates of 4 · critical 1 · high 1 · medium 1\n" in out
     assert "to verify" not in out              # the selection is shown once, with the run settings
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
@@ -113,7 +118,8 @@ def test_no_visible_question_asks_for_a_secret(env):
     (env.run / "scope.yaml").unlink()
     (env.run / "identities.yaml").write_text(yaml.safe_dump(IDENTITY))
     _, _, prompts, _ = env.go(BASE, "none")
-    assert len(prompts) == 2 and not any(word in p.lower() for p in prompts for word in SECRET_WORDS)
+    assert len(prompts) == 2
+    assert not any(word in p.lower() for p in [*prompts, *env.preparation_prompts] for word in SECRET_WORDS)
 
 
 def test_text_from_the_assessment_cannot_control_the_terminal(env):
@@ -561,3 +567,34 @@ def test_the_confirmation_is_still_asked_after_the_questions(env, monkeypatch, c
     assert not (env.cwd / "verification").exists()
     runs = Path(os.environ["XDG_DATA_HOME"]) / "appsec-verifier" / "runs"
     assert list(runs.glob("*/*")) == []                 # the declined run's own directory is gone again (VER-058)
+
+
+def test_run_only_preparation_reaches_verify_but_never_skips_confirmation(env, monkeypatch, capsys):
+    """The actual guided-to-verify handoff preserves scope and asks before contacting any target (VER-031/061)."""
+    from appsec_verifier.tools import httpx_transport
+
+    monkeypatch.undo()
+    monkeypatch.chdir(env.cwd)
+    env.assessment.write_text(yaml.safe_dump({"threats": [{
+        "id": "T-1", "cwe": "CWE-306", "severity": "high", "title": "Management exposure",
+        "evidence": {"file": "app.py", "line": 1}}]}))
+    (env.run / "scope.yaml").unlink()
+    before = set(env.run.iterdir())
+    answers = iter(["yes", "yes", "/admin/config", "admin", "anonymous", "Administrator access required",
+                    "Operator access policy", "/marker", "harmless-config-marker", "yes"])
+    confirmed = []
+
+    def no_network(*a, **k):
+        pytest.fail("target contacted before confirmation")
+
+    monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: no_network)
+    monkeypatch.setattr(cli, "_build_planner_factory", lambda args, environ=None:
+                        (object, {"profile": "claude", "model": "fake", "runtime": "fake", "auth": "none"}))
+    monkeypatch.setattr(cli, "confirm_authorization", lambda **kw:
+                        confirmed.append(kw) or Confirmation(False, "interactive", "declined"))
+    args = cli.build_guided_parser().parse_args([str(env.assessment), "--url", BASE, "--screenshots", "none"])
+    result = guided.run_guided(args, interactive=True, ask=lambda _: next(answers), out=lambda _: None, environ={})
+    assert result == cli.EXIT_BLOCKED and len(confirmed) == 1
+    assert args._guided_resources[0]["anonymous_only"] is True
+    assert set(env.run.iterdir()) == before
+    assert "run-only access declarations" in capsys.readouterr().out

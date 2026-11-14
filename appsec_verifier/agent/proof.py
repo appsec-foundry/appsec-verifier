@@ -191,7 +191,15 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
 
         view = plan_view(history, cited)
         error = session_check(ctx, view, cited)
-        return _downgrade(result, error) if error else _checked(result, view, cited, ctx)
+        if error:
+            return _downgrade(result, error)
+        observations = [o for n in cited or [] for o in view[n - 1].get("result", {}).get("login_observations", [])]
+        if observations:
+            result.evidence = _write_record(ctx, "cookie_observations", observations)
+        result = _checked(result, view, cited, ctx)
+        if observations:
+            result.proof["cookie_observations"] = observations
+        return result
 
     if cls == "xss":
         executed = [
@@ -277,10 +285,22 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
     return require_restriction(ctx, view, cited, result)
 
 
+def retain_login_observations(ctx, history, result):
+    """Keep value-free issuance evidence even when missing or conflicting attributes leave no verdict."""
+    observations = {o["observation_id"]: o for h in history if h.get("tool") == "plan_test"
+                    for o in h.get("result", {}).get("login_observations", [])}
+    if observations and not (result.proof or {}).get("cookie_observations"):
+        items = list(observations.values())
+        result.evidence = [*result.evidence, *_write_record(ctx, "cookie_observations", items)]
+        result.proof = {"checked": False, **(result.proof or {}), "cookie_observations": items}
+    if observations:
+        result.identities_used = sorted(set(result.identities_used) | {o["role"] for o in observations.values()})
+
+
 def proof_form(cls, plan) -> str | None:
     """The proof form a confirmation of class `cls` rests on under `plan`, a key of PROOF_FORMS (verify/probes.py),
     so the console and report say what this form showed rather than what the class usually shows."""
-    forms = {"injection": (("oob_template", "out-of-band"), ("auth_artifact", "auth-artifact"),
+    forms = {"injection": (("oob_template", "out-of-band"), ("auth_artifact", "auth-resource"),
                            ("error_set", "engine-error"), ("markers", "returned-marker"),
                            ("expression_template", "computed-expression")),
              "access-control": (("signed_in", "comparison-without-credentials"), ("change", "record-change"),
@@ -293,7 +313,7 @@ def _checked(result, history, cited, ctx=None):
         return result
     _, plan = latest_plan(history)
     own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")
-                                                    or plan.get("signed_in"))
+                                                    or plan.get("signed_in") or plan.get("exposure"))
     result.confidence = (
         "high" if result.verdict == "confirmed" and plan.get("kind") not in ("boolean", "timing") and not own
         else "medium"
@@ -311,6 +331,12 @@ def _checked(result, history, cited, ctx=None):
         events["marker"] = "".join(getattr(ctx, "marker", None) or ())
     elif plan.get("reference") or plan.get("signed_in"):
         scope = "cited requests only; the access comparison and its expected restriction are recorded separately"
+    if ctx is not None and getattr(ctx.plan, "cls", None) == "access-control":
+        from .access_observation import selected_observation
+
+        selected = selected_observation(ctx, plan.get("path"), plan.get("method", "GET"))
+        if selected:
+            events["access_observation"] = selected
     result.proof = {
         **events,
         "checked": True,
@@ -325,6 +351,10 @@ def _checked(result, history, cited, ctx=None):
         **({"observation_text": plan["text"]} if plan.get("text") else {}),     # VER-055
         "scope": scope,
     }
+    if plan.get("exposure"):
+        result.proof["form"] = "declared-exposure"
+    elif events.get("access_observation"):
+        result.proof["form"] = "selected-access"
     result.identities_used = sorted(
         {
             h.get("args", {}).get("role") or "anonymous"
@@ -342,6 +372,9 @@ def _negative(ctx, history, result, cited):
         if h.get("tool") in ("http_request", "browser_check", "archive_probe")
         and type(h.get("result", {}).get("status")) is int
     ]
+    if ctx.plan.cls == "session":
+        answered += [h for h in history if h.get("tool") == "plan_test"
+                     and h.get("result", {}).get("login_observations")]
     if not answered:
         return ProbeResult(
             verdict="not-attempted",
@@ -360,7 +393,15 @@ def _negative(ctx, history, result, cited):
         from .session_proof import session_check
 
         error = session_check(ctx, history, cited, negative=True)
-        return _downgrade(result, error) if error else _checked(result, history, cited)
+        if error:
+            return _downgrade(result, error)
+        observations = [o for n in cited for o in history[n - 1].get("result", {}).get("login_observations", [])]
+        if observations:
+            result.evidence = _write_record(ctx, "cookie_observations", observations)
+        result = _checked(result, history, cited, ctx)
+        if observations:
+            result.proof["cookie_observations"] = observations
+        return result
     if ctx.plan.cls == "xss" and result.verdict == "not-reproducible":
         marker = getattr(ctx, "marker", None) or ()
         if all(
@@ -388,7 +429,8 @@ def _negative(ctx, history, result, cited):
                                   "its plan")
     # An own-resource proof also cites the owner's write, and its plan path may hold a placeholder: access_check
     # matches those paths itself.
-    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference") or plan.get("signed_in"))
+    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference")
+                                               or plan.get("signed_in") or plan.get("exposure"))
     if any(
         h.get("tool") != "http_request"
         or (not own and not planned_route(plan.get("path") or "", h.get("args", {}).get("path") or ""))
@@ -637,8 +679,15 @@ def _cited_exchanges(ctx, history: list[dict], cited, minimum: int) -> tuple[lis
             digest = response.get("digest") if response.get("complete") else None
             group = comparison_groups.setdefault(digest, len(comparison_groups) + 1) if digest else None
             exchange.update(comparison_body_group=group, body_withheld=bool(res.get("body_withheld")))
+        response = getattr(ctx, "responses", {}).get(n, {})
+        if response.get("access_observation"):
+            exchange["access_observation"] = response["access_observation"]
+        if "exposure_match" in response:
+            exchange["exposure_match"] = response["exposure_match"]
         if "location" in res:
             exchange["location_host"] = _location_host(ctx, res["location"])
+        if "auth_access" in res:
+            exchange["auth_access"] = res["auth_access"]
         if "marker_read" in res:
             exchange["marker_read"] = res["marker_read"] is True
         if isinstance(res.get("elapsed_ms"), int) and not isinstance(res["elapsed_ms"], bool):

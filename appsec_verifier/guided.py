@@ -166,6 +166,7 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
         if found is None:
             return cli.EXIT_BLOCKED
         scope, guard = found
+        _access_preparation(d, args, scope, plans)
         chosen = _ask_identities(d, args, guard, environ, assessment, cwd, scope, plans)
         if chosen is None:
             return cli.EXIT_BLOCKED
@@ -177,10 +178,56 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
     invocation = equivalent_invocation(args)
+    if getattr(args, "_guided_resources", None):
+        invocation += ("\n  It does not include the run-only access declarations: put them in test_resources "
+                       "in a scope file to reproduce this setup non-interactively.")
     if pasted:
         invocation += ("\n  It does not include the pasted sessions: put them in an identities file "
                        "(method session) and pass it with --identities.")
     return cli.cmd_verify(args, invocation=invocation, default_yes=True, secrets=secrets, pasted=pasted)
+
+
+def _access_preparation(d, args, scope, plans):
+    """Collect optional run-only declarations, never network authority (VER-031/061)."""
+    selected = [p for p in cli._select(args, plans) if p.cls == "access-control"
+                and not any(r["finding_id"] == p.id for key in ("test_resources", "access_policies")
+                            for r in scope.get(key, []))]
+    if not selected or not d.yes("Prepare access rules and harmless test markers for selected findings?"):
+        return
+    from .agent.experiments import EXPOSURE_CWES
+
+    additions = []
+    for plan in selected:
+        if not d.yes(f"Prepare {clean(plan.id)}: {clean(plan.title)}?"):
+            continue
+        while True:
+            path = d.question("Concrete read path (for example /reports/private)")
+            allowed = d.question("Roles allowed to read it (comma-separated)")
+            denied = d.question("Roles denied access (comma-separated; anonymous means no credentials)")
+            restriction = d.question("Expected access restriction")
+            source = d.question("Source of this restriction (requirement or operator policy)")
+            pointer = d.question("JSON Pointer of a harmless marker (Enter for plain text)", "")
+            value = d.question("Harmless test marker, never a credential or personal data")
+            anonymous = plan.cwe in EXPOSURE_CWES and denied.strip() == "anonymous" and d.yes(
+                "Prove this declared exposure without a reference account?")
+            item = {"id": "guided-" + plan.id, "finding_id": plan.id, "path": path, "method": "GET",
+                    "allowed_roles": [r.strip() for r in allowed.split(",")],
+                    "denied_roles": [r.strip() for r in denied.split(",")], "restriction": restriction,
+                    "source": source, "pointer": pointer, "value": value,
+                    **({"anonymous_only": True} if anonymous else {})}
+            candidate = {**scope, "test_resources": [*scope.get("test_resources", []), item]}
+            errors = cli._validate_scope(candidate, url_only=not args.scope)
+            if not errors:
+                scope["test_resources"] = candidate["test_resources"]
+                additions.append(item)
+                break
+            for error in errors:
+                d.out("  " + clean(error))
+            if not d.yes("Correct this declaration?"):
+                break
+    if additions:
+        args._guided_resources = additions
+        d.out("Access declarations apply to this run only; no configuration file was written.")
 
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
@@ -350,7 +397,7 @@ def _ask_pasted(d: Dialog, args, guard: ScopeGuard, scope: dict, plans, secrets:
     resources = [r for r in scope.get("test_resources", [])
                  if any(p.id == r.get("finding_id") and p.status == "dynamic" and p.cls == "access-control"
                         for p in cli._select(args, plans))]
-    roles = sorted({str(r) for res in resources
+    roles = sorted({str(r) for res in resources if not res.get("anonymous_only")
                     for r in [*res.get("allowed_roles", []), *res.get("denied_roles", [])]} - {"anonymous"})
     if not roles:
         return []

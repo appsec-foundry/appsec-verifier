@@ -1,5 +1,5 @@
 """The exact, narrow tool surface the verification agent is confined to
-(VER-017). The agent never gets a shell or raw network: it can issue an HTTP
+(VER-017, VER-049, VER-061, VER-062). The agent never gets a shell or raw network: it can issue an HTTP
 request to the target as one of the configured identities (scope-guarded),
 read the evidenced source (repository-confined), and, for XSS findings, load a
 page in the proof browser whose requests go through the same guard (VER-009,
@@ -485,9 +485,13 @@ class AgentTools:
                 plan = callback_controls(plan, self.ctx.listener, self.ctx.marker)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
+        if plan.get("auth_artifact"):
+            from .auth_followup import declaration
+
+            if declaration(self.ctx, plan["path"]) is None or self.ctx.sessions is None:
+                raise ToolError("login-bypass proof needs an operator-declared auth_checks protected resource")
         if plan.get("auth_artifact") and not (plan.get("sql_template") or plan.get("operator_challenge")):
-            # VER-049: a login-bypass proof rides on the generated SQL/NoSQL controls but observes the presence
-            # of an authenticated artifact at the (schema-required) pointer instead of a response field.
+            # VER-049: generated SQL/NoSQL controls obtain artifacts; a declared protected read tests their use.
             raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
                             "(sql_template for CWE-89 or operator_challenge for CWE-943)")
         if plan.get("fixed") and not (plan["kind"] == "access-control" and plan.get("signed_in")):
@@ -670,11 +674,34 @@ class AgentTools:
                 or resource.get("method", "GET") != plan.get("method", "GET")
             ):
                 raise ToolError("the plan needs a matching operator-supplied test resource")
+            if resource.get("anonymous_only"):
+                if (self.ctx.plan.cwe not in EXPOSURE_CWES or resource.get("method", "GET") != "GET"
+                        or not resource.get("restriction") or not resource.get("source")
+                        or resource["denied_roles"] != ["anonymous"]):
+                    raise ToolError("anonymous-only proof needs a declared exposure restriction and GET resource")
+                plan = {**plan, "exposure": True,
+                        "control_path": comparison_path(plan["path"], "vrf" + secrets.token_hex(8))}
         if needs_writes and not self._may_write(needs_writes, plan.get("owner") or plan.get("role") or ""):
             next_step = refused_write(self.ctx, plan.get("method", "GET"), urlsplit(plan.get("path") or "/").path)
             raise ToolError("this plan needs write requests, which safe mode does not send, and the operator did not "
                             "allow them for this finding (VER-030, VER-052): " + "; ".join(needs_writes)
                             + f"; {next_step}")
+        login_observations = None
+        if plan["kind"] == "session":
+            check = next((r for r in self.ctx.scope.get("session_checks", [])
+                          if r["finding_id"] == self.ctx.plan.id and r["id"] == plan.get("resource")), None)
+            if check and check.get("source") == "login":
+                from ..auth.sessions import AuthError
+
+                if not self.ctx.sessions:
+                    raise ToolError("login cookie observations need configured sessions")
+                try:
+                    login_observations = self.ctx.sessions.observe_login(check["role"])
+                except AuthError as exc:
+                    raise ToolError("configured login cookie observation unavailable") from exc
+                login_observations = [o for o in login_observations if o["path"] == check["path"]
+                                      and same_origin(o["origin"], self.ctx.target_base)]
+                plan = {**plan, "login_observation": True}
         self._experiment = plan
         notes = []
         if candidates and plan.get("method", "GET") not in SAFE_METHODS:
@@ -691,6 +718,7 @@ class AgentTools:
                          "finding's marker and creates, never changes what may belong to someone else (VER-014)")
         return {
             "accepted": True,
+            **({"login_observations": login_observations} if login_observations is not None else {}),
             "kind": plan["kind"],
             "experiment": plan,
             **({"marker": marker} if marker else {}),
@@ -722,6 +750,13 @@ class AgentTools:
         mode (`write` True), and only once per plan. Each control is sent twice, an auth-artifact control once,
         because that proof needs no repetition (VER-049)."""
         plan = getattr(self, "_experiment", {})
+        if plan.get("exposure"):
+            if write:
+                raise ToolError("the exposure comparison already ran")
+            resource = next(r for r in self.ctx.scope["test_resources"] if r["id"] == plan["resource"])
+            base = {"method": "GET", "comparison": True, "params": resource.get("params", {})}
+            return [{**base, "path": plan["path"]}, {**base, "path": plan["path"]},
+                    {**base, "path": plan["control_path"]}]
         if plan.get("kind") == "access-control" and plan.get("signed_in"):
             # VER-057: the account's GET, the same GET without credentials, and the random path next to it.
             if write:
@@ -1072,9 +1107,10 @@ class AgentTools:
         m = (method or "GET").upper()
         if comparison:
             plan = getattr(self, "_experiment", None) or {}
-            if not (plan.get("kind") == "access-control" and plan.get("signed_in") and m == "GET"
+            if not (plan.get("kind") == "access-control" and (plan.get("signed_in") or plan.get("exposure"))
+                    and m == "GET"
                     and json is None and form is None and path_inputs is None
-                    and (path, role or None) in ((plan["path"], plan["signed_in"]), (plan["path"], None),
+                    and (path, role or None) in ((plan["path"], plan.get("signed_in")), (plan["path"], None),
                                                  (plan.get("control_path"), None))):
                 raise ToolError("a comparison request must be one the accepted comparison sends (VER-057)")
         # VER-057: what anyone can read, the answer without credentials to the finding's path, is kept and shown.
@@ -1190,7 +1226,15 @@ class AgentTools:
             from .session_proof import cookie_observations
 
             session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
-            omit = "body not kept: compared in code only (VER-057)" if comparison and not exposed else None
+            active = getattr(self, "_experiment", {})
+            if active.get("auth_artifact"):
+                from .auth_followup import artifact
+
+                obtained = artifact(_body_text(resp), active.get("pointer"))
+                if obtained and self.ctx.sessions is not None:
+                    self.ctx.sessions.remember_secret(obtained)
+            omit = ("body withheld: authentication artifact (VER-049)" if active.get("auth_artifact") else
+                    "body not kept: compared in code only (VER-057)" if comparison and not exposed else None)
             self._record(self._sent(resp, m, url, headers, params, json, form), role, headers, omit=omit)
             sessions = self.ctx.sessions if role else None
             if sessions is not None:
@@ -1219,6 +1263,11 @@ class AgentTools:
         engine_error = engine_error_signature(text) if error_probe else None
         auth_artifact_probe = self.ctx.plan.cls == "injection" and experiment.get("auth_artifact")
         auth_present = _auth_artifact_present(text, experiment.get("pointer")) if auth_artifact_probe else None
+        auth_access = None
+        if auth_artifact_probe:
+            from .auth_followup import followup
+
+            auth_access = followup(self, text, experiment)
         if auth_artifact_probe:
             # The presence is kept; the body itself stands down everywhere it could be read: the recorded body
             # (read_response), the excerpt the model sees, and the hash (VER-049, VER-016).
@@ -1241,6 +1290,21 @@ class AgentTools:
         digest = hmac.new(self._digest_key, compared.encode("utf-8", "replace"), hashlib.sha256).hexdigest()
         self._last_response = {"body": redacted[:cap], "complete": len(redacted) <= cap, "identity": identity,
                                "digest": digest}
+        from .access_observation import matches, selected_observation
+
+        active = getattr(self, "_experiment", {})
+        selection_path = active.get("path", path) if comparison else path
+        selected = selected_observation(self.ctx, selection_path, m)
+        sent_inputs = {"path": path, "params": params, "json": json, "form": form}
+        if selected:
+            matched = matches(compared, selected, sent_inputs)
+            selected_bytes = jsonlib.dumps(selected, sort_keys=True).encode()
+            self._last_response["digest"] = (hmac.new(self._digest_key, selected_bytes, hashlib.sha256).hexdigest()
+                                             if matched else None)
+            self._last_response["access_observation"] = {**selected, "matched": matched}
+        if active.get("exposure"):
+            resource = next(r for r in self.ctx.scope["test_resources"] if r["id"] == active["resource"])
+            self._last_response["exposure_match"] = matches(compared, resource, sent_inputs)
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
         withheld = bool(error_probe or auth_artifact_probe or (comparison and not exposed))
@@ -1267,6 +1331,7 @@ class AgentTools:
         if self.ctx.plan.cls == "session":
             out["session_cookies"] = session_cookies
         if auth_artifact_probe:
+            out["auth_access"] = auth_access
             out["auth_artifact"] = bool(auth_present)   # the code's observation; the token value is withheld
         if error_probe:
             out["engine_error"] = bool(engine_error)    # the code's observation; the error text is withheld

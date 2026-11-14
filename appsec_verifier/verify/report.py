@@ -376,6 +376,10 @@ def _shown(r: dict, *, detail: bool = True) -> str | None:
     def who(step) -> str:
         return _inline(step["role"], 60)
 
+    if proof.get("form") in ("selected-access", "declared-exposure"):
+        from .probes import PROOF_FORMS
+
+        return PROOF_FORMS[proof["form"]][1] + "."
     if proof.get("kind") == "access-control" and cited:
         writes = [s for s in cited if s["method"] in ("POST", "PUT", "PATCH")]
         reads = [s for s in cited if s["method"] == "GET"]
@@ -641,6 +645,16 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
             + "; denied: " + ", ".join(restriction.get("denied_roles", [])))
         notes.append(f"**Expected access:** {_sentence(description)} "
                      f"Source: {_sentence(restriction.get('source'))}")
+    observation = proof.get("access_observation")
+    if observation:
+        notes.append("**Compared observation:** " + _code(observation.get("pointer") or "literal text")
+                     + " = " + _code(str(observation.get("value"))) + "; declared by the operator.")
+    for item in proof.get("cookie_observations", []):
+        attributes = ", ".join(
+            f"{c['name']}: Secure={c['secure']}, HttpOnly={c['httponly']}, SameSite={c['samesite'] or 'missing'}"
+            for c in item.get("session_cookies", []))
+        notes.append("**Login cookie observation:** " + _code(f"{item['method']} {item['path']}")
+                     + f" (HTTP {item['status']}, {_inline(item['role'])}): " + _code(attributes))
     limits = re.sub(r"^cited requests only[;,]?\s*", "", str(proof.get("scope") or "")) if proof.get("checked") else ""
     limits = re.sub(r"^on ", "tested on ", limits)
     if limits:

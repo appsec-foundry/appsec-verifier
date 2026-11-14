@@ -422,7 +422,10 @@ def _auth_plan():
 def _auth_req(value, authenticated):
     return {"tool": "http_request",
             "args": {"path": "/rest/user/login", "method": "POST", "json": {"email": value, "password": "p"}},
-            "result": {"status": 200 if authenticated else 401, "auth_artifact": authenticated, "role": None}}
+            "result": {"status": 200 if authenticated else 401, "auth_artifact": authenticated, "role": None,
+                       "auth_access": {"path": "/protected", "status": 200 if authenticated else 401,
+                                       "matched": authenticated, "artifact_supplied": authenticated,
+                                       "pointer": "/marker", "value": "owned-test-marker"}}}
 
 
 _AUTH_HISTORY = [
@@ -433,7 +436,9 @@ _AUTH_HISTORY = [
 
 
 def test_auth_artifact_injection_confirms_on_the_true_false_auth_flip(tmp_path):
-    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence"),
+    res = check_proof(_ctx("injection", evidence_dir=tmp_path / "evidence", scope={"auth_checks": [
+        {"finding_id": "T-1", "login_path": "/rest/user/login", "path": "/protected",
+         "pointer": "/marker", "value": "owned-test-marker"}]}),
                       _AUTH_HISTORY, ProbeResult(verdict="confirmed"), [2, 3, 4, 5, 6])
     assert res.verdict == "confirmed" and res.confidence == "medium"
 
@@ -573,6 +578,7 @@ def test_every_proof_form_the_check_records_is_described_and_every_description_i
              "access-control": [{"signed_in": "a"}, {"change": {"method": "PUT"}, "owner": "a"}, {"owner": "a"},
                                 {"reference": "b"}]}
     forms = {proof_form(cls, plan) for cls, listed in plans.items() for plan in listed}
-    forms |= {proof_form(cls, {}) for cls in DEFAULT_FORMS} | {"archive-marker"}     # set by check_proof itself
+    forms |= {proof_form(cls, {}) for cls in DEFAULT_FORMS}
+    forms |= {"archive-marker", "selected-access", "declared-exposure", "auth-artifact"}  # checked or legacy forms
     assert forms == set(PROOF_FORMS)
     assert proof_form("access-control", {"change": {"method": "PUT"}, "owner": "a"}) == "record-change"

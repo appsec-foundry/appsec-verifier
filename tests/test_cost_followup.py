@@ -50,6 +50,10 @@ def _login_target(sent):
     db.execute("INSERT INTO users VALUES ('admin@shop.test', 'secret')")
 
     def target(m, u, h, **kw):
+        if u.endswith("/protected"):
+            sent.append((m, None))
+            allowed = h.get("Authorization") == "Bearer eyJ.secret.token"
+            return Resp(200 if allowed else 401, json.dumps({"marker": "owned-test-marker" if allowed else ""}))
         body = kw.get("json") or {}
         sent.append((m, body.get("email")))
         try:
@@ -69,6 +73,8 @@ def _login_ctx(tmp_path, sent, *, safe=False, read_only=False):
     ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", instance="routes/login.ts:34",
                        endpoints=(Endpoint("POST", "/rest/user/login", None),))
     ctx.marker = (MARK, "bb")
+    ctx.scope = {**ctx.scope, "auth_checks": [{"finding_id": ctx.plan.id, "login_path": "/rest/user/login",
+                  "path": "/protected", "pointer": "/marker", "value": "owned-test-marker"}]}
     return ctx
 
 
@@ -88,9 +94,11 @@ def test_login_bypass_confirms_with_send_controls_in_few_model_calls(tmp_path):
     result = AgentProbe("injection", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.proof["checked"] is True
     assert script.calls == 4                                   # plan, send_controls, verdict, presentation
-    assert len(sent) == 5                                      # five controls, each once: no repetition needed
+    assert len(sent) == 10                                     # five controls, each with a protected read
     statuses = [h["result"]["status"] for h in script.history if h.get("experiment")]
-    assert sorted(statuses) == [200, 200, 401, 401, 401]       # the 401-to-200 flip is the proof (VER-049)
+    assert sorted(statuses) == [200, 200, 401, 401, 401]
+    access = [h["result"]["auth_access"]["matched"] for h in script.history if h.get("experiment")]
+    assert sorted(access) == [False, False, False, True, True]  # actual access, not token presence (VER-049)
 
 
 def test_a_write_plan_sends_nothing_on_acceptance(tmp_path):
@@ -126,7 +134,7 @@ def test_send_controls_needs_an_accepted_plan_and_runs_once_per_plan(tmp_path):
     ctx2 = _login_ctx(tmp_path, sent2)
     script2 = Script([_login_plan(), {"tool": "send_controls", "args": {}}, {"tool": "send_controls", "args": {}}])
     AgentProbe("injection", lambda: script2).run(ctx2)
-    assert len(sent2) == 5
+    assert len(sent2) == 10
     errors = [h["result"]["error"] for h in script2.history if h.get("tool") == "send_controls"]
     assert errors and "already sent" in errors[-1]
 
@@ -412,6 +420,8 @@ def test_every_generated_control_passes_the_verifiers_own_checks(tmp_path, name)
                 "request": {"method": method, "path": path, "inputs": inputs}})
     ctx.plan = replace(ctx.plan, cls="injection", cwe=cwe)
     ctx.marker = (MARK, "bb")
+    ctx.scope = {**ctx.scope, "auth_checks": [{"finding_id": ctx.plan.id, "login_path": path,
+                  "path": "/protected", "pointer": "/marker", "value": "owned-test-marker"}]}
     plan = {"kind": "boolean", "hypothesis": "The input reaches the query unescaped", "variant": "v",
             "path": path, "method": method, **declaration}
     with pytest.raises(ToolError, match="a value in fixed"):

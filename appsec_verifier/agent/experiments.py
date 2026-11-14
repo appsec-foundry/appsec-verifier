@@ -1,5 +1,5 @@
 """Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
-VER-053, VER-055, VER-057)."""
+VER-049, VER-053, VER-055, VER-057, VER-061)."""
 
 from __future__ import annotations
 
@@ -919,11 +919,8 @@ def callback_injection_check(ctx, history, cited):
 
 
 def auth_artifact_check(ctx, history, cited):
-    """VER-049: a login-bypass injection is confirmed when the true-predicate controls yield an authenticated
-    artifact and the false-predicate controls and the baseline do not. The artifact's presence (not its value,
-    which is withheld in code, agent/tools.py) is computed by the code, so the uniform-status rule does not apply:
-    a 401-to-200 auth flip is the point. The complementary true/false pair rules out a coincidence, so no
-    repetition is needed."""
+    """VER-049: positive artifacts must access the declared protected resource; every baseline and negative
+    control must fail that read. Presence alone is not authenticated access. Values remain withheld."""
     plan, groups, error = experiment_groups(history, cited, getattr(ctx, "accepted_plans", None))
     if error:
         return error
@@ -938,6 +935,26 @@ def auth_artifact_check(ctx, history, cited):
         return "every true-predicate control must yield the authenticated artifact"
     if any(r.get("auth_artifact") for k in absent_groups for _, r in groups[k]):
         return "a false-predicate control or the baseline also authenticated, so the injection is not shown"
+    from .auth_followup import declaration
+
+    check = declaration(ctx, plan["path"])
+    if not check:
+        return "login-bypass proof needs the declared protected follow-up resource"
+    for kind, group in groups.items():
+        for _, result in group:
+            observed = result.get("auth_access") or {}
+            if observed.get("path") != check["path"] or type(observed.get("status")) is not int:
+                return "every control needs its recorded protected-resource follow-up"
+            if not 200 <= observed["status"] < 500:
+                return "a failed follow-up cannot establish the protected-resource contrast"
+            if observed.get("pointer") != check["pointer"] or observed.get("value") != check["value"]:
+                return "follow-up observations must match the operator's declared resource"
+            if kind in present_groups:
+                if (observed.get("matched") is not True or observed.get("artifact_supplied") is not True
+                        or not 200 <= observed["status"] < 300):
+                    return "positive artifacts must access the declared protected resource"
+            elif observed.get("matched") is not False:
+                return "baseline or negative control also reached the protected resource"
     return None
 
 
@@ -1249,7 +1266,13 @@ def signed_in_check(ctx, history, cited, *, negative=False, blocked=False):
 def comparison_ready(ctx, history, steps):
     """Whether the comparison the Verifier just sent meets VER-057, reported to the agent so its next step is the
     verdict. Pure: proof.py re-checks the cited steps."""
-    problem = signed_in_check(ctx, history, steps)
+    _, current = latest_plan(history)
+    if current.get("exposure"):
+        from .access_observation import exposure_check
+
+        problem = exposure_check(ctx, history, steps, current)
+    else:
+        problem = signed_in_check(ctx, history, steps)
     if problem is None:
         from .access_policy import restriction
 
@@ -1273,6 +1296,10 @@ def comparison_ready(ctx, history, steps):
 
 def access_check(ctx, history, cited, *, negative=False, blocked=False):
     _, plan = latest_plan(history)
+    if plan.get("exposure"):
+        from .access_observation import exposure_check
+
+        return exposure_check(ctx, history, cited, plan, negative=negative)
     if plan.get("kind") == "access-control" and plan.get("signed_in"):
         if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
             return "the operator-declared test resource takes precedence"

@@ -162,7 +162,7 @@ class Controller:
         # authorises no route. The other two requests of the comparison pass the checks below like any read.
         plan = self.plan or {}
         if name == "http_request" and args.get("comparison") and plan.get("control_path") == path:
-            if method != "GET" or args.get("role") or not plan.get("signed_in"):
+            if method != "GET" or args.get("role") or not (plan.get("signed_in") or plan.get("exposure")):
                 raise ToolError("the random path of a comparison is read once without credentials (VER-057)")
             return
         route_path = path

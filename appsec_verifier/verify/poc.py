@@ -822,6 +822,11 @@ def difference(ctx, history: list[dict], e: dict, ref: tuple[int, dict], ref_lab
             whose = "the normal answer" if ref_label is None else f"the {ref_label}'s answer"
             text += f", {new} of them not in {whose}" if new else ""
         return start + text + (f"; the proof does not count this difference: {discount}." if discount else ".")
+    response = getattr(ctx, "responses", {}).get(e.get("_step") if step is None else step, {})
+    if response.get("access_observation"):
+        selected = response["access_observation"]
+        return start + f"{status}; declared observation {selected['pointer'] or 'text marker'}: " + (
+            "matched." if selected["matched"] else "not matched.")
     ce, cr = e["response"]["content"], r["response"]["content"]
     in_code = _same_in_code(ctx, e.get("_step") if step is None else step, m)
     if ce.get("_omitted") or cr.get("_omitted"):      # no text to compare: by the digest or a binary body's hash
@@ -1082,6 +1087,8 @@ _OBSERVATIONS = {
     "marker_read": (("path-traversal",), "marker file read", "marker file read", "marker file not read"),
     "callback_hit": (("ssrf", "injection"), "callback listener received the marker", "callback received",
                      "no callback"),
+    "auth_access": (("injection",), "declared protected resource accessed", "protected resource accessed",
+                    "protected resource not accessed"),
     "auth_artifact": (("injection",), "authenticated artifact in the answer", "authenticated artifact",
                       "no authenticated artifact"),
     "engine_error": (("injection",), "engine error", "engine error", "no engine error"),
@@ -1105,7 +1112,7 @@ def _proof_observation(ctx, history: list[dict], n: int, e: dict) -> tuple[str, 
     res = step.get("result") or {}
     key = next((k for k, row in _OBSERVATIONS.items() if k in res and cls in row[0]), None)
     if key is not None:
-        yes = res[key] is True
+        yes = res[key].get("matched") is True if key == "auth_access" else res[key] is True
         return key, yes, _engine_error(e) if key == "engine_error" and yes else None
     _, plan = latest_plan(history)
     if cls == "injection" and plan.get("kind") == "boolean" and not plan.get("pointer"):
@@ -1576,14 +1583,13 @@ def _tried(history: list[dict], steps: list[dict]) -> list[tuple[int, dict]]:
     return out
 
 
-WITHHELD_BODY = ("[body withheld from the model; it is kept only in the owner-only proof of concept "
-                  "(VER-049, VER-053)]")
+WITHHELD_BODY = "[body withheld from the model (VER-049, VER-053)]"
 
 
 def withheld_steps(history: list[dict]) -> set[int]:
     """The steps whose answer body no model may see (VER-016, VER-049, VER-053): an engine-error probe, whose error
     text stays owner-only, and a login-bypass control, whose authenticated artifact is never shown. The test agent
-    got only the code's observation for them; the image and the report keep the body for the operator."""
+    got only the code's observation for them; authentication bodies stay withheld for the operator too."""
     return {n for n, h in enumerate(history, 1) if isinstance(h.get("result"), dict)
             and ("engine_error" in h["result"] or "auth_artifact" in h["result"])}
 
@@ -1688,6 +1694,11 @@ def verifier_rows(ctx, history: list[dict], steps: list[dict], numbers: set[int]
 
 
 def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None, presentation=None):
+    if getattr(getattr(ctx, "plan", None), "cls", None) == "session":
+        from ..agent.proof import retain_login_observations
+
+        retain_login_observations(ctx, history, result)
+        _login_cookie_screenshot(ctx, result)
     for number, step in enumerate(history, 1):
         if step.get("tool") == "browser_check":
             paths = {e.get("path") for e in step.get("result", {}).get("evidence", [])
@@ -1767,3 +1778,29 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
                       "for API-only findings the recorded HTTP exchanges are the primary evidence")
         result.observations.append("Application screenshot unavailable: " + reason + ".")
     return result
+
+
+def _login_cookie_screenshot(ctx, result):
+    """Render recorded cookie facts as a labelled observation table, never as reconstructed HTTP."""
+    observations = (result.proof or {}).get("cookie_observations", [])
+    browser = getattr(ctx, "browser", None)
+    if not observations or browser is None or "session" not in getattr(browser, "screenshots", ()):
+        return
+    lines = [f"{ctx.plan.id}: {result.verdict}", "Recorded login-cookie observations; cookie values omitted."]
+    for item in observations:
+        for cookie in item["session_cookies"]:
+            lines.append(f"{item['method']} {item['origin']}{item['path']} | HTTP {item['status']} | "
+                         f"{item['role']} | {cookie['name']}: Secure={cookie['secure']}, "
+                         f"HttpOnly={cookie['httponly']}, SameSite={cookie['samesite'] or 'missing'}, "
+                         f"active={cookie['active']}")
+    text = "\n".join(lines)
+    text = ctx.sessions.redact(text) if ctx.sessions is not None else text
+    page = ('<!doctype html><meta charset="utf-8"><style>body{font:16px sans-serif;padding:24px}'
+            'pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}</style><pre>'
+            + html.escape(text) + '</pre>')
+    ctx.evidence_panels.append({"text": text[:8000], "body_font_px": 16})
+    try:
+        result.evidence.extend({**shot, "composed_by": "verifier"} for shot in browser.render_exchanges(
+            html=page, name=evidence_name(ctx.plan) + "-cookies", marked=False))
+    except Exception:  # noqa: BLE001 - the recorded facts remain evidence without an image
+        result.observations.append("Cookie observation screenshot unavailable; recorded attributes are retained.")

@@ -224,6 +224,29 @@ properties:
         input_name: {type: string, minLength: 1, maxLength: 128}
         semantics: {const: literal}
 
+  auth_checks:
+    type: array
+    maxItems: 50
+    items:
+      type: object
+      additionalProperties: false
+      required: [finding_id, login_path, path, pointer, value]
+      properties:
+        finding_id: {type: string, minLength: 1, maxLength: 80}
+        login_path: {type: string, pattern: '^/[^?#]*$', maxLength: 2000}
+        path: {type: string, pattern: '^/[^?#]*$', maxLength: 2000}
+        pointer: {type: string, pattern: '^/|^$', maxLength: 256}
+        value: {type: string, minLength: 3, maxLength: 200}
+        artifact_kind: {enum: [bearer, cookie], default: bearer}
+        cookie_name: {type: string, pattern: '^[A-Za-z0-9_-]{1,128}$'}
+      allOf:
+        - if:
+            required: [artifact_kind]
+            properties:
+              artifact_kind: {const: cookie}
+          then:
+            required: [cookie_name]
+
   session_checks:
     type: array
     maxItems: 50
@@ -237,6 +260,14 @@ properties:
         path: {type: string, minLength: 1, maxLength: 2000}
         cookie_name: {type: string, minLength: 1, maxLength: 128}
         role: {type: string, minLength: 1, maxLength: 80}
+        source: {enum: [read, login], default: read}
+      allOf:
+        - if:
+            required: [source]
+            properties:
+              source: {const: login}
+          then:
+            required: [role]
 
   access_policies:
     type: array
@@ -264,6 +295,13 @@ properties:
           items: {type: string, minLength: 1, maxLength: 80}
         restriction: {type: string, minLength: 10, maxLength: 1000}
         source: {type: string, minLength: 3, maxLength: 1000}
+        observation:
+          type: object
+          additionalProperties: false
+          required: [pointer, value]
+          properties:
+            pointer: {type: string, pattern: '^/|^$', maxLength: 256}
+            value: {type: [string, number, boolean], minLength: 3, maxLength: 200}
 
   test_resources:
     type: array
@@ -298,6 +336,23 @@ properties:
           items: {type: string, minLength: 1}
         pointer: {type: string, pattern: '^/|^$', maxLength: 256, description: 'JSON Pointer, or empty for a literal text marker.'}
         value: {type: [string, number, boolean], minLength: 3, maxLength: 200}
+        anonymous_only: {type: boolean, default: false}
+        restriction: {type: string, minLength: 10, maxLength: 1000}
+        source: {type: string, minLength: 3, maxLength: 1000}
+      allOf:
+        - if:
+            required: [anonymous_only]
+            properties:
+              anonymous_only: {const: true}
+          then:
+            required: [restriction, source]
+            properties:
+              method: {const: GET}
+              path: {type: string, pattern: '^/[^?#]*$', maxLength: 2000}
+              denied_roles: {const: [anonymous]}
+              value: {type: string, minLength: 3, maxLength: 200}
+              json: false
+              form: false
 
   archive_checks:
     type: array

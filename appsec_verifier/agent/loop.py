@@ -37,7 +37,7 @@ from ..limits import LimitExceeded
 from ..verify import poc
 from ..verify.probes import ProbeContext, ProbeResult
 from .controller import Controller
-from .proof import check_proof
+from .proof import check_proof, retain_login_observations
 from .steps import check_action
 from .tools import AgentTools, ToolError
 
@@ -58,7 +58,7 @@ def _control_failed(tools, result: dict) -> bool:
     class."""
     status = result.get("status", 0)
     experiment = getattr(tools, "_experiment", None) or {}
-    if experiment.get("error_probe") or experiment.get("signed_in"):
+    if experiment.get("error_probe") or experiment.get("signed_in") or experiment.get("exposure"):
         # A comparison without credentials (VER-057) expects a refusal or a 404 for some of its requests.
         return bool(result.get("error"))
     if result.get("error") or not isinstance(status, int) or status >= 500:
@@ -152,6 +152,8 @@ class AgentProbe:
     def run(self, ctx: ProbeContext) -> ProbeResult:
         controller = Controller(ctx)
         result = self._run(ctx, controller)
+        if self.cls == "session":
+            retain_login_observations(ctx, getattr(ctx, "agent_history", []), result)
         # A model may correctly report inconclusive immediately after the comparison feedback. Still retain
         # the code-checked observed access separately from the missing restriction (VER-010/057).
         if self.cls == "access-control" and result.verdict == "inconclusive" and not result.proof:
@@ -329,7 +331,7 @@ class AgentProbe:
 
             view = plan_view(history, sent_steps)
             start, plan = latest_plan(view)
-            comparison = plan.get("signed_in")
+            comparison = plan.get("signed_in") or plan.get("exposure")
             feedback = (comparison_ready if comparison else injection_ready)(ctx, view, sent_steps)
             feedback["plan_step"] = start
             _log(ctx, len(history) + 1, tool="experiment", result=feedback)

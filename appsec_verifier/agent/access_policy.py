@@ -20,7 +20,8 @@ def restriction(ctx, history, cited):
     resource = next((r for r in resources if r.get("finding_id") == ctx.plan.id
                      and r.get("id") == plan.get("resource")), None)
     if resource is not None:
-        return {"source": "scope.test_resources:" + resource["id"],
+        return {"source": resource.get("source", "scope.test_resources:" + resource["id"]),
+                "restriction": resource.get("restriction", "Operator-declared test resource access"),
                 "allowed_roles": resource["allowed_roles"], "denied_roles": resource["denied_roles"],
                 "path": resource["path"], "method": resource.get("method", "GET")}
     operation = plan.get("change") or plan
@@ -50,7 +51,8 @@ def restriction(ctx, history, cited):
                 seen.add(args.get("role") or "anonymous")
         if seen & denied & tested_denied:
             return {"method": policy.get("method", "GET"),
-                    **{k: policy[k] for k in ("source", "restriction", "path", "allowed_roles", "denied_roles")}}
+                    **{k: policy[k] for k in ("source", "restriction", "path", "allowed_roles", "denied_roles")},
+                    **({"observation": policy["observation"]} if policy.get("observation") else {})}
     return None
 
 

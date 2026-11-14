@@ -1,5 +1,5 @@
 """Obtain and cache a session per test identity, and return the headers to
-attach to target requests (VER-016, VER-028, VER-040).
+attach to target requests (VER-016, VER-028, VER-040, VER-062).
 
 A session is the set of headers an identity attaches to its own origin
 (`target_origin`, else the target base URL), with an optional expiry. It comes
@@ -21,7 +21,9 @@ device-code flows need a person: they run only while `ui` is set and before
 a session that cannot be renewed makes its identity unavailable, without a
 prompt (VER-028).
 
-A session is obtained once per role and reused. One whose expiry is known is
+A session is obtained once per role and reused. A declared login-cookie check may repeat a configured form
+login once per role, retaining only the issuing requests and value-free cookie observations (VER-062).
+One whose expiry is known is
 renewed shortly before it: with the refresh token where the flow issued one,
 else by logging in again where the method can. A static session that has
 expired is not used. A login the target refused, or a renewal that failed, is
@@ -181,6 +183,9 @@ class SessionManager:
         self._issued_by: dict[str, str] = {}   # issued value -> the role whose session it is, for its placeholder
         self._refused: dict[str, str] = {}     # role -> why its session could not be obtained
         self._renewed: set[str] = set()        # roles renewed after a 401 and not accepted since
+        self._login_cookie_observations: list[dict] = []
+        self._observing_role = None
+        self._cookie_repeated: set[str] = set()
         self._no_renewal: set[str] = set()     # roles whose renewal was answered 401 again
 
     # ── public interface ─────────────────────────────────────────────────────
@@ -226,7 +231,7 @@ class SessionManager:
             attempt = dict(auth, username_field=username_field, password_field=password_field)
             tried.append(f"{username_field}/{password_field}")
             try:
-                session = self._form_login(attempt)
+                session = self._acquire(role, "form", attempt)
             except AuthError as exc:
                 cause = f": {exc}"
                 continue
@@ -390,7 +395,42 @@ class SessionManager:
             raise AuthError(f"{method}: the session has expired; supply a fresh one")
         return session
 
+    def _observe_cookies(self, response, method, url):
+        from ..agent.session_proof import cookie_observations
+
+        cookies = cookie_observations(response, self)
+        if self._observing_role and cookies and len(self._login_cookie_observations) < 100:
+            self._login_cookie_observations.append({
+                "observation_id": len(self._login_cookie_observations) + 1,
+                "role": self._observing_role, "method": method,
+                "path": urlsplit(url).path or "/",
+                "origin": urlsplit(url)._replace(path="", query="", fragment="").geturl(),
+                "status": response.status_code, "session_cookies": cookies})
+
+    def observe_login(self, role):
+        """Repeat a configured noninteractive login once, retaining only cookie facts (VER-062)."""
+        ident = self._by_role.get(role, {})
+        if ident.get("method") != "form" or role in self._refused:
+            raise AuthError("cookie observation needs an available configured form login")
+        self.headers_for(role)
+        if role not in self._cookie_repeated:
+            self._cookie_repeated.add(role)
+            session = self._acquire(role, "form", ident["auth"])
+            self._keep(role, session)
+        return [dict(o) for o in self._login_cookie_observations if o["role"] == role]
+
     def _acquire(self, role: str, method: str, auth: dict) -> Session:
+        previous, start = self._observing_role, len(self._login_cookie_observations)
+        self._observing_role = role
+        try:
+            return self._acquire_impl(role, method, auth)
+        except Exception:
+            del self._login_cookie_observations[start:]
+            raise
+        finally:
+            self._observing_role = previous
+
+    def _acquire_impl(self, role: str, method: str, auth: dict) -> Session:
         if method == "none":
             return Session({}, renewable=False)
         if method == "bearer":
@@ -474,6 +514,7 @@ class SessionManager:
         if form is None:
             resp = self._http.request("POST", login_url, {"Accept": "application/json"},
                                       purpose="auth", json={user[0]: user[1], password[0]: password[1]})
+            self._observe_cookies(resp, "POST", login_url)
             token = _extract_token(resp)
             if not token:
                 raise AuthError(f"form login did not return a recognisable token (HTTP {resp.status_code})")
@@ -532,6 +573,7 @@ class SessionManager:
             if cookies:
                 headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in cookies.items())
             resp = self._http.request(method, url, headers, purpose="auth", follow_redirects=False, **body)
+            self._observe_cookies(resp, method, url)
             html_login.keep_cookies(resp, cookies, self._clock())
             found = getattr(resp, "headers", None) or {}
             location = found.get("Location") or found.get("location")

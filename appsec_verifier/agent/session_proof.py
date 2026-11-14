@@ -1,4 +1,4 @@
-"""Value-free session-cookie observations and class-specific proof (VER-013/016/035)."""
+"""Value-free session-cookie observations and class-specific proof (VER-013/016/035/062)."""
 
 from __future__ import annotations
 
@@ -62,6 +62,26 @@ def session_check(ctx, history, cited, *, negative=False):
     attribute = {"CWE-614": "secure", "CWE-1004": "httponly", "CWE-1275": "samesite"}.get(ctx.plan.cwe)
     if plan.get("kind") != "session" or not resource or not attribute:
         return "declare a session plan for an operator-identified session cookie"
+    if resource.get("source") == "login":
+        observations = []
+        for n in cited or []:
+            h = history[n - 1] if type(n) is int and 0 < n <= len(history) else {}
+            if h.get("tool") != "plan_test" or not h.get("result", {}).get("accepted"):
+                return "cite the accepted session plan with recorded login observations"
+            observations.extend(h["result"].get("login_observations", []))
+        unique = {o["observation_id"]: o for o in observations}
+        matching = [o for o in unique.values() if o.get("path") == resource["path"]
+                    and o.get("role") == resource["role"] and 200 <= o.get("status", 0) < 400]
+        if len(matching) < 2:
+            return "repeat the configured login cookie observation; fewer than two responses issued the cookie"
+        for o in matching:
+            cookies = [c for c in o["session_cookies"] if c["name"] == resource["cookie_name"] and c["active"]]
+            if len(cookies) != 1:
+                return "the declared active session cookie is absent or ambiguous"
+            protected = cookies[0][attribute] in ("lax", "strict") if attribute == "samesite" else cookies[0][attribute]
+            if protected != negative:
+                return "login cookie observations conflict with the proposed attribute verdict"
+        return None
     if not isinstance(cited, list) or len(set(cited)) < 2:
         return "repeat the session observation using distinct requests"
     for step in cited:
