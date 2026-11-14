@@ -199,7 +199,7 @@ def test_the_status_line_stays_away_while_the_question_waits_and_the_new_limit_s
     plain = lambda: re.sub(r"\x1b\[[0-9;]*m", "", out.getvalue())     # noqa: E731
     assert "$10.40 of $25.00" in plain()
     progress.finished(plan, ProbeResult(verdict="inconclusive"))
-    assert "run $10.40 of $25.00" in plain().splitlines()[-1]
+    assert "run $10.40 of $25.00" in next(line for line in reversed(plain().splitlines()) if "inconclusive" in line)
     progress.close()
 
 

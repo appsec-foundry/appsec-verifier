@@ -23,11 +23,12 @@ from test_text_observation import (
 )
 
 from appsec_verifier.agent.experiments import latest_plan, plan_view
-from appsec_verifier.agent.loop import AgentProbe
+from appsec_verifier.agent.loop import EXPERIMENT_NO_PROOF, AgentProbe
 from appsec_verifier.agent.steps import parse_step, step_schema
 from appsec_verifier.agent.tools import AgentTools, ToolError
 from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.verify import poc
+from appsec_verifier.verify.report import why_not_confirmed
 
 
 def revision(plan_step=1, **observation):
@@ -71,6 +72,7 @@ def test_correcting_the_observation_reuses_all_controls_and_preserves_the_origin
     result = AgentProbe("injection", lambda: script).run(ctx)
     assert result.verdict == "confirmed" and result.proof["checked"] is True
     assert len(sent) == 10 and result.proof["steps"] == list(range(2, 12))
+    assert not any(o.startswith(EXPERIMENT_NO_PROOF) for o in result.observations)   # a confirmation needs no reason
     assert result.proof.get("observation_text") == correction.get("text")
     assert result.proof["observation_pointer"] == correction.get("pointer")
     original = script.history[0]["result"]["experiment"]
@@ -245,6 +247,13 @@ def test_an_old_success_does_not_override_a_failing_corrected_observation(tmp_pa
     assert result.verdict == "inconclusive"
     experiments = [h["result"] for h in script.history if h["tool"] == "experiment"]
     assert experiments[0]["proof"] == "holds" and experiments[1]["proof"] == "missing"
+    # VER-024: the experiment without proof, not the one that held, is recorded in the code's words as the reason.
+    assert [o for o in result.observations if o.startswith(EXPERIMENT_NO_PROOF)] == [
+        EXPERIMENT_NO_PROOF + experiments[1]["reason"]]
+    why = why_not_confirmed({"verdict": result.verdict, "rationale": result.rationale,
+                             "observations": result.observations, "proof": result.proof})
+    assert why == ("No proof: the agent's confirmation failed the proof check: the true and false conditions got the "
+                   "same answer, so the answer does not show the injected condition.")
 
 
 @pytest.mark.parametrize("extra", [

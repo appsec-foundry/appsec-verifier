@@ -1,5 +1,5 @@
 """The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-015,
-VER-016, VER-017, VER-039, VER-042).
+VER-016, VER-017, VER-024, VER-039, VER-042).
 
 Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
@@ -20,7 +20,8 @@ and a ``proof`` entry says whether the controls give the proof. A ``proof`` entr
 proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
 entry says so, then a ``proof`` entry says whether the proof was checked (VER-009 to VER-013) or why
 there is none. The evidence reviewer of VER-042 gets ``agent`` entries for its start and end as well.
-The ``done`` entry gives the verdict, marked and highlighted, and the first sentence of the agent's
+The ``done`` entry gives the verdict, marked and highlighted, and for an inconclusive or untested finding
+why, led by the kind of reason as the report gives it, otherwise the first sentence of the agent's
 rationale; once a finding's last variant is done, a ``rating`` entry follows when the rating after
 verification differs from the Analyzer's (VER-039). The evidence reviewer's corrections and issues show
 their first sentence as well, as the report does. When the run shows costs (API billing, or
@@ -62,7 +63,7 @@ from .agent.experiments import agent_controls
 from .preflight import printable
 from .term_style import Style, columns
 from .verify.probes import proof_shown
-from .verify.report import _VERDICT_LABEL, _first_sentence
+from .verify.report import _VERDICT_LABEL, _first_sentence, why_not_confirmed
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
@@ -693,9 +694,16 @@ class RunProgress:
             parts.append(duration(max(0.0, self._clock() - self._finding_at - self._review_time)))
             if self._spent is not None:
                 parts.append([("run" + _NBSP,), *self._spend()])
-            # Why, in its first sentence, unless a refused step, a limit or the proof entry above already said so.
-            why = (_clip(_first_sentence(self._text(result.rationale)), 160)
-                   if result.rationale and not self._noted and not self._explained else "")
+            # An inconclusive or untested finding always says why, as the report does (VER-024); otherwise the
+            # first sentence of the rationale, unless a refused step, a limit or the proof entry already said so.
+            variants = (getattr(plan, "verification_context", None) or {}).get("variants") or []
+            why = why_not_confirmed({"verdict": result.verdict, "rationale": result.rationale,
+                                     "limits_hit": result.limits_hit, "proof": result.proof,
+                                     "observations": result.observations, "class": plan.cls, "poc": result.poc},
+                                    variants[0] if getattr(plan, "variant_id", None) and len(variants) == 1 else None)
+            why = _clip(self._text(why), 320) if why else (
+                _clip(_first_sentence(self._text(result.rationale)), 160)
+                if result.rationale and not self._noted and not self._explained else "")
             # A finding is done once its last variant is; a plan begin() did not see counts on its own.
             self._finished[plan.id] += 1
             if self._finished[plan.id] >= self._variants.get(plan.id, 1):

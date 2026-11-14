@@ -448,12 +448,90 @@ def test_an_unchecked_or_unconfirmed_result_shows_nothing_and_a_one_account_test
     assert report_module._shown({**doc, "proof": {**doc["proof"], "checked": False}}) is None
     tested = {**doc, "verdict": "inconclusive", "proof": None}
     assert report_module._shown(tested) is None
-    assert report_module._why_not(tested) == "only u-a sent requests; the comparison with another account is missing"
+    assert report_module.why_not_confirmed(tested) == (
+        "No proof: only u-a sent requests; the comparison with another account is missing.")
 
 
-@pytest.mark.parametrize("rationale, kind", [("stopped by limit: request cap reached", "requests"),
-                                             ("stopped: request cap reached", "stagnation")])
-def test_a_stopped_finding_says_stopped_once_in_the_report(rationale, kind):
-    """A budget's stop and a test agent that made no progress (limits.LimitExceeded.rationale) read alike."""
+@pytest.mark.parametrize("rationale, kind, said", [
+    ("stopped by limit: request cap reached", "requests",
+     "Limit reached: the run's requests to the target; raise them with --max-requests."),
+    ("stopped: request cap reached", "stagnation", "Agent stuck: it made no progress and was stopped. A new run may "
+                                                   "get further."),
+])
+def test_a_stopped_finding_says_whether_a_limit_or_a_stuck_test_agent_stopped_it(rationale, kind, said):
+    """A budget's stop names the option that raises it; a test agent that made no progress is not a limit."""
     stopped = {"verdict": "inconclusive", "rationale": rationale, "limits_hit": kind}
-    assert report_module._why_not(stopped) == "stopped: request cap reached"
+    assert report_module.why_not_confirmed(stopped) == said
+
+
+_STUCK = "stopped: repeated tool failures without a usable observation; the last: "
+_HEADER = {"id": "variant-001", "request": {"method": "GET", "path": "/vulnerabilities/bac/", "inputs": [
+    {"location": "header", "name": "X-Forwarded-For"}, {"location": "query", "name": "user_id"}]}}
+
+
+@pytest.mark.parametrize("result, variant, said", [
+    # The cases of a DVWA run, each said by its kind first: what the operator can change, or that they cannot.
+    ({"limits_hit": "stagnation", "rationale": _STUCK + "plan_test (refused): fixed gives the request's other inputs "
+      "to controls the Verifier generates; controls you choose carry none and support only a negative verdict"},
+     None, "Agent stuck: the Verifier refused its steps repeatedly, the last a test plan with values it chose itself, "
+           "which cannot confirm. A new run may get further."),
+    ({"limits_hit": "stagnation", "rationale": _STUCK + "http_request (refused): request must carry the accepted "
+      "experiment's sink value; send 'target' in json with one of '127.0.0.1'"},
+     None, "Agent stuck: the Verifier refused its steps repeatedly, the last a request that did not match its "
+           "accepted test plan. A new run may get further."),
+    ({"limits_hit": "stagnation", "rationale": _STUCK + "plan_test (refused): request has no matching route in this "
+      "finding or its operator-declared resources; allowed: POST /setup.php"},
+     None, "Agent stuck: the Verifier refused its steps repeatedly, the last a request this finding may not send. "
+           "A new run may get further."),
+    ({"limits_hit": "stagnation", "rationale": _STUCK + "derive_request (schema): something new"},
+     None, "Agent stuck: the Verifier refused its steps repeatedly, the last a step the Verifier refused. A new run "
+           "may get further."),
+    ({"rationale": "Variant-001 requires injecting a payload via the X-Forwarded-For HTTP header."},
+     _HEADER, "Not possible: the input is the X-Forwarded-For header, and the Verifier sends no custom headers."),
+    ({"proof": {"checked": False, "missing": ["observed access has no independently established access "
+                                              "restriction"]}},
+     None, "Needs an option: access was observed, but no declared rule says it should be refused; add "
+           "access_policies to the scope."),
+    ({"limits_hit": "time", "rationale": "stopped by limit: execution deadline reached"},
+     None, "Limit reached: the run's time limit; raise it with --max-duration."),
+    ({"verdict": "not-attempted", "rationale": "not tested: the run's time limit was reached by an earlier finding"},
+     None, "Limit reached before this finding: the run's time limit; raise it with --max-duration."),
+    ({"verdict": "not-attempted", "rationale": "not tested: no supported proof method for CWE-915"},
+     None, "Not possible: the Verifier has no test method for CWE-915."),
+    ({"verdict": "not-attempted", "rationale": "not tested: no marker_file in the scope"},
+     None, "Needs an option: a marker file on the target (marker_file in a scope file)."),
+    ({"verdict": "not-attempted", "limits_hit": "safe-mode",
+      "rationale": "not tested: safe mode; the finding needs POST /x, which this run does not send; run with "
+                   "--allow-intrusive"},
+     None, "Needs an option: --allow-intrusive (its test needs POST /x)."),
+    ({"observations": ["Runtime prerequisite security level is medium: not-observed (recorded steps [3])."],
+      "rationale": "Variant-002 requires a session at security level medium."},
+     None, "Prerequisite not met: the target did not show that security level is medium."),
+    ({"observations": ["Experiment without proof: a syntax-breaking metacharacter raised an engine error but its "
+                       "balanced counterpart did too, so the break is not what caused it",
+                       "Experiment without proof: the true and false predicates did not separate the observation "
+                       "into two classes"],
+      "rationale": "Source confirms first_name is concatenated unescaped. However, no runtime split was observed."},
+     None, "No proof: the test ran, but the true and false conditions got the same answer, so the answer does not "
+           "show the injected condition."),
+    ({"rationale": "probe failed: KeyError"},
+     None, "Verifier error: the test stopped on an internal error (KeyError); failed-findings.json in the run "
+           "directory has the details."),
+    ({"rationale": "The session stayed at level low. Changing it needs a POST."},
+     None, "Agent's assessment: The session stayed at level low."),
+    ({"verdict": "confirmed", "rationale": "it ran"}, None, None),
+])
+def test_why_a_finding_is_not_confirmed_starts_with_the_kind_of_reason(result, variant, said):
+    """VER-024: the reason the console, the results and the report give, from what the code recorded."""
+    r = {"verdict": "inconclusive", "finding_ref": {"id": "T-1", "variant": "variant-001"}, **result}
+    assert report_module.why_not_confirmed(r, report_module.variant_of(r, [variant] if variant else [])) == said
+
+
+def test_the_report_finds_the_tested_variant_in_the_assessment_for_its_reason():
+    doc = {"meta": {}, "results": [{"result_id": "VF-001", "verdict": "inconclusive", "class": "injection",
+                                    "finding_ref": {"id": "T-019", "variant": "variant-001", "title": "Stored XSS"},
+                                    "rationale": "needs a header"}]}
+    assessment = {"threats": [{"id": "T-019", "verification_context": {"variants": [_HEADER]}}]}
+    text = report_module.to_markdown(doc, assessment)
+    assert ("**Why not confirmed:** Not possible: the input is the X-Forwarded-For header, and the Verifier sends no "
+            "custom headers.") in text

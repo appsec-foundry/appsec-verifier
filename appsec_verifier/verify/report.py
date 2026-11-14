@@ -212,6 +212,8 @@ _CLASS = {"xss": "XSS", "ssrf": "SSRF", "access-control": "access control", "ope
 _MAX_STEP_ROWS = 15
 # A verdict the proof check lowered names its reason before the agent's claim (agent/proof.py, _downgrade).
 _MODEL_CALL_FAILED = "Model call failed: "     # agent/loop.py MODEL_CALL_FAILED: the code's own observation (VER-024)
+_EXPERIMENT_NO_PROOF = "Experiment without proof: "   # agent/loop.py EXPERIMENT_NO_PROOF, likewise the code's own
+_PREREQUISITE_MISSING = re.compile(r"Runtime prerequisite (.+): not-observed \(recorded steps")   # agent/loop.py
 _LOWERED = re.compile(r"indicative, not (?:proven|executed): (.*?)\. Agent's claim:", re.S)
 # A recorded step (verify/poc.py, _line): tool, method, URL or opened page, identity and answer.
 _STEP = re.compile(r"(\S+) (\S+) (.+) as (\S+) → (.*)", re.S)
@@ -437,30 +439,152 @@ def _not_tested(rationale) -> str:
     return why
 
 
-def _why_not(r: dict) -> str | None:
-    """Why a tested finding is not confirmed, as the code knows it: what the proof check missed, the limit
-    that stopped the test, why the check lowered the agent's verdict, a failed model call (VER-024), or which
-    comparison is missing."""
-    if r["verdict"] not in ("inconclusive", "not-attempted"):
+# What a limit that stopped a finding was, and how to raise it (limits.LimitExceeded kinds).
+_LIMITS = {
+    "time": "the run's time limit; raise it with --max-duration",
+    "cost": "the run's cost limit; raise it with --cost-limit",
+    "finding-cost": "this finding's share of the cost limit; raise --cost-limit",
+    "attempts": "the test agent's steps for this finding; raise them with --max-attempts",
+    "calls": "the run's model calls; raise them with --max-calls",
+    "requests": "the run's requests to the target; raise them with --max-requests",
+    "window": "the end of the scope's test window",
+}
+# The last step the Verifier refused before it stopped a stuck test agent (agent/controller.py, agent/tools.py),
+# said as what the agent tried; the first pattern found in the refusal applies.
+_REFUSED = (
+    (r"fixed gives the request's other inputs|the accepted plan is not a challenge",
+     "a test plan with values it chose itself, which cannot confirm"),
+    (r"request must carry the accepted experiment's sink value|request does not match the accepted test plan",
+     "a request that did not match its accepted test plan"),
+    (r"a write must carry", "a write without the Verifier's test marker"),
+    (r"disabled in safe/read-only mode|need intrusive mode|needs --allow-intrusive", "a write this run does not allow"),
+    (r"exposure checks use only", "an exposure check, which needs a declared test resource"),
+    (r"no matching route|the finding's declared variant inputs|lack recorded evidence|not the finding's evidence"
+     r"|a GET the finding does not name", "a request this finding may not send"),
+    (r"no recorded response|context field is unavailable|JSON pointer cannot be read",
+     "a look-up of something that was not recorded"),
+    (r"invalid \S+ arguments|declare the observation|needs a baseline", "an incomplete test plan or step"),
+    (r"navigation failed or was blocked", "a page the proof browser could not open"),
+)
+# An experiment's reason in plain words where the check's own wording is technical (agent/experiments.py).
+_EXPERIMENT = (
+    (r"the true and false predicates did not separate the observation.*",
+     "the true and false conditions got the same answer, so the answer does not show the injected condition"),
+    (r"a syntax-breaking metacharacter raised an engine error but its balanced counterpart did too.*",
+     "the balanced control raised the same error as the syntax break, so the break did not cause it"),
+    (r"no syntax-breaking metacharacter raised a backend engine error.*", "no syntax break raised a database error"),
+)
+
+
+def _plain(said: str) -> str:
+    """An experiment's or proof check's reason in plain words where `_EXPERIMENT` has them."""
+    said = said.rstrip(".")
+    return next((plain for pattern, plain in _EXPERIMENT if re.fullmatch(pattern, said)), said)
+
+
+def _needed(rationale) -> str:
+    """A reason of `_not_tested` as the kind of reason and what it names: what the Verifier lacks is not
+    possible, anything else is an option the operator can provide."""
+    said = _not_tested(rationale)
+    lacks = re.fullmatch(r"needs a capability the Verifier lacks: (.+)", said)
+    if lacks:
+        return f"Not possible: the Verifier lacks a capability it needs: {lacks.group(1)}"
+    if method := re.fullmatch(r"no test method for (.+)", said):
+        return f"Not possible: the Verifier has no test method for {method.group(1)}"
+    needs = re.fullmatch(r"needs (.+?): (.+)", said)
+    return f"Needs an option: {needs.group(1)} ({needs.group(2)})" if needs else f"Not tested: {said}"
+
+
+def _stuck(rationale: str) -> str:
+    """What a test agent the Verifier stopped for making no progress last tried (limits.LimitExceeded)."""
+    if "experiment allowance is exhausted" in rationale:
+        return "it used the finding's three test plans without a proof"
+    if "repetition allowance exhausted" in rationale:
+        return "it kept repeating a step it had already taken"
+    last = rationale.partition("the last: ")[2]
+    if not last:
+        return ("the Verifier refused its steps repeatedly" if "repeated tool failures" in rationale
+                else "it made no progress and was stopped")
+    tool, _, refusal = last.partition(" ")
+    tool = tool.rstrip(":")
+    tried ={"plan_test": "a test plan", "http_request": "a request", "browser_check": "a browser check"}
+    what = next((said for pattern, said in _REFUSED if re.search(pattern, refusal)), None) or (
+        tried.get(tool, "a step") + " the Verifier refused")
+    return f"the Verifier refused its steps repeatedly, the last {what}"
+
+
+def variant_of(r: dict, variants) -> dict | None:
+    """The declared variant a result tested, from its finding's `verification_context` variants."""
+    wanted = (r.get("finding_ref") or {}).get("variant")
+    return next((v for v in variants or [] if isinstance(v, dict) and wanted and v.get("id") == wanted), None)
+
+
+def _declared_variant(r: dict, threats: dict) -> dict | None:
+    threat = threats.get((r.get("finding_ref") or {}).get("id")) or {}
+    return variant_of(r, (threat.get("verification_context") or {}).get("variants"))
+
+
+def why_not_confirmed(r: dict, variant: dict | None = None) -> str | None:
+    """Why a finding is inconclusive or not tested, for the operator (VER-024): first the kind of reason, then
+    what it was. The kinds: an option or scope entry is missing, a limit was reached, the Verifier cannot do it
+    or failed itself, the test agent got stuck, a model call failed, the test ran without proof, a prerequisite
+    was not met. Each
+    comes from what the code recorded; only when none applies, the test agent's own first sentence, marked as
+    its assessment. `variant` is the declared variant the result tested, where known."""
+    verdict = r.get("verdict")
+    if verdict not in ("inconclusive", "not-attempted"):
         return None
-    proof = r.get("proof") or {}
-    if proof.get("missing"):
-        return "; ".join(str(m) for m in proof["missing"])
-    if r.get("limits_hit") == "safe-mode":         # a write the run refused during the test (VER-052)
-        return _not_tested(r.get("rationale"))
-    if r.get("limits_hit"):
-        stopped = re.sub(r"^stopped(?: by limit)?: ", "", str(r.get("rationale") or ""))
-        return f"stopped: {stopped}" if stopped else f"stopped by the {r['limits_hit']} limit"
-    lowered = _LOWERED.match(r.get("rationale") or "")
+    limit, rationale = r.get("limits_hit"), " ".join(str(r.get("rationale") or "").split())
+    if limit == "safe-mode":                         # a write the run refused during the test (VER-052)
+        return _needed(rationale) + "."
+    if verdict == "not-attempted":
+        why = re.sub(r"^not tested: ", "", rationale)
+        if m := re.fullmatch(r"the run's (\S+) limit was reached by an earlier finding", why):
+            reached = _LIMITS.get(m.group(1)) or "the run's " + m.group(1) + " limit"
+            return f"Limit reached before this finding: {reached}."
+        if why == "the finding's cost limit was reached by an earlier variant":
+            return f"Limit reached: {_LIMITS['finding-cost']}; an earlier variant spent it."
+        if why == "the run was interrupted":
+            return "Interrupted: the run was stopped before this finding."
+        if why.startswith("another variant"):
+            return f"Not needed: {why.rstrip('.')}."
+        return _needed(rationale) + "."
+    if crashed := re.fullmatch(r"probe failed: (\S+)", rationale):     # verify/runner.py: the test itself failed
+        return (f"Verifier error: the test stopped on an internal error ({crashed.group(1)}); failed-findings.json "
+                "in the run directory has the details.")
+    header = next((i.get("name") for i in ((variant or {}).get("request") or {}).get("inputs") or []
+                   if isinstance(i, dict) and i.get("location") == "header"), None)
+    if header:                                       # the Verifier never sends a model-chosen header (VER-017)
+        return f"Not possible: the input is the {header} header, and the Verifier sends no custom headers."
+    if limit == "stagnation":
+        return f"Agent stuck: {_stuck(rationale)}. A new run may get further."
+    if limit:
+        return f"Limit reached: {_LIMITS.get(limit, f'the {limit} limit')}."
+    observations = [str(o) for o in r.get("observations") or []]
+    failed = next((o for o in observations if o.startswith(_MODEL_CALL_FAILED)), None)
+    if failed:                                       # VER-024: a failed model call, not a test without proof
+        return f"Model call failed: {failed.removeprefix(_MODEL_CALL_FAILED).rstrip('.')}. A new run may get further."
+    experiments = [o.removeprefix(_EXPERIMENT_NO_PROOF) for o in observations if o.startswith(_EXPERIMENT_NO_PROOF)]
+    missing = [str(m) for m in (r.get("proof") or {}).get("missing") or []]
+    if any("access restriction" in m for m in [*missing, *experiments]):
+        return ("Needs an option: access was observed, but no declared rule says it should be refused; add "
+                "access_policies to the scope.")
+    if missing:
+        return f"No proof: the agent's confirmation failed the proof check: {_plain(missing[0])}."
+    lowered = _LOWERED.match(rationale)
     if lowered:
-        return lowered.group(1)
-    failed = next((o for o in r.get("observations") or [] if o.startswith(_MODEL_CALL_FAILED)), None)
-    if failed:                                     # VER-024: a failed model call, not a test without proof
-        return "a model call failed: " + failed.removeprefix(_MODEL_CALL_FAILED)
+        return f"No proof: {lowered.group(1)}."
+    prerequisite = next((m.group(1) for o in observations if (m := _PREREQUISITE_MISSING.match(o))), None)
+    if prerequisite:
+        return f"Prerequisite not met: the target did not show that {prerequisite.rstrip('.')}."
+    if experiments:
+        return f"No proof: the test ran, but {_plain(experiments[-1])}."
     accounts = {s["role"] for s in _steps(r) if s["role"] and s["status"] is not None} - {"anonymous"}
     if r.get("class") == "access-control" and len(accounts) == 1:
-        return f"only {next(iter(accounts))} sent requests; the comparison with another account is missing"
-    return "the test agent ended without a proof the Verifier could check"
+        return f"No proof: only {next(iter(accounts))} sent requests; the comparison with another account is missing."
+    said = _first_sentence(rationale) if rationale else ""
+    return (f"Agent's assessment: {said.rstrip('.')}." if said
+            else "No proof: the test agent ended without a proof the Verifier could check.")
 
 
 def to_markdown(doc: dict, assessment: dict | None = None, *, analyzer_report: str | None = None) -> str:
@@ -487,7 +611,8 @@ def to_markdown(doc: dict, assessment: dict | None = None, *, analyzer_report: s
         for fid, rows in tested:
             for i, r in enumerate(rows):
                 lines += _entry(r, ratings[fid], first=i == 0, details=bool(details[id(r)]),
-                                analyzer_report=analyzer_report, several=len(rows) > 1)
+                                analyzer_report=analyzer_report, several=len(rows) > 1,
+                                variant=_declared_variant(r, threats))
     if any(details.values()):
         lines += ["", "## Appendix: test details", "",
                   "The test agent's plan and own words and the evidence review, per finding. They are not proof: "
@@ -577,7 +702,7 @@ def _summary(tested, untested, threats: dict, ratings: dict) -> list[str]:
             link = f"[{_inline(fid, cell=True)}](#{anchor})" if anchor else _inline(fid, cell=True)
             what = next((s for s in (_shown(r, detail=False) for r in rows) if s), None)
             if what is None:
-                why = next((w for w in (_why_not(r) for r in rows) if w), "")
+                why = next((w for w in (why_not_confirmed(r, _declared_variant(r, threats)) for r in rows) if w), "")
                 what = why[:1].upper() + why[1:] + ("." if why and not why.endswith(".") else "")
             lines.append(f"| {result} | {link} · {_inline(fr.get('title') or fr.get('cwe'), 110, cell=True)} | "
                          f"{_rating_text(ratings[fid], threats.get(fid))} | {_inline(what, 220, cell=True) or '–'} |")
@@ -602,7 +727,7 @@ def _summary(tested, untested, threats: dict, ratings: dict) -> list[str]:
 
 
 def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer_report: str | None = None,
-           several: bool = False) -> list[str]:
+           several: bool = False, variant: dict | None = None) -> list[str]:
     """A tested finding (VER-020): a card with result, rating, weakness and the link to the finding in the
     Analyzer's report; what the checked proof showed or why it is not confirmed; limits and deviations; the
     requests; the proof of concept; the cross-run key and files."""
@@ -640,7 +765,7 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
            "| " + " | ".join(head) + " |", "|" + " --- |" * len(head), "| " + " | ".join(cells) + " |"]
     if shown := _shown(r):
         out += ["", f"**What the test showed:** {shown}"]
-    if why := _why_not(r):
+    if why := why_not_confirmed(r, variant):
         out += ["", f"**Why not confirmed:** {_sentence(why)}"]
     notes = []
     restriction = proof.get("access_restriction")

@@ -80,6 +80,10 @@ class Planner(Protocol):
 
 
 MODEL_CALL_FAILED = "Model call failed: "      # an observation the code adds; the report's reason line reads it
+EXPERIMENT_NO_PROOF = "Experiment without proof: "   # likewise, an experiment whose controls gave no proof
+# Observations only the code adds, which the reason line reads (verify/report.py, why_not_confirmed); a model's
+# observation that starts like one is dropped, so the model cannot supply the reason (VER-024).
+_CODE_OBSERVATIONS = (MODEL_CALL_FAILED, EXPERIMENT_NO_PROOF, "Runtime prerequisite ")
 
 
 def _result_from_verdict(v: dict) -> ProbeResult:
@@ -96,7 +100,7 @@ def _result_from_verdict(v: dict) -> ProbeResult:
         state_changes=v.get("state_changes", []),
         deviation=v.get("deviation"),
         # An observation with the code's own prefix is the code's alone (VER-024).
-        observations=[o for o in v.get("observations", []) if not str(o).startswith(MODEL_CALL_FAILED)],
+        observations=[o for o in v.get("observations", []) if not str(o).startswith(_CODE_OBSERVATIONS)],
         # The model's own account of evidence is not taken over: the code records it (VER-034).
     )
 
@@ -191,6 +195,12 @@ class AgentProbe:
         for item in getattr(ctx, "prerequisite_checks", []):
             result.observations.append(f"Runtime prerequisite {item['condition']}: {item['status']} "
                                        f"(recorded steps {item['steps']}).")
+        # VER-024: why the controls of an unconfirmed finding's experiments gave no proof, in the check's words.
+        if result.verdict != "confirmed":
+            reasons = [h["result"]["reason"] for h in getattr(ctx, "agent_history", [])
+                       if h.get("tool") == "experiment" and isinstance(h.get("result"), dict)
+                       and h["result"].get("proof") == "missing" and h["result"].get("reason")]
+            result.observations.extend(EXPERIMENT_NO_PROOF + str(reason) for reason in dict.fromkeys(reasons))
         for request in ctx.derived_requests:
             origin = (f"supported by recorded step {request['evidence_step']}" if request.get("evidence_step")
                       else "resolved from the source before the test")

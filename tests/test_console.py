@@ -101,7 +101,8 @@ def test_results_strip_escapes_from_assessment_and_model_text(capsys):
 
 def test_results_name_what_an_untested_variant_needs_and_how_to_provide_it():
     """docs/cli.md (Results): a finding or variant the run could not test shows what it needs, keyed as the test
-    plan keys it (the variant's digest), and under it how to provide it; a tested variant keeps its reason."""
+    plan keys it (the variant's digest), and under it how to provide it; a tested variant says why it is not
+    confirmed, as the report does."""
     digest = "ab" * 32
     rows = [{"finding_ref": {"id": "T-2", "title": "idor", "variant": "variant-002", "variant_digest": digest},
              "class": "access-control", "verdict": "not-attempted",
@@ -118,7 +119,7 @@ def test_results_name_what_an_untested_variant_needs_and_how_to_provide_it():
     at = lines.index("· T-3 injection needs marker file sqli")
     assert lines[at + 1] == "a marker_file in a scope file"
     at = lines.index("? T-2 access-control inconclusive idor")
-    assert lines[at + 1] == "no proof"
+    assert lines[at + 1] == "Agent's assessment: no proof."
 
 
 def test_results_list_no_needs_of_a_confirmed_finding_and_count_alike_variants():

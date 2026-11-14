@@ -1896,9 +1896,12 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
     with its whole reason. Text from the assessment and the model passes `printable` before it is
     coloured (VER-005); on a terminal a line is cut to fit."""
     from .loader import _SEVERITY_RANK
-    from .verify.report import _VERDICT_LABEL
+    from .verify.report import _VERDICT_LABEL, variant_of, why_not_confirmed
 
     severity = {p.id: printable(p.severity).lower() for p in plans}
+    declared: dict[str, list] = {}       # each finding's variants, for a reason that depends on the variant
+    for p in plans:
+        declared.setdefault(p.id, []).extend((getattr(p, "verification_context", None) or {}).get("variants") or [])
     rows = [r for r in doc["results"] if full or (r.get("eligibility") or {}).get("status") == "dynamic"]
     if not rows:
         return []
@@ -1946,8 +1949,10 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
         used = 4 + len(cells) + result_width + 2
         lines.append(f"  {st(mark, role)} {cells}{st(f'{result(r):<{result_width}}', role)}  "
                      + _fit(title, room - used))
-        # Under a finding the run could not test, how to provide what it needs, e.g. "run with --allow-intrusive".
-        reason = _NEEDS[need(r)][1] if need(r) else " ".join(printable(r.get("rationale") or "").split())
+        # Under a finding the run could not test, how to provide what it needs, e.g. "run with --allow-intrusive";
+        # under an inconclusive or untested one why, as the report says it (VER-024); otherwise the rationale.
+        why = None if need(r) else why_not_confirmed(r, variant_of(r, declared.get(r["finding_ref"].get("id"))))
+        reason = _NEEDS[need(r)][1] if need(r) else " ".join(printable(why or r.get("rationale") or "").split())
         if variants.get(id(r), 1) > 1:
             reason = f"{reason} · {variants[id(r)]} variants" if reason else f"{variants[id(r)]} variants"
         if reason:

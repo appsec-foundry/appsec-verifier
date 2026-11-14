@@ -136,7 +136,8 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
                                  ("blocked-by-control", "✘ blocked by control", "critical"),
                                  ("inconclusive", "? inconclusive", "warn")):
         progress.finished(plan, ProbeResult(verdict=verdict))
-        assert st(label, role, "bold") in _rows(out)[-1], verdict
+        done = next(row for row in reversed(_rows(out)) if SGR.sub("", row).split()[3:4] == ["done"])
+        assert st(label, role, "bold") in done, verdict
 
 
 def test_a_variant_line_names_its_own_key_and_request_so_siblings_differ():
@@ -251,7 +252,7 @@ def test_a_screenshot_without_a_checked_proof_is_no_proof_line(verdict, proof):
     assert _rows(out)[-1].split()[3] == "img"
 
 
-def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_done_line():
+def test_refused_steps_and_limits_need_attention_and_the_done_line_names_the_limit_to_raise():
     out = io.StringIO()
     progress = RunProgress(out, clock=Clock(), env={})
     progress.begin([_plan()])
@@ -268,7 +269,8 @@ def test_refused_steps_and_limits_need_attention_and_are_not_repeated_on_the_don
     assert rows[1].endswith("step 2 · GET /a · stopped by limit: request cap 1 exceeded")
     assert rows[2].endswith("■ test agent finished · 2 steps · 0s")
     assert rows[3].split()[3] == "proof" and rows[3].endswith("✗ no proof: stopped by the requests limit")
-    assert rows[4].endswith("? inconclusive · 0s")
+    assert rows[4].endswith("? inconclusive · 0s · Limit reached: the run's requests to the target; raise them with "
+                            "--max-requests.")
 
 
 def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_failure():
@@ -286,6 +288,8 @@ def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_fa
     rows = [" ".join(row.split()) for row in _rows(out)[4:]]
     assert rows[0].endswith("step 8 · stopped: " + reason) and "by limit" not in rows[0]
     assert rows[2].endswith("✗ no proof: the test agent made no progress and was stopped")
+    assert rows[3].endswith("? inconclusive · 0s · Agent stuck: the Verifier refused its steps repeatedly, the last a "
+                            "test plan the Verifier refused. A new run may get further.")
 
 
 def test_an_inconclusive_finding_says_why_when_nothing_above_did():
@@ -294,22 +298,27 @@ def test_an_inconclusive_finding_says_why_when_nothing_above_did():
     progress.begin([_plan()])
     progress.finding(_plan())
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="claude call failed: no answer"))
-    assert _rows(out)[-1].endswith("? inconclusive · 0s · claude call failed: no answer")
+    assert _rows(out)[-1].endswith("? inconclusive · 0s · Agent's assessment: claude call failed: no answer.")
 
 
-@pytest.mark.parametrize("result, why", [
+@pytest.mark.parametrize("result, why, done", [
     # A claimed confirmation the proof check refused: what it missed, not the agent's claim.
     (ProbeResult(verdict="inconclusive",
                  rationale="indicative, not proven: no executed browser_check. Agent's claim: x",
                  proof={"checked": False, "contract": 3, "missing": ["no executed browser_check"]}),
-     "no executed browser_check"),
+     "no executed browser_check", "No proof: the agent's confirmation failed the proof check: no executed "
+                                  "browser_check."),
+    # A negative verdict is no missing proof: its done line does not repeat the reason.
     (ProbeResult(verdict="not-reproducible", rationale="bob got 403 for every basket",
-                 proof={"checked": True, "steps": [2, 3]}), "bob got 403 for every basket"),
-    (ProbeResult(verdict="inconclusive", rationale="probe failed: KeyError"), "probe failed: KeyError"),
-    (ProbeResult(verdict="inconclusive"), "no verdict"),
+                 proof={"checked": True, "steps": [2, 3]}), "bob got 403 for every basket", None),
+    (ProbeResult(verdict="inconclusive", rationale="probe failed: KeyError"), "probe failed: KeyError",
+     "Verifier error: the test stopped on an internal error (KeyError); failed-findings.json in the run directory "
+     "has the details."),
+    (ProbeResult(verdict="inconclusive"), "no verdict",
+     "No proof: the test agent ended without a proof the Verifier could check."),
 ])
-def test_without_a_checked_proof_the_proof_entry_says_why_and_the_done_line_does_not_repeat_it(monkeypatch, result,
-                                                                                                why):
+def test_without_a_checked_proof_the_proof_entry_says_why_and_the_done_line_says_it_by_kind(monkeypatch, result, why,
+                                                                                            done):
     monkeypatch.setenv("COLUMNS", "400")
     out = Tty()
     progress = RunProgress(out, clock=Clock(), env={}, live=False)
@@ -322,7 +331,13 @@ def test_without_a_checked_proof_the_proof_entry_says_why_and_the_done_line_does
     assert st("✗ no proof", "warn", "bold") in proof and st(f": {why}", "warn") in proof
     assert st("proof  ", "warn") in proof                     # the event in the warning colour, not green
     progress.finished(_plan(), result)
-    assert why not in _rows(out)[-1] and SGR.sub("", _rows(out)[-1]).endswith(" · 0s")
+    rows = [SGR.sub("", row) for row in _rows(out)]
+    at = max(n for n, row in enumerate(rows) if row.split()[3:4] == ["done"])
+    assert rows[at].endswith(" · 0s")
+    if done:            # on a terminal under the done line, continued under its column
+        assert " ".join(" ".join(rows[at + 1:]).split()) == done
+    else:
+        assert at == len(rows) - 1 and why not in rows[at]
 
 
 @pytest.mark.parametrize("cls, shown", [("xss", "script executed in the browser"),
@@ -609,7 +624,7 @@ def test_a_changed_rating_follows_the_verdict_and_an_unchanged_one_is_not_shown(
     assert st("severity Medium → High", "bold") in row
     unchanged = {"analyzer": {}, "after_verification": {}, "changed": False, "reason": "no checked proof"}
     progress.finished(_plan(), ProbeResult(verdict="inconclusive"), rating=unchanged)
-    assert SGR.sub("", _rows(out)[-1]).split()[3] == "done"
+    assert SGR.sub("", _rows(out)[-2]).split()[3] == "done" and "rating" not in SGR.sub("", _rows(out)[-1])
 
 
 @pytest.mark.parametrize("api_prices, spend", [(False, "run $1.62 of $10.00"),
@@ -622,7 +637,7 @@ def test_with_costs_shown_the_done_line_gives_the_run_spend_and_not_the_finding_
     progress.finding(_plan())
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="no answer"))
-    assert _rows(out)[-1].endswith(f"inconclusive · 0s · {spend} · no answer")
+    assert _rows(out)[-1].endswith(f"inconclusive · 0s · {spend} · Agent's assessment: no answer.")
     assert "$0.42" not in _rows(out)[-1]
 
 
@@ -640,7 +655,7 @@ def test_the_evidence_review_shows_its_own_time_and_the_run_spend_off_the_varian
     assert finished.endswith("■ evidence reviewer finished · clear: Evidence text and layout checks passed. · "
                              "2m06s · run $1.63")
     progress.finished(_plan(), ProbeResult(verdict="not-attempted", rationale="another variant confirmed it"))
-    assert _rows(out)[-1].endswith(" · 0s · run $1.63 of $10.00 · another variant confirmed it")
+    assert _rows(out)[-1].endswith(" · 0s · run $1.63 of $10.00 · Not needed: another variant confirmed it.")
 
 
 def test_with_costs_shown_entries_give_the_running_total_and_the_status_line_the_run_spend(monkeypatch):
@@ -677,9 +692,11 @@ def test_with_costs_shown_entries_give_the_running_total_and_the_status_line_the
     assert progress.st("$1.27", "accent") + " of $10.00 · step 1/12 · m plans" in frame
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive"))
-    done = _rows(live)[-1]
+    done = _rows(live)[-2]
     assert progress.st("$1.62", "accent") in done
     assert SGR.sub("", done).endswith("inconclusive · 0s · run $1.62 of $10.00 at API prices")
+    said = "No proof: the test agent ended without a proof the Verifier could check."
+    assert SGR.sub("", _rows(live)[-1]).strip() == said
     progress.close()
 
 
@@ -974,7 +991,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
     done = next(row for row in rows if row.split()[3:4] == ["done"])
     assert done.split()[3:5] == ["done", "100%"] and "inconclusive" in done
-    assert done.endswith(" · run $0.50 of $10.00")                        # API billing: costs shown
+    assert done.endswith(" · run $0.50 of $10.00 · Agent's assessment: rejection alone is insufficient.")
     assert "$0.50 · run" not in done                                      # the running total only
     # The verdict cites no step: the image of its requests follows, named img, not proof (VER-035).
     assert rows[-1].split()[3] == "img" and "screenshot" in rows[-1]
@@ -994,7 +1011,7 @@ def test_a_subscription_run_shows_costs_only_with_show_costs(tmp_path, monkeypat
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, *(["--show-costs"] if show else []),
                             usd=0.25 if profile == "claude" else 0.0)
     if done:
-        assert next(row for row in rows if row.split()[3:4] == ["done"]).endswith(done)
+        assert done + " · " in next(row for row in rows if row.split()[3:4] == ["done"])
     else:
         assert "$" not in "\n".join(rows)
     assert run in out
