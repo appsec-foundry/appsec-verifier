@@ -33,13 +33,17 @@ Verification has two stages: [AppSec Analyzer](https://github.com/appsec-foundry
 4. **Verify the findings** in the running application. The two accounts are Juice Shop customers for the access-control tests. The Verifier asks for their passwords, which Juice Shop lists in `data/static/users.yml`:
 
    ```sh
-   appsec-verifier ~/assessments/juice-shop/appsec-assessment.yaml --annotate \
-     --url http://localhost:3000 --account jim@juice-sh.op --account bender@juice-sh.op
+   appsec-verifier ~/assessments/juice-shop/appsec-assessment.yaml \
+     --url http://localhost:3000 \
+     --account jim@juice-sh.op \
+     --account bender@juice-sh.op
    ```
+
+   Two options are worth adding: `--source` with a checkout of the Juice Shop source code, which the agent reads to plan its tests, for example to find a request the assessment does not name, and `--annotate` for the annotated report of step 5.
 
    The run lists the findings it can test, asks a few questions and starts after you confirm. It sends only reading requests and asks before a write ([Safety](#safety)). For your own application, see [Scope and test accounts](#scope-and-test-accounts).
 
-5. **Read the results.** The run ends with the paths of `verification.md`, with verdict, evidence and proof of concept per finding ([example](examples/juice-shop/result/verification.md)), and of `appsec-assessment.annotated.md`, the Analyzer's report with these results added to each tested finding ([example](examples/juice-shop/result/security-assessment.annotated.md)).
+5. **Read the results.** The run ends with the path of `verification.md`, with verdict, evidence and proof of concept per finding ([example](examples/juice-shop/result/verification.md)). With `--annotate` it also writes `appsec-assessment.annotated.md`, the Analyzer's report with these results added to each tested finding ([example](examples/juice-shop/result/security-assessment.annotated.md)).
 
 To update the Verifier later, run `appsec-verifier update`.
 
@@ -164,8 +168,10 @@ Ctrl-C stops the run and still writes the report. `--resume` continues a run tha
 
 ```sh
 pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
-pipx inject appsec-verifier playwright==1.64.1    # proof browser, needed for XSS
-pipx inject appsec-verifier 'anthropic>=0.87,<1'   # only for --profile anthropic-api
+# proof browser, needed for XSS
+pipx inject appsec-verifier playwright==1.64.1
+# only for --profile anthropic-api
+pipx inject appsec-verifier 'anthropic>=0.87,<1'
 ```
 
 The proof browser uses the installed Google Chrome and starts it without network access, which needs Linux with `unshare` (util-linux) and unprivileged user namespaces. Elsewhere XSS findings cannot be confirmed. For the CLI profiles, install the CLI and log in (`claude`, `codex login`, `copilot login`).
