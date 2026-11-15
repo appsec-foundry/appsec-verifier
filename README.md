@@ -33,13 +33,13 @@ Verification has two stages: [AppSec Analyzer](https://github.com/appsec-foundry
 4. **Verify the findings** in the running application. The two accounts are Juice Shop customers for the access-control tests. The Verifier asks for their passwords, which Juice Shop lists in `data/static/users.yml`:
 
    ```sh
-   appsec-verifier ~/assessments/juice-shop/appsec-assessment.yaml \
+   appsec-verifier ~/assessments/juice-shop/appsec-assessment.yaml --annotate \
      --url http://localhost:3000 --account jim@juice-sh.op --account bender@juice-sh.op
    ```
 
    The run lists the findings it can test, asks a few questions and starts after you confirm. It sends only reading requests and asks before a write ([Safety](#safety)). For your own application, see [Scope and test accounts](#scope-and-test-accounts).
 
-5. **Read the report.** The run ends with the path of `verification.md`: verdict, evidence and proof of concept per finding ([example](examples/juice-shop/result/verification.md)).
+5. **Read the results.** The run ends with the paths of `verification.md`, with verdict, evidence and proof of concept per finding ([example](examples/juice-shop/result/verification.md)), and of `appsec-assessment.annotated.md`, the Analyzer's report with these results added to each tested finding ([example](examples/juice-shop/result/security-assessment.annotated.md)).
 
 To update the Verifier later, run `appsec-verifier update`.
 
