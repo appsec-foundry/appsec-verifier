@@ -96,6 +96,8 @@ from .experiments import (
 )
 from .source_reader import SourceAccessError
 
+_COMMAND_GROUPS = ("baseline", "positive", "negative", "positive_other", "negative_other")
+
 _BODY_EXCERPT = 600
 _LOCATION_CAP = 2000
 _HIDDEN = "[marker-file]"
@@ -452,6 +454,13 @@ class AgentTools:
                 plan = expression_controls(plan)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
+            if self.ctx.plan.cwe == "CWE-78" and plan.get("method", "GET") not in SAFE_METHODS:
+                # VER-014: a command-injection write carries no fixed inputs, so its controls would reach the
+                # target with no finding marker and the guard would refuse every one. Append the marker as a
+                # trailing shell comment: inert to the arithmetic proof, enough to attribute the request.
+                marker = "".join(self.ctx.marker or ())
+                if marker:
+                    plan = {**plan, **{k: f"{plan[k]} #{marker}" for k in _COMMAND_GROUPS if k in plan}}
         if plan.get("sql_template") and not plan.get("predicate_template"):
             if plan["kind"] != "boolean" or getattr(self.ctx.plan, "cwe", "") != "CWE-89":
                 raise ToolError("SQL challenges apply only to boolean SQL injection experiments")

@@ -33,8 +33,9 @@ def test_reported_header_steps_are_refused_before_target_contact(tmp_path, findi
     assert any("headers" in h.get("result", {}).get("error", "") for h in script.history)
 
 
-@pytest.mark.parametrize("generated", [False, True])
-def test_reported_command_post_cannot_send_unmarked_or_agent_chosen_controls(tmp_path, generated):
+def test_reported_command_post_cannot_send_agent_chosen_controls(tmp_path):
+    """Agent-chosen positive/negative values for a command write support only a negative verdict, so the plan is
+    refused as not a challenge and nothing reaches the target."""
     sent = []
     ctx = _inj_ctx(tmp_path, lambda *a, **k: sent.append(a) or Resp(200, '{"status":"OK"}'),
                    cwe="CWE-78", method="POST", path="/vulnerabilities/api/v2/health/connectivity",
@@ -42,17 +43,40 @@ def test_reported_command_post_cannot_send_unmarked_or_agent_chosen_controls(tmp
     ctx.marker = ("vrfcommand", "fixture")
     args = {"kind": "boolean", "hypothesis": "The target value reaches the connectivity shell command",
             "method": "POST", "path": "/vulnerabilities/api/v2/health/connectivity",
-            "input_location": "json", "input_name": "target", "baseline": "127.0.0.1", "pointer": "/status"}
-    if generated:
-        args["expression_template"] = "127.0.0.1; printf '%s' \"$(({{expression}}))\""
-    else:
-        args.update(positive="127.0.0.1; true", negative="127.0.0.1; false")
+            "input_location": "json", "input_name": "target", "baseline": "127.0.0.1", "pointer": "/status",
+            "positive": "127.0.0.1; true", "negative": "127.0.0.1; false"}
     script = Script([{"tool": "plan_test", "args": args}, {"tool": "send_controls", "args": {}}, _confirm])
     result = AgentProbe("injection", lambda: script).run(ctx)
     assert script.history[0]["result"]["accepted"]
     assert result.verdict != "confirmed" and not sent
-    errors = [h.get("result", {}).get("error", "") for h in script.history]
-    assert any(("a write must carry" if generated else "not a challenge") in e for e in errors)
+    assert any("not a challenge" in h.get("result", {}).get("error", "") for h in script.history)
+
+
+def test_reported_command_post_marks_its_generated_controls(tmp_path):
+    """VER-014: a command-injection write carries no fixed inputs, so the Verifier appends the finding marker as
+    an inert trailing shell comment to every generated control. The controls then pass the write guard and reach
+    the target, each attributable; proof still rests on the returned computation."""
+    bodies = []
+
+    def target(*a, **k):
+        bodies.append((k.get("json") or {}).get("target"))
+        return Resp(200, '{"status":"OK"}')
+
+    ctx = _inj_ctx(tmp_path, target, cwe="CWE-78", method="POST",
+                   path="/vulnerabilities/api/v2/health/connectivity", safe=False, read_only=False)
+    ctx.marker = ("vrfcommand", "fixture")
+    args = {"kind": "boolean", "hypothesis": "The target value reaches the connectivity shell command",
+            "method": "POST", "path": "/vulnerabilities/api/v2/health/connectivity",
+            "input_location": "json", "input_name": "target", "baseline": "127.0.0.1", "pointer": "/status",
+            "expression_template": "127.0.0.1; printf '%s' \"$(({{expression}}))\""}
+    script = Script([{"tool": "plan_test", "args": args}, {"tool": "send_controls", "args": {}}, _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert script.history[0]["result"]["accepted"]
+    sent_values = [v for v in bodies if v is not None]
+    assert sent_values and all("#vrfcommandfixture" in v for v in sent_values)   # every write attributable
+    assert all(v.startswith("127.0.0.1; printf ") or v == "127.0.0.1 #vrfcommandfixture" for v in sent_values)
+    assert not any("a write must carry" in h.get("result", {}).get("error", "") for h in script.history)
+    assert result.verdict != "confirmed"      # the status-only fixture never returns the computed product
 
 
 def test_status_only_answers_do_not_meet_arithmetic_proof():
