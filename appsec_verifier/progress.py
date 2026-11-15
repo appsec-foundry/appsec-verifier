@@ -17,14 +17,15 @@ category's heading it leaves out the class, and the title when it only repeats t
 further variants the class follows the severity. The ``agent`` entry after it says that the test agent started:
 its model in AppSec Analyzer's short form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act
 as and whether it may read source code. A finding an earlier run-wide limit stopped gets no agent entries, since
-no agent starts for it. A step entry gives the agent's note on what the step checks, then the request it tested with its
-query and body, the result and how long the model took to propose the step; a result that a proof needs
-(a script executed, the marker file read, a callback hit) is highlighted. The controls the Verifier sends for an
-accepted experiment (VER-011, VER-049, VER-053, VER-057) form a block: an entry with what the experiment tests and
-the question its controls answer, then one entry per control with what it is (``normal``, ``true``, ``false``,
-``break`` …), the value it sends and the result; a second round that repeats the first one's answers is one entry,
-and a ``proof`` entry says whether the controls give the proof. A ``proof`` entry also says when the
-proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
+no agent starts for it. A step entry first says in plain words what the step does, the agent's note or, without
+one, a fixed description, and what its result shows for the proof (a script executed, the marker file read, a
+callback hit, highlighted) or that it failed; then the request it tested with its query and body, the status or
+error and how long the model took to propose the step. An action's internal name is never shown. The controls the
+Verifier sends for an accepted experiment (VER-011, VER-049, VER-053, VER-057) form a block: an entry with what the
+experiment tests and the question its controls answer, then one entry per control with what it is (``normal``,
+``true``, ``false``, ``break`` …), the value it sends and the result; a second round that repeats the first one's
+answers is one entry, and a ``proof`` entry says whether the controls give the proof. A ``proof`` entry also says
+when the proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
 entry says so, then a ``proof`` entry says whether the proof was checked (VER-009 to VER-013) or why
 there is none. The evidence reviewer of VER-042 gets ``agent`` entries for its start and end as well.
 The ``done`` entry gives the verdict, marked and highlighted, and for an inconclusive or untested finding
@@ -41,7 +42,7 @@ the verdict's proof, otherwise ``img``. PROGRESS counts finished runs, one for e
 test plan counts them; ELAPSED is the run's time. LEFT extrapolates the time the finished runs took, never beyond
 the run's time limit; until the first run has finished it shows that limit (``≤29m``).
 
-On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
+On a terminal an entry's parts stand on rows of their own, a step's technical detail grey, and a
 long row wraps under its column, at most ``MAX_COLUMNS`` wide as in AppSec Analyzer; a status line under
 the grid is redrawn every ``TICK_SECONDS`` with a spinner, a progress bar, the category and the finding's place in
 it (``Cross-Site Scripting (XSS) 2 of 3``), the run's spend, the running step (``Sonnet 4.5 plans`` while the
@@ -217,6 +218,27 @@ _CONTROL_NAMES = {"baseline": "normal", "true, second pair": "true", "false, sec
                   "delayed, second pair": "delayed", "anonymous": "without credentials"}
 _CONTROL_INPUTS = {"query": "params", "path": "path_inputs"}     # where a plan's input sits in the request
 _ROUND = re.compile(r"(.*) #(\d+)")
+# What a step does in plain words, when it has no note of the agent's: the Verifier's own steps and a step whose
+# note a host dropped. The step's technical detail stands on the row under it.
+_DOING = {
+    "http_request": "Sending a request to the target",
+    "browser_check": "Opening the page in the proof browser",
+    "read_source": "Reading the source code",
+    "find_source": "Looking for a file in the source code",
+    "search_source": "Searching the source code",
+    "read_context": "Reading the finding's analysis context",
+    "read_response": "Rereading recorded answers",
+    "derive_request": "Deriving a request from an earlier step",
+    "check_prerequisite": "Checking a prerequisite in recorded answers",
+    "plan_test": "Planning a test",
+    "revise_observation": "Correcting what the experiment observes",
+    "send_controls": "Sending the experiment's controls",
+    "archive_probe": "Uploading a test archive",
+    "presentation_request": "Asking the test agent to present its evidence",
+    "presentation_feedback": "Sending the presentation back for correction",
+    "qa_feedback": "Technical QA asks for a follow-up",
+}
+_DESCRIBED = ("http_request", "browser_check", "read_source")     # the tools `_action` describes in detail
 
 
 def _experiment_title(plan: dict, role: str) -> list[str]:
@@ -259,24 +281,33 @@ def _control_value(plan: dict, args: dict) -> str:
     return _clip("&".join(shown), 100) if shown else _action("http_request", args)
 
 
-def _outcome(result: dict) -> list[tuple]:
-    """A tool result as segments; what a proof needs stands out."""
-    if result.get("error"):
-        return [(f"error: {_clip(result['error'], 160)}",)]
-    parts = []
-    if isinstance(result.get("status"), int):
-        parts.append(str(result["status"]))
+def _status(result: dict) -> list:
+    """A tool result's status and size."""
+    parts = [str(result["status"])] if isinstance(result.get("status"), int) else []
     if isinstance(result.get("length"), int):
         parts.append(f"{result['length']} B")
     elif result.get("body_withheld"):          # an engine error or login artifact, never shown to a model
         parts.append("body withheld")
+    return parts
+
+
+def _proof_words(result: dict) -> list:
+    """What a tool result shows that a proof needs, highlighted."""
+    parts = []
     if "executed" in result:
         parts.append(("script executed", "ok", "bold") if result["executed"] else "no script executed")
     if result.get("marker_read"):
         parts.append(("marker file read", "ok", "bold"))
     if result.get("callback_hit"):
         parts.append(("callback hit", "ok", "bold"))
-    return _line(*parts) or [("done",)]
+    return parts
+
+
+def _outcome(result: dict) -> list[tuple]:
+    """A tool result as segments; what a proof needs stands out."""
+    if result.get("error"):
+        return [(f"error: {_clip(result['error'], 160)}",)]
+    return _line(*_status(result), *_proof_words(result)) or [("done",)]
 
 
 class _StatusGuard:
@@ -580,13 +611,20 @@ class RunProgress:
                     self._record("plan", _line(label, _clip(args.get("path", "")),
                                                _clip(reason, 180) if reason else ""))
                     return
-                tested = (action, "agent") if record["tool"] in ("http_request", "browser_check") else (action,)
-                tested = _line([tested, (" → ",), *_outcome(result)], (took, "muted"), cost)
-                hang = len(head) + 3
-                if note:
-                    self._record("·", _line(head, note), tested, hang=hang)
+                # First what the step does in plain words and what it showed for the proof, or that it failed; on
+                # a grey row under it the request, its status and size, the model's time and the run's spend.
+                tool = str(record["tool"])
+                said = [("failed", "warn")] if result.get("error") else _line(*_proof_words(result))
+                first = _line(head, [(note or _DOING.get(tool, tool),), *([(" → ",), *said] if said else [])])
+                status = ([(f"error: {_clip(result['error'], 160)}",)] if result.get("error")
+                          else _line(*_status(result)))
+                detail = [(action,), *([(" → ",), *status] if status else [])] if tool in _DESCRIBED else status
+                tail = [(text, "muted") if not roles else (text, *roles)
+                        for text, *roles in _line(detail, took, cost)]
+                if detail:
+                    self._record("·", first, tail, hang=len(head) + 3)
                 else:
-                    self._record("·", _line(head, tested), hang=hang)
+                    self._record("·", _line(first, tail))
 
     def _control(self, head: str, label: str, record: dict) -> None:
         """One control the Verifier generated and sent for the accepted plan (agent/loop.py), in the plan's block:

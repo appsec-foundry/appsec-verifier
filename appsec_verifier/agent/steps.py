@@ -5,8 +5,8 @@ answers with one step, {"action": ..., "args_json": ..., "note": ...}, which is
 decoded and validated here before the loop executes it through the confined
 AgentTools. `args_json` is a JSON string so that one wire schema also works under
 strict structured-output modes that reject free-form objects (OpenAI, Codex CLI).
-`note` says in a few words what the step checks; it is shown on the console and
-kept in the action log, and nothing acts on it.
+`note` says in plain words what the step does and why, for the operator; it is
+shown on the console and kept in the action log, and nothing acts on it.
 """
 
 from __future__ import annotations
@@ -134,7 +134,8 @@ def system_prompt(ctx) -> str:
         + ("" if source else "\nThere is no source checkout in this run; work from the finding's description.")
         + "\nThis session has no tools. Answer every message with exactly one step: "
         '{"action": <name>, "args_json": <the action\'s arguments as a JSON object, encoded as a string>, '
-        '"note": <what this step checks, in at most 12 words>}. '
+        '"note": <what this step does and why, in plain words for the operator, at most 12 words, without paths, '
+        'payloads or action names>}. '
         "The actions and their argument schemas are:\n"
         + json.dumps(actions)
         + "\nOmit optional arguments you do not need; never send null. The steps so far arrive as JSON. "

@@ -88,7 +88,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
     assert start.endswith("Basket of another user readable · high")
     assert agent.split()[3] == "agent" and agent.endswith("▶ test agent started · Sonnet 5.5 · no identities")
-    assert step.endswith("step 1 · GET /rest/basket/2 as alice → 200 · 512 B")
+    assert step.endswith("step 1 · Sending a request to the target · GET /rest/basket/2 as alice → 200 · 512 B")
     assert finished.split()[3] == "agent" and finished.endswith("■ test agent finished · 2 steps · 1m00s")
     assert proof.split()[3] == "proof"
     assert proof.endswith("✓ proof checked: access differs between identities · steps 1, 2")
@@ -398,14 +398,15 @@ def test_a_result_a_proof_needs_is_highlighted_in_its_step(monkeypatch):
     progress.begin([_plan(cls="xss")])
     progress.finding(_plan(cls="xss"))
     progress.step({"step": 1, "tool": "browser_check", "args": {"path": "/#/search?q=x"}, "result": {"executed": True}})
-    assert st("script executed", "ok", "bold") in _rows(out)[-1]
+    assert st("script executed", "ok", "bold") in _rows(out)[-2]      # on the step's first row, after what it does
     progress.step({"step": 2, "tool": "http_request", "args": {"path": "/f"},
                    "result": {"status": 200, "marker_read": True, "callback_hit": True}})
-    assert st("marker file read", "ok", "bold") in _rows(out)[-1] and st("callback hit", "ok", "bold") in _rows(out)[-1]
+    assert st("marker file read", "ok", "bold") in _rows(out)[-2] and st("callback hit", "ok", "bold") in _rows(out)[-2]
     progress.step({"step": 3, "tool": "browser_check", "args": {"path": "/#/search?q=y"},
                    "result": {"executed": False}})
-    assert SGR.sub("", _rows(out)[-1]).endswith("→ no script executed")
-    assert st("no script executed", "ok", "bold") not in _rows(out)[-1]
+    assert SGR.sub("", _rows(out)[-2]).endswith("step 3 · Opening the page in the proof browser → no script executed")
+    assert st("no script executed", "ok", "bold") not in _rows(out)[-2]
+    assert _rows(out)[-1].strip() == st("browser /#/search?q=y", "muted")       # the technical row, grey
 
 
 _BOOLEAN_PLAN = {"kind": "boolean", "path": "/brute/", "method": "GET", "input_location": "query",
@@ -547,12 +548,26 @@ def _redact_all(value, secret):
     return value
 
 
+def test_a_step_says_in_plain_words_what_it_does_and_never_names_the_action(monkeypatch):
+    """A step the Verifier logs itself, or one without the agent's note, says what it does in plain words, a failed
+    one says so before its error on the grey row; the action's internal name is never shown."""
+    out, progress = _started(monkeypatch)
+    progress.step({"step": 2, "tool": "presentation_request",
+                   "result": {"status": "verdict recorded; compose its presentation"}})
+    progress.step({"step": 3, "tool": "derive_request", "args": {"from_step": 1}, "result": {"error": "no such step"}})
+    text = _shown(out)
+    assert "step 2 · Asking the test agent to present its evidence" in text and "presentation_request" not in text
+    assert "step 3 · Deriving a request from an earlier step → failed error: no such step" in text
+    assert "derive_request" not in text
+
+
 def test_a_request_of_the_agent_after_a_block_shows_its_url_again(monkeypatch):
     out, progress = _started(monkeypatch)
     _experiment(progress, _BOOLEAN_PLAN, [("baseline #1", "admin", 4399)])
     progress.step({"step": 6, "tool": "http_request", "result": {"status": 200, "length": 4399},
                    "args": {"path": "/brute/", "params": {"username": "admin"}, "role": "account-2"}})
-    assert "step 6 · GET /brute/?username=admin as account-2 → 200 · 4399 B" in _shown(out)
+    assert "step 6 · Sending a request to the target GET /brute/?username=admin as account-2 → 200 · 4399 B" in (
+        _shown(out))
 
 
 def test_the_evidence_reviewer_has_agent_entries_for_its_start_and_end():
@@ -678,12 +693,12 @@ def test_with_costs_shown_entries_give_the_running_total_and_the_status_line_the
     spent[0] = 1.25
     progress.activity(1, 12, "http_request", {"path": "/a"})
     progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "result": {"status": 200}})
-    assert _rows(out)[-1].endswith("step 1 · GET /a → 200 · model 0s · run $1.25")
+    assert _rows(out)[-1].endswith("step 1 · Sending a request to the target · GET /a → 200 · model 0s · run $1.25")
     spent[0] = 1.27
     progress.step({"step": 2, "refused": "unknown action 'x'"})
     assert _rows(out)[-1].endswith("step 2 · refused: unknown action 'x' · run $1.27")
     progress.step({"step": 3, "tool": "read_source", "args": {"path": "a.ts"}, "result": {}})
-    assert _rows(out)[-1].endswith("step 3 · source a.ts → done")        # nothing spent, no amount
+    assert _rows(out)[-1].endswith("step 3 · Reading the source code · source a.ts")     # nothing spent, no amount
     progress.activity(4, 12)
     clock.now += 120
     progress.tick()
@@ -708,7 +723,8 @@ def test_with_costs_shown_entries_give_the_running_total_and_the_status_line_the
     progress.close()
 
 
-def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(monkeypatch):
+def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_under_the_note(monkeypatch):
+    """A step's note comes first; the request it tested wraps on grey rows under it, the run's spend highlighted."""
     monkeypatch.setenv("COLUMNS", "120")
     out, spent = Tty(), [0.0]
     progress = RunProgress(out, clock=Clock(), env={}, spent=lambda: spent[0], cost_limit=10.0)
@@ -733,8 +749,8 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(
     assert tested[0][hang:].startswith("GET /rest/products/search?q=x'))")
     assert all(len(row) <= 119 for row in rows)
     assert tested[-1].endswith("→ 500 · 942 B · run $0.04")
-    assert _rows(out)[note + 1].strip() == st(tested[0].strip(), "agent")   # each piece of the request coloured
-    assert st(tested[1][hang:].split(" → ")[0], "agent") in _rows(out)[note + 2]
+    assert _rows(out)[note + 1].strip() == st(tested[0].strip(), "muted")   # each piece of the request grey
+    assert st(tested[1][hang:].split(" → ")[0], "muted") in _rows(out)[note + 2]
     assert st("$0.04", "accent") in out.getvalue()
     blank = rows.index("", done)                                            # a blank line before the next finding
     assert " 2/2 T-2  start " in rows[blank + 1]
@@ -795,7 +811,9 @@ def test_on_a_terminal_the_status_line_shows_the_running_step_and_is_cleared_bef
     before = out.getvalue()
     progress.step({"step": 3, "tool": "read_source", "args": {"path": "a.ts", "around_line": 4}, "result": {}})
     added = out.getvalue()[len(before):]
-    assert added.startswith("\r\x1b[K") and SGR.sub("", added).endswith("step 3 · source a.ts:4 → done\n")  # cleared
+    shown = SGR.sub("", added).split("\n")
+    assert added.startswith("\r\x1b[K") and shown[0].endswith("step 3 · Reading the source code")  # cleared
+    assert shown[1].strip() == "source a.ts:4"
     progress.tick()
     progress.close()
     assert out.getvalue().endswith("\r\x1b[K")                              # no status line left behind
@@ -951,7 +969,7 @@ def test_the_agent_loop_logs_and_shows_the_planner_note_and_ignores_it_for_a_ver
     progress.close()
     assert log[0]["note"] == f"find the route{HOSTILE}"      # JSON-encoded when written, see test_actionlog
     assert "note" not in log[1]
-    assert " · find the route]0;pwned[2J · source a.ts → error: " in out.getvalue()
+    assert " · find the route]0;pwned[2J → failed · source a.ts → error: " in out.getvalue()
     assert "model 9s" in out.getvalue() and "\x1b" not in out.getvalue()
 
 
@@ -998,7 +1016,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
     assert any(row.endswith("▶ test agent started · m via Fake API · ≤12 steps · no identities") for row in rows)
     assert any(row.endswith("✗ no proof: rejection alone is insufficient") for row in rows)
-    assert any("step 1 · GET /rest/basket/2 → 403" in row for row in rows)
+    assert any("step 1 · Sending a request to the target · GET /rest/basket/2 → 403" in row for row in rows)
     done = next(row for row in rows if row.split()[3:4] == ["done"])
     assert done.split()[3:5] == ["done", "100%"] and "inconclusive" in done
     assert done.endswith(" · run $0.50 of $10.00 · Agent's assessment: rejection alone is insufficient.")

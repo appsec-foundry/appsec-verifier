@@ -297,8 +297,9 @@ def test_a_finding_prompt_carries_only_its_own_class():
     # 250 for the text observation of page answers (VER-055), by 50 for read_response's text window of an HTML
     # answer, which a pointer cannot read, by 2,100 for the presentation of the proof of concept (VER-059), and by
     # 150 for where the agent reads the answer text it quotes there, and by 250 for what a plan with fixed or
-    # without baseline needs, what a pointer reads, and that a generated control's step shows no excerpt (VER-011).
-    assert len(text) < 16_000 and len(injection) < 23_800
+    # without baseline needs, what a pointer reads, and that a generated control's step shows no excerpt (VER-011),
+    # and by 100 for a step note in plain words for the operator, as the console shows it.
+    assert len(text) < 16_000 and len(injection) < 23_900
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():
