@@ -34,6 +34,9 @@ IDENTITY = {"identities": [{"role": "alice", "method": "bearer", "auth": {"token
 SECRET_WORDS = ("password", "token", "secret", "key")
 
 
+_ACCESS_PROMPTS = ("Prepare access rules", "Do these expectations hold")
+
+
 class Script:
     """Answers the prompts in order; running out of answers is end of input."""
 
@@ -43,7 +46,7 @@ class Script:
 
     def __call__(self, prompt):
         self.prompts.append(prompt)
-        if prompt.startswith("Prepare access rules"):
+        if prompt.startswith(_ACCESS_PROMPTS):
             return "no"  # Existing scenarios explicitly decline optional preparation; tested separately below.
         if not self.answers:
             raise EOFError
@@ -83,8 +86,8 @@ def env(tmp_path, monkeypatch):
         e.hidden, e.pasted = Script(*hidden), Script(*pasted)
         rc = guided.run_guided(args, interactive=interactive, ask=script, out=lines.append,
                                environ={} if environ is None else environ, ask_secret=e.hidden, ask_block=e.pasted)
-        e.preparation_prompts = [p for p in script.prompts if p.startswith("Prepare access rules")]
-        prompts = [p for p in script.prompts if not p.startswith("Prepare access rules")]
+        e.preparation_prompts = [p for p in script.prompts if p.startswith(_ACCESS_PROMPTS)]
+        prompts = [p for p in script.prompts if not p.startswith(_ACCESS_PROMPTS)]
         return rc, args, prompts, "\n".join(lines)
 
     e.go = go
@@ -94,7 +97,7 @@ def env(tmp_path, monkeypatch):
 def test_with_a_scope_file_only_optional_preparation_is_asked_and_defaults_apply(env):
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
-    assert len(env.preparation_prompts) == 1
+    assert len(env.preparation_prompts) == 2  # the findings' restrictions, then the declarations
     assert "3 runtime candidates of 4 · critical 1 · high 1 · medium 1\n" in out
     assert "to verify" not in out              # the selection is shown once, with the run settings
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
@@ -580,7 +583,7 @@ def test_run_only_preparation_reaches_verify_but_never_skips_confirmation(env, m
         "evidence": {"file": "app.py", "line": 1}}]}))
     (env.run / "scope.yaml").unlink()
     before = set(env.run.iterdir())
-    answers = iter(["yes", "yes", "/admin/config", "admin", "anonymous", "Administrator access required",
+    answers = iter(["no", "yes", "yes", "/admin/config", "admin", "anonymous", "Administrator access required",
                     "Operator access policy", "/marker", "harmless-config-marker", "yes"])
     confirmed = []
 

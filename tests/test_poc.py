@@ -330,7 +330,7 @@ def test_access_control_screenshots(tmp_path, transport, screenshots, verdict, p
         assert sum(e["kind"] == "screenshot" for e in result.evidence) == 3
     if exchanges:
         page = browser.exchanges[0]["html"]
-        assert "<mark>[identity customer-a]</mark>" in page and "<mark>[identity customer-b]</mark>" in page
+        assert ">customer-a<small>" in page and ">customer-b<small>" in page     # one table row per identity
         if verdict == "confirmed":
             assert "<mark>bob@shop.test</mark>" in page and "not on the page" not in page
             assert "<mark>bob@shop.test</mark><span class=note>◀ named in the verdict</span>" in page

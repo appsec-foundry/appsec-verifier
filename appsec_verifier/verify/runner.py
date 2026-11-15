@@ -153,6 +153,7 @@ def run_verification(
     environment: str | None = None,
     safe: bool = True,
     read_only: bool = True,
+    accept_finding_restrictions: bool = False,
     contacted: bool = False,
     target_status: dict | None = None,
     now: datetime | None = None,
@@ -211,6 +212,7 @@ def run_verification(
             safe=safe and not writes,
             read_only=read_only and not writes,
             ask_writes=ask if ask_writes is not None and not writes else None,
+            accept_finding_restrictions=accept_finding_restrictions is True,
             sessions=sessions,
             source=source,
             target_base=target_base,
@@ -443,6 +445,8 @@ def run_verification(
         "safety": {
             "mode": "safe" if safe else "intrusive",
             "read_only": bool(read_only),
+            # VER-010: the operator accepted the assessment's access restrictions for this run.
+            **({"finding_restrictions_accepted": True} if accept_finding_restrictions is True else {}),
             # VER-052: the findings the operator allowed write requests for in a safe run.
             **({"writes_allowed_for": allowed} if (allowed := sorted({
                 r["finding_ref"]["id"] for r in results if (r.get("write_permission") or {}).get("allowed")

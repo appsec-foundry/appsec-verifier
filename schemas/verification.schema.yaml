@@ -361,6 +361,24 @@ properties:
           additionalProperties: false
           properties:
             file: { type: [string, "null"], description: Path of the HAR file under evidence/. }
+            comparison:
+              type: object
+              description: Why an access-control comparison has its verdict (VER-010).
+              required: [lead, checks, closing]
+              additionalProperties: false
+              properties:
+                lead:    { type: string, description: What the comparison observed. }
+                closing: { type: string, description: What the verdict makes of the checks. }
+                checks:
+                  type: array
+                  items:
+                    type: object
+                    required: [ok, name, text]
+                    additionalProperties: false
+                    properties:
+                      ok:   { type: boolean }
+                      name: { type: string }
+                      text: { type: string }
             steps:
               type: array
               items:

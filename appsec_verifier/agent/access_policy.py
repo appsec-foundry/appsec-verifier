@@ -1,7 +1,8 @@
 """Separate observed access from operator-established restrictions (VER-010, VER-046, VER-057).
 
 Policies describe intended access only. They grant no route, identity, write permission or proof.
-Finding claims and model interpretations never create policy entries.
+Model interpretations never create policy entries; a finding's restriction counts only after the operator
+accepted the assessment's restrictions for the run.
 """
 
 from __future__ import annotations
@@ -56,11 +57,37 @@ def restriction(ctx, history, cited):
     return None
 
 
+# The restriction each comparison form of a finding tests, in the words the operator accepts before the run.
+FINDING_RESTRICTIONS = {
+    "signed_in": "The request requires a signed-in account.",
+    "reference": "Only a privileged account may use the function.",
+    "owner": "Only the account that owns the record may read or change it.",
+}
+
+
+def finding_restriction(ctx, history):
+    """The finding's restriction for the comparison form that was checked, only when the operator accepted the
+    assessment's restrictions for the run (VER-010). The text comes from the form, never from a model."""
+    if getattr(ctx, "accept_finding_restrictions", False) is not True:
+        return None
+    _, plan = latest_plan(history)
+    form = next((f for f in FINDING_RESTRICTIONS if plan.get(f)), None)
+    if form is None:
+        return None
+    operation = plan.get("change") or plan
+    denied = (["anonymous"] if form == "signed_in" else
+              sorted(set(normal_roles(getattr(ctx, "identities", []))) - {plan[form]}))
+    return {"source": f"finding {ctx.plan.id} of the assessment, accepted by the operator for this run",
+            "restriction": FINDING_RESTRICTIONS[form], "accepted_from_finding": True,
+            "path": urlsplit(operation.get("path", "")).path, "method": operation.get("method", "GET"),
+            "allowed_roles": [plan[form]], "denied_roles": denied}
+
+
 def require_restriction(ctx, history, cited, result):
     """Retain the checked comparison as an observation when its authorization meaning is unestablished."""
     if result.verdict != "confirmed" or getattr(ctx.plan, "cls", None) != "access-control":
         return result
-    policy = restriction(ctx, history, cited)
+    policy = restriction(ctx, history, cited) or finding_restriction(ctx, history)
     if policy is not None:
         result.proof["access_restriction"] = policy
         return result
@@ -69,8 +96,9 @@ def require_restriction(ctx, history, cited, result):
                         missing=["observed access has no independently established access restriction"])
     result.observations = [*result.observations, "The recorded comparison established access; whether it violates "
                            "the application's intended access policy remains unproven."]
-    result.rationale = "Access observed, authorization violation unproven: declare the expected restriction and " \
-                       "its source in scope.access_policies or use an operator-declared test resource."
+    result.rationale = "Access observed, authorization violation unproven: accept the assessment's restrictions " \
+                       "with --accept-finding-restrictions, declare the expected restriction and its source in " \
+                       "scope.access_policies or use an operator-declared test resource."
     return result
 
 

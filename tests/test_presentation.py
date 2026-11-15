@@ -82,7 +82,8 @@ def test_an_accepted_presentation_leads_the_images_and_the_report(tmp_path):
     page = browser.pages[-1]
     assert "(the test agent's words)" in page and "class=outcome" in page and "Outcome" in page
     images = [e for e in result.evidence if e.get("kind") == "screenshot"]
-    assert images and all(e["composed_by"] == "test-agent" and e["reviewable"] is True for e in images)
+    assert images[0]["composed_by"] == "verifier"                 # the comparison table leads (VER-010)
+    assert images[1:] and all(e["composed_by"] == "test-agent" and e["reviewable"] is True for e in images[1:])
     assert not any(o.startswith(pres.COMPOSED_NOTE) for o in result.observations)
     assert not any("presentation_feedback" in seen for seen in planner.seen)
 
@@ -113,7 +114,7 @@ def test_a_presentation_with_a_wrong_quote_goes_back_once_then_only_the_quote_is
     assert [h["tool"] for h in json.loads(planner.seen[-1])].count("presentation_feedback") == 1
     assert "Left out by the Verifier: " + "; ".join(left) + "." in browser.pages[-1]
     assert "alice@shop.test" not in browser.pages[-1] and "the owner&#x27;s basket" in browser.pages[-1]
-    assert all(e["composed_by"] == "test-agent" for e in result.evidence if e.get("kind") == "screenshot")
+    assert [e["composed_by"] for e in result.evidence if e.get("kind") == "screenshot"] == ["verifier", "test-agent"]
     assert not any(o.startswith(pres.COMPOSED_NOTE) for o in result.observations)
 
 

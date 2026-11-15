@@ -120,3 +120,62 @@ def test_report_shows_the_independent_restriction_and_its_source():
     assert "**Expected access:** Only the declared allowed accounts" in text
     assert "Source: requirements/access.txt:7 &lt;untrusted&gt;." in text
     assert "<untrusted>" not in text
+
+
+def test_the_findings_restriction_confirms_only_when_the_operator_accepted_it():
+    """VER-010: without a declaration the finding's restriction counts only after the operator's acceptance."""
+    from test_access_without_credentials import PATH, _check, comparison
+
+    assert _check(comparison(), scope={}).verdict == "inconclusive"
+    assert _check(comparison(), scope={}, accept="yes").verdict == "inconclusive"  # only an explicit True
+    result = _check(comparison(), scope={}, accept=True)
+    assert result.verdict == "confirmed" and result.confidence == "medium", result.rationale
+    taken = result.proof["access_restriction"]
+    assert taken["accepted_from_finding"] is True and taken["source"].startswith("finding T-1 of the assessment")
+    assert (taken["path"], taken["allowed_roles"], taken["denied_roles"]) == (PATH, ["account-1"], ["anonymous"])
+    assert taken["restriction"] == "The request requires a signed-in account."
+
+
+def test_acceptance_replaces_no_comparison_and_no_declaration():
+    from test_access_without_credentials import PATH, _check, comparison
+
+    # The comparison itself still has to hold: a refused anonymous request stays unconfirmed.
+    assert _check(comparison(anonymous_status=403), scope={}, accept=True).verdict != "confirmed"
+    declared = _check(comparison(), scope={"access_policies": [policy(PATH)]}, accept=True)
+    assert declared.proof["access_restriction"]["source"].startswith("operator:")
+    assert "accepted_from_finding" not in declared.proof["access_restriction"]
+
+
+def test_acceptance_names_the_restriction_of_the_own_resource_and_privileged_forms():
+    from test_own_access import _check, owned, privileged
+
+    own = _check(owned(), scope={}, accept=True)
+    assert own.verdict == "confirmed", own.rationale
+    assert own.proof["access_restriction"]["restriction"].startswith("Only the account that owns the record")
+    assert _check(owned(), scope={}).verdict == "inconclusive"
+    function = _check(privileged(), scope={}, accept=True, cwe="CWE-862")
+    assert function.verdict == "confirmed", function.rationale
+    assert function.proof["access_restriction"]["allowed_roles"] == ["admin-1"]
+    assert function.proof["access_restriction"]["denied_roles"] == ["account-1", "account-2"]
+
+
+def test_the_guided_run_takes_the_restrictions_after_a_yes_and_asks_nothing_more():
+    from test_guided import SCOPE
+
+    from appsec_verifier.cli import build_guided_parser
+    from appsec_verifier.guided import Dialog, _access_preparation
+    from appsec_verifier.loader import classify, load_verifiable_cwes
+
+    plan = classify({"id": "T-1", "cwe": "CWE-306", "title": "Management exposure",
+                     "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
+    for answer, accepted in (("yes", True), ("no", False)):
+        args, asked, shown = build_guided_parser().parse_args(["assessment.yaml"]), [], []
+
+        def ask(prompt, answer=answer, asked=asked):
+            asked.append(prompt)
+            return answer if len(asked) == 1 else "no"
+
+        _access_preparation(Dialog(ask, shown.append), args, dict(SCOPE), [plan])
+        assert args.accept_finding_restrictions is accepted
+        assert len(asked) == (1 if accepted else 2)
+        assert any("T-1 · Management exposure: The request requires a signed-in account." in line for line in shown)

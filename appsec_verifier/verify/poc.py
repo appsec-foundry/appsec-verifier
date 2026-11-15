@@ -32,7 +32,9 @@ finding whose response is an HTML page, the proof browser renders that
 recorded response without a new request and marks the values the verdict
 names. Live application observations are attached before this renderer. The
 report displays application images and marked HTTP excerpts; exchange images
-are saved for later use, not embedded. Every finding with decisive steps also gets an image of those
+are saved for later use, not embedded. An access-control comparison gets one image of its own (`comparison_document`):
+the observed access, the expected one, a table row per identity and the answer once. Every finding with decisive steps
+also gets an image of those
 exchanges: as the test agent presents them, with what verify/presentation.py left out and the steps it does not
 show named, the report showing those steps after the agent's (VER-059); where the Verifier shows its own presentation
 instead, as described here, with the reason in its header and in the observations. One whose verdict
@@ -1649,6 +1651,214 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
     return shots
 
 
+_COMPARISON_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
+header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #b00020}
+header .id{font-size:14px;color:#bbb}header .chip{font:bold 13px sans-serif;padding:1px 8px;border-radius:3px;
+background:#555;color:#fff;margin-left:8px;text-transform:uppercase}header .chip.confirmed{background:#b00020}
+header .chip.inconclusive{background:#b26a00}header p{margin:6px 0 0}header .lead{font-size:21px;font-weight:bold}
+header ul{list-style:none;margin:8px 0 0;padding:0}header li{padding:1px 0 1px 26px;position:relative}
+header li:before{position:absolute;left:0;font-weight:bold}header li.yes:before{content:"\\2713";color:#7ddc8a}
+header li.no:before{content:"\\2717";color:#ffb74d}header li b{color:#ffeb3b;margin-right:6px}
+header .closing{font-weight:bold}
+table{border-collapse:collapse;margin:16px;width:calc(100% - 32px)}
+th{text-align:left;font-size:13px;color:#555;padding:4px 10px;border-bottom:2px solid #999}
+td{padding:8px 10px;border-bottom:1px solid #ccc;vertical-align:top}td.req,pre{font-family:ui-monospace,Menlo,
+Consolas,monospace}td.req{overflow-wrap:anywhere}
+.role{color:#fff;font:bold 13px sans-serif;text-transform:uppercase;padding:2px 8px;border-radius:3px;
+background:#546e7a;white-space:nowrap}tr.normal .role{background:#2e7d32}tr.attack .role,tr.effect .role
+{background:#b00020}td small{display:block;color:#555}
+tr.attack.access td,tr.effect.access td{background:#fdecea}tr.access td.got{font-weight:bold;color:#b00020}
+section{margin:16px;border:1px solid #ccc}h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:15px;
+border-bottom:1px solid #ccc}pre{margin:0;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}
+mark{background:none;color:#000;outline:2px solid #b00020;outline-offset:1px}.hit{display:inline-block;max-width:100%}
+.note{color:#b00020;font:bold 13px sans-serif;margin-left:8px}.nl{display:none}
+.tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}
+tr.access.unrated td{background:#fff4e0}tr.access.unrated td.got{color:#b26a00}td.req{width:36%}
+footer{margin:0 16px 14px;color:#666;font-size:13px}"""
+_LONG_HEX = re.compile(r"\b[0-9a-fA-F]{32,}\b")
+
+
+def _readable_body(e: dict) -> str:
+    """A recorded answer as a person reads it: a page's visible text, JSON indented, long hex values shortened."""
+    text = _text(e)
+    if "html" in e["response"]["content"].get("mimeType", "").lower():
+        parser = _VisibleText()
+        parser.feed(text[:MAX_BODY_CHARS])
+        text = " ".join(parser.parts)
+    else:
+        try:
+            text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+        except (ValueError, RecursionError):
+            pass
+    return _LONG_HEX.sub(lambda m: f"{m[0][:8]}…{m[0][-4:]} ({len(m[0])} hex characters)", text)
+
+
+def comparison_rows(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> list[dict] | None:
+    """The steps of an access-control comparison as table rows (VER-010, VER-035), or None where the latest plan
+    places no normal request and no attack among `shown`. `same` says whether a step got the answer of the normal
+    request it is compared with: by the digests kept in memory (VER-057), else by the recorded texts, else None."""
+    roles = step_roles(ctx, history, shown)
+    ordered = [(n, e) for n, e in by_role(shown, roles) if roles.get(n, ("",))[0]][:6]
+    # The identity that may, the one that must not, then the controls.
+    ordered.sort(key=lambda s: ("normal", "attack", "effect", "control").index(roles[s[0]][0])
+                 if roles[s[0]][0] != "outcome" else 4)
+    kinds = {roles[n][0] for n, _ in ordered}
+    if getattr(ctx.plan, "cls", None) != "access-control" or "normal" not in kinds or not kinds & {"attack", "effect"}:
+        return None
+    rows = []
+    for n, e in ordered:
+        kind, label = roles[n]
+        ref = compared_with(n, e, ordered, roles) if kind in ("attack", "control") else None
+        same = None
+        if ref is not None:
+            same = _same_in_code(ctx, n, ref[0])
+            if same is None and not (e["response"]["content"].get("_omitted")
+                                     or ref[1]["response"]["content"].get("_omitted")):
+                same = _text(e) == _text(ref[1])
+        rows.append({"step": n, "entry": e, "kind": kind, "label": label, "who": e.get("_role") or "without login",
+                     "ref": ref[0] if ref else None, "same": same})
+    return rows
+
+
+def comparison_summary(ctx, history: list[dict], rows: list[dict], result) -> dict:
+    """Why an access-control comparison has its verdict (VER-010), for its image and the report: `lead`, what was
+    observed; `checks`, the access, each control with what it excludes and the rule with its source, each with
+    whether it holds; `closing`, what the verdict makes of them. Without shown access only the lead. `restricted`
+    says whether a rule rates the access."""
+    from ..agent.experiments import latest_plan
+
+    _, plan = latest_plan(history)
+    proof, verdict = result.proof or {}, result.verdict
+    access = verdict == "confirmed" or bool(proof.get("observed_access"))
+    attack = next(r for r in rows if r["kind"] in ("attack", "effect"))
+    operation = plan.get("change") if isinstance(plan.get("change"), dict) else plan
+    target = f"{operation.get('method', 'GET')} {operation.get('path', '')}".strip()
+    restriction = proof.get("access_restriction") if isinstance(proof.get("access_restriction"), dict) else None
+    if not access:
+        return {"lead": "The comparison did not show the access. "
+                        + _VERDICT_SENTENCE.get(verdict, "No completed proof."),
+                "checks": [], "closing": "", "restricted": bool(restriction)}
+    if plan.get("signed_in"):
+        lead = f"Without a login, {target} returns the same answer as for {plan['signed_in']}."
+    elif plan.get("reference"):
+        lead = f"{attack['who']} gets the same answer from {target} as the privileged account {plan['reference']}."
+    elif isinstance(plan.get("change"), dict):
+        lead = f"Another account changed the record that {plan.get('owner')} created."
+    elif plan.get("owner"):
+        lead = f"{attack['who']} reads the record that {plan['owner']} created."
+    else:
+        lead = f"{attack['who']} gets what the allowed identity gets from {target}."
+    if restriction:
+        expected = (f"{str(restriction.get('restriction') or 'Access is restricted').rstrip('.')}. "
+                    f"Source: {str(restriction.get('source') or 'not named').rstrip('.')}.")
+    else:
+        expected = ("No access rule is declared or accepted for this finding, so the access is shown but not rated "
+                    "as a violation.")
+    got = f"{attack['who']} got the answer"
+    if attack["same"] and attack["ref"] is not None:
+        got += f" of step {attack['ref']}, identical as compared in code"
+    checks = [{"ok": True, "name": "Access shown", "text": got + f" (step {attack['step']})."}]
+    for r in rows:
+        if r["kind"] == "control":
+            means = ("the target does not answer every path alike" if "random path" in r["label"]
+                     else "the resource is not open to everyone")
+            checks.append({"ok": True, "name": "Control",
+                           "text": f"{r['label']}: {r['entry']['response']['status']} (step {r['step']}), "
+                                   f"so {means}."})
+    checks.append({"ok": bool(restriction), "name": "Rule", "text": expected})
+    closing = ("Confirmed: the access violates the rule." if verdict == "confirmed" else
+               f"{verdict.capitalize()}: the access is shown, " + (
+                   "but the verdict is not a confirmation." if restriction else "but no rule rates it."))
+    return {"lead": lead, "checks": checks, "closing": closing, "restricted": bool(restriction)}
+
+
+def comparison_document(ctx, history: list[dict], shown: list[tuple[int, dict]], result, har_path,
+                        highlight=None) -> tuple[str, int] | None:
+    """An access-control comparison as one HTML page for its screenshot (VER-010, VER-035): what was observed, why
+    the verdict follows (`comparison_summary`), one table row per identity with its request and answer, and the
+    answer the attack received once, since an identical answer of the account is not kept (VER-057). Every recorded
+    value is escaped; the page has no script."""
+    from ..planning import _TITLE_LOCATION
+
+    rows = comparison_rows(ctx, history, shown)
+    if rows is None:
+        return None
+    summary = comparison_summary(ctx, history, rows, result)
+    verdict, restriction, access = result.verdict, summary["restricted"], bool(summary["checks"])
+    title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
+    head = [f"<div class=id>{html.escape(str(ctx.plan.id))} · {html.escape(title)}"
+            f"<span class='chip {html.escape(verdict)}'>{html.escape(verdict)}</span></div>",
+            f"<p class=lead>{html.escape(summary['lead'])}</p>"]
+    if access:
+        head.append("<ul>" + "".join(
+            f"<li class={'yes' if c['ok'] else 'no'}><b>{html.escape(c['name'])}</b> {html.escape(c['text'])}</li>"
+            for c in summary["checks"]) + f"</ul><p class=closing>{html.escape(summary['closing'])}</p>")
+    body_row = next((r for r in rows if r["kind"] in ("attack", "effect")
+                     and not r["entry"]["response"]["content"].get("_omitted") and _text(r["entry"])), None)
+    table = ["<tr><th></th><th>Identity</th><th>Request</th><th>Answer</th><th>Expected</th></tr>"]
+    for r in rows:
+        e, res = r["entry"], r["entry"]["response"]
+        url = urlsplit(e["request"]["url"])
+        size = res["content"].get("size")
+        answer = f"{res['status']} {res['statusText']}".strip() + (f" · {size} bytes" if type(size) is int else "")
+        detail = ""
+        if r["same"] is not None and r["ref"] is not None:
+            detail = f"{'identical to' if r['same'] else 'differs from'} step {r['ref']}, compared in code"
+        if r["kind"] == "normal":
+            wanted = "allowed"
+        elif r["kind"] == "control":
+            wanted = "no such resource" if "random path" in r["label"] else "refused"
+        else:
+            wanted = "refused" if restriction else "not declared"
+        violates = access and r["kind"] in ("attack", "effect")
+        table.append(
+            f"<tr class='{r['kind']}{' access' if violates else ''}{'' if restriction else ' unrated'}'>"
+            f"<td><span class=role>{html.escape(ROLE_TITLES[r['kind']])}</span></td>"
+            f"<td>{html.escape(r['who'])}<small>"
+            f"{html.escape('' if r['label'] == r['who'] else r['label'] + ' · ')}step {r['step']}</small></td>"
+            f"<td class=req>{html.escape(e['request']['method'])} "
+            f"{html.escape(url.path + ('?' + url.query if url.query else ''))}</td>"
+            f"<td class=got>{html.escape(answer)}" + (f"<small>{html.escape(detail)}</small>" if detail else "")
+            + f"</td><td>{html.escape(wanted)}</td></tr>")
+    parts, total = [f"<header>{''.join(head)}</header>", f"<table>{''.join(table)}</table>"], 0
+    if body_row is not None:
+        n, e = body_row["step"], body_row["entry"]
+        _, res_marks, res_lines, _ = _exchange_marks(ctx, history, n, e, shown, highlight, shown)
+        res_marks = [m for m in res_marks if m[0] != "answer differs"]
+        marked, total = _marked(_image_excerpt(_readable_body(e), res_marks, limit=900), res_marks, res_lines)
+        twins = [r for r in rows if r is not body_row and (
+            (body_row["same"] and r["step"] == body_row["ref"]) or (r["same"] and r["ref"] == n))]
+        caption = f"Answer {'' if body_row['who'] == 'without login' else 'to '}{body_row['who']} (step {n})"
+        if twins:
+            caption += ("; " + " and ".join(f"{r['who']} (step {r['step']})" for r in twins)
+                        + " got the identical answer, compared in code")
+        parts.append(f"<section><h2>{html.escape(caption)}</h2><pre>{marked}</pre></section>")
+    captured = shown[0][1].get("startedDateTime", "") if shown else ""
+    record = " in " + html.escape(har_path) if har_path else ""
+    parts.append(f"<footer>AppSec Verifier · recorded and redacted{record} at "
+                 f"{html.escape(shown_time(captured))}; nothing sent again. Long hex values are shortened.</footer>")
+    page = (f"<!doctype html><html><head><meta charset=utf-8><style>{_COMPARISON_CSS}</style></head>"
+            f"<body>{''.join(parts)}</body></html>")
+    return page, total
+
+
+def _comparison_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], result, har_path, highlight
+                           ) -> list[dict] | None:
+    """The one image of an access-control comparison, or None where the steps form none (VER-035)."""
+    built = comparison_document(ctx, history, shown, result, har_path, highlight)
+    if built is None:
+        return None
+    page, marked = built
+    visible = _VisibleText()
+    visible.feed(page)
+    ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
+    try:
+        return [{**shot, "composed_by": "verifier"}
+                for shot in ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)]
+    except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
+        return []
+
+
 def attach(ctx, history: list[dict], steps: list[dict], result, cited, highlight=None, presentation=None):
     """Bound final rendering; retain recorded exchanges after a stop (VER-036). `presentation` is the test agent's
     (VER-059), used as far as verify/presentation.py takes it.
@@ -1702,6 +1912,8 @@ def verifier_rows(ctx, history: list[dict], steps: list[dict], numbers: set[int]
     entries = [(s["step"], e) for s in steps if s.get("decisive") and (e := _shown_entry(s)) is not None]
     roles = step_roles(ctx, history, entries)
     entries = by_role(entries, roles)
+    if getattr(ctx.plan, "cls", None) == "access-control":      # as in the comparison image: the attack, then controls
+        entries.sort(key=lambda s: roles.get(s[0], ("",))[0] == "control")
     others = [e for _, e in entries]
     return [{"step": n, "request": _raw_request(e), "elapsed_ms": e.get("time"),
              "response": _raw_response(e, _focus(ctx, others, e), har_path),
@@ -1772,16 +1984,25 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
         result.observations.append(f"{COMPOSED_NOTE}{why}.")
     shots: list[dict] = []
     cls, browser = getattr(ctx.plan, "cls", None), getattr(ctx, "browser", None)
+    if cls == "access-control" and (rows := comparison_rows(ctx, history, shown_entries)) is not None:
+        # VER-010: why the comparison has its verdict, for the report as for the image.
+        summary = comparison_summary(ctx, history, rows, result)
+        summary = {k: summary[k] for k in ("lead", "checks", "closing")}
+        result.poc["comparison"] = ctx.sessions.redact(summary) if ctx.sessions is not None else summary
     if browser is not None and cls in getattr(browser, "screenshots", ()):
         if result.verdict == "confirmed" and cls == "access-control" and not any(
                 e.get("presentation") == "application" for e in result.evidence):
             shots = _page_screenshots(ctx, steps, highlight)
+        # An access-control comparison is one table (VER-010); the test agent's presentation follows it (VER-059).
+        compared = (_comparison_screenshot(ctx, history, shown_entries, result, har_path, highlight)
+                    if cls == "access-control" and shown_entries else None)
+        shots += compared or []
         if accepted:                             # the exchanges as the test agent presents them
             shots += composed_screenshots(ctx, history, steps, accepted, result, har_path)
-        elif shown_entries:                      # the exchanges, also beside a page that shows the proof
+        elif shown_entries and compared is None:  # the exchanges, also beside a page that shows the proof
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight,
                                           composed=why)
-        elif not decisive and (tried := _tried(history, steps)):     # e.g. a finding a limit stopped
+        elif compared is None and not decisive and (tried := _tried(history, steps)):     # e.g. a limit stopped it
             shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False)
     result.evidence = [*(result.evidence or []), *shots]
     if result.verdict == "confirmed" and not any(

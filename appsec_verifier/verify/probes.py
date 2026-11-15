@@ -105,6 +105,7 @@ class ProbeContext:
     safe: bool = True                  # VER-030: cautious by default
     read_only: bool = True             # VER-014: no state change unless explicitly allowed
     ask_writes: object | None = None   # VER-052: callable(requests, reason, identity) -> the operator's yes
+    accept_finding_restrictions: bool = False  # VER-010: the operator took the assessment's access restrictions
     sessions: object | None = None     # SessionManager, or None offline
     source: object | None = None       # SourceReader (read-only target checkout), or None
     target_base: str = ""              # target base URL the agent's requests are joined to

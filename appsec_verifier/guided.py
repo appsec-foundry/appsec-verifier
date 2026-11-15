@@ -192,9 +192,26 @@ def _access_preparation(d, args, scope, plans):
     selected = [p for p in cli._select(args, plans) if p.cls == "access-control"
                 and not any(r["finding_id"] == p.id for key in ("test_resources", "access_policies")
                             for r in scope.get(key, []))]
-    if not selected or not d.yes("Prepare access rules and harmless test markers for selected findings?"):
+    if not selected:
         return
-    from .agent.experiments import EXPOSURE_CWES
+    from .agent.access_policy import FINDING_RESTRICTIONS
+    from .agent.experiments import EXPOSURE_CWES, RECORD_CWES
+
+    if not getattr(args, "accept_finding_restrictions", False):
+        # VER-010: the operator, not the assessment or a model, says that the findings' restrictions hold.
+        d.out("These access-control findings have no declared access rule. Each finding expects:")
+        for plan in selected:
+            expected = (FINDING_RESTRICTIONS["signed_in"] if plan.cwe in EXPOSURE_CWES else
+                        FINDING_RESTRICTIONS["owner"] if plan.cwe in RECORD_CWES else
+                        "Only an entitled account may use it: the record's owner, a privileged or a signed-in "
+                        "account, as the test compares.")
+            d.out(f"  {clean(plan.id)} · {clean(plan.title)}: {expected}")
+        args.accept_finding_restrictions = d.yes("Do these expectations hold for the target?")
+    if args.accept_finding_restrictions:
+        d.out("The report names the finding as the source of each restriction.")
+        return
+    if not d.yes("Prepare access rules and harmless test markers for selected findings?"):
+        return
 
     additions = []
     for plan in selected:
@@ -474,7 +491,8 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("screenshots", "--screenshots"), ("console_log", "--console-log"))
 _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "--overwrite"),
           ("annotate", "--annotate"), ("allow_intrusive", "--allow-intrusive"),
-          ("read_only", "--read-only"), ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
+          ("read_only", "--read-only"), ("accept_finding_restrictions", "--accept-finding-restrictions"),
+          ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
           ("show_costs", "--show-costs"), ("strict_severity", "--strict-severity"))
 
 

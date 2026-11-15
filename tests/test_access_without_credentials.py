@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+import yaml
 from test_access_policy import policy
 from test_agent_tools import Resp, _ctx
 from test_experiments import STRATEGY
@@ -60,13 +61,13 @@ def comparison(anonymous=SECRET, anonymous_status=200, control="<h1>404</h1>", c
             _read(None, control, control_status, path=CONTROL)]
 
 
-def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-306"):
+def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-306", accept=False):
     history = copy.deepcopy(history)
     responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe),
                           scope={"access_policies": [policy(PATH)]} if scope is None else scope,
                           identities=[{"role": "account-1"}], marker=MARKER, responses=responses, sessions=None,
-                          evidence_dir=None)
+                          evidence_dir=None, accept_finding_restrictions=accept)
     if cited is None:
         cited = [n for n, h in enumerate(history, 1) if h["tool"] == "http_request"]
     return check_proof(ctx, history, ProbeResult(verdict=verdict, confidence="high", rationale="claim"), cited)
@@ -386,9 +387,14 @@ def test_a_confirmed_comparison_reads_as_the_same_answer_on_the_console_in_the_r
     facts = [f for s in result.poc["shown"] for f in s["facts"]]
     assert any("same status 200, the identical answer, compared in code over the whole body" in f for f in facts)
     page = "".join(pages)
-    assert "without login, and without login to a random path next to it" in page           # the Test line
-    assert "without login: 200, the same answer" in page                                    # the Result line
-    assert "a different answer" not in page and "not recorded to compare" not in page
+    assert f"Without a login, GET {PATH} returns the same answer as for account-1." in page   # the lead
+    assert "Only the declared allowed accounts may access this resource. Source: operator:" in page
+    assert "identical to step 2, compared in code" in page and "<td>refused</td>" in page  # the attack's row
+    assert page.count("<li class=yes>") == 3 and "<li class=no>" not in page     # access, control and rule hold
+    assert "so the target does not answer every path alike" in page
+    assert "Confirmed: the access violates the rule." in page
+    assert "got the identical answer, compared in code" in page and "s3cr3t" in page       # the answer, shown once
+    assert "differs from" not in page and "not recorded to compare" not in page
     shown = _shown({"verdict": "confirmed", "class": "access-control", "proof": result.proof, "poc": result.poc})
     assert shown.startswith("Without a login the same answer as account-1, compared in code") and "404" in shown
 
@@ -474,3 +480,57 @@ def test_interpretation_objections_reach_the_agent_and_unresolved_objections_pre
     assert result.verdict == "inconclusive"
     feedback = [h for h in histories[-1] if h["tool"] == "qa_feedback"]
     assert feedback[0]["result"]["issues"] == [INTENDED]
+
+
+def test_the_comparison_image_says_when_no_rule_rates_the_access_and_shortens_long_hex_values(tmp_path):
+    """VER-010, VER-035: without a restriction the image shows the access and says that nothing rates it."""
+    pages = []
+    browser = SimpleNamespace(screenshots=("access-control",),
+                              render_exchanges=lambda html, name, marked: pages.append(html) or [])
+    digest = "1c8bfe8f801d79745c4631d09fff36c82aa37fc4cce4fc946683d7b336b63032"
+
+    def target(m, path, h):
+        return Resp(200, json.dumps({"name": "tony", "hash": digest})) if path == PATH else Resp(404, "")
+
+    result, _, _ = _run(tmp_path, target, browser=browser, declared=False)
+    assert result.verdict == "inconclusive" and len(pages) == 1          # one image holds the whole comparison
+    page = pages[0]
+    assert f"Without a login, GET {PATH} returns the same answer as for account-1." in page
+    assert "No access rule is declared or accepted for this finding" in page and "<td>not declared</td>" in page
+    assert "class='attack access unrated'" in page and "<td>refused</td>" not in page
+    assert page.count("<li class=yes>") == 2 and "<li class=no><b>Rule</b>" in page      # only the rule is missing
+    assert "Inconclusive: the access is shown, but no rule rates it." in page
+    assert digest not in page and "1c8bfe8f…3032 (64 hex characters)" in page
+    order = [page.index(f"<span class=role>{role}<") for role in ("Normal request", "Attack", "Control")]
+    assert order == sorted(order)
+
+
+def test_the_report_says_why_a_comparison_has_its_verdict(tmp_path):
+    """VER-010: the report names the access, the control and the rule, each with whether it holds, as the image does."""
+    from jsonschema import Draft202012Validator
+
+    from appsec_verifier.verify.report import to_markdown
+
+    def target(m, path, h):
+        return Resp(200, SECRET) if path == PATH else Resp(404, "<h1>Not found</h1>")
+
+    schema = yaml.safe_load(Path("schemas/verification.schema.yaml").read_text())
+    poc_schema = schema["properties"]["results"]["items"]["properties"]["poc"]
+    for declared, verdict, marks, closing in (
+            (True, "confirmed", ["✓", "✓", "✓"], "Confirmed: the access violates the rule."),
+            (False, "inconclusive", ["✓", "✓", "✗"], "Inconclusive: the access is shown, but no rule rates it.")):
+        (tmp_path / verdict).mkdir()
+        result, _, _ = _run(tmp_path / verdict, target, declared=declared)
+        comparison = result.poc["comparison"]
+        assert result.verdict == verdict and [c["name"] for c in comparison["checks"]] == [
+            "Access shown", "Control", "Rule"]
+        assert not list(Draft202012Validator(poc_schema).iter_errors(result.poc))
+        text = to_markdown({"meta": {}, "results": [{
+            "result_id": "VF-1", "finding_ref": {"id": "T-1", "title": "Access"}, "class": "access-control",
+            "verdict": result.verdict, "confidence": result.confidence, "proof": result.proof, "poc": result.poc}]})
+        lead = f"Without a login, GET {PATH} returns the same answer as for account-1."
+        assert "**What the test showed:** " + lead in text
+        assert [line[2] for line in text.splitlines() if line.startswith(("- ✓ **", "- ✗ **"))] == marks
+        assert closing in text and "**Expected access:**" not in text      # the rule line names it once
+        roles = [line.split(" · ")[0].strip("*") for line in text.splitlines() if " · step " in line and "**" in line]
+        assert roles == ["Normal request", "Attack", "Control"]

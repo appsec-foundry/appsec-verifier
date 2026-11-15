@@ -567,8 +567,9 @@ def why_not_confirmed(r: dict, variant: dict | None = None) -> str | None:
     experiments = [o.removeprefix(_EXPERIMENT_NO_PROOF) for o in observations if o.startswith(_EXPERIMENT_NO_PROOF)]
     missing = [str(m) for m in (r.get("proof") or {}).get("missing") or []]
     if any("access restriction" in m for m in [*missing, *experiments]):
-        return ("Needs an option: access was observed, but no declared rule says it should be refused; add "
-                "access_policies to the scope.")
+        return ("Needs an option: access was observed, but no rule says it should be refused; "
+                "--accept-finding-restrictions takes the rule from the finding, access_policies in the scope "
+                "declares it.")
     if missing:
         return f"No proof: the agent's confirmation failed the proof check: {_plain(missing[0])}."
     lowered = _LOWERED.match(rationale)
@@ -763,13 +764,19 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
            f"### {badge} {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r) if several else ''}",
            "",
            "| " + " | ".join(head) + " |", "|" + " --- |" * len(head), "| " + " | ".join(cells) + " |"]
-    if shown := _shown(r):
+    comparison = (r.get("poc") or {}).get("comparison") or {}
+    if comparison.get("checks"):       # VER-010: the observed access, its controls and the rule, as in the image
+        out += ["", f"**What the test showed:** {_sentence(comparison['lead'])}", "",
+                *(f"- {'✓' if c['ok'] else '✗'} **{_inline(c['name'], 40)}:** {_sentence(c['text'])}"
+                  for c in comparison["checks"]),
+                "", _sentence(comparison["closing"])]
+    elif shown := _shown(r):
         out += ["", f"**What the test showed:** {shown}"]
     if why := why_not_confirmed(r, variant):
         out += ["", f"**Why not confirmed:** {_sentence(why)}"]
     notes = []
     restriction = proof.get("access_restriction")
-    if isinstance(restriction, dict):
+    if isinstance(restriction, dict) and not comparison.get("checks"):
         description = restriction.get("restriction") or (
             "Allowed: " + ", ".join(restriction.get("allowed_roles", []))
             + "; denied: " + ", ".join(restriction.get("denied_roles", [])))

@@ -895,14 +895,17 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
                 safe,
                 read_only,
                 agent_info,
-                notes,
+                [*notes, *([("Access rules", "from the findings where the scope declares none "
+                                             "(--accept-finding-restrictions)")]
+                           if getattr(args, "accept_finding_restrictions", False)
+                           and any(p.cls == "access-control" for p in sel) else [])],
                 floor=args.min_severity,
                 guided=invocation is not None,
             )
         )
     )
     print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing), full=False)))
-    for hint in _access_setup_hints(probed, scope):
+    for hint in _access_setup_hints(probed, scope, getattr(args, "accept_finding_restrictions", False)):
         print(hint)
     if probed and not contact:
         return _blocked(
@@ -1041,6 +1044,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             authorization=authorization,
             safe=safe,
             read_only=read_only,
+            accept_finding_restrictions=getattr(args, "accept_finding_restrictions", False),
             contacted=contact,
             agent=agent_info,
             browser=browser,
@@ -1694,14 +1698,16 @@ def _wrap_whole(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False)
 
 
-def _access_setup_hints(plans, scope):
-    """Actionable offline preparation for missing access declarations (VER-031)."""
+def _access_setup_hints(plans, scope, accepted: bool = False):
+    """Actionable offline preparation for missing access declarations (VER-031); none when the operator took
+    the restrictions from the findings (VER-010)."""
     declared = {r["finding_id"] for key in ("test_resources", "access_policies") for r in scope.get(key, [])}
     missing = sorted({p.id for p in plans if p.cls == "access-control" and p.id not in declared})
-    if not missing:
+    if not missing or accepted:
         return []
     return ["Access restriction missing for " + ", ".join(printable(p) for p in missing) + ".",
-            "  Add access_policies: [{finding_id: ID, path: /protected, allowed_roles: [account-1], "
+            "  --accept-finding-restrictions takes it from each finding. To declare it instead, add "
+            "access_policies: [{finding_id: ID, path: /protected, allowed_roles: [account-1], "
             "denied_roles: [anonymous], restriction: 'Sign-in is required', source: 'Operator access policy'}] "
             "to the scope; use test_resources with pointer and value for a harmless field or text marker. "
             "These declarations describe expected access, not additional request permissions."]
@@ -2340,6 +2346,12 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         "--read-only",
         action="store_true",
         help="no write requests, even with --allow-intrusive",
+    )
+    mode.add_argument(
+        "--accept-finding-restrictions",
+        action="store_true",
+        help="take the access restriction of an access-control finding from the assessment where the scope "
+        "declares none; the report names that source",
     )
     mode.add_argument(
         "--non-interactive",

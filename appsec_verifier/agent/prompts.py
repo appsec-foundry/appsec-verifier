@@ -490,8 +490,10 @@ def _access_hint(ctx) -> str:
                 "accounts this finding's proof can use. Report the missing prerequisite.")
     hint = ("\nAn access_policies observation selects a declared field or text marker instead of the whole "
             "response; the engine checks it.\nAccess comparisons establish observed access only. "
-            "Confirmation additionally requires an "
-            "independent operator-declared test resource or access_policies restriction, never a finding claim.")
+            + ("The operator accepted the assessment's access restrictions for this run, so a checked comparison "
+               "can confirm." if getattr(ctx, "accept_finding_restrictions", False) is True else
+               "Confirmation additionally requires an "
+               "independent operator-declared test resource or access_policies restriction, never a finding claim."))
     if "owner" in methods:
         hint += (
             "\nOwn-resource proof: call plan_test with kind access-control, owner set to one normal account and "
