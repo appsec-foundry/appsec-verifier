@@ -526,11 +526,34 @@ def test_engine_error_signature_catches_each_engine(body):
     '{"data":[1,2,3]}',                                         # a normal success body
     '{"data":[{"name":"Velocity Runner"},{"name":"Twig Basket"}]}',   # engine names as ordinary words
     "<p>Handlebars, Mako shark poster, Smarty pants</p>",
+    "Damn Vulnerable Web Application (DVWA) is a PHP/MySQL web application.",   # a bare DBMS name in page prose
+    "<footer>Powered by MariaDB 10.5 and PostgreSQL</footer>",                 # DBMS names in the page frame
 ])
 def test_a_generic_failure_is_not_an_engine_error(body):
     from appsec_verifier.agent.experiments import engine_error_signature
 
     assert engine_error_signature(body) is False
+
+
+def test_a_constant_dbms_name_does_not_defeat_the_engine_error_proof():
+    """VER-053: a bare DBMS product name rendered constantly in the page frame (DVWA shows "PHP/MySQL") must not
+    count as an engine error. Otherwise the balanced control inherits it and the proof fails closed although the
+    break alone raised a real syntax error. Regression for the brute/username false negative."""
+    from appsec_verifier.agent.experiments import _error_probe_check, engine_error_signature
+
+    frame = " <footer>Damn Vulnerable Web Application (PHP/MySQL)</footer>"
+    break_body = "You have an error in your SQL syntax near '''" + frame
+    balance_body = "Username and/or password incorrect." + frame
+
+    def rec(body):
+        return {"engine_error": engine_error_signature(body)}
+
+    plan = {"error_set": [{"name": "'", "break": "admin'", "balance": "admin''"}]}
+    groups = {
+        "break:'": [(2, rec(break_body)), (4, rec(break_body))],
+        "balance:'": [(3, rec(balance_body)), (5, rec(balance_body))],
+    }
+    assert _error_probe_check(groups, plan) is None
 
 
 def test_marker_controls_builds_only_null_and_a_concatenated_marker():

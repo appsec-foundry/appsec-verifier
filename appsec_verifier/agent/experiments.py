@@ -19,7 +19,10 @@ _ENGINE_ERROR = re.compile(
     r"SQLITE_ERROR|unrecognized token|near \"[^\"]*\": syntax error|incomplete input|"
     r"you have an error in your SQL syntax|SQL syntax|syntax error at or near|"
     r"unterminated quoted string|quoted string not properly terminated|ORA-\d{5}|SQLSTATE\[|"
-    r"PG::|psycopg|sqlalchemy|SQLException|MySQL|MariaDB|PostgreSQL|"
+    # Error tokens only, never a bare DBMS name (MySQL, MariaDB, PostgreSQL): those are ordinary words in page
+    # prose and in the page frame (DVWA renders "PHP/MySQL"), so a constant one would mark the balanced control an
+    # engine error too and fail the proof closed. Real syntax errors stay covered by their phrases above.
+    r"PG::|psycopg|sqlalchemy|SQLException|"
     # Microsoft SQL Server, H2 and Db2 name a syntax error in words of their own.
     r"Unclosed quotation mark|Incorrect syntax near|Syntax error in SQL statement|DB2 SQL error|SQLCODE=-?\d+|"
     r"XPathException|Invalid XPath|xmlXPathEval|XPST\d{4}|XPTY\d{4}|Saxon|"
