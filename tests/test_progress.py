@@ -874,7 +874,9 @@ def test_the_runner_shows_only_findings_with_a_probe():
 
 
 def test_the_runner_gives_the_rating_after_the_last_variant_of_a_finding_from_all_its_variants():
-    """One confirmed variant raises the rating (VER-039); it is shown once, after the finding's last variant."""
+    """One confirmed variant raises the rating (VER-039); it is shown once, after the finding's last variant.
+    Because v1 confirms, its remaining variant v2 is deferred behind T-2 (VER-026), so the order the console
+    shows is v1, T-2, v2, and the rating lands on v2 last."""
     from dataclasses import replace
 
     class Probe:
@@ -895,8 +897,8 @@ def test_the_runner_gives_the_rating_after_the_last_variant_of_a_finding_from_al
                      identities=[], registry=ProbeRegistry({"access-control": Probe()}), verifier_version="t",
                      target_base=scope["base_url"], authorization={}, progress=recorder)
     finished = [event for event in recorder.events if event[0] == "finished"]
-    assert [len(event) for event in finished] == [3, 4, 4]          # no rating after the first variant
-    changed, unrated = finished[1][3], finished[2][3]
+    assert [(event[1], len(event)) for event in finished] == [("T-1", 3), ("T-2", 4), ("T-1", 4)]
+    unrated, changed = finished[1][3], finished[2][3]               # T-2 first, then v2 with the finding's rating
     assert changed["changed"] and changed["after_verification"] == {"likelihood": "High", "impact": "High",
                                                                     "severity": "High"}
     assert not unrated["changed"]                                    # T-2 names no rating
@@ -1038,3 +1040,27 @@ def test_the_grid_counts_findings_and_the_variants_of_one_share_its_number():
     rows = [row for row in _rows(out) if " start " in row]
     assert [row.split()[1] for row in rows] == ["1/2", "1/2", "2/2"]
     assert progress.done == 1
+
+
+def test_a_confirmed_findings_other_variants_are_deferred_behind_the_rest(tmp_path):
+    """VER-026: once a variant confirms, the finding's remaining variants wait until every other selected finding
+    has been tested, then run in the planned order. Here T-1/v1 confirms, so T-1/v2 runs after T-2 and T-3."""
+    from dataclasses import replace
+
+    class Probe:
+        cls = "access-control"
+
+        def run(self, ctx):
+            if ctx.plan.variant_id == "v1":
+                return ProbeResult(verdict="confirmed", proof={"checked": True, "variant": "v1", "steps": [1]})
+            return ProbeResult(verdict="inconclusive", rationale="r")
+
+    t1 = [replace(_plan("T-1"), variant_id=v, variant_digest=v * 8) for v in ("v1", "v2")]
+    plans = [t1[0], t1[1], _plan("T-2"), _plan("T-3")]
+    recorder = Recorder()
+    scope = {"base_url": "https://app.example.com", "hosts": ["app.example.com"]}
+    run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=plans, limits=Limits(),
+                     identities=[], registry=ProbeRegistry({"access-control": Probe()}), verifier_version="t",
+                     target_base=scope["base_url"], authorization={}, progress=recorder)
+    order = [event[1] for event in recorder.events if event[0] == "finished"]
+    assert order == ["T-1", "T-2", "T-3", "T-1"]      # v2 deferred to the end, after the other findings

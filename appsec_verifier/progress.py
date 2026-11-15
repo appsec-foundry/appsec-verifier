@@ -405,7 +405,7 @@ class RunProgress:
         self.total = self.done = self.number = 0
         self._variants: Counter = Counter()     # variants per finding of the grid; findings, not variants, count
         self._finished: Counter = Counter()     # variants of each finding that have finished
-        self._numbered = None                   # the finding the current number belongs to
+        self._numbers: dict = {}                # each finding's number; it keeps it when tested again later
         self._id = ""
         self._id_width = 0
         self._steps, self._noted = 0, False
@@ -429,7 +429,7 @@ class RunProgress:
         counts as done once its last variant is."""
         self._variants = Counter(plan.id for plan in plans)
         self._finished = Counter()
-        self._numbered = None
+        self._numbers = {}
         self.total = total = len(self._variants)
         if not total:
             return
@@ -453,9 +453,8 @@ class RunProgress:
             self._end_series()
             if self.number:
                 self._write("")         # sets the finding apart from the one before
-            if plan.id != self._numbered:   # another variant of the same finding keeps its number
-                self.number += 1
-                self._numbered = plan.id
+            # Another variant of the same finding keeps its number, also when it is tested later (VER-026).
+            self.number = self._numbers.setdefault(plan.id, len(self._numbers) + 1)
             self._id = _clip(plan.id, 16)
             self._steps, self._activity, self._noted, self._explained = 0, "", False, False
             self._planned, self._plan = False, {}

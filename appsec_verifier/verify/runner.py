@@ -232,7 +232,7 @@ def run_verification(
                            "active" if n == len(results) else "pending",
                  "proof_checked": bool((results[n].get("proof") or {}).get("checked"))
                                   if n < len(results) else False}
-                for n, p in enumerate(plans) if p.id == plan.id
+                for n, (p, _) in enumerate(queue) if p.id == plan.id   # in test order, as `results`
             ][:32],
             prior_results=[
                 {
@@ -271,12 +271,17 @@ def run_verification(
 
     results = []
     groups = {}
-    last_variant = {p.id: i for i, p in enumerate(plans, start=1)}
+    planned = {id(p): n for n, p in enumerate(plans)}
+    queue = list(zip(plans, probed, strict=True))
+    deferred: set[str] = set()  # VER-026: findings whose remaining variants wait behind the other findings
     confirmed_ids: set[str] = set()  # Findings eligible for evidence review.
     tested_signatures: dict[str, set] = {}  # VER-039: a request already tested is not tested again
     stopped: str | None = None  # the run-wide limit that stopped an earlier finding
     interrupted = False
-    for i, (plan, shown) in enumerate(zip(plans, probed, strict=True), start=1):
+    i = 0
+    while i < len(queue):
+        plan, shown = queue[i]
+        i += 1
         started = _iso(datetime.now(timezone.utc))
         budget.begin_finding(plan.id)
         finding_exhausted = False
@@ -326,6 +331,10 @@ def run_verification(
                 stopped = res.limits_hit
             if res.verdict == "confirmed":
                 confirmed_ids.add(plan.id)
+                # VER-026: the finding is confirmed, so its remaining variants wait until every other selected
+                # finding has been tested, then run in the planned order.
+                deferred.add(plan.id)
+                queue[i:] = sorted(queue[i:], key=lambda e: (e[0].id in deferred, planned[id(e[0])]))
             signature = _variant_signature(plan)
             if shown and signature is not None and (res.proof or {}).get("checked") is True:
                 tested_signatures.setdefault(plan.id, set()).add(signature)
@@ -337,7 +346,10 @@ def run_verification(
         ctx = contexts.get(evidence_id(plan))
         if ctx is not None and res.verdict != "not-attempted":
             groups.setdefault(plan.id, []).append((i - 1, plan, ctx, res))
-        if last_variant[plan.id] == i and plan.id in groups:
+        # A finding is reviewed and rated once, after its last variant; deferral (above) keeps a confirmed
+        # finding's later variants together, so this is still a single group of all its tested variants.
+        last_variant = all(e[0].id != plan.id for e in queue[i:])
+        if last_variant and plan.id in groups:
             from .evidence_review import review_finding
 
             group = groups.pop(plan.id)
@@ -365,7 +377,7 @@ def run_verification(
                 contexts.pop(evidence_id(reviewed_plan), None)
         if shown and progress is not None and not interrupted:
             rating = None
-            if last_variant[plan.id] == i:      # the rating rests on all variants of the finding (VER-039)
+            if last_variant:      # the rating rests on all variants of the finding (VER-039)
                 from .report import rating_after_verification
 
                 rating = rating_after_verification(plan.rating, [r for r in results
