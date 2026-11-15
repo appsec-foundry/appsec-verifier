@@ -14,37 +14,37 @@ AppSec Verifier tests whether the findings of an [AppSec Analyzer](https://githu
 
 ## Quick start
 
-This example tests the findings from the [AppSec Analyzer quick start](https://github.com/appsec-foundry/appsec-analyzer#quick-start) against the intentionally vulnerable [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) on your own machine. You need Python 3.10+, [pipx](https://pipx.pypa.io/stable/), Docker, the assessment from that quick start, and the Claude CLI (`claude`) with a login. Other models are listed under [Model profiles](#model-profiles).
+Verification has two stages: [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) first assesses the source code statically and writes its findings to `appsec-assessment.yaml`, then the Verifier tests these findings in the running application. This example does both for [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) on your machine. You need Python 3.10+, [pipx](https://pipx.pypa.io/stable/), Docker, and a signed-in Claude CLI (`claude`).
 
-1. **Install the Verifier** from GitHub (preview):
+1. **Create the assessment** with the [AppSec Analyzer quick start](https://github.com/appsec-foundry/appsec-analyzer#quick-start). It writes `~/assessments/juice-shop/appsec-assessment.yaml`.
+
+2. **Install the Verifier** from GitHub (preview). XSS findings also need the [proof browser](#install).
 
    ```sh
    pipx install git+https://github.com/appsec-foundry/appsec-verifier.git
    ```
 
-   XSS findings also need the proof browser ([Install](#install)).
-
-2. **Start Juice Shop.** Binding the port to 127.0.0.1 keeps the vulnerable application unreachable from your network:
+3. **Start Juice Shop**, reachable only from your machine:
 
    ```sh
    docker run --rm -p 127.0.0.1:3000:3000 bkimminich/juice-shop
    ```
 
-3. **Verify the findings.** The two Juice Shop customers are test accounts for the access-control findings. The Verifier asks for their passwords with hidden input; Juice Shop lists them in `data/static/users.yml`:
+4. **Verify the findings** in the running application. The two accounts are Juice Shop customers for the access-control tests. The Verifier asks for their passwords, which Juice Shop lists in `data/static/users.yml`:
 
    ```sh
    appsec-verifier ~/assessments/juice-shop/appsec-assessment.yaml \
      --url http://localhost:3000 --account jim@juice-sh.op --account bender@juice-sh.op
    ```
 
-   The guided run shows which findings it can test, asks who may use the requests of the access-control findings, and starts after you confirm. By default it tests findings of severity high and above and sends only reading requests; it asks before a write ([Safety](#safety)). For your own application, pass its assessment, URL and test accounts ([Scope and test accounts](#scope-and-test-accounts)).
+   The run lists the findings it can test, asks a few questions and starts after you confirm. It sends only reading requests and asks before a write ([Safety](#safety)). For your own application, see [Scope and test accounts](#scope-and-test-accounts).
 
-4. **Read the report.** At the end the run prints the path of its report, `verification.md`, with the verdict, the evidence and a proof of concept for each finding ([Output](#output), [example](examples/juice-shop/result/verification.md)).
+5. **Read the report.** The run ends with the path of `verification.md`: verdict, evidence and proof of concept per finding ([example](examples/juice-shop/result/verification.md)).
 
-To update the Verifier later, run `appsec-verifier update`. See [Install](#install) for details.
+To update the Verifier later, run `appsec-verifier update`.
 
 > [!NOTE]
-> With API billing, the Verifier asks before a run exceeds the default limit of USD 10. The [example run](examples/juice-shop/result/console.log.md) against Juice Shop tested 8 findings in 12 minutes for USD 4.11 at API prices.
+> With API billing, the Verifier asks before a run exceeds USD 10. The [example run](examples/juice-shop/result/console.log.md) tested 8 findings in 12 minutes for USD 4.11.
 
 ## What it verifies
 
