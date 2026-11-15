@@ -82,6 +82,46 @@ PROOF_FORMS = {
                                        "Without credentials the request got the same answer as the signed-in "
                                        "account, unlike a random path next to it"),
 }
+# Why each form's observation is a proof and not only a hint, in one sentence for the images and the report.
+PROOF_RULES = {
+    "script-executed": "The browser showed a dialog with the Verifier's random marker. Only a script that ran can "
+                       "produce it; a payload that is merely reflected in the answer does not count.",
+    "listener-hit": "The Verifier's listener received a request with this finding's marker, so the target called "
+                    "an address the request chose.",
+    "marker-redirect": "The Location of the redirect is a host name the Verifier generated for this finding, so the "
+                       "target took the redirect target from the request.",
+    "marker-file": "The answer holds the content of the operator's marker file, which the request must not be able "
+                   "to read.",
+    "archive-marker": "An entry of the uploaded archive was written outside its directory and read back with the "
+                      "Verifier's marker.",
+    "cookie-attribute": "The target set the session cookie without the attribute in repeated responses.",
+    "predicate": "The answer changed with the truth of conditions whose values the Verifier generated fresh, so "
+                 "the declared input changes the backend's logic. A slower answer alone never counts.",
+    "engine-error": "Only the syntax break raised a backend engine error, its balanced counterpart did not, so "
+                    "the backend parses the declared input as code.",
+    "returned-marker": "The answer returned the marker the Verifier generated for one control and not for its "
+                       "complement, so the injected statement ran.",
+    "computed-expression": "Each answer holds the result of an expression the Verifier generated fresh for it, so "
+                           "the backend evaluated the declared input.",
+    "out-of-band": "The Verifier's listener received the nonce of one control and not the complementary one's, so "
+                   "the injected statement ran on the target.",
+    "auth-artifact": "Only the true-predicate controls yielded an authenticated artifact; the false ones and the "
+                     "normal input did not, so the input decides the login.",
+    "auth-resource": "Only the artifacts of the positive controls reached the declared protected resource; those "
+                     "of the normal input and the negative controls did not.",
+    "selected-access": "The field or text marker the operator declared as protected reached an identity the "
+                       "declaration denies.",
+    "declared-exposure": "Two reads without credentials showed the marker the operator declared as protected; the "
+                         "neighbouring control did not.",
+    "identity-contrast": "The proof check compared the identities' answers on the cited steps and found the access "
+                         "the finding describes.",
+    "record-marker": "Another account read the record with the marker that only the owner's request had written.",
+    "record-change": "The owner's read showed the second marker, which only the other account's write carried.",
+    "privileged-comparison": "A normal account got the identical answer of the privileged account, while a request "
+                             "without login was refused.",
+    "comparison-without-credentials": "A request without credentials got the identical answer of the signed-in "
+                                      "account, and a random path next to it did not.",
+}
 # The form a result saved without one stands for: its class's usual proof.
 DEFAULT_FORMS = {"xss": "script-executed", "ssrf": "listener-hit", "open-redirect": "marker-redirect",
                  "path-traversal": "marker-file", "session": "cookie-attribute", "injection": "predicate",

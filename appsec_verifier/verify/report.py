@@ -764,10 +764,10 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
            f"### {badge} {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r) if several else ''}",
            "",
            "| " + " | ".join(head) + " |", "|" + " --- |" * len(head), "| " + " | ".join(cells) + " |"]
-    comparison = (r.get("poc") or {}).get("comparison") or {}
-    if comparison.get("checks"):       # VER-010: the observed access, its controls and the rule, as in the image
+    comparison = (r.get("poc") or {}).get("why") or {}
+    if comparison.get("checks"):       # why the verdict follows, as in the images (poc.why_summary)
         out += ["", f"**What the test showed:** {_sentence(comparison['lead'])}", "",
-                *(f"- {'✓' if c['ok'] else '✗'} **{_inline(c['name'], 40)}:** {_sentence(c['text'])}"
+                *(f"- {'✓' if c['ok'] else '✗'} **{_inline(c['name'], 60)}:** {_sentence(c['text'])}"
                   for c in comparison["checks"]),
                 "", _sentence(comparison["closing"])]
     elif shown := _shown(r):
@@ -776,7 +776,7 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
         out += ["", f"**Why not confirmed:** {_sentence(why)}"]
     notes = []
     restriction = proof.get("access_restriction")
-    if isinstance(restriction, dict) and not comparison.get("checks"):
+    if isinstance(restriction, dict) and not any(c.get("name") == "Rule" for c in comparison.get("checks") or []):
         description = restriction.get("restriction") or (
             "Allowed: " + ", ".join(restriction.get("allowed_roles", []))
             + "; denied: " + ", ".join(restriction.get("denied_roles", [])))

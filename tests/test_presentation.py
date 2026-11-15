@@ -81,6 +81,9 @@ def test_an_accepted_presentation_leads_the_images_and_the_report(tmp_path):
     assert "GET ⟦/rest/basket/2⟧" in result.poc["shown"][1]["request_excerpt"]
     page = browser.pages[-1]
     assert "(the test agent's words)" in page and "class=outcome" in page and "Outcome" in page
+    # Why the verdict follows, in the Verifier's words, replaces the one-line proof check.
+    assert "<b class=closing>Confirmed: " in page and "Proof check:" not in page
+    assert page.count("<span class=yes></span>") == len(result.poc["why"]["checks"])
     images = [e for e in result.evidence if e.get("kind") == "screenshot"]
     assert images[0]["composed_by"] == "verifier"                 # the comparison table leads (VER-010)
     assert images[1:] and all(e["composed_by"] == "test-agent" and e["reviewable"] is True for e in images[1:])
@@ -507,7 +510,8 @@ def test_present_replaces_the_images_and_excerpts_unless_nothing_usable_remains(
     assert [(s["step"], s.get("composed_by")) for s in result.poc["shown"]] == [(2, None), (3, "verifier")]
     assert ctx.represent(_good()) is None
     assert result.poc["presentation"] == {"composed_by": "test-agent", "summary": SUMMARY}
-    assert [e["composed_by"] for e in result.evidence if e.get("kind") == "screenshot"] == ["test-agent"]
+    images = [e for e in result.evidence if e.get("kind") == "screenshot"]
+    assert [(e["composed_by"], e.get("overview")) for e in images] == [("verifier", True), ("test-agent", None)]
     assert not any(o.startswith(pres.COMPOSED_NOTE) for o in result.observations)
     assert "Outcome" in browser.pages[-1]
 
@@ -560,3 +564,20 @@ def test_the_verification_schema_takes_either_presentation():
                                             "presentation": presentation})
     assert not Draft202012Validator(poc).is_valid({"file": None, "steps": [], "shown": [],
                                                    "presentation": {"composed_by": "model"}})
+
+
+def test_the_redirect_the_proof_reads_is_framed_whatever_the_agent_marked():
+    """VER-012, VER-035: the Location that names the marker host is the proof, so the Verifier marks it itself."""
+    host = "vrfaa11bb22.invalid"
+    ctx = SimpleNamespace(plan=SimpleNamespace(cls="open-redirect"), marker=("vrfaa11", "bb22"))
+
+    def entry(location):
+        return {"request": {"method": "GET", "url": f"https://shop.test/go?to=https://{host}/", "headers": []},
+                "response": {"status": 302, "statusText": "Found", "content": {"text": "", "mimeType": "text/html"},
+                             "headers": [{"name": "location", "value": location}]}}
+
+    _, answer, _, res_marks, facts = pres._step(ctx, [], 1, entry(f"https://{host}/"), {}, [], set())
+    assert res_marks == [("redirect to the Verifier's marker host", f"https://{host}/")]
+    assert f"location: https://{host}/" in answer and facts == ["Verifier's observation: redirect to the marker host"]
+    _, _, _, res_marks, facts = pres._step(ctx, [], 1, entry("https://shop.test/home"), {}, [], set())
+    assert res_marks == [] and facts == []                         # another target is no proof and gets no frame

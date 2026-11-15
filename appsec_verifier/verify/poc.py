@@ -33,7 +33,9 @@ recorded response without a new request and marks the values the verdict
 names. Live application observations are attached before this renderer. The
 report displays application images and marked HTTP excerpts; exchange images
 are saved for later use, not embedded. An access-control comparison gets one image of its own (`comparison_document`):
-the observed access, the expected one, a table row per identity and the answer once. Every finding with decisive steps
+the observed access, the expected one, a table row per identity and the answer once; an injection experiment one
+with a table row per step and one comparison in detail. Images and report say why a confirmed result is confirmed
+(`why_summary`). Every finding with decisive steps
 also gets an image of those
 exchanges: as the test agent presents them, with what verify/presentation.py left out and the steps it does not
 show named, the report showing those steps after the agent's (VER-059); where the Verifier shows its own presentation
@@ -1377,6 +1379,17 @@ def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
 _EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 ui-monospace,Menlo,Consolas,monospace}
 header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #b00020;white-space:pre-wrap}
 header b{font-size:20px}header .k{color:#ffeb3b;font-weight:bold}header small{color:#bbb;font-size:13px}
+header .lead{font-size:19px;font-weight:bold}header b.closing{font-size:16px}
+header .yes:before{content:"\\2713  ";color:#7ddc8a;font-weight:bold}
+header .no:before{content:"\\2717  ";color:#ffb74d;font-weight:bold}
+table.steps{border-collapse:collapse;margin:14px;width:calc(100% - 28px);font:15px/1.4 system-ui,Helvetica,Arial,
+sans-serif}table.steps th{text-align:left;font-size:13px;color:#555;padding:4px 8px;border-bottom:2px solid #999}
+table.steps td{padding:6px 8px;border-bottom:1px solid #ccc;vertical-align:top}table.steps td.in{font-family:
+ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere}table.steps .role{white-space:nowrap}
+table.steps tr.normal .role{background:#2e7d32}table.steps tr.control .role{background:#546e7a}
+table.steps tr.attack .role{background:#b00020}table.steps tr.effect .role{background:#e65100}
+table.steps tr.attack td{background:#fdecea}table.steps td.seen{font-weight:bold}
+section>h4{margin:0;padding:4px 10px;font:13px sans-serif;color:#555;background:#fafafa;border-bottom:1px solid #ccc}
 .hit.block{display:block}.block mark{display:block;background:none;outline:none;border:2px solid #b00020}
 .sent mark{background:#ffeb3b;outline:2px solid #b00020;outline-offset:0}
 .note{color:#b00020;font:bold 14px sans-serif;margin-left:8px}.block .note{display:block;margin:0 0 3px}
@@ -1461,14 +1474,35 @@ _VERDICT_SENTENCE = {
 }
 
 
-def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], roles, verdict: str,
-                 cited: bool) -> str:
-    """What the steps showed, per kind of step, and what the verdict makes of it."""
+def _step_observation(ctx, history: list[dict], n: int, e: dict, everything: list[tuple[int, dict]], roles,
+                      timing: bool) -> str:
+    """What step `n` showed, as the proof reads it: its own observation, else its observed value, its answer time
+    for a timing experiment, its status, or how its answer compares with its reference."""
+    value, ref = observed(ctx, history, e), compared_with(n, e, everything, roles, opposites(history))
+    if proof := _proof_observation(ctx, history, n, e):     # what the proof reads, not the status or value
+        return _OBSERVATIONS[proof[0]][2 if proof[1] else 3]
+    if value is not _MISSING:
+        return _brief(value)
+    if timing and isinstance(e.get("time"), int):
+        return f"{e['time']} ms"
+    if ref is None:
+        return str(e["response"]["status"])
+    same = _same_in_code(ctx, n, ref[0])
+    if same is None and not (e["response"]["content"].get("_omitted")
+                             or ref[1]["response"]["content"].get("_omitted")):
+        same = _text(e) == _text(ref[1])
+    return f"{e['response']['status']}, " + ("an answer not recorded to compare" if same is None
+                                             else f"{'the same' if same else 'a different'} answer")
+
+
+def observation_groups(ctx, history: list[dict], everything: list[tuple[int, dict]], roles
+                       ) -> list[tuple[str, list[int], list[str]]]:
+    """The steps per kind of step, as (name, step numbers, what they showed), in role order."""
     from ..agent.experiments import latest_plan
 
     timing = latest_plan(history)[1].get("kind") == "timing"
     cls = getattr(ctx.plan, "cls", None)
-    rows: dict[str, list[str]] = {}
+    groups: dict[str, tuple[list[int], list[str]]] = {}
     for n, e in by_role(everything, roles):
         kind, label = roles.get(n, ("", ""))
         if roles and not kind:        # outside the comparison the plan declares
@@ -1476,28 +1510,56 @@ def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], r
         who = e.get("_role")
         name = (label.replace(", second form", "") + (f" {who}" if who and cls == "access-control" else "")
                 if kind else f"step {n} as {who or 'anonymous'}")
-        value, ref = observed(ctx, history, e), compared_with(n, e, everything, roles, opposites(history))
-        if proof := _proof_observation(ctx, history, n, e):     # what the proof reads, not the status or value
-            seen = _OBSERVATIONS[proof[0]][2 if proof[1] else 3]
-        elif value is not _MISSING:
-            seen = _brief(value)
-        elif timing and isinstance(e.get("time"), int):
-            seen = f"{e['time']} ms"
-        elif ref is None:
-            seen = str(e["response"]["status"])
-        else:
-            same = _same_in_code(ctx, n, ref[0])
-            if same is None and not (e["response"]["content"].get("_omitted")
-                                     or ref[1]["response"]["content"].get("_omitted")):
-                same = _text(e) == _text(ref[1])
-            seen = f"{e['response']['status']}, " + ("an answer not recorded to compare" if same is None
-                                                     else f"{'the same' if same else 'a different'} answer")
-        if seen not in rows.setdefault(name, []):
-            rows[name].append(seen)
-    shown = [f"{name}: {', '.join(seen[:3])}" for name, seen in list(rows.items())[:5]]
+        seen = _step_observation(ctx, history, n, e, everything, roles, timing)
+        steps, values = groups.setdefault(name, ([], []))
+        steps.append(n)
+        if seen not in values:
+            values.append(seen)
+    return [(name, steps, values) for name, (steps, values) in groups.items()]
+
+
+def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], roles, verdict: str,
+                 cited: bool) -> str:
+    """What the steps showed, per kind of step, and what the verdict makes of it."""
+    groups = observation_groups(ctx, history, everything, roles)
+    shown = [f"{name}: {', '.join(seen[:3])}" for name, _, seen in groups[:5]]
     closing = (_VERDICT_SENTENCE.get(verdict, "No completed proof.") if cited
                else "The verdict cites no step; these recorded attempts have no completed proof.")
     return " · ".join(shown) + ". " + closing
+
+
+def why_summary(ctx, history: list[dict], shown: list[tuple[int, dict]], result) -> dict | None:
+    """Why a result has its verdict, for its images and the report (VER-034, VER-035): `lead`, what the proof showed;
+    `checks`, what each kind of step showed and the rule that makes it a proof, each with whether it holds;
+    `closing`, the conclusion. An access-control comparison names its controls and the access rule (VER-010); any
+    other class only a confirmation the proof check accepted. None where there is nothing to explain."""
+    from .probes import PROOF_FORMS, PROOF_RULES, proof_shown
+
+    cls, proof = getattr(ctx.plan, "cls", None), result.proof or {}
+    rows = comparison_rows(ctx, history, shown) if cls == "access-control" else None
+    if rows is not None:
+        summary = comparison_summary(ctx, history, rows, result)
+        return {k: summary[k] for k in ("lead", "checks", "closing")} if summary["checks"] else None
+    said = proof_shown(proof, cls)
+    if result.verdict != "confirmed" or proof.get("checked") is not True or said is None:
+        return None
+    form = next(k for k, v in PROOF_FORMS.items() if v is said)
+    roles = step_roles(ctx, history, shown)
+    checks = [{"ok": True, "name": name[:1].upper() + name[1:],
+               "text": f"step{'s' if len(steps) > 1 else ''} {', '.join(map(str, steps))}: {', '.join(seen[:3])}."}
+              for name, steps, seen in observation_groups(ctx, history, shown, roles)[:6]]
+    checks.append({"ok": True, "name": "Why this proves it", "text": PROOF_RULES[form]})
+    return {"lead": said[1] + ".", "checks": checks, "closing": f"Confirmed: {said[0]}."}
+
+
+def why_lines(why: dict | None) -> list[str]:
+    """`why_summary` as the lines of an image header, escaped."""
+    if not why:
+        return []
+    return [f"<span class=lead>{html.escape(why['lead'])}</span>",
+            *(f"<span class={'yes' if c['ok'] else 'no'}></span><span class=k>{html.escape(c['name'])}</span> "
+              f"{html.escape(c['text'])}" for c in why["checks"]),
+            f"<b class=closing>{html.escape(why['closing'])}</b>"]
 
 
 def _shown_line(panel: list[tuple[int, dict]], roles) -> str:
@@ -1511,9 +1573,38 @@ def _shown_line(panel: list[tuple[int, dict]], roles) -> str:
     return "; ".join(parts)
 
 
+def experiment_table(ctx, history: list[dict], everything: list[tuple[int, dict]], roles) -> str:
+    """Every step of an experiment as one table row (VER-035): what the step is, the value it sent for the declared
+    input, and what the proof read from its answer, so the pattern of a comparison is seen at a glance. "" where
+    the plan places fewer than two steps. Every recorded value is escaped."""
+    from ..agent.experiments import latest_plan
+
+    _, plan = latest_plan(history)
+    placed = [(n, e) for n, e in by_role(everything, roles) if roles.get(n, ("",))[0]]
+    if len(placed) < 2:
+        return ""
+    timing = plan.get("kind") == "timing"
+    name = str(plan.get("input_name") or "")
+    rows = [f"<tr><th></th><th>Step</th><th>What it is</th><th>Sent{' as ' + html.escape(name) if name else ''}"
+            "</th><th>Answer</th><th>What the proof reads</th></tr>"]
+    for n, e in sorted(placed, key=lambda s: s[0])[:16]:
+        kind, label = roles[n]
+        args = (history[n - 1].get("args") or {}) if 1 <= n <= len(history) else {}
+        sent = _sink(plan, args) if name else _MISSING
+        sent = "" if sent is _MISSING else (sent if isinstance(sent, str) else json.dumps(sent, ensure_ascii=False))
+        sent = sent if len(sent) <= 120 else sent[:119] + "…"
+        seen = _step_observation(ctx, history, n, e, everything, roles, timing)
+        res = e["response"]
+        rows.append(f"<tr class={kind}><td><span class=role>{html.escape(ROLE_TITLES[kind])}</span></td>"
+                    f"<td>{n}</td><td>{html.escape(label)}</td><td class=in>{html.escape(sent)}</td>"
+                    f"<td>{res['status']} {html.escape(res['statusText'])}</td>"
+                    f"<td class=seen>{html.escape(seen)}</td></tr>")
+    return f"<table class=steps>{''.join(rows)}</table>"
+
+
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                      highlight=None, *, cited: bool = True, comparison=None, composed: str | None = None
-                      ) -> tuple[str, int]:
+                      highlight=None, *, cited: bool = True, comparison=None, composed: str | None = None,
+                      why: dict | None = None, table: bool = False) -> tuple[str, int]:
     """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): request and
     response side by side per step, what the verdict rests on marked. Without `cited` they are the answered
     requests after the last test plan of a verdict that cites no step, and the header says so; `composed` says why
@@ -1540,9 +1631,11 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
         test = "no accepted test plan; shown are the requests the verdict cites"
     lines = [f"<b>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), cls, title, verdict))))}</b>",
              *([f"<span class=k>Test:</span> {html.escape(test)}"] if test else []),
-             f"<span class=k>Result:</span> "
-             f"{html.escape(_result_line(ctx, history, everything, roles, verdict, cited))}",
-             f"<span class=k>Shown:</span> {html.escape(_shown_line(shown, roles))}",
+             # Why the verdict follows (why_summary), else what the steps showed in one line.
+             *(why_lines(why) or [f"<span class=k>Result:</span> "
+                                  f"{html.escape(_result_line(ctx, history, everything, roles, verdict, cited))}"]),
+             f"<span class=k>Shown{' in detail' if table else ''}:</span> "
+             f"{html.escape(_shown_line(shown, roles))}",
              *([f"<small>Composed by the Verifier: {html.escape(composed)}.</small>"] if composed else []),
              f"<small>AppSec Verifier · recorded and redacted{' in ' + html.escape(har_path) if har_path else ''}"
              f" at {html.escape(shown_time(captured))}; nothing sent again. "
@@ -1554,6 +1647,8 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     reason = _split_reason(ctx, history, everything, roles) if opposite else ""
     counts = verdict == "confirmed" and reason is None
     parts, total = [f"<header>{chr(10).join(lines)}</header>"], 0
+    if table:
+        parts.append(experiment_table(ctx, history, everything, roles))
     for n, e in shown:
         kind, label = roles.get(n, ("", ""))
         req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight, shown)
@@ -1623,28 +1718,32 @@ def _for_model(e: dict) -> dict:
 
 
 def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
-                         highlight, *, cited: bool = True, composed: str | None = None) -> list[dict]:
+                         highlight, *, cited: bool = True, composed: str | None = None, why: dict | None = None,
+                         table: bool = False) -> list[dict]:
     """The Verifier's own images of the exchanges; `composed` says why the test agent's presentation is not used
-    (VER-059)."""
+    (VER-059), `why` is the result's reason (why_summary). With `table` one image: every step as a table row and
+    the first comparison in detail."""
     shots = []
     withheld = withheld_steps(history) & {n for n, _ in shown}
     # What a model reviews of the panels (VER-042) is the page as it would look with every withheld answer
     # replaced by a notice; the image itself keeps the answer for the operator.
     safe = {n: _for_model(e) if n in withheld else e for n, e in shown}
     # Two exchanges per panel preserve the comparison without a long full-page image.
-    for panel in panels(shown, step_roles(ctx, history, shown), opposite=opposites(history)):
-        page, marked = exchange_document(ctx, history, panel, verdict, har_path,
-                                         highlight, cited=cited, comparison=shown, composed=composed)
+    for panel in panels(shown, step_roles(ctx, history, shown), opposite=opposites(history))[:1 if table else None]:
+        page, marked = exchange_document(ctx, history, panel, verdict, har_path, highlight, cited=cited,
+                                         comparison=shown, composed=composed, why=why, table=table)
         model_page = page
         if withheld:
             model_page, _ = exchange_document(ctx, history, [(n, safe[n]) for n, _ in panel], verdict, har_path,
                                               highlight, cited=cited, comparison=list(safe.items()),
-                                              composed=composed)
+                                              composed=composed, why=why, table=table)
         visible = _VisibleText()
         visible.feed(model_page)
-        ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
+        # `overview`: the table of all steps, which a revised presentation of the test agent keeps beside it.
+        ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16,
+                                    **({"overview": True} if table else {})})
         try:
-            shots += [{**shot, "composed_by": "verifier"}
+            shots += [{**shot, "composed_by": "verifier", **({"overview": True} if table else {})}
                       for shot in ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)]
         except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
             break
@@ -1851,9 +1950,9 @@ def _comparison_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict
     page, marked = built
     visible = _VisibleText()
     visible.feed(page)
-    ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16})
+    ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16, "overview": True})
     try:
-        return [{**shot, "composed_by": "verifier"}
+        return [{**shot, "composed_by": "verifier", "overview": True}
                 for shot in ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)]
     except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
         return []
@@ -1970,7 +2069,8 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
 
     # VER-059: the test agent's presentation as the code takes it, the steps it leaves out after it as the Verifier
     # shows them; else the Verifier's own presentation and why.
-    accepted, why, _ = assess(ctx, history, steps, result, cited, presentation) if decisive else (None, None, ())
+    accepted, composed, _ = (assess(ctx, history, steps, result, cited, presentation) if decisive
+                             else (None, None, ()))
     result.poc = {
         "file": har_path,
         "steps": [{"step": s["step"], "line": _line(s, history), "decisive": s["decisive"]} for s in steps],
@@ -1978,17 +2078,18 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
             ctx, history, steps, set(accepted["not_shown"]), har_path, highlight, composed=True) if accepted
         else verifier_rows(ctx, history, steps, decisive, har_path, highlight),
         **({"presentation": saved(accepted)} if accepted
-           else {"presentation": {"composed_by": "verifier", "reason": why}} if why else {}),
+           else {"presentation": {"composed_by": "verifier", "reason": composed}} if composed else {}),
     }
-    if why:
-        result.observations.append(f"{COMPOSED_NOTE}{why}.")
+    if composed:
+        result.observations.append(f"{COMPOSED_NOTE}{composed}.")
     shots: list[dict] = []
     cls, browser = getattr(ctx.plan, "cls", None), getattr(ctx, "browser", None)
-    if cls == "access-control" and (rows := comparison_rows(ctx, history, shown_entries)) is not None:
-        # VER-010: why the comparison has its verdict, for the report as for the image.
-        summary = comparison_summary(ctx, history, rows, result)
-        summary = {k: summary[k] for k in ("lead", "checks", "closing")}
-        result.poc["comparison"] = ctx.sessions.redact(summary) if ctx.sessions is not None else summary
+    why = why_summary(ctx, history, shown_entries, result) if shown_entries else None
+    if why:             # why the result has its verdict, for the report as for the images
+        why = result.poc["why"] = ctx.sessions.redact(why) if ctx.sessions is not None else why
+    # An injection experiment's steps as one table before any other image: the pattern at a glance.
+    placed = step_roles(ctx, history, shown_entries)
+    tabled = cls == "injection" and sum(bool(placed.get(n, ("",))[0]) for n, _ in shown_entries) >= 2
     if browser is not None and cls in getattr(browser, "screenshots", ()):
         if result.verdict == "confirmed" and cls == "access-control" and not any(
                 e.get("presentation") == "application" for e in result.evidence):
@@ -1997,11 +2098,14 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
         compared = (_comparison_screenshot(ctx, history, shown_entries, result, har_path, highlight)
                     if cls == "access-control" and shown_entries else None)
         shots += compared or []
+        if tabled:
+            shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight,
+                                          composed=None if accepted else composed, why=why, table=True)
         if accepted:                             # the exchanges as the test agent presents them
             shots += composed_screenshots(ctx, history, steps, accepted, result, har_path)
-        elif shown_entries and compared is None:  # the exchanges, also beside a page that shows the proof
+        elif shown_entries and compared is None and not tabled:   # the exchanges, also beside a proof page
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight,
-                                          composed=why)
+                                          composed=composed, why=why)
         elif compared is None and not decisive and (tried := _tried(history, steps)):     # e.g. a limit stopped it
             shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False)
     result.evidence = [*(result.evidence or []), *shots]

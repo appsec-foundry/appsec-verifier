@@ -1260,3 +1260,67 @@ def test_report_excerpts_are_marked_while_http_images_stay_saved(tmp_path):
     har = json.loads((tmp_path / result.poc["file"]).read_text())
     assert "⟦" not in json.dumps(har)
     assert "bob@shop.test" in result.poc["shown"][0]["response"]
+
+
+# ── why a result has its verdict, and the table of an experiment (VER-034, VER-035) ──────────
+
+
+def test_every_proof_form_says_why_it_is_a_proof():
+    from appsec_verifier.verify.probes import PROOF_FORMS, PROOF_RULES
+
+    assert PROOF_RULES.keys() == PROOF_FORMS.keys() and all(rule.endswith(".") for rule in PROOF_RULES.values())
+
+
+def test_a_confirmed_result_says_why_in_its_image_and_report_and_another_verdict_does_not(tmp_path):
+    from appsec_verifier.verify.report import to_markdown
+
+    host = "vrfaa11bb22.invalid"
+    steps = [_get(None, "/go", to=f"https://{host}/")]
+    result, shot = _shot(tmp_path / "a", "open-redirect",
+                         lambda m, u, h, **k: Resp(302, "", {"location": f"https://{host}/"}),
+                         [*steps, {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}])
+    why = result.poc["why"]
+    assert why["lead"] == "The target redirected to the Verifier's marker host."
+    assert [(c["name"], c["text"]) for c in why["checks"][:-1]] == [("Carries the payload", "step 1: 302.")]
+    assert why["checks"][-1]["name"] == "Why this proves it"
+    assert "a host name the Verifier generated for this finding" in why["checks"][-1]["text"]
+    assert why["closing"] == "Confirmed: redirect to the marker host."
+    page = shot["html"]
+    assert "<span class=lead>The target redirected to the Verifier&#x27;s marker host.</span>" in page
+    assert page.count("<span class=yes></span>") == 2 and "<span class=k>Result:</span>" not in page
+    assert "<b class=closing>Confirmed: redirect to the marker host.</b>" in page
+    text = to_markdown({"meta": {}, "results": [{
+        "result_id": "VF-1", "finding_ref": {"id": "T-1", "title": "Redirect"}, "class": "open-redirect",
+        "verdict": "confirmed", "confidence": "high", "proof": result.proof, "poc": result.poc}]})
+    assert "**What the test showed:** The target redirected to the Verifier's marker host." in text
+    assert "- ✓ **Why this proves it:** The Location of the redirect is a host name" in text
+    assert "Confirmed: redirect to the marker host." in text
+    # Not confirmed: nothing claims a proof; the image keeps its one-line result.
+    result, shot = _shot(tmp_path / "b", "open-redirect", lambda m, u, h, **k: Resp(200, "ok"),
+                         [*steps, {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}])
+    assert result.verdict != "confirmed" and "why" not in result.poc
+    assert "<span class=k>Result:</span>" in shot["html"] and "class=lead" not in shot["html"]
+
+
+def test_an_experiment_table_lists_every_step_and_the_image_details_one_comparison():
+    ctx, history, shown = _conditions(_split)
+    result = SimpleNamespace(verdict="confirmed", proof={"checked": True, "form": "predicate"})
+    why = poc.why_summary(ctx, history, shown, result)
+    assert [(c["name"], c["text"]) for c in why["checks"][:3]] == [
+        ("Baseline input", "step 2: 1 entry."), ("True condition", "steps 3, 5: 3 entries."),
+        ("False condition", "steps 4, 6: 0 entries.")]
+    assert why["checks"][3]["name"] == "Why this proves it" and "A slower answer alone never counts" in (
+        why["checks"][3]["text"])
+    roles = poc.step_roles(ctx, history, shown)
+    first = poc.panels(shown, roles, opposite=poc.opposites(history))[0]
+    page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown, why=why, table=True)
+    table = page[page.index("<table class=steps>"):page.index("</table>")]
+    assert table.count("<tr class=") == 5 and "Sent as q" in table                # every step, in the order sent
+    assert [table.index(f"<td>{n}</td>") for n in (2, 3, 4, 5, 6)] == sorted(table.index(f"<td>{n}</td>")
+                                                                           for n in (2, 3, 4, 5, 6))
+    assert "<td class=in>x&#x27; AND 7=7--</td>" in table and "<td class=seen>3 entries</td>" in table
+    assert "<td class=in>x&#x27; AND 8&lt;&gt;8--</td>" in table and "<td class=seen>0 entries</td>" in table
+    assert "<span class=k>Shown in detail:</span>" in page and page.count("<section class=attack>") == 2
+    assert poc.experiment_table(ctx, history, shown[:1], roles) == ""             # one step is no comparison
+    # Without a confirmation the checked proof is not claimed.
+    assert poc.why_summary(ctx, history, shown, SimpleNamespace(verdict="inconclusive", proof={})) is None

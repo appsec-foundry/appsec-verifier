@@ -521,7 +521,7 @@ def test_the_report_says_why_a_comparison_has_its_verdict(tmp_path):
             (False, "inconclusive", ["✓", "✓", "✗"], "Inconclusive: the access is shown, but no rule rates it.")):
         (tmp_path / verdict).mkdir()
         result, _, _ = _run(tmp_path / verdict, target, declared=declared)
-        comparison = result.poc["comparison"]
+        comparison = result.poc["why"]
         assert result.verdict == verdict and [c["name"] for c in comparison["checks"]] == [
             "Access shown", "Control", "Rule"]
         assert not list(Draft202012Validator(poc_schema).iter_errors(result.poc))

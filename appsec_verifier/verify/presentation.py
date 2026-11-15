@@ -345,6 +345,15 @@ def _step(ctx, history, n: int, e: dict, item: dict, marks: list[dict], withheld
     res_marks = [(m["label"], m["text"]) for m in marks if m["step"] == n and m["part"] == "response"]
     seen = _proof_observation(ctx, history, n, e)
     facts = [f"Verifier's observation: {_observation(history, seen)}"] if seen else []
+    if getattr(ctx.plan, "cls", None) == "open-redirect":
+        # The proof reads the Location, so it is framed whether or not the test agent marked it.
+        from ..agent.proof import redirect_host
+
+        host = redirect_host(getattr(ctx, "marker", None) or ("", ""))
+        location = next((h["value"] for h in e["response"]["headers"] if h["name"].lower() == "location"), "")
+        if host and host in location and location in answer and not any(location in t for _, t in res_marks):
+            res_marks.append(("redirect to the Verifier's marker host", location))
+            facts.append("Verifier's observation: redirect to the marker host")
     return request_text(e), answer, req_marks, res_marks, facts
 
 
@@ -386,7 +395,7 @@ def document(ctx, history: list[dict], steps: list[dict], presentation: dict, re
     and proof check, the agent's sentence labelled as its own, what the Verifier left out and the steps the verdict
     rests on that the page does not show, then each step in its order."""
     from ..planning import _TITLE_LOCATION
-    from .poc import _EXCHANGE_CSS, _VERDICT_SENTENCE, _marked, _shown_entry, shown_time, withheld_steps
+    from .poc import _EXCHANGE_CSS, _VERDICT_SENTENCE, _marked, _shown_entry, shown_time, why_lines, withheld_steps
     from .probes import proof_shown
 
     recorded = {s["step"]: _shown_entry(s) for s in steps}
@@ -402,7 +411,9 @@ def document(ctx, history: list[dict], steps: list[dict], presentation: dict, re
     lines = [f"<b>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), cls, title, verdict))))}</b>",
              *([f"<span class=s><span class=k>{lead}:</span> {html.escape(presentation['summary'])} "
                 "<small>(the test agent's words)</small></span>"] if presentation.get("summary") else []),
-             f"<span class=k>Proof check:</span> {html.escape(checked)}",
+             # Why the verdict follows (poc.why_summary), else the proof check's result in one line.
+             *(why_lines((getattr(result, "poc", None) or {}).get("why"))
+               or [f"<span class=k>Proof check:</span> {html.escape(checked)}"]),
              *([f"<small>Left out by the Verifier: {html.escape('; '.join(left_out))}.</small>"] if left_out else []),
              *([f"<small>Also part of the proof, not shown here: step{'s' if len(not_shown) > 1 else ''} "
                 f"{', '.join(map(str, not_shown))} (in the report and the HAR file).</small>"] if not_shown else []),
@@ -509,14 +520,16 @@ def present(ctx, history: list[dict], steps: list[dict], result, cited, presenta
     browser = getattr(ctx, "browser", None)
     if browser is not None and getattr(ctx.plan, "cls", None) in getattr(browser, "screenshots", ()):
         panels = list(ctx.evidence_panels)
-        ctx.evidence_panels[:] = []
+        # The Verifier's overview of all steps (a comparison or experiment table) stays beside the new presentation.
+        ctx.evidence_panels[:] = [p for p in panels if p.get("overview")]
         shots = screenshots(ctx, view, steps, accepted, result, poc.get("file"))
         if not shots:
             ctx.evidence_panels[:] = panels
             return "its image could not be rendered"
-        for ev in [e for e in result.evidence if e.get("composed_by")]:
+        replaced = [e for e in result.evidence if e.get("composed_by") and not e.get("overview")]
+        for ev in replaced:
             _remove(ctx, ev)
-        result.evidence[:] = [e for e in result.evidence if not e.get("composed_by")] + shots
+        result.evidence[:] = [e for e in result.evidence if not any(e is r for r in replaced)] + shots
     poc["shown"] = shown_steps(ctx, view, steps, accepted, poc.get("file")) + verifier_rows(
         ctx, view, steps, set(accepted["not_shown"]), poc.get("file"), composed=True)
     poc["presentation"] = saved(accepted)

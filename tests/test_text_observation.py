@@ -194,3 +194,25 @@ def test_a_boolean_experiment_declares_exactly_one_observation(tmp_path, extra, 
     args = {k: v for k, v in _sql_plan("x")["args"].items() if k != "text"}
     with pytest.raises(ToolError, match=message):
         AgentTools(ctx).plan_test(**args, **extra)
+
+
+def test_a_confirmed_experiment_gets_one_image_with_every_step_in_a_table_and_the_reason(tmp_path):
+    """VER-035: the Verifier's image of an injection experiment is one table of all steps, why the proof holds, and
+    one comparison in detail, instead of an image per pair."""
+    pages = []
+    ctx = _inj_ctx(tmp_path, _page_target([]))
+    ctx.evidence_dir = tmp_path / "evidence"
+    ctx.browser = SimpleNamespace(screenshots=("injection",), render_exchanges=lambda html, name, marked: (
+        pages.append(html) or [{"kind": "screenshot", "path": f"evidence/{name}-http-{len(pages)}.png"}]))
+    result = AgentProbe("injection", lambda: Script([_sql_plan("Item number 2"), _confirm])).run(ctx)
+    assert result.verdict == "confirmed" and len(pages) == 1
+    images = [e for e in result.evidence if e.get("kind") == "screenshot"]
+    assert [(e["composed_by"], e.get("overview")) for e in images] == [("verifier", True)]
+    page = pages[0]
+    rows = page[page.index("<table class=steps>"):page.index("</table>")].count("<tr class=")
+    assert rows == sum(s["decisive"] for s in result.poc["steps"]) >= 5       # every step the proof rests on
+    assert "<td class=seen>text present</td>" in page and "<td class=seen>text absent</td>" in page
+    why = result.poc["why"]
+    assert why["closing"] == "Confirmed: response follows fresh controls."
+    assert {"True condition", "False condition", "Why this proves it"} <= {c["name"] for c in why["checks"]}
+    assert "<b class=closing>Confirmed: response follows fresh controls.</b>" in page
