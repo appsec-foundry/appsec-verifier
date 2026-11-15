@@ -233,7 +233,8 @@ def strict_json(text: str):
 
 
 def parse_step(step) -> dict:
-    """Turn a host's wire step into a loop action, or an inconclusive verdict.
+    """Turn a host's wire step into a loop action (a refusal for arguments that
+    break their schema), or an inconclusive verdict for a reply that is no step.
     A missing note is accepted (a host without schema enforcement may drop it);
     a note that is not a string is not."""
     if not isinstance(step, dict) or set(step) - {"note"} != {"action", "args_json"}:
@@ -258,23 +259,20 @@ def _with_note(action: dict, note) -> dict:
 
 
 def _validated(name: str, args) -> dict:
-    """A verdict, a tool call, or an inconclusive verdict. A tool call whose arguments are not one JSON object or
-    break its schema becomes {"refused": name, "args", "error"} ("args" None for the former), without a "tool"
-    key, so nothing takes it for a call: the loop runs nothing and returns the error to the planner."""
+    """A verdict or a tool call. One whose arguments are not one JSON object or break its schema becomes
+    {"refused": name, "args", "error"} ("args" None for the former), without a "tool" or "verdict" key, so nothing
+    takes it for a call or a verdict: the loop runs nothing and returns the error to the planner. A verdict is no
+    exception, so a slip in its form does not cost a proof the steps already hold."""
     if not isinstance(args, dict):
-        if name != "submit_verdict":
-            return {"refused": name, "args": None,
-                    "error": f"invalid {name} arguments: args_json must be one JSON object without duplicate keys"}
-        return inconclusive(f"agent sent {name} arguments that are not a JSON object")
+        return {"refused": name, "args": None,
+                "error": f"invalid {name} arguments: args_json must be one JSON object without duplicate keys"}
     error = next(iter(sorted(_ARG_VALIDATORS[name].iter_errors(args), key=str)), None)
     if error is not None:
-        if name != "submit_verdict":
-            message = error.message
-            if name == "plan_test" and (problem := observation_problem(args)):
-                # The observation is checked after the schema; name it now, so one revision fixes both (VER-043).
-                message += "; " + problem
-            return {"refused": name, "args": args, "error": f"invalid {name} arguments: {message}"[:ERROR_CAP]}
-        return inconclusive(f"agent proposed invalid {name} arguments: {error.message}")
+        message = error.message
+        if name == "plan_test" and (problem := observation_problem(args)):
+            # The observation is checked after the schema; name it now, so one revision fixes both (VER-043).
+            message += "; " + problem
+        return {"refused": name, "args": args, "error": f"invalid {name} arguments: {message}"[:ERROR_CAP]}
     if name == "submit_verdict":
         return {"verdict": args}
     return {"tool": name, "args": args}
@@ -282,13 +280,17 @@ def _validated(name: str, args) -> dict:
 
 def check_action(action) -> dict:
     """Validate a loop action from ANY planner against the strict tool schemas
-    before anything acts on it (VER-017, VER-019): a tool call or a verdict,
-    otherwise an inconclusive verdict. The loop applies this to every action,
-    so no planner can pass unchecked arguments to the tools. A refused call that
-    parse_step passed on is checked again like any other."""
+    before anything acts on it (VER-017, VER-019): a tool call, a verdict or a
+    refusal of either, otherwise an inconclusive verdict. The loop applies this
+    to every action, so no planner can pass unchecked arguments to the tools. A
+    refused call or verdict that parse_step passed on is checked again like any other."""
     if isinstance(action, dict) and set(action) == {"verdict"}:
         return _validated("submit_verdict", action["verdict"])
     if isinstance(action, dict) and "refused" in action and set(action) <= {"refused", "args", "error", "note"}:
+        if action["refused"] == "submit_verdict":
+            # Refused again, never accepted: a refusal is not a second way to submit a verdict.
+            checked = _with_note(_validated("submit_verdict", action.get("args")), action.get("note", ""))
+            return checked if "refused" in checked else inconclusive("planner refused a verdict that is valid")
         action = {"tool": action["refused"], "args": action.get("args", {}), "note": action.get("note", "")}
     if isinstance(action, dict) and "tool" in action and set(action) <= {"tool", "args", "note"}:
         name = action["tool"]

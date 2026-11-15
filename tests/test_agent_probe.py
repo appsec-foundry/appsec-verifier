@@ -232,8 +232,10 @@ def test_every_step_is_logged_with_its_outcome_and_refusals(tmp_path):
     assert "out of scope" in refused_by_guard["result"]["error"]
     assert "invalid http_request" in refused_args["result"]["error"] and "X-Forwarded-For" in str(refused_args["args"])
     assert len(sent) == 1  # neither the guard's refusal nor the invalid arguments reached the target
-    assert "invalid submit_verdict" in refused_verdict["refused"] and "owned" in refused_verdict["proposal"]
-    assert verdict["verdict"] == "inconclusive" and verdict["step"] == 5
+    # an invalid verdict is no verdict: it goes back as an error like any refused call, and the next one counts
+    assert refused_verdict["tool"] == "submit_verdict" and refused_verdict["args"]["verdict"] == "owned"
+    assert "invalid submit_verdict" in refused_verdict["result"]["error"]
+    assert verdict["verdict"] == "inconclusive" and verdict["step"] == 6
     assert all(r["finding"] == "T-001" for r in records)
     assert "private" not in str(records) and "db.basket" not in str(records)
 
@@ -316,3 +318,49 @@ def test_closed_window_stops_the_finding_before_any_model_call(tmp_path):
     res = AgentProbe("access-control", Planner, max_steps=3).run(ctx)
     assert res.verdict == "inconclusive" and res.limits_hit == "window"
     assert asked == [] and sent == []
+
+
+_IDOR_STEPS = [
+    {"tool": "plan_test", "args": {"kind": "access-control", "strategy": STRATEGY, "path": "/rest/basket/2",
+                                   "hypothesis": "A can read B's basket", "resource": "basket"}},
+    {"tool": "http_request", "args": {"role": "customer-a", "method": "GET", "path": "/rest/basket/2"}},
+    {"tool": "http_request", "args": {"role": "customer-b", "method": "GET", "path": "/rest/basket/2"}},
+]
+_IDOR_VERDICT = {"verdict": "confirmed", "confidence": "high", "rationale": "customer-a read customer-b's basket",
+                 "identities_used": ["customer-a", "customer-b"], "proof_steps": [2, 3],
+                 "proof": {"identity_a": "customer-a", "identity_b": "customer-b", "observed_difference": "UserId 2"}}
+# The slip of a real run: a field of the presentation beside it, which the verdict's schema does not know.
+_SLIPPED = {**_IDOR_VERDICT, "marks": [{"step": 2, "part": "response", "text": "UserId", "label": "the owner"}]}
+
+
+def _idor_run(tmp_path, verdicts, max_steps=10):
+    ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp())
+    ctx.scope = {**ctx.scope, "test_resources": [{
+        "id": "basket", "finding_id": "T-001", "path": "/rest/basket/2", "allowed_roles": ["customer-b"],
+        "denied_roles": ["customer-a"], "pointer": "/UserId", "value": 2}]}
+    ctx.evidence_dir = tmp_path / "evidence"
+    records = []
+    ctx.log = records.append
+    planner = ScriptedPlanner([*_IDOR_STEPS, *({"verdict": v} for v in verdicts)])
+    return AgentProbe("access-control", lambda: planner, max_steps=max_steps).run(ctx), records
+
+
+def test_a_verdict_that_breaks_its_schema_goes_back_and_the_corrected_one_counts(tmp_path):
+    res, records = _idor_run(tmp_path, [_SLIPPED, _IDOR_VERDICT])
+    assert res.verdict == "confirmed" and res.proof["checked"] is True
+    refused = next(r for r in records if r.get("tool") == "submit_verdict")
+    assert "'marks' was unexpected" in refused["result"]["error"] and refused["result"]["error_kind"] == "schema"
+
+
+def test_a_verdict_that_stays_invalid_never_confirms(tmp_path):
+    res, records = _idor_run(tmp_path, [_SLIPPED] * 12)
+    assert res.verdict == "inconclusive" and res.limits_hit in ("stagnation", "attempts")
+    assert not (res.proof or {}).get("checked")
+    assert sum(r.get("tool") == "submit_verdict" for r in records) < 12     # stopped, not asked without end
+
+
+def test_an_invalid_answer_to_the_presentation_request_keeps_the_checked_verdict(tmp_path):
+    res, records = _idor_run(tmp_path, [_IDOR_VERDICT, _SLIPPED])
+    assert res.verdict == "confirmed" and res.proof["checked"] is True
+    assert any(r.get("tool") == "presentation_request" for r in records)
+    assert any("'marks' was unexpected" in str(r.get("refused")) for r in records)

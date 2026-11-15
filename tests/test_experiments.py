@@ -476,7 +476,7 @@ def test_results_are_structured_and_measurements_survive_excerpt_bounding():
     assert '"elapsed_ms": 3100' in text and "[truncated]" in text
     assert PLAN_SCHEMA["additionalProperties"] is False
     proposal = {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 1, 2, 2]}}
-    assert check_action(proposal)["verdict"]["verdict"] == "inconclusive"
+    assert check_action(proposal)["refused"] == "submit_verdict"      # goes back to the planner, no verdict
 
 
 def test_a_plan_its_schema_refuses_also_names_a_missing_observation():

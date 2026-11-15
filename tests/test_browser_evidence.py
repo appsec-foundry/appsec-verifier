@@ -96,8 +96,9 @@ def test_browser_evidence_schema_refuses_executable_or_unbounded_proposals(propo
 
     parsed = check_action({"verdict": {"verdict": "confirmed", "rationale": "effect observed",
                                        "browser_evidence": proposal}})
-    assert parsed["verdict"]["verdict"] == "inconclusive"
-    assert "browser_evidence" not in parsed["verdict"]
+    # refused as a whole: no verdict, and so no browser_evidence, reaches the loop
+    assert parsed["refused"] == "submit_verdict" and "invalid submit_verdict" in parsed["error"]
+    assert "verdict" not in parsed and "tool" not in parsed
 
 
 def test_the_explanation_leads_the_report_labelled_as_the_agents_and_stays_text(tmp_path):

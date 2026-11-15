@@ -128,8 +128,6 @@ def test_a_refused_call_cannot_be_turned_into_a_call():
 
 @pytest.mark.parametrize("step", [
     {"action": "shell", "args_json": "{}"},                                        # unknown action
-    _wire("submit_verdict", verdict="owned", rationale="x"),                       # verdict not allowed
-    {"action": "submit_verdict", "args_json": '{"verdict": "confirmed",'},         # verdict not JSON
     {"action": "http_request", "args_json": "{", "extra": 1},                      # extra field
     {**_wire("http_request", path="/a"), "note": 7},                               # note not a string
     {**_wire("http_request", path="/a"), "note": "x", "extra": 1},                 # extra field beside a note
@@ -137,6 +135,18 @@ def test_a_refused_call_cannot_be_turned_into_a_call():
 ])
 def test_invalid_steps_end_inconclusive(step):
     assert parse_step(step)["verdict"]["verdict"] == "inconclusive"
+
+
+@pytest.mark.parametrize("step", [
+    _wire("submit_verdict", verdict="owned", rationale="x"),                       # verdict not allowed
+    _wire("submit_verdict", verdict="confirmed", rationale="x", marks=[]),         # a field the verdict does not know
+    {"action": "submit_verdict", "args_json": '{"verdict": "confirmed",'},         # verdict not JSON
+])
+def test_an_invalid_verdict_is_refused_like_an_invalid_call(step):
+    out = parse_step(step)
+    assert out["refused"] == "submit_verdict" and "invalid submit_verdict" in out["error"]
+    assert "verdict" not in out and "tool" not in out
+    assert check_action(out) == out  # the loop checks the arguments again and refuses them again
 
 
 def test_target_response_reaches_the_model_only_as_json_data():

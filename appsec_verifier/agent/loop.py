@@ -9,7 +9,7 @@ Each model call's cost and token counts go on the next action-log record.
 A ``Planner`` (the model, injected) is asked for the next step given the finding
 and what the tools have returned so far; it either calls a tool or submits a
 verdict. Every action is validated against the strict tool schemas here,
-whichever planner produced it, and nothing invalid runs: a tool call with invalid
+whichever planner produced it, and nothing invalid runs: a tool call or verdict with invalid
 arguments goes back to the planner as an error and counts as a failed action, any
 other invalid action ends the finding inconclusive. The loop executes tool calls through the confined AgentTools,
 enforces a step limit, the run budget and the authorisation window (checked
@@ -411,6 +411,9 @@ class AgentProbe:
                 return attach_stopped(_stopped(ctx, step, exc))
             action = check_action(proposal)  # VER-019: no unchecked arguments
             if presented is not None and "verdict" not in action:
+                if action.get("refused") == "submit_verdict":   # logged; the checked verdict stands without it
+                    _log(ctx, step, refused=action["error"],
+                         proposal=json.dumps(proposal, default=str)[:_PROPOSAL_CAP])
                 return conclude(step, *presented)   # VER-059: only a verdict answers a presentation feedback
             if "refused" in action:
                 # VER-017: refused and logged, nothing runs; counted like a failed action (VER-036)
