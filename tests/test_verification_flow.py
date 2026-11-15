@@ -181,7 +181,7 @@ def test_executed_controls_use_recorded_proof_feedback_without_resending():
     assert state["next"] == "The recorded contrast does not suffice."
 
 
-@pytest.mark.parametrize("method,location,needle", [("POST", "form", "GET only"),
+@pytest.mark.parametrize("method,location,needle", [("POST", "form", "rendering that recorded response"),
                                                   ("GET", "header", "custom header")])
 def test_plan_and_agent_explain_unavailable_paths_without_disallowing_alternatives(method, location, needle):
     from test_endpoints import _blocker

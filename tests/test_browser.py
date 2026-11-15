@@ -234,6 +234,47 @@ def test_browser_check_refusals_become_tool_errors(ctx):
         AgentTools(ctx).call("browser_check", {"path": "/"})
 
 
+# ── VER-009: render a recorded response for XSS that only surfaces in a write's answer ─
+
+def _recorded_ctx():
+    ctx = _ctx(browser=FakeBrowser(result={"executed": True, "context_verified": True}))
+    ctx.agent_history = [{"tool": "http_request", "args": {"path": "/msg"}, "result": {"status": 200}}]
+    ctx.responses = {1: {"body": "<p>stored</p>", "complete": True,
+                         "render": {"status": 200, "content_type": "text/html",
+                                    "headers": {"content-security-policy": "default-src 'self'"}}}}
+    return ctx
+
+
+def test_browser_check_renders_a_recorded_response_at_its_own_route():
+    ctx = _recorded_ctx()
+    AgentTools(ctx).call("browser_check", {"path": "/msg", "response_step": 1})
+    call = ctx.browser.calls[0]
+    assert call["url"] == BASE + "/msg"
+    assert call["document"] == {"status": 200, "content_type": "text/html", "body": "<p>stored</p>",
+                                "headers": {"content-security-policy": "default-src 'self'"}}
+
+
+def test_browser_check_without_a_response_step_sends_no_document():
+    ctx = _ctx(browser=FakeBrowser(result={"executed": True}))
+    AgentTools(ctx).call("browser_check", {"path": "/s?q=x"})
+    assert ctx.browser.calls[0]["document"] is None
+
+
+@pytest.mark.parametrize("responses, path, msg", [
+    ({}, "/msg", "recorded http_request step"),
+    ({1: {"body": "x", "complete": True}}, "/msg", "renderable page"),
+    ({1: {"body": "x", "complete": False, "render": {"headers": {}}}}, "/msg", "truncated"),
+    ({1: {"body": "x", "complete": True, "render": {"headers": {}}}}, "/other", "its own route"),
+])
+def test_browser_check_refuses_an_unrenderable_recorded_step(responses, path, msg):
+    ctx = _ctx(browser=FakeBrowser())
+    ctx.agent_history = [{"tool": "http_request", "args": {"path": "/msg"}, "result": {"status": 200}}]
+    ctx.responses = responses
+    with pytest.raises(ToolError, match=msg):
+        AgentTools(ctx).call("browser_check", {"path": path, "response_step": 1})
+    assert ctx.browser.calls == []    # nothing is rendered when the recorded step cannot be trusted
+
+
 # ── VER-009: confirmed XSS needs an executed marker ───────────────────────────
 
 

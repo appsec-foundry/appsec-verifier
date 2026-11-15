@@ -101,6 +101,9 @@ _COMMAND_GROUPS = ("baseline", "positive", "negative", "positive_other", "negati
 _BODY_EXCERPT = 600
 _LOCATION_CAP = 2000
 _HIDDEN = "[marker-file]"
+# VER-009: the response headers the proof browser replays when it renders a recorded response, so the page's own
+# content security policy and sniffing rule still decide whether the marker executes.
+_RENDER_SECURITY_HEADERS = ("content-security-policy", "content-security-policy-report-only", "x-content-type-options")
 # VER-049: an auth-artifact probe's body may hold a fresh session token; only its presence (computed in code) is
 # kept, and this stands in for the body everywhere the model or the log could read it.
 _AUTH_ARTIFACT_NOTICE = "[auth-artifact probe: body withheld; the token value never reaches the model or logs]"
@@ -1004,7 +1007,8 @@ class AgentTools:
                             + " (VER-012)"
                         )
 
-    def browser_check(self, *, path: str, role: str | None = None, wait_ms: int = 1500) -> dict:
+    def browser_check(self, *, path: str, role: str | None = None, wait_ms: int = 1500,
+                      response_step: int | None = None) -> dict:
         from ..tools.browser import BrowserError
 
         if self.ctx.plan.cls != "xss":
@@ -1019,6 +1023,10 @@ class AgentTools:
         url = self._url(path)
         if not isinstance(wait_ms, int) or isinstance(wait_ms, bool):
             raise ToolError("wait_ms must be an integer number of milliseconds")
+        # VER-009: observe execution in a response the agent already recorded for this finding (a payload that
+        # surfaces only in a write's response), rendered at its own route with its own security headers. The
+        # browser issues nothing to obtain it; the write that produced it went through VER-052/VER-014 already.
+        document = self._render_document(response_step, path) if response_step is not None else None
         try:
             # The browser attaches the identity headers only to requests for `origin` (VER-018).
             result = self.ctx.browser.check(
@@ -1031,6 +1039,7 @@ class AgentTools:
                 wait_ms=wait_ms,
                 safe=self.ctx.safe or self.ctx.read_only or bool(role and self._privileged(role)),
                 role=role,
+                document=document,
             )
         except BrowserError as exc:
             raise ToolError(str(exc)) from exc
@@ -1039,6 +1048,28 @@ class AgentTools:
                 raw, role, headers, keep_body=raw.get("keep_body", True), navigation=raw.get("navigation", False)
             )
         return result
+
+    def _render_document(self, response_step, path) -> dict:
+        """The recorded response of an http_request step of this finding, to render in the proof browser (VER-009).
+        It must be the step's own route, a kept and complete page, so the rendered document is the finding's real
+        answer at its real URL, not a model-chosen reconstruction."""
+        responses = getattr(self.ctx, "responses", {}) or {}
+        history = getattr(self.ctx, "agent_history", []) or []
+        if type(response_step) is not int or response_step not in responses:
+            raise ToolError("response_step must be the number of a recorded http_request step of this finding")
+        recorded = responses[response_step]
+        render = recorded.get("render")
+        if render is None:
+            raise ToolError("that step kept no renderable page: a withheld or code-compared body cannot be rendered")
+        if not recorded.get("complete"):
+            raise ToolError("that step's response body was truncated and cannot be rendered faithfully")
+        sent = history[response_step - 1] if 1 <= response_step <= len(history) else {}
+        sent_path = (sent.get("args") or {}).get("path") if sent.get("tool") == "http_request" else None
+        if not sent_path or urlsplit(self._url(sent_path)).path != urlsplit(self._url(path)).path:
+            raise ToolError("render a recorded response at its own route: browser_check path must match the "
+                            "recorded request's path")
+        return {"status": render.get("status"), "content_type": render.get("content_type") or "text/html",
+                "headers": render.get("headers") or {}, "body": recorded.get("body") or ""}
 
     def _url(self, path) -> str:
         """An absolute http(s) URL as given, anything else appended below the target base URL.
@@ -1329,6 +1360,15 @@ class AgentTools:
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
         withheld = bool(error_probe or auth_artifact_probe or (comparison and not exposed))
+        if not withheld and self._last_response is not None:
+            # VER-009: keep what the proof browser needs to render this recorded response faithfully — its own
+            # content type and the security headers that still govern execution (a content security policy). The
+            # body is the redacted text already stored above; markers survive redaction, credentials do not.
+            self._last_response["render"] = {
+                "status": status,
+                "content_type": resp.headers.get("content-type", "text/html"),
+                "headers": {k: resp.headers[k] for k in _RENDER_SECURITY_HEADERS if k in resp.headers},
+            }
         out = {
             "role": role,
             "status": status,

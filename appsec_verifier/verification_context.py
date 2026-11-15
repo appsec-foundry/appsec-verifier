@@ -128,8 +128,8 @@ def proof_limitations(plan) -> list[str]:
     if not variants:
         methods.update(e.method for e in getattr(plan, "endpoints", ()))
     if getattr(plan, "cls", None) == "xss" and methods & {"POST", "PUT", "PATCH"}:
-        notes.append("The proof browser navigates with GET only; a write response cannot be executed directly. "
-                     "Stored payloads need an evidenced GET page that renders them.")
+        notes.append("The proof browser navigates with GET; a payload in the write's own response is proven by "
+                     "rendering that recorded response, a stored payload by a page that renders it.")
     return notes
 
 

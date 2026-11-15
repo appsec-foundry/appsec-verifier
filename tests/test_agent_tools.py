@@ -58,6 +58,22 @@ def test_http_request_joins_path_and_attaches_identity(tmp_path):
     assert seen == [("GET", "https://app.example.com/rest/basket/2", "Bearer A")]
 
 
+def test_http_request_keeps_only_render_security_headers_for_the_proof_browser(tmp_path):
+    """VER-009: the recorded response carries what the proof browser needs to render it faithfully — its content
+    type and the headers that still govern execution — never Set-Cookie or other response headers."""
+    def transport(m, u, h, **k):
+        r = Resp(200, "<p>hi</p>")
+        r.headers = {"content-type": "text/html; charset=utf-8", "content-security-policy": "script-src 'self'",
+                     "x-content-type-options": "nosniff", "set-cookie": "sid=1"}
+        return r
+
+    tools = AgentTools(_ctx(tmp_path, transport))
+    tools.http_request(role="customer-a", method="GET", path="/rest/basket/2")
+    render = tools.take_response()["render"]
+    assert render == {"status": 200, "content_type": "text/html; charset=utf-8",
+                      "headers": {"content-security-policy": "script-src 'self'", "x-content-type-options": "nosniff"}}
+
+
 @pytest.mark.parametrize("path", ["/public/../rest/admin", "public/./x", "/a/..", "../../etc/passwd",
                                   "https://app.example.com/public/../rest/admin"])
 def test_dot_segments_reach_the_guard_and_are_refused(tmp_path, path):

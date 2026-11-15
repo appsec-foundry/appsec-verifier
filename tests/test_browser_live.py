@@ -580,3 +580,31 @@ def test_application_capture_accepts_another_request_that_shows_the_marked_recor
     if captured:
         assert result["evidence"][0]["path"] == "evidence/T-UI-product-update.png"
         assert (tmp_path / result["evidence"][0]["path"]).is_file()
+
+
+# ── VER-009: render a response the Verifier already recorded (XSS only in a write's answer) ─
+
+def test_a_recorded_response_is_rendered_and_executes_the_marker(browser):
+    """A payload that surfaces only in the response to a write is proven by rendering that recorded response;
+    the browser issues no request to the target to obtain it."""
+    b, target, tmp = browser
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+    document = {"status": 200, "content_type": "text/html",
+                "headers": {}, "body": f"<html><body><p>Saved {payload}</p></body></html>"}
+    result = b.check(BASE + "/account/name", identity_headers={}, target_base=BASE, marker=MARKER,
+                     finding_id="T-7", wait_ms=300, safe=True, document=document)
+    assert result["executed"] is True
+    assert BASE + "/account/name" not in target.seen     # the document was served from the record, not fetched
+
+
+def test_a_rendered_response_keeps_its_content_security_policy(browser):
+    """VER-009: the recorded response's security headers are replayed, so a policy that blocks script keeps the
+    marker from executing — the rendered proof is as honest as a live navigation."""
+    b, _, _ = browser
+    payload = f"<img src=x onerror=alert({marker_expression(MARKER)})>"
+    document = {"status": 200, "content_type": "text/html",
+                "headers": {"content-security-policy": "script-src 'none'"},
+                "body": f"<html><body><p>Saved {payload}</p></body></html>"}
+    result = b.check(BASE + "/account/name", identity_headers={}, target_base=BASE, marker=MARKER,
+                     finding_id="T-7", wait_ms=300, safe=True, document=document)
+    assert result["executed"] is False and result["markup_break"] is True

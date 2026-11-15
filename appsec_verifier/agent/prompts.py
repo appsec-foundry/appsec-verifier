@@ -216,7 +216,10 @@ def _tool_defs() -> list[dict]:
             "description": "XSS findings only: load one target page (GET, path relative to the target base URL, "
             "payload in the path or query) in the headless proof browser, optionally as an "
             "identity, and report whether your marker expression executed. Requests the page "
-            "makes stay within the scope and run mode.",
+            "makes stay within the scope and run mode. For a payload that surfaces only in the "
+            "response to a write, set response_step to the http_request step whose response "
+            "carried it: the browser renders that recorded response at its own path, with its own "
+            "content type and security headers, so no new request is sent.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -224,6 +227,9 @@ def _tool_defs() -> list[dict]:
                     "role": {"type": ["string", "null"],
                              "description": "identity role label, or omit/null for unauthenticated"},
                     "wait_ms": {"type": "integer", "minimum": 0, "maximum": 5000},
+                    "response_step": {"type": ["integer", "null"],
+                                      "description": "number of an http_request step of this finding whose recorded "
+                                      "response to render at `path`, instead of a fresh GET navigation"},
                 },
                 "required": ["path"],
             },
@@ -609,7 +615,9 @@ def _marker_proof(ctx, cls, marker) -> str:
             "at runtime (quotes may change to fit the context). Do not join them with +: many applications read + "
             "in a query string as a space. Only that evaluated value counts as execution, and "
             "only browser_check observes it; confirmed without an executed marker is downgraded. Never send the "
-            "joined value itself: a request that carries it voids the proof, since a page could merely echo it."
+            "joined value itself: a request that carries it voids the proof, since a page could merely echo it. "
+            "When the payload surfaces only in the response to a write (not on any GET page), send that write once "
+            "with http_request, then browser_check that step with response_step to render its recorded response."
         )
     host = redirect_host(marker)
     if cls == "open-redirect" and host:

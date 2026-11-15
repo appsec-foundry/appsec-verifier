@@ -667,8 +667,10 @@ class ProofBrowser:
 
     def _check(self, url: str, *, identity_headers: dict, target_base: str, marker: tuple[str, str],
                finding_id: str, wait_ms: int, safe: bool, role: str | None = None,
-               observation: dict | None = None, name: str | None = None) -> dict:
-        """`finding_id` is shown in the captions, `name` (by default `finding_id`) names the files."""
+               observation: dict | None = None, name: str | None = None, document: dict | None = None) -> dict:
+        """`finding_id` is shown in the captions, `name` (by default `finding_id`) names the files. With
+        `document`, the first navigation is served from a response the Verifier already recorded, under its own
+        content type and security headers (VER-009); every other request still goes through `answer()`."""
         from playwright.sync_api import Error as PlaywrightError
 
         browser = self._ensure()
@@ -697,8 +699,28 @@ class ProofBrowser:
         # time, later nothing after the wait, and no request but a document longer than PAGE_REQUEST_TIMEOUT_S.
         until = [time.monotonic() + NAVIGATION_TIMEOUT_MS / 1000]
 
+        served_document: list[bool] = []
+
         def on_route(route, request):
             from ..limits import LimitExceeded
+
+            if document is not None and not served_document:
+                try:
+                    is_navigation = request.is_navigation_request() and request.frame.parent_frame is None
+                except Exception:  # noqa: BLE001 - a request without a frame is never the top navigation
+                    is_navigation = False
+                if is_navigation:
+                    # The document is a response the Verifier already recorded; the browser fetches nothing for it.
+                    served_document.append(True)
+                    headers = {"content-type": document.get("content_type") or "text/html",
+                               **{str(k): str(v) for k, v in (document.get("headers") or {}).items()}}
+                    if any(k.lower() == "content-security-policy" and re.search(r"(?:^|;)\s*sandbox\b", v)
+                           for k, v in headers.items()):
+                        isolated_documents.add(request.url)
+                    status = document.get("status")
+                    route.fulfill(status=status if isinstance(status, int) and 200 <= status < 600 else 200,
+                                  headers=headers, body=(document.get("body") or "").encode("utf-8"))
+                    return
 
             left = until[0] - time.monotonic()
             try:
