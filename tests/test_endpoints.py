@@ -373,7 +373,7 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     out = capsys.readouterr().out
     assert rc == cli.EXIT_OK and asked == ["T-1"]
     assert out.index("Test plan     1 of 3 findings will be tested") < out.index("Preflight")   # before contact
-    assert "  T-1  critical  injection  sqli in search · GET /rest/products/search\n" in out
+    assert "  T-1  critical  sqli in search · GET /rest/products/search\n" in out
     assert "Not testable  2 findings need what this run does not have (--test-all tries anyway)" in out
     assert "test identity" in out and "→ test accounts: --account, or --identities FILE" in " ".join(out.split())
     # T-2 names only a POST; the proof sends each control twice, so --allow-intrusive is required.
@@ -434,7 +434,7 @@ def test_on_a_terminal_verify_cuts_a_test_plan_line_to_fit_and_preflight_shows_i
     plan.title = "Missing ownership check on records"
     sgr = __import__("re").compile(r"\x1b\[[0-9;]*m")
     line = sgr.sub("", cli._test_cases(cli.Style(True), [plan], {}, full=False)[-1])
-    assert line.startswith("  T-1  high  access-control  Missing ownership check on records · GET /a, GET")
+    assert line.startswith("  T-1  high  Missing ownership check on records · GET /a, GET /a/very")
     assert line.endswith("…") and len(line) == 79 and "(login)" not in line
     whole = cli._test_cases(cli.Style(True), [plan], {}, full=True)[-1]
     assert sgr.sub("", whole).endswith("· GET /a, GET /a/very/long/path/to/a/record/:id")
@@ -458,7 +458,8 @@ def test_a_finding_with_declared_variants_groups_them_under_one_header(monkeypat
     out = cli._test_cases(cli.Style(False), plans, {})
     text = "\n".join(out)
     assert sum(1 for line in out if line.lstrip().startswith("T-1 ")) == 1     # eine Kopfzeile, keine drei
-    assert "  T-1  high  xss  Angular sanitizer bypass" in out and "3 variants" not in text
+    assert out[2:5] == ["", "  Cross-Site Scripting (XSS) · 1 finding", "  T-1  high  Angular sanitizer bypass"]
+    assert "3 variants" not in text
     assert "v-html  POST /api/Feedbacks" in text
     assert "v-svg  POST /api/Feedbacks" in text
     assert "v-page  GET /#/about" in text
@@ -483,18 +484,18 @@ def test_variants_alike_in_request_and_inputs_share_the_finding_s_line(monkeypat
 
     alike = cli._test_cases(cli.Style(False), variants({"id": "variant-001", "request": search, "hypothesis": "a"},
                                                        {"id": "variant-002", "request": search, "hypothesis": "b"}), {})
-    assert alike[-1] == ("  T-1  high  injection  SQL injection in product search · GET /rest/products/search"
+    assert alike[-1] == ("  T-1  high  SQL injection in product search · GET /rest/products/search"
                          " · 2 variants")
     assert "variant-00" not in "\n".join(alike)
     header = {**search, "inputs": [{"location": "header", "name": "X-Search"}]}
     rows = cli._test_cases(cli.Style(False), variants({"id": "variant-001", "request": search},
                                                       {"id": "variant-002", "request": header}), {})
-    assert rows[2] == "  T-1  high  injection  SQL injection in product search"
-    assert rows[3].endswith("  variant-001  GET /rest/products/search  q (query)")
-    assert rows[4].endswith("  variant-002  GET /rest/products/search  X-Search (header)")
-    assert "custom header" in " ".join(rows[5:])
+    assert rows[4] == "  T-1  high  SQL injection in product search"
+    assert rows[5].endswith("  variant-001  GET /rest/products/search  q (query)")
+    assert rows[6].endswith("  variant-002  GET /rest/products/search  X-Search (header)")
+    assert "custom header" in " ".join(rows[7:])
     nothing = cli._test_cases(cli.Style(False), [_plan("xss")], {})
-    assert nothing[-1] == "  T-1  high  xss  t · no request in the assessment"
+    assert nothing[-1] == "  T-1  high  t · no request in the assessment"
 
 
 def test_the_request_hint_names_a_scope_entry_only_where_one_can_name_the_request(monkeypatch):
@@ -585,3 +586,5 @@ def test_the_settings_count_findings_and_name_the_quick_ones_added():
                                 info, floor="high")
     line = next(row for row in rows if "Selection" in row)
     assert "2 findings, severity high and above, with 1 quick below it" in line
+    categories = next(row for row in rows if "Categories" in row)        # the findings of each category (VER-026)
+    assert categories.endswith(": Injection 1 · Cross-Site Scripting (XSS) 1")

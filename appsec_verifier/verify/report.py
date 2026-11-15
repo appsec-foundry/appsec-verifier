@@ -4,9 +4,11 @@ an additive annotation of a copy of the assessment (VER-027) with the rating
 after verification (VER-039, verify/rating.py). The Analyzer's Markdown report
 with the results is verify/annotated_report.py (VER-038).
 
-verification.md opens with a summary (VER-020, VER-039): the tested findings,
-linked to their entries, with result, rating and what the test showed, and the
-findings not tested with what the run lacked (VER-024). Results and severities
+verification.md opens with a summary (VER-020, VER-039): the tested findings by
+category (VER-026), each category headed with how many of its findings it
+confirmed, linked to their entries, with result, rating and what the test
+showed, and the findings not tested with what the run lacked (VER-024). The
+entries follow under the same categories. Results and severities
 carry colours, the severities as in AppSec Analyzer's report. A tested
 finding's entry leads with a card of result, rating, weakness and a link to the
 finding in the Analyzer's report, then what the checked proof showed (built
@@ -37,6 +39,8 @@ from urllib.parse import quote
 
 import yaml
 
+from ..loader import load_verifiable_cwes
+from ..planning import category, category_name
 from ..version_info import resource_root
 from .poc import ROLE_TITLES, TARGET_DATA_NOTE
 from .presentation import COMPOSED_NOTE
@@ -298,6 +302,13 @@ def _overall(rows: list[dict]) -> str:
 def _rank(rows: list[dict]) -> int:
     verdict = _overall(rows)
     return _ORDER.index(verdict) if verdict in _ORDER else len(_ORDER)
+
+
+def _category(r: dict, catalog: dict) -> str:
+    """A result's category (VER-026), as the run ordered it: its class, for injection the technique its CWE has in
+    the catalog (loader.load_verifiable_cwes)."""
+    cwe = str((r.get("finding_ref") or {}).get("cwe") or "").strip().upper()
+    return category(r.get("class"), (catalog.get(cwe) or {}).get("technique"))
 
 
 def _severity(value) -> str:
@@ -589,27 +600,40 @@ def why_not_confirmed(r: dict, variant: dict | None = None) -> str | None:
 
 
 def to_markdown(doc: dict, assessment: dict | None = None, *, analyzer_report: str | None = None) -> str:
-    """verification.md (VER-020): the run; a summary of the selected findings, the tested ones linked to their
-    entries with result, rating before and after verification (VER-039) and what the test showed, the ones not
-    tested with what the run lacked (VER-024); each tested finding led by its result, what the checked proof
-    showed, its steps and its proof of concept (VER-034, VER-035), and with `analyzer_report` (a link to the
-    Analyzer's report) a link to the finding there; an appendix, collapsed, with the test plan, the test agent's
-    explanation and the evidence review (VER-042). Text from the assessment, the model or the target stays on
-    one line, in a code span or in a fence."""
+    """verification.md (VER-020): the run; a summary of the selected findings, the tested ones by category
+    (VER-026), linked to their entries with result, rating before and after verification (VER-039) and what the
+    test showed, the ones not tested with what the run lacked (VER-024); each tested finding, under its category,
+    led by its result, what the checked proof showed, its steps and its proof of concept (VER-034, VER-035), and
+    with `analyzer_report` (a link to the Analyzer's report) a link to the finding there; an appendix, collapsed,
+    with the test plan, the test agent's explanation and the evidence review (VER-042). Text from the assessment,
+    the model or the target stays on one line, in a code span or in a fence."""
     threats = {t.get("id"): t for t in (assessment or {}).get("threats") or [] if isinstance(t, dict)}
     groups: dict[str, list[dict]] = {}
     for r in doc["results"]:
         groups.setdefault((r.get("finding_ref") or {}).get("id") or r["result_id"], []).append(r)
-    ordered = sorted(groups.items(), key=lambda item: _rank(item[1]))
+    catalog = load_verifiable_cwes()
+    kinds = {fid: _category(rows[0], catalog) for fid, rows in groups.items()}
+    first: dict[str, int] = {}          # the categories in the order the run tested them
+    for n, fid in enumerate(groups):
+        first.setdefault(kinds[fid], n)
+
+    def severity(fid) -> int:
+        level = str(_severity_of(threats.get(fid)) or "").lower()
+        return list(_SEVERITY_BADGE).index(level) if level in _SEVERITY_BADGE else 99
+
+    # Within a category confirmed first, then by severity; the run's order breaks the remaining ties.
+    ordered = sorted(groups.items(), key=lambda item: (first[kinds[item[0]]], _rank(item[1]), severity(item[0])))
     ratings = {fid: rating_after_verification(threats[fid], rows) if fid in threats and any(
         r["verdict"] != "not-attempted" for r in rows) else None for fid, rows in groups.items()}
     tested = [(fid, rows) for fid, rows in ordered if _overall(rows) != "not-attempted"]
     untested = [(fid, rows) for fid, rows in ordered if _overall(rows) == "not-attempted"]
     details = {id(r): _details(r) for _, rows in tested for r in rows}
-    lines = _run_lines(doc, analyzer_report) + _summary(tested, untested, threats, ratings)
+    lines = _run_lines(doc, analyzer_report) + _summary(tested, untested, threats, ratings, kinds)
     if tested:
         lines += ["", "## Tested findings"]
-        for fid, rows in tested:
+        for n, (fid, rows) in enumerate(tested):
+            if n == 0 or kinds[tested[n - 1][0]] != kinds[fid]:
+                lines += ["", f"### {category_name(kinds[fid])}"]
             for i, r in enumerate(rows):
                 lines += _entry(r, ratings[fid], first=i == 0, details=bool(details[id(r)]),
                                 analyzer_report=analyzer_report, several=len(rows) > 1,
@@ -678,10 +702,11 @@ def _run_lines(doc: dict, analyzer_report: str | None = None) -> list[str]:
     return lines
 
 
-def _summary(tested, untested, threats: dict, ratings: dict) -> list[str]:
-    """The overview of the selected findings (VER-020): the counts; the tested findings, each linked to its entry
-    with result, rating (VER-039) and what the test showed or why it is not confirmed; the findings not tested,
-    most severe first, with what the run lacked. Their row is their entry."""
+def _summary(tested, untested, threats: dict, ratings: dict, kinds: dict) -> list[str]:
+    """The overview of the selected findings (VER-020): the counts; the tested findings in a table for each
+    category (VER-026), headed with how many of its findings it confirmed, each linked to its entry with result,
+    rating (VER-039) and what the test showed or why it is not confirmed; the findings not tested, most severe
+    first, with what the run lacked. Their row is their entry."""
     tally: dict[str, int] = {}
     for _, rows in [*tested, *untested]:
         tally[_overall(rows)] = tally.get(_overall(rows), 0) + 1
@@ -695,8 +720,12 @@ def _summary(tested, untested, threats: dict, ratings: dict) -> list[str]:
         counts.append("no rating changed")
     lines = ["", "## Summary", "", " · ".join(counts)]
     if tested:
-        lines += ["", "| Result | Finding | Severity | What the test showed |", "| --- | --- | --- | --- |"]
-        for fid, rows in tested:
+        for n, (fid, rows) in enumerate(tested):
+            if n == 0 or kinds[tested[n - 1][0]] != kinds[fid]:
+                members = [r for f, r in tested if kinds[f] == kinds[fid]]
+                confirmed = sum(1 for r in members if _overall(r) == "confirmed")
+                lines += ["", f"### {category_name(kinds[fid])} · {confirmed} of {len(members)} confirmed", "",
+                          "| Result | Finding | Severity | What the test showed |", "| --- | --- | --- | --- |"]
             verdict, anchor, fr = _overall(rows), _anchor(fid), (rows[0].get("finding_ref") or {})
             label = _LABEL.get(verdict, verdict).capitalize() + (f" ({len(rows)} variants)" if len(rows) > 1 else "")
             result = f"{_RESULT_BADGE.get(verdict, '')} " + (f"**{label}**" if verdict == "confirmed" else label)
@@ -761,7 +790,7 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
         head.append("In the assessment report")
         cells.append(f"[{_inline(_display_id(fid), cell=True)}]({analyzer_report}#{anchor})")
     out = ["", *([f'<a id="{anchor}"></a>'] if first and anchor else []),
-           f"### {badge} {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r) if several else ''}",
+           f"#### {badge} {_inline(fid)} · {_inline(fr.get('title') or fr.get('cwe'))}{_variant(r) if several else ''}",
            "",
            "| " + " | ".join(head) + " |", "|" + " --- |" * len(head), "| " + " | ".join(cells) + " |"]
     comparison = (r.get("poc") or {}).get("why") or {}
@@ -818,7 +847,7 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
         rests = "proof rests on" if verdict == "confirmed" else "verdict rests on"
         bold = any(s["decisive"] for s in _steps(r))
         out += ["", f"**Requests**{f' (bold: the steps the {rests})' if bold else ''}", "", *table]
-    out += _poc_markdown(r, level=4, steps=False, limitations=False)
+    out += _poc_markdown(r, level=5, steps=False, limitations=False)
     footer = [f"Cross-run key {_code(fr['match_key'])}"] if fr.get("match_key") else []
     files = [_code(e["path"]) for e in r.get("evidence") or [] if e.get("path")]
     if files:

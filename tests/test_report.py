@@ -345,11 +345,40 @@ def test_the_summary_links_tested_findings_with_colour_rating_and_what_the_test_
     assert ("| 🟥 **Confirmed** | [T-037](#t-037) · Stored XSS | **🟠 High → 🔴 Critical** | "
             "The injected script ran in the browser. |") in summary
     assert "Ratings changed after verification: [T-037](#t-037)" in summary
-    assert md.index("## Summary") < md.index('<a id="t-037"></a>\n### 🟥 T-037') < md.index("## Appendix")
+    assert "### Cross-Site Scripting (XSS) · 1 of 1 confirmed\n\n| Result | Finding |" in summary
+    assert md.index("## Summary") < md.index('### Cross-Site Scripting (XSS)\n\n<a id="t-037"></a>\n#### 🟥 T-037') \
+        < md.index("## Appendix")
+
+
+def test_the_summary_and_the_entries_follow_the_categories_in_the_order_tested():
+    """VER-026: a table for each category, headed with how many of its findings it confirmed, the categories in the
+    order the run tested them, within one the confirmed findings first; the entries under the same categories."""
+    doc = _confirmed_doc()
+    xss = doc["results"][0]
+
+    def result(fid, cwe, cls, verdict):
+        return {**xss, "result_id": f"VF-{fid}", "verdict": verdict, "class": cls, "proof": None, "poc": None,
+                "evidence": [], "finding_ref": {"id": fid, "title": f"title {fid}", "cwe": cwe,
+                                                "match_key": f"{fid}|{cwe}"}}
+
+    doc["results"] = [result("T-050", "CWE-79", "xss", "inconclusive"),
+                      result("T-051", "CWE-89", "injection", "not-reproducible"), xss]
+    md = to_markdown(doc, {"threats": [_analyzer_threat()]})
+    summary = md.split("## Summary", 1)[1].split("## Tested findings", 1)[0]
+    headings = [line for line in summary.splitlines() if line.startswith("### ")]
+    assert headings == ["### Cross-Site Scripting (XSS) · 1 of 2 confirmed", "### SQL injection · 0 of 1 confirmed"]
+    first = summary.split(headings[0], 1)[1].split(headings[1], 1)[0]
+    assert first.index("T-037") < first.index("T-050") and "T-051" not in first
+    assert summary.count("| Result | Finding | Severity | What the test showed |") == 2
+    tested = md.split("## Tested findings", 1)[1].split("## Appendix", 1)[0]
+    assert [line for line in tested.splitlines() if line.startswith("### ")] == [
+        "### Cross-Site Scripting (XSS)", "### SQL injection"]
+    assert tested.index("#### 🟥 T-037") < tested.index("#### 🟨 T-050") < tested.index("### SQL injection") \
+        < tested.index("#### 🟩 T-051")
 
 
 def test_a_tested_entry_leads_with_its_card_what_the_test_showed_and_deviation():
-    entry = _report().split("### 🟥 T-037", 1)[1].split("## Appendix", 1)[0]
+    entry = _report().split("#### 🟥 T-037", 1)[1].split("## Appendix", 1)[0]
     assert "| 🟥 **Confirmed**, high confidence | **🟠 High → 🔴 Critical** | CWE-79 · XSS |" in entry
     assert "**What the test showed:** The injected script ran in the browser." in entry
     assert f"- **Deviation:** {DEVIATION.removeprefix('Deviation: ')}" in entry and "- **Rating changed:** " in entry

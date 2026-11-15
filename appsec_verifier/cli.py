@@ -62,7 +62,7 @@ def _csv(value: str | None) -> set[str] | None:
 
 def _select(args: argparse.Namespace, plans):
     """Apply the selection options of `args` (VER-026)."""
-    from .planning import add_quick, dependency_order, severity_order, supplement
+    from .planning import add_quick, category_order, dependency_order, severity_order, supplement
 
     filters = dict(
         categories=_csv(args.category),
@@ -80,7 +80,7 @@ def _select(args: argparse.Namespace, plans):
     if (args.min_severity or args.severity) and not args.only and not strict:
         # The `quick` findings below a severity selection are tested too, within the other selectors.
         selected = add_quick(selected, select(plans, **{**filters, "min_severity": None, "severities": None}))
-    return dependency_order(severity_order(selected))
+    return dependency_order(category_order(severity_order(selected)))
 
 
 # ── console layout, as in AppSec Analyzer ───────────────────────────────────
@@ -1715,8 +1715,9 @@ def _access_setup_hints(plans, scope, accepted: bool = False):
 
 def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str, list[str]] | None = None,
                 full: bool = True) -> list[str]:
-    """The test plan before the confirmation: one line per finding the run tests, with its title and
-    the requests the assessment names, those that prepare a test resource marked `(prepares)`. A finding
+    """The test plan before the confirmation: under a heading for each category (VER-026), one line per finding the
+    run tests, with its title and the requests the assessment names, those that prepare a test resource marked
+    `(prepares)`. A finding
     whose declared variants differ in request or inputs adds one indented line per variant, naming its own
     request and inputs, and its line names no requests; the runner tries them in that order, skipping only
     completed equivalent tests. Variants that do not differ get no lines: the finding's line names their
@@ -1727,7 +1728,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
     if not plans:
         return []
     from .agent.derivation import page_candidates
-    from .planning import evidence_id
+    from .planning import category, category_name, evidence_id
 
     tested = [p for p in plans if evidence_id(p) not in blocked]
     groups: dict[str, list] = {}
@@ -1747,10 +1748,12 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         else "this run cannot test it"
     )
     lines = ["", f"{st('Test plan', 'bold')}     {head}"]
-    id_w, sev_w, cls_w = (max((len(printable(getattr(p, k) or "")) for p in tested), default=0)
-                          for k in ("id", "severity", "cls"))
-    indent = " " * (2 + id_w + 2 + sev_w + 2 + cls_w + 2)
+    id_w, sev_w = (max((len(printable(getattr(p, k) or "")) for p in tested), default=0) for k in ("id", "severity"))
+    indent = " " * (2 + id_w + 2 + sev_w + 2)
     width = len(indent)
+    # The findings in the order they run, under a heading for each category (VER-026); a prerequisite of another
+    # category hoisted ahead of its dependant (planning.dependency_order) gets a heading of its own.
+    kinds = {fid: category(groups[fid][0].cls, groups[fid][0].technique) for fid in order}
 
     def request(endpoint) -> str:      # whether it needs a login is settled: without an account it is not tested
         return printable(str(endpoint)).removesuffix(" (login)")
@@ -1776,9 +1779,13 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
                 lines.extend(f"{indent}{line}" for line in _wrap_whole(
                     f"{label}: {note}", max(columns() - 1 - width, 40)))
 
-    for fid in order:
+    for n_fid, fid in enumerate(order):
         group = groups[fid]
         p = group[0]
+        if n_fid == 0 or kinds[order[n_fid - 1]] != kinds[fid]:
+            size = next((k for k, other in enumerate(order[n_fid:]) if kinds[other] != kinds[fid]),
+                        len(order) - n_fid)
+            lines += ["", f"  {st(category_name(kinds[fid]), 'bold')}{st(' · ' + _count(size, 'finding'), 'muted')}"]
         title = printable(p.title or p.cwe or "")
         # Declared variants name their own requests: a row each when they differ, otherwise the shared one here.
         rows = [variant_request(v) for v in group] if any(getattr(v, "variant_id", None) for v in group) else []
@@ -1798,8 +1805,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
             text = _fit(text, max(columns() - 1 - width, 20))
         rest = text[len(title):]
         lines.append(f"  {printable(p.id):<{id_w}}  {st(f'{printable(p.severity).lower():<{sev_w}}', 'muted')}  "
-                     f"{printable(p.cls or ''):<{cls_w}}  {text[:len(title)]}"
-                     + (st(rest, "muted") if rest else ""))
+                     f"{text[:len(title)]}" + (st(rest, "muted") if rest else ""))
         if distinct:
             for n, (vp, (req_text, inputs)) in enumerate(zip(group, rows, strict=True), start=1):
                 vid = printable(getattr(vp, "variant_id", None) or f"v{n}")
@@ -1885,9 +1891,17 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
         selection += " (--min-severity to change)"
     elif not guided and selected > dyn:
         selection += f" (another {selected - dyn} selected are outside supported runtime verification)"
+    from .planning import category, category_name
+
+    kinds: dict[str, set] = {}      # the findings of each category, in the order the run tests them (VER-026)
+    for p in sel:
+        if p.status == "dynamic":
+            kinds.setdefault(category(p.cls, p.technique), set()).add(p.id)
     rows = [
         *([] if guided else [("Assessment", str(assessment))]),
         ("Selection", selection),
+        *([("Categories", [(f"{category_name(k)} {len(ids)}", "bold") for k, ids in kinds.items()])]
+          if kinds else []),
         ("Target", f"{target} (scope: {', '.join(scope.get('hosts', []) or [target])}, owner: "
                    f"{(scope.get('owner') or {}).get('name')})" if "owner" in scope
          else f"{target} (no scope file: only this host and port)"),

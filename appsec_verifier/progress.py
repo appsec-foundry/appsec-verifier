@@ -1,11 +1,16 @@
 """The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-015,
-VER-016, VER-017, VER-024, VER-039, VER-042).
+VER-016, VER-017, VER-024, VER-026, VER-039, VER-042).
 
 Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
 ``start`` and ``done`` for a finding's bounds, ``agent`` when an agent starts or finishes, ``·`` for an
 agent step, ``proof`` for the proof check, ``↻`` for a step the step contract refused and ``⚠`` for a
 limit that stopped the finding. A blank line sets each finding apart.
+The findings of a category (VER-026) stand between two lines outside the grid, unlike AppSec Analyzer's phases,
+whose bounds are grid entries, since FINDING here holds findings: before them its name in bold and
+its number of findings, after them its name with the count of each result in that result's colour and the time
+the category took. The remaining variants of confirmed findings follow under a line of their own with the number
+of their runs, and without a closing line, since each of their findings already has its result.
 The ``start`` entry gives the finding's title, then its severity, class and the requests the assessment
 names. The ``agent`` entry after it says that the test agent started: its model in AppSec Analyzer's short
 form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act as and whether it may read
@@ -30,18 +35,19 @@ their first sentence as well, as the report does. When the run shows costs (API 
 spend as it grows; on a terminal the amounts are highlighted. Unlike AppSec Analyzer, which gives a step's
 own cost as well, the grid shows only the running total. Under the ``done`` entry a line names each
 screenshot the finding produced, with its path in the output directory: ``proof`` when the Verifier checked
-the verdict's proof, otherwise ``img``. PROGRESS counts finished findings, ELAPSED is the run's time.
-LEFT extrapolates the time the finished findings took, never beyond the run's time limit; until the first
-finding has finished it shows that limit (``≤29m``).
+the verdict's proof, otherwise ``img``. PROGRESS counts finished runs, one for each variant of a finding, as the
+test plan counts them; ELAPSED is the run's time. LEFT extrapolates the time the finished runs took, never beyond
+the run's time limit; until the first run has finished it shows that limit (``≤29m``).
 
 On a terminal an entry's parts stand on rows of their own, the tested request in its own colour, and a
 long row wraps under its column, at most ``MAX_COLUMNS`` wide as in AppSec Analyzer; a status line under
-the grid is redrawn every ``TICK_SECONDS`` with a spinner, a progress bar, the run's spend, the running
-step (``Sonnet 4.5 plans`` while the model call runs, otherwise the request) and its age. While the
-question for a higher cost ceiling waits (budget_prompt.py), the status line is away. Off a terminal
-(CI, logs) each entry is one plain line, and a line follows after ``HEARTBEAT_SECONDS`` without output. Text from the
-assessment, the model or the target passes the run's redaction and `printable` before it is shown, so no
-credential value, line break or escape sequence from it reaches the console.
+the grid is redrawn every ``TICK_SECONDS`` with a spinner, a progress bar, the category and the finding's place in
+it (``Cross-Site Scripting (XSS) 2 of 3``), the run's spend, the running step (``Sonnet 4.5 plans`` while the
+model call runs, otherwise the request) and its age. While the question for a higher cost ceiling waits
+(budget_prompt.py), the status line is away. Off a terminal (CI, logs) each entry is one plain line, and a
+line follows after ``HEARTBEAT_SECONDS`` without output. Text from the assessment, the model or the target passes
+the run's redaction and `printable` before it is shown, so no credential value, line break or escape sequence
+from it reaches the console.
 
 With ``--console-log``, `console_log` copies what `verify` prints to standard output and standard error to
 ``console.log`` in the output directory, without colour codes or, ``color``, with the console's colour; the
@@ -60,10 +66,11 @@ from collections import Counter
 from contextlib import contextmanager
 
 from .agent.experiments import agent_controls
+from .planning import category, category_name
 from .preflight import printable
 from .term_style import Style, columns
 from .verify.probes import proof_shown
-from .verify.report import _VERDICT_LABEL, _first_sentence, why_not_confirmed
+from .verify.report import _ORDER, _VERDICT_LABEL, _first_sentence, _overall, why_not_confirmed
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
@@ -73,6 +80,7 @@ _VERDICT_ROLES = {"confirmed": "ok", "not-reproducible": "critical", "blocked-by
 _VERDICT_MARKS = {"confirmed": "✔", "not-reproducible": "✘", "blocked-by-control": "✘", "inconclusive": "?"}
 _EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
 _SEVERITIES = ("critical", "high", "medium", "low")
+_FURTHER = "Further variants of confirmed findings"     # the group after the categories (VER-026)
 _NBSP = "\xa0"       # keeps the run's spend and the model time whole across a wrap, as in AppSec Analyzer
 # A redraw begins a synchronized update and hides the cursor, then shows it again; terminals without
 # synchronized updates ignore the mode. The cursor stays at the line start, as in AppSec Analyzer.
@@ -402,10 +410,18 @@ class RunProgress:
         self._shown = False
         self._paused = False        # a question waits for the operator: no status line, no heartbeat
         self._frame = 0
-        self.total = self.done = self.number = 0
-        self._variants: Counter = Counter()     # variants per finding of the grid; findings, not variants, count
-        self._finished: Counter = Counter()     # variants of each finding that have finished
+        self.total = self.number = 0            # findings of the grid, and the number of the one under test
+        self.runs = self.runs_started = self.runs_done = 0     # runs: a finding's variants each count, for PROGRESS
         self._numbers: dict = {}                # each finding's number; it keeps it when tested again later
+        self._kinds: dict = {}                  # each finding's category (VER-026)
+        self._order: list = []                  # the findings in the order the run tests them
+        self._group: str | None = None          # the category shown, or _FURTHER
+        self._group_size = 0                    # its findings, or for _FURTHER its runs
+        self._group_ids: list = []              # its findings that have started
+        self._group_runs = 0                    # its runs that have started
+        self._group_verdicts: dict = {}         # the verdicts of its findings' runs, for its closing line
+        self._group_at = self._group_end = 0.0  # when its first run started and its last finished
+        self._last_id = None
         self._id = ""
         self._id_width = 0
         self._steps, self._noted = 0, False
@@ -425,12 +441,15 @@ class RunProgress:
 
     def begin(self, plans: list) -> None:
         """Start the grid for the findings with a probe; without any, nothing is shown. `plans` holds one entry
-        per variant; the grid counts findings, so the variants of one finding share its number and the finding
-        counts as done once its last variant is."""
-        self._variants = Counter(plan.id for plan in plans)
-        self._finished = Counter()
+        per variant, in the order the run tests them; the grid numbers findings, so the variants of one finding
+        share its number, and PROGRESS counts runs."""
+        self._order = list(dict.fromkeys(plan.id for plan in plans))
+        self._kinds = {plan.id: category(getattr(plan, "cls", None), getattr(plan, "technique", None))
+                       for plan in plans}
         self._numbers = {}
-        self.total = total = len(self._variants)
+        self._group, self._group_verdicts, self._last_id = None, {}, None
+        self.runs, self.runs_started, self.runs_done = len(plans), 0, 0
+        self.total = total = len(self._order)
         if not total:
             return
         self.started = self.last = self._clock()
@@ -451,8 +470,21 @@ class RunProgress:
         """The finding's ``start`` entry; ``agent`` off when no agent starts for it."""
         with self._lock:
             self._end_series()
-            if self.number:
+            # A finding that comes back after another one is a confirmed finding's further variant (VER-026); from
+            # then on only those follow.
+            again = plan.id in self._numbers and plan.id != self._last_id
+            kind = _FURTHER if again or self._group == _FURTHER else self._kinds.get(plan.id) or category(
+                getattr(plan, "cls", None), getattr(plan, "technique", None))
+            if kind != self._group:
+                self._close_group()
+                self._open_group(kind, plan.id)
+            elif self.number:
                 self._write("")         # sets the finding apart from the one before
+            if plan.id not in self._group_ids:
+                self._group_ids.append(plan.id)
+            self._group_runs += 1
+            self.runs_started += 1
+            self._last_id = plan.id
             # Another variant of the same finding keeps its number, also when it is tested later (VER-026).
             self.number = self._numbers.setdefault(plan.id, len(self._numbers) + 1)
             self._id = _clip(plan.id, 16)
@@ -703,10 +735,9 @@ class RunProgress:
             why = _clip(self._text(why), 320) if why else (
                 _clip(_first_sentence(self._text(result.rationale)), 160)
                 if result.rationale and not self._noted and not self._explained else "")
-            # A finding is done once its last variant is; a plan begin() did not see counts on its own.
-            self._finished[plan.id] += 1
-            if self._finished[plan.id] >= self._variants.get(plan.id, 1):
-                self.done += 1
+            self.runs_done += 1
+            self._group_verdicts.setdefault(plan.id, []).append(verdict)
+            self._group_end = self._clock()
             self._activity = ""
             self._record("done", _line(*parts), *([_line(why)] if why else []), role=role)
             if rating and rating.get("changed"):
@@ -743,6 +774,7 @@ class RunProgress:
             self._thread.join(timeout=1)
         with self._lock:
             self._clear()
+            self._close_group()
             if isinstance(sys.stderr, _StatusGuard) and sys.stderr._progress is self:
                 sys.stderr = sys.stderr.stream
             if isinstance(sys.stdout, _StatusGuard) and sys.stdout._progress is self:
@@ -753,6 +785,45 @@ class RunProgress:
     def _text(self, value):
         """``value`` without the credential values the run knows (VER-016)."""
         return self._redact(value) if self._redact is not None else value
+
+    def _open_group(self, kind: str, finding: str) -> None:
+        """The line before a category's findings, ``Cross-Site Scripting (XSS) · 3 findings``, or before the
+        further variants of confirmed findings with the number of their runs (VER-026)."""
+        if kind == _FURTHER:
+            size, name, noun = self.runs - self.runs_started, _FURTHER, "run"
+        else:
+            start = self._order.index(finding) if finding in self._order else len(self._order)
+            later = (n for n, other in enumerate(self._order[start:]) if self._kinds.get(other) != kind)
+            size, name, noun = max(next(later, len(self._order) - start), 1), category_name(kind), "finding"
+        self._group, self._group_size, self._group_ids, self._group_runs = kind, size, [], 0
+        self._group_verdicts, self._group_at = {}, self._clock()
+        self._write("")
+        self._write(self.st(name, "bold") + self.st(f" · {size} {noun}{'' if size == 1 else 's'}", "muted"))
+
+    def _close_group(self) -> None:
+        """The line after a category's findings: how many of them it confirmed, the other results, each in its
+        colour, and the time it took, ``Cross-Site Scripting (XSS): 2 of 3 confirmed · 1 inconclusive · 4m11s``.
+        Nothing for the further variants, or when none of its findings finished."""
+        if self._group in (None, _FURTHER) or not self._group_verdicts:
+            return
+        # A finding's result over its runs here, as the report gives it.
+        results = Counter(_overall([{"verdict": v} for v in verdicts]) for verdicts in self._group_verdicts.values())
+        others = [v for v in (*_ORDER, *sorted(set(results) - set(_ORDER))) if v != "confirmed" and results[v]]
+        line = [(f"{category_name(self._group)}: ",), *_line(
+            (f"{results['confirmed']} of {len(self._group_verdicts)} confirmed",
+             "ok" if results["confirmed"] else "muted"),
+            *((f"{results[v]} {_VERDICT_LABEL.get(v, v)}", _VERDICT_ROLES.get(v, "muted")) for v in others),
+            (duration(self._group_end - self._group_at), "muted"))]
+        self._group_verdicts = {}
+        self._write(self._paint(line, 0, sum(len(segment[0]) for segment in line)))
+
+    def _where(self) -> str:
+        """The category under test and the finding's place in it, for the status line (VER-026)."""
+        if self._group is None:
+            return ""
+        if self._group == _FURTHER:
+            return f"further variants {self._group_runs} of {self._group_size}"
+        return f"{category_name(self._group)} {len(self._group_ids)} of {self._group_size}"
 
     def _rating(self, rating: dict) -> None:
         """``severity Medium → High · likelihood Low → High · confirmed with a checked proof`` (verify/rating.py)."""
@@ -779,8 +850,8 @@ class RunProgress:
             spend = self._spend(qualified=False) if self._spent is not None else []
             if self.live:
                 self._frame += 1
-                self._status(self._row(SPINNER[self._frame % len(SPINNER)], [_line(spend, self._activity, age)],
-                                       now, live=True))
+                self._status(self._row(SPINNER[self._frame % len(SPINNER)],
+                                       [_line(self._where(), spend, self._activity, age)], now, live=True))
             elif now - self.last >= self.HEARTBEAT_SECONDS:
                 self._record("·", _line(spend, self._activity or "working", age))
 
@@ -803,11 +874,12 @@ class RunProgress:
     def _run(self, now: float) -> tuple[str, str, str]:
         """PROGRESS, ELAPSED and LEFT for the whole run."""
         elapsed = now - self.started
-        share = f"{round(100 * self.done / self.total)}%" if self.total else ""
-        if self.done >= self.total:
+        done = min(self.runs_done, self.runs)     # a run begin() did not see counts toward no total
+        share = f"{round(100 * done / self.runs)}%" if self.runs else ""
+        if done >= self.runs:
             return share, duration(elapsed), ""
         remaining = self._remaining_time() if self._remaining_time is not None else None
-        estimate = elapsed / self.done * (self.total - self.done) if self.done else None
+        estimate = elapsed / done * (self.runs - done) if done else None
         if estimate is not None and (remaining is None or estimate <= remaining):
             left = _minutes(estimate) if estimate < 60 else "~" + _minutes(estimate)
         else:
@@ -856,7 +928,7 @@ class RunProgress:
         return "".join(pieces)
 
     def _bar(self) -> str:
-        filled = round(self.BAR_WIDTH * self.done / self.total) if self.total else 0
+        filled = round(self.BAR_WIDTH * min(self.runs_done, self.runs) / self.runs) if self.runs else 0
         return self.st("━" * filled, "accent") + self.st("─" * (self.BAR_WIDTH - filled), "muted")
 
     def _record(self, event: str, *lines: list[tuple], role: str | None = None, hang: int = 0) -> None:

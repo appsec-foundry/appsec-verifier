@@ -316,6 +316,31 @@ def test_quick_findings_are_tested_before_more_severe_heavier_ones():
     assert [p.id for p in dependency_order(severity_order(dep_plans))] == ["T-6", "T-5", "T-7"]
 
 
+def test_the_findings_of_one_category_are_tested_together():
+    """VER-026: within the order above the findings of one category run one after another, the categories in the
+    order of their first finding, so the run still starts with the quick findings and each category with its most
+    severe one. Injection splits by technique. A prerequisite of another category still runs before its dependant,
+    and a less severe finding of an earlier category runs before a more severe one of a later category."""
+    from appsec_verifier.endpoints import Endpoint
+    from appsec_verifier.planning import category_order
+
+    def threat(id, cwe, severity, **more):
+        return {"id": id, "cwe": cwe, "severity": severity, "evidence": {"file": id, "line": 1}, **more}
+
+    read, write = (Endpoint("GET", "/search", None),), (Endpoint("POST", "/comment", None),)
+    doc = {"threats": [threat("T-1", "CWE-89", "critical"), threat("T-2", "CWE-79", "high"),
+                       threat("T-3", "CWE-89", "medium"), threat("T-4", "CWE-639", "critical"),
+                       threat("T-5", "CWE-79", "critical"), threat("T-6", "CWE-78", "high")]}
+    plans = [replace(p, endpoints=write if p.id == "T-5" else read) for p in plans_from(doc)]
+    assert [p.id for p in severity_order(plans)] == ["T-1", "T-2", "T-3", "T-4", "T-5", "T-6"]
+    assert [p.id for p in category_order(severity_order(plans))] == ["T-1", "T-3", "T-2", "T-5", "T-4", "T-6"]
+    assert [p.id for p in _selected(plans)] == ["T-1", "T-3", "T-2", "T-5", "T-4", "T-6"]
+
+    doc["threats"][1]["verification_dependencies"] = ["T-6"]       # the XSS needs the command injection first
+    dependent = [replace(p, endpoints=write if p.id == "T-5" else read) for p in plans_from(doc)]
+    assert [p.id for p in _selected(dependent)] == ["T-1", "T-3", "T-6", "T-2", "T-5", "T-4"]
+
+
 @pytest.mark.parametrize("frame_kind", ["main", "child", "foreign", "old-page", "isolated"])
 def test_browser_execution_attribution(frame_kind):
     main = SimpleNamespace(url="https://app.example.com/page")

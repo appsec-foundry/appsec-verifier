@@ -115,7 +115,7 @@ The console shows model costs with API billing, including reported prompt-cache 
 | `runs` | Lists earlier runs written without `--output` and removes the ones you name or older ones after you confirm. |
 | `update` | Updates a pipx installation after you confirm. |
 
-Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also tests some findings below it, such as XSS and SQL injection findings that are cheap to confirm ([details](docs/cli.md#select-what-to-verify-ver-026)); `--strict-severity` leaves them out. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
+Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also tests some findings below it, such as XSS and SQL injection findings that are cheap to confirm ([details](docs/cli.md#select-what-to-verify-ver-026)); `--strict-severity` leaves them out. The run tests the selected findings category by category, such as all XSS findings and then all SQL injection findings, and the console and the report show them the same way. All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
 
 ### Run without questions (CI)
 

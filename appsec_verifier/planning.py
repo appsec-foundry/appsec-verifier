@@ -190,8 +190,9 @@ def severity_order(plans):
     named read request before those whose named requests all write, and those before findings without a named
     request; finding number as a stable tiebreaker. Ordering only, never selection: under a limit the budget reaches
     the inexpensive findings before heavier ones spend it. `quick` depends only on what a finding's variants share,
-    and the last group is decided over all plans of one finding, so its variants stay together. `dependency_order`
-    runs after this and only hoists prerequisites, so a prerequisite still precedes what depends on it."""
+    and the last group is decided over all plans of one finding, so its variants stay together. `category_order`
+    and `dependency_order` run after this; the latter only hoists prerequisites, so a prerequisite still precedes
+    what depends on it."""
     unsendable = {}
     for p in plans:
         variants = (getattr(p, "verification_context", None) or {}).get("variants", [])
@@ -200,6 +201,37 @@ def severity_order(plans):
     return sorted(plans, key=lambda p: (unsendable[p.id], not quick(p),
                                         -_SEVERITY_RANK.get((p.severity or "").lower(), 0),
                                         _ease(p), _finding_number(p.id), p.id or ""))
+
+
+# How the test plan, the console and the report name a category (VER-026).
+_CATEGORY_NAMES = {
+    "xss": "Cross-Site Scripting (XSS)", "sqli": "SQL injection", "nosqli": "NoSQL injection",
+    "command-injection": "Command injection", "code-evaluation": "Code injection",
+    "template-injection": "Template injection", "xpath-injection": "XPath injection",
+    "ldap-injection": "LDAP injection", "injection": "Injection", "access-control": "Access control",
+    "path-traversal": "Path traversal", "open-redirect": "Open redirect",
+    "ssrf": "Server-Side Request Forgery (SSRF)", "session": "Session cookies",
+}
+
+
+def category(cls: str | None, technique: str | None = None) -> str:
+    """A finding's category (VER-026): its weakness class, and for injection its technique, such as `sqli`."""
+    return (technique if cls == "injection" and technique else cls) or ""
+
+
+def category_name(key: str) -> str:
+    """A category as the user reads it, e.g. `Cross-Site Scripting (XSS)` for `xss`."""
+    return _CATEGORY_NAMES.get(key) or (key.replace("-", " ").capitalize() if key else "Other")
+
+
+def category_order(plans):
+    """The findings of one category together, in the order they had (VER-026); the categories in the order of their
+    first finding, so the run still starts with the inexpensive findings and each category with its most severe
+    one. Ordering only, never selection."""
+    first: dict[str, int] = {}
+    for n, p in enumerate(plans):
+        first.setdefault(category(p.cls, p.technique), n)
+    return sorted(plans, key=lambda p: first[category(p.cls, p.technique)])
 
 
 def dependency_order(plans):

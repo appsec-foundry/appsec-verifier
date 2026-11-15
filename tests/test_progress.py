@@ -75,8 +75,11 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     progress.agent_finished(_plan(), result)
     progress.finished(_plan(), result)
     progress.close()
-    header, start, agent, step, finished, proof, done = _rows(out)[1:]
+    header, gap, heading, start, agent, step, finished, proof, done, footer = _rows(out)[1:]
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
+    # VER-026: the category stands before its findings, and after them what they showed and the time it took.
+    assert gap == "" and heading == "Access control · 2 findings"
+    assert footer == "Access control: 1 of 1 confirmed · 1m00s"
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
     assert start.endswith("Basket of another user readable · high · access-control")
     assert agent.split()[3] == "agent" and agent.endswith("▶ test agent started · Sonnet 5.5 · no identities")
@@ -263,7 +266,7 @@ def test_refused_steps_and_limits_need_attention_and_the_done_line_names_the_lim
     result = ProbeResult(verdict="inconclusive", rationale="stopped by limit: request cap", limits_hit="requests")
     progress.agent_finished(_plan(), result)
     progress.finished(_plan(), result)
-    rows = _rows(out)[4:]
+    rows = _rows(out)[6:]
     assert rows[0].split()[3] == "↻" and rows[0].endswith("step 1 · refused: unknown action 'fetch_url'")
     assert rows[1].split()[3] == "⚠"
     assert rows[1].endswith("step 2 · GET /a · stopped by limit: request cap 1 exceeded")
@@ -285,7 +288,7 @@ def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_fa
     result = ProbeResult(verdict="inconclusive", rationale="stopped: " + reason, limits_hit="stagnation")
     progress.agent_finished(_plan(), result)
     progress.finished(_plan(), result)
-    rows = [" ".join(row.split()) for row in _rows(out)[4:]]
+    rows = [" ".join(row.split()) for row in _rows(out)[6:]]
     assert rows[0].endswith("step 8 · stopped: " + reason) and "by limit" not in rows[0]
     assert rows[2].endswith("✗ no proof: the test agent made no progress and was stopped")
     assert rows[3].endswith("? inconclusive · 0s · Agent stuck: the Verifier refused its steps repeatedly, the last a "
@@ -715,7 +718,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(
     progress.finding(_plan("T-2"))
     progress.close()
     rows = [SGR.sub("", row) for row in _rows(out)]
-    column = rows[2].index("Basket")                        # where the detail column starts
+    column = rows[4].index("Basket")                        # where the detail column starts
     note = next(i for i, row in enumerate(rows) if row.endswith("step 1 · boolean injection"))
     hang = column + len("step 1 · ")
     done = next(i for i, row in enumerate(rows) if " done " in row)
@@ -744,7 +747,7 @@ def test_off_a_terminal_a_blank_line_sets_each_finding_apart():
     progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "note": "n", "result": {"status": 200}})
     progress.finished(_plan(), ProbeResult(verdict="confirmed", rationale="why"))
     progress.finding(_plan("T-2"))
-    rows = _rows(out)[2:]
+    rows = _rows(out)[4:]
     assert [row.split()[3] if row else "" for row in rows] == ["start", "agent", "·", "done", "", "start", "agent"]
     assert rows[2].endswith("step 1 · n · GET /a → 200") and rows[3].endswith(" · why")
 
@@ -816,7 +819,7 @@ def test_off_a_terminal_a_quiet_stretch_gets_a_heartbeat_line():
     progress.activity(2, 12)
     clock.now += 119
     progress.tick()
-    assert len(_rows(out)) == 4
+    assert len(_rows(out)) == 6
     clock.now += 1
     progress.tick()
     assert _rows(out)[-1].endswith("step 2/12 · m plans · 2m00s")
@@ -996,7 +999,8 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     assert done.endswith(" · run $0.50 of $10.00 · Agent's assessment: rejection alone is insufficient.")
     assert "$0.50 · run" not in done                                      # the running total only
     # The verdict cites no step: the image of its requests follows, named img, not proof (VER-035).
-    assert rows[-1].split()[3] == "img" and "screenshot" in rows[-1]
+    assert rows[-2].split()[3] == "img" and "screenshot" in rows[-2]
+    assert rows[-1].endswith(": 0 of 1 confirmed · 1 inconclusive · 0s")     # the category's closing line (VER-026)
     assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
 
 
@@ -1019,9 +1023,9 @@ def test_a_subscription_run_shows_costs_only_with_show_costs(tmp_path, monkeypat
     assert run in out
 
 
-def test_the_grid_counts_findings_and_the_variants_of_one_share_its_number():
-    """The grid shows the findings this run verifies: a finding's variants share its number, and it counts as
-    done once its last variant is."""
+def test_the_grid_numbers_findings_and_progress_counts_their_runs():
+    """The grid shows the findings this run verifies: a finding's variants share its number, and PROGRESS counts
+    each finished run, as the test plan counts them, so it moves with every variant."""
     from dataclasses import replace
 
     out = io.StringIO()
@@ -1030,16 +1034,113 @@ def test_the_grid_counts_findings_and_the_variants_of_one_share_its_number():
     second = replace(_plan("T-1"), variant_id="v2")
     other = _plan("T-2")
     progress.begin([first, second, other])
-    assert progress.total == 2
+    assert (progress.total, progress.runs) == (2, 3)
     progress.finding(first)
     progress.finished(first, ProbeResult(verdict="inconclusive", rationale="no proof"))
-    assert progress.done == 0                                   # its other variant is still to come
     progress.finding(second, agent=False)
     progress.finished(second, ProbeResult(verdict="not-attempted", rationale="same request"))
     progress.finding(other)
     rows = [row for row in _rows(out) if " start " in row]
     assert [row.split()[1] for row in rows] == ["1/2", "1/2", "2/2"]
-    assert progress.done == 1
+    assert [row.split()[4] for row in rows] == ["0%", "33%", "67%"]
+    assert progress.runs_done == 2
+
+
+def _category_plan(id, cls, cwe="CWE-79", variant=None):
+    from dataclasses import replace
+
+    plan = replace(_plan(id, cls=cls), cwe=cwe, technique="sqli" if cwe == "CWE-89" else None)
+    return replace(plan, variant_id=variant) if variant else plan
+
+
+def test_each_category_stands_between_a_heading_and_a_line_with_its_results():
+    """VER-026: before a category's findings its name and number of findings, after them how many it confirmed,
+    the other results and its time; a blank line before the next category's heading. Injection is named by its
+    technique."""
+    out, clock = io.StringIO(), Clock()
+    progress = RunProgress(out, clock=clock, env={})
+    xss_1, xss_2 = _category_plan("T-1", "xss"), _category_plan("T-2", "xss")
+    sqli = _category_plan("T-3", "injection", cwe="CWE-89")
+    progress.begin([xss_1, xss_2, sqli])
+    for plan, verdict, took in ((xss_1, "confirmed", 30), (xss_2, "inconclusive", 90), (sqli, "not-reproducible", 5)):
+        progress.finding(plan)
+        clock.now += took
+        progress.finished(plan, ProbeResult(verdict=verdict, rationale="r"))
+    progress.close()
+    rows = _rows(out)
+    first = rows.index("Cross-Site Scripting (XSS) · 2 findings")
+    closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 2m00s")
+    assert rows[first - 1] == "" and " 1/3 T-1  start " in rows[first + 1] and first < closing
+    assert rows[closing + 1:closing + 3] == ["", "SQL injection · 1 finding"]
+    assert rows[-1] == "SQL injection: 0 of 1 confirmed · 1 not reproducible · 5s"
+
+
+def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_terminal():
+    """The heading's name is bold and its count muted; in the closing line each result has its colour, as in the
+    finding's done line, so the category's outcome is found without colouring its heading."""
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    st = progress.st
+    plan = _category_plan("T-1", "xss")
+    progress.begin([plan])
+    progress.finding(plan)
+    progress.finished(plan, ProbeResult(verdict="confirmed", rationale="r"))
+    progress.close()
+    text = out.getvalue()
+    assert st("Cross-Site Scripting (XSS)", "bold") + st(" · 1 finding", "muted") in text
+    assert st("1 of 1 confirmed", "ok") in text and "Cross-Site Scripting (XSS): " in text
+
+
+def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_own():
+    """VER-026: a confirmed finding's remaining variants run after every other finding; they come back under
+    `Further variants of confirmed findings` with the number of their runs and no closing line, and the category
+    they left closes before them."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    first, later = _category_plan("T-1", "xss", variant="v1"), _category_plan("T-1", "xss", variant="v2")
+    other = _category_plan("T-2", "xss")
+    progress.begin([first, later, other])
+    for plan, verdict in ((first, "confirmed"), (other, "inconclusive"), (later, "inconclusive")):
+        progress.finding(plan)
+        progress.finished(plan, ProbeResult(verdict=verdict, rationale="r"))
+    progress.close()
+    rows = _rows(out)
+    closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 0s")
+    assert rows[closing + 1:closing + 3] == ["", "Further variants of confirmed findings · 1 run"]
+    assert " 1/2 T-1  start " in rows[closing + 3]
+    assert not any(row.startswith("Further variants of confirmed findings:") for row in rows)
+
+
+def test_a_prerequisite_of_another_category_gets_a_heading_of_its_own():
+    """A prerequisite hoisted ahead of its dependant (VER-026) splits that category; each part is headed with the
+    findings it holds."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    a, prerequisite, b = (_category_plan("T-1", "xss"), _category_plan("T-2", "access-control"),
+                          _category_plan("T-3", "xss"))
+    progress.begin([a, prerequisite, b])
+    for plan in (a, prerequisite, b):
+        progress.finding(plan)
+        progress.finished(plan, ProbeResult(verdict="inconclusive", rationale="r"))
+    progress.close()
+    headings = [row for row in _rows(out) if row.endswith(" finding")]
+    assert headings == ["Cross-Site Scripting (XSS) · 1 finding", "Access control · 1 finding",
+                        "Cross-Site Scripting (XSS) · 1 finding"]
+
+
+def test_the_status_line_names_the_category_and_the_findings_place_in_it(monkeypatch):
+    monkeypatch.setenv("COLUMNS", "160")
+    out = Tty()
+    progress = RunProgress(out, model="m", clock=Clock(), env={})
+    one, two = _category_plan("T-1", "xss"), _category_plan("T-2", "xss")
+    progress.begin([one, two])
+    progress.finding(one)
+    progress.finished(one, ProbeResult(verdict="inconclusive", rationale="r"))
+    progress.finding(two)
+    progress.activity(1, 12)
+    progress.tick()
+    assert "Cross-Site Scripting (XSS) 2 of 2 · step 1/12 · m plans" in SGR.sub("", out.getvalue().rsplit("\n", 1)[1])
+    progress.close()
 
 
 def test_a_confirmed_findings_other_variants_are_deferred_behind_the_rest(tmp_path):
