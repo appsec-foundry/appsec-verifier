@@ -56,8 +56,8 @@ def _rows(stream) -> list[str]:
 
 
 def _unruled(rows: list[str]) -> list[str]:
-    """The rows, a category heading (VER-026) as its text without the rule around it."""
-    return [match.group(1) if (match := re.fullmatch(r"── (.+?) ─+", row)) else row for row in rows]
+    """The rows without the line under a category's heading (VER-026)."""
+    return [row for row in rows if not re.fullmatch(r"─+", row)]
 
 
 def test_durations_read_like_the_analyzer():
@@ -83,10 +83,10 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     header, gap, heading, start, agent, step, finished, proof, done, footer = _unruled(_rows(out))[1:]
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
     # VER-026: the category stands before its findings, and after them what they showed and the time it took.
-    assert gap == "" and heading == "Access control · 2 findings"
+    assert gap == "" and heading == "Access control: testing 2 findings"
     assert footer == "Access control: 1 of 1 confirmed · 1m00s"
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
-    assert start.endswith("Basket of another user readable · high · access-control")
+    assert start.endswith("Basket of another user readable · high")
     assert agent.split()[3] == "agent" and agent.endswith("▶ test agent started · Sonnet 5.5 · no identities")
     assert step.endswith("step 1 · GET /rest/basket/2 as alice → 200 · 512 B")
     assert finished.split()[3] == "agent" and finished.endswith("■ test agent finished · 2 steps · 1m00s")
@@ -131,7 +131,7 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
     progress.finding(plan)
     title, facts, agent = _rows(out)[-3:]
     assert SGR.sub("", title).endswith("  Basket of another user readable") and st(plan.title, "bold") in title
-    assert SGR.sub("", facts).strip() == "high · access-control · GET /rest/basket/:id (login), PUT /a"
+    assert SGR.sub("", facts).strip() == "high · GET /rest/basket/:id (login), PUT /a"
     plain = SGR.sub("", agent)
     assert plain.split()[3] == "agent" and plain.endswith("▶ test agent started · no identities")
     assert st("▶ test agent started", "agent", "bold") in agent
@@ -188,7 +188,7 @@ def test_the_start_entry_names_the_agent_its_step_budget_and_what_it_may_use(mon
     progress.activity(1, 12)
     assert progress._activity == "step 1/12 · Sonnet 4.5 plans"         # what the status line shows
     progress.finding(_plan("T-2"), agent=False)     # stopped by an earlier run-wide limit: no agent starts
-    assert SGR.sub("", _rows(out)[-1]).strip() == "high · access-control"
+    assert SGR.sub("", _rows(out)[-1]).strip() == "high"
 
 
 def test_a_finding_an_earlier_run_wide_limit_stopped_is_shown_without_an_agent():
@@ -271,7 +271,7 @@ def test_refused_steps_and_limits_need_attention_and_the_done_line_names_the_lim
     result = ProbeResult(verdict="inconclusive", rationale="stopped by limit: request cap", limits_hit="requests")
     progress.agent_finished(_plan(), result)
     progress.finished(_plan(), result)
-    rows = _rows(out)[6:]
+    rows = _unruled(_rows(out))[6:]
     assert rows[0].split()[3] == "↻" and rows[0].endswith("step 1 · refused: unknown action 'fetch_url'")
     assert rows[1].split()[3] == "⚠"
     assert rows[1].endswith("step 2 · GET /a · stopped by limit: request cap 1 exceeded")
@@ -293,7 +293,7 @@ def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_fa
     result = ProbeResult(verdict="inconclusive", rationale="stopped: " + reason, limits_hit="stagnation")
     progress.agent_finished(_plan(), result)
     progress.finished(_plan(), result)
-    rows = [" ".join(row.split()) for row in _rows(out)[6:]]
+    rows = [" ".join(row.split()) for row in _unruled(_rows(out))[6:]]
     assert rows[0].endswith("step 8 · stopped: " + reason) and "by limit" not in rows[0]
     assert rows[2].endswith("✗ no proof: the test agent made no progress and was stopped")
     assert rows[3].endswith("? inconclusive · 0s · Agent stuck: the Verifier refused its steps repeatedly, the last a "
@@ -723,7 +723,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_out(
     progress.finding(_plan("T-2"))
     progress.close()
     rows = [SGR.sub("", row) for row in _rows(out)]
-    column = rows[4].index("Basket")                        # where the detail column starts
+    column = next(row for row in rows if " start " in row).index("Basket")     # where the detail column starts
     note = next(i for i, row in enumerate(rows) if row.endswith("step 1 · boolean injection"))
     hang = column + len("step 1 · ")
     done = next(i for i, row in enumerate(rows) if " done " in row)
@@ -752,7 +752,7 @@ def test_off_a_terminal_a_blank_line_sets_each_finding_apart():
     progress.step({"step": 1, "tool": "http_request", "args": {"path": "/a"}, "note": "n", "result": {"status": 200}})
     progress.finished(_plan(), ProbeResult(verdict="confirmed", rationale="why"))
     progress.finding(_plan("T-2"))
-    rows = _rows(out)[4:]
+    rows = _unruled(_rows(out))[4:]
     assert [row.split()[3] if row else "" for row in rows] == ["start", "agent", "·", "done", "", "start", "agent"]
     assert rows[2].endswith("step 1 · n · GET /a → 200") and rows[3].endswith(" · why")
 
@@ -824,7 +824,7 @@ def test_off_a_terminal_a_quiet_stretch_gets_a_heartbeat_line():
     progress.activity(2, 12)
     clock.now += 119
     progress.tick()
-    assert len(_rows(out)) == 6
+    assert len(_unruled(_rows(out))) == 6
     clock.now += 1
     progress.tick()
     assert _rows(out)[-1].endswith("step 2/12 · m plans · 2m00s")
@@ -1059,9 +1059,9 @@ def _category_plan(id, cls, cwe="CWE-79", variant=None):
 
 
 def test_each_category_stands_between_a_heading_and_a_line_with_its_results():
-    """VER-026: before a category's findings its name and number of findings, after them how many it confirmed,
-    the other results and its time; a blank line before the next category's heading. Injection is named by its
-    technique."""
+    """VER-026: before a category's findings a heading with its name and number of findings, after them how many it
+    confirmed, the other results and its time; a blank line before the next category's heading. Injection is named
+    by its technique."""
     out, clock = io.StringIO(), Clock()
     progress = RunProgress(out, clock=clock, env={})
     xss_1, xss_2 = _category_plan("T-1", "xss"), _category_plan("T-2", "xss")
@@ -1073,17 +1073,16 @@ def test_each_category_stands_between_a_heading_and_a_line_with_its_results():
         progress.finished(plan, ProbeResult(verdict=verdict, rationale="r"))
     progress.close()
     rows = _unruled(_rows(out))
-    first = rows.index("Cross-Site Scripting (XSS) · 2 findings")
+    first = rows.index("Cross-Site Scripting (XSS): testing 2 findings")
     closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 2m00s")
     assert rows[first - 1] == "" and " 1/3 T-1  start " in rows[first + 1] and first < closing
-    assert rows[closing + 1:closing + 3] == ["", "SQL injection · 1 finding"]
+    assert rows[closing + 1:closing + 3] == ["", "SQL injection: testing 1 finding"]
     assert rows[-1] == "SQL injection: 0 of 1 confirmed · 1 not reproducible · 5s"
 
 
 def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_terminal():
-    """The heading's rule is in the accent colour, its name bold and its count muted; in the closing line each
-    result has its colour, as in the finding's done line, so the category's outcome is found without colouring its
-    heading."""
+    """The heading's name is bold and its underline in the accent colour; in the closing line each result has its
+    colour, as in the finding's done line, so the category's outcome is found without colouring its heading."""
     out = Tty()
     progress = RunProgress(out, clock=Clock(), env={}, live=False)
     st = progress.st
@@ -1093,30 +1092,37 @@ def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_ter
     progress.finished(plan, ProbeResult(verdict="confirmed", rationale="r"))
     progress.close()
     text = out.getvalue()
-    heading = st("── ", "accent") + st("Cross-Site Scripting (XSS)", "bold") + st(" · 1 finding ", "muted")
-    assert heading + st("───", "accent").removesuffix("\033[0m") in text
+    heading = "Cross-Site Scripting (XSS): testing 1 finding"
+    assert (st("Cross-Site Scripting (XSS)", "bold") + ": testing 1 finding\n" + st("─" * len(heading), "accent")
+            in text)
     assert st("1 of 1 confirmed", "ok") in text and "Cross-Site Scripting (XSS): " in text
 
 
-def test_a_category_heading_is_a_rule_across_the_grid(monkeypatch):
-    """VER-026: a category's heading stands out from the findings' bold titles as a rule across the grid's width,
-    at most AppSec Analyzer's 140 columns, with the name and number of findings in it; also without a terminal."""
-    for width, expected in (("100", 99), ("400", RunProgress.MAX_COLUMNS - 1)):
-        monkeypatch.setenv("COLUMNS", width)
-        out = io.StringIO()
-        progress = RunProgress(out, clock=Clock(), env={})
-        plan = _category_plan("T-1", "xss")
-        progress.begin([plan])
-        progress.finding(plan)
-        progress.close()
-        heading = next(row for row in _rows(out) if row.startswith("── "))
-        assert heading.startswith("── Cross-Site Scripting (XSS) · 1 finding ───") and len(heading) == expected
+def test_under_a_category_heading_the_start_entry_leaves_out_what_the_heading_says():
+    """VER-026: the heading is underlined as long as it is, also without a terminal; under it the start entry gives
+    no class, and no title that only repeats the category's name."""
+    from dataclasses import replace
+
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    generic = replace(_category_plan("T-1", "injection", cwe="CWE-89"), title="SQL Injection")
+    specific = replace(_category_plan("T-2", "injection", cwe="CWE-89"), title="Blind SQL injection via cookie id")
+    progress.begin([generic, specific])
+    for plan in (generic, specific):
+        progress.finding(plan, agent=False)
+    progress.close()
+    rows = _rows(out)
+    heading = rows.index("SQL injection: testing 2 findings")
+    assert rows[heading + 1] == "─" * len(rows[heading])
+    first, second = (row for row in rows if " start " in row)
+    assert first.endswith("  high") and "injection" not in first.lower()
+    assert second.endswith("  Blind SQL injection via cookie id · high")
 
 
 def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_own():
     """VER-026: a confirmed finding's remaining variants run after every other finding; they come back under
-    `Further variants of confirmed findings` with the number of their runs and no closing line, and the category
-    they left closes before them."""
+    `Confirmed findings: testing N further variants` with no closing line, the class after the severity since no
+    category heading names it, and the category they left closes before them."""
     out = io.StringIO()
     progress = RunProgress(out, clock=Clock(), env={})
     first, later = _category_plan("T-1", "xss", variant="v1"), _category_plan("T-1", "xss", variant="v2")
@@ -1128,9 +1134,10 @@ def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_o
     progress.close()
     rows = _unruled(_rows(out))
     closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 0s")
-    assert rows[closing + 1:closing + 3] == ["", "Further variants of confirmed findings · 1 run"]
-    assert " 1/2 T-1  start " in rows[closing + 3]
-    assert not any(row.startswith("Further variants of confirmed findings:") for row in rows)
+    assert rows[closing + 1:closing + 3] == ["", "Confirmed findings: testing 1 further variant"]
+    start = rows[closing + 3]
+    assert " 1/2 T-1  start " in start and "Basket of another user readable · high · xss" in start
+    assert [row for row in rows if row.startswith("Confirmed findings")] == [rows[closing + 2]]
 
 
 def test_a_prerequisite_of_another_category_gets_a_heading_of_its_own():
@@ -1146,8 +1153,8 @@ def test_a_prerequisite_of_another_category_gets_a_heading_of_its_own():
         progress.finished(plan, ProbeResult(verdict="inconclusive", rationale="r"))
     progress.close()
     headings = [row for row in _unruled(_rows(out)) if row.endswith(" finding")]
-    assert headings == ["Cross-Site Scripting (XSS) · 1 finding", "Access control · 1 finding",
-                        "Cross-Site Scripting (XSS) · 1 finding"]
+    assert headings == ["Cross-Site Scripting (XSS): testing 1 finding", "Access control: testing 1 finding",
+                        "Cross-Site Scripting (XSS): testing 1 finding"]
 
 
 def test_the_status_line_names_the_category_and_the_findings_place_in_it(monkeypatch):

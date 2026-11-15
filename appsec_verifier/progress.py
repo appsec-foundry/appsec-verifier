@@ -6,16 +6,18 @@ FINDING is the finding under test with its position among the findings that get 
 ``start`` and ``done`` for a finding's bounds, ``agent`` when an agent starts or finishes, ``·`` for an
 agent step, ``proof`` for the proof check, ``↻`` for a step the step contract refused and ``⚠`` for a
 limit that stopped the finding. A blank line sets each finding apart.
-The findings of a category (VER-026) stand between two lines outside the grid, unlike AppSec Analyzer's phases,
-whose bounds are grid entries, since FINDING here holds findings: before them a rule across the grid with its name
-in bold and its number of findings, after them its name with the count of each result in that result's colour and
-the time the category took. The remaining variants of confirmed findings follow under a rule of their own with the
-number of their runs, and without a closing line, since each of their findings already has its result.
-The ``start`` entry gives the finding's title, then its severity, class and the requests the assessment
-names. The ``agent`` entry after it says that the test agent started: its model in AppSec Analyzer's short
-form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act as and whether it may read
-source code. A finding an earlier run-wide limit stopped gets no agent entries, since no agent starts for
-it. A step entry gives the agent's note on what the step checks, then the request it tested with its
+The findings of a category (VER-026) stand between lines outside the grid, unlike AppSec Analyzer's phases,
+whose bounds are grid entries, since FINDING here holds findings: before them an underlined heading,
+``SQL injection: testing 2 findings`` with the name in bold, after them its name with the count of each result in
+that result's colour and the time the category took. The remaining variants of confirmed findings follow under a
+heading of their own, ``Confirmed findings: testing 5 further variants``, and without a closing line, since each of
+their findings already has its result.
+The ``start`` entry gives the finding's title, then its severity and the requests the assessment names. Under a
+category's heading it leaves out the class, and the title when it only repeats the category's name; under the
+further variants the class follows the severity. The ``agent`` entry after it says that the test agent started:
+its model in AppSec Analyzer's short form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act
+as and whether it may read source code. A finding an earlier run-wide limit stopped gets no agent entries, since
+no agent starts for it. A step entry gives the agent's note on what the step checks, then the request it tested with its
 query and body, the result and how long the model took to propose the step; a result that a proof needs
 (a script executed, the marker file read, a callback hit) is highlighted. The controls the Verifier sends for an
 accepted experiment (VER-011, VER-049, VER-053, VER-057) form a block: an entry with what the experiment tests and
@@ -495,13 +497,17 @@ class RunProgress:
             self._finding_at = self._clock()
             self._step_spent_at = self._spent() if self._spent is not None else 0.0
             title = _clip(self._text(plan.title or plan.cwe or "")) or "-"
+            # Under a category's heading the class goes unsaid, and a title that only repeats the category's name.
+            grouped = kind != _FURTHER
+            if grouped and title.casefold() == category_name(kind).casefold():
+                title = ""
             severity = _clip(self._text(plan.severity or ""), 10).lower()
             # A variant names its own request and key, so its line differs from its siblings'; otherwise the
             # finding's named requests.
             requests = _variant_detail(plan) or ", ".join(str(e) for e in getattr(plan, "endpoints", ())[:2])
-            self._record("start", [(title, "bold")],
+            self._record("start", *([[(title, "bold")]] if title else []),
                          _line((severity, severity if severity in _SEVERITIES else "muted"),
-                               _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)))
+                               "" if grouped else _clip(plan.cls or "-", 20), _clip(self._text(requests), 120)))
             if agent:
                 self._record("agent", _line(("▶ test agent started", "agent", "bold"), self._agent))
 
@@ -787,22 +793,21 @@ class RunProgress:
         return self._redact(value) if self._redact is not None else value
 
     def _open_group(self, kind: str, finding: str) -> None:
-        """The line before a category's findings, ``── Cross-Site Scripting (XSS) · 3 findings ───…``, or before
-        the further variants of confirmed findings with the number of their runs (VER-026). The rule runs across
-        the grid's width, so the heading stands out from the findings' bold titles."""
+        """The heading before a category's findings, ``SQL injection: testing 2 findings``, worded like its closing
+        line, or before the further variants of confirmed findings, ``Confirmed findings: testing 5 further
+        variants`` (VER-026); underlined as long as it is, so it stands out from the findings' bold titles."""
         if kind == _FURTHER:
-            size, name, noun = self.runs - self.runs_started, _FURTHER, "run"
+            size, name, noun = self.runs - self.runs_started, "Confirmed findings", "further variant"
         else:
             start = self._order.index(finding) if finding in self._order else len(self._order)
             later = (n for n, other in enumerate(self._order[start:]) if self._kinds.get(other) != kind)
             size, name, noun = max(next(later, len(self._order) - start), 1), category_name(kind), "finding"
         self._group, self._group_size, self._group_ids, self._group_runs = kind, size, [], 0
         self._group_verdicts, self._group_at = {}, self._clock()
-        count = f" · {size} {noun}{'' if size == 1 else 's'} "
-        rule = "─" * max(min(columns(), self.MAX_COLUMNS) - 1 - len(f"── {name}{count}"), 3)
+        rest = f": testing {size} {noun}{'' if size == 1 else 's'}"
         self._write("")
-        self._write(self.st("── ", "accent") + self.st(name, "bold") + self.st(count, "muted")
-                    + self.st(rule, "accent"))
+        self._write(self.st(name, "bold") + rest)
+        self._write(self.st("─" * min(len(name + rest), self.MAX_COLUMNS - 1), "accent"))
 
     def _close_group(self) -> None:
         """The line after a category's findings: how many of them it confirmed, the other results, each in its
