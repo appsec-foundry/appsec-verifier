@@ -84,7 +84,7 @@ _REQUEST_CHARS = 1500
 TITLES = {"normal": "Normal request", "attack": "Attack", "outcome": "Outcome", "control": "Control"}
 COMPOSED_NOTE = "HTTP evidence composed by the Verifier: "      # an observation, followed by the reason
 _CSS = ("section.outcome{border:2px solid #e65100}.outcome h2{background:#fff3e0}.outcome .role{background:#e65100}"
-        "header .s{font-size:18px}")
+        "header .s{font-size:17px}header.head small.own{display:inline}")
 
 # The same presentation for a structured revision call (VER-042): a strict host needs every property required, so
 # an excerpt may be null there instead of omitted; `normalized` drops the nulls again.
@@ -392,36 +392,41 @@ def report_steps(ctx, history: list[dict], steps: list[dict], presentation: dict
 
 def document(ctx, history: list[dict], steps: list[dict], presentation: dict, result, har_path) -> tuple[str, int]:
     """A presentation `check` returned as one HTML page for its screenshot and the number of marks: the code's verdict
-    and proof check, the agent's sentence labelled as its own, what the Verifier left out and the steps the verdict
-    rests on that the page does not show, then each step in its order."""
-    from ..planning import _TITLE_LOCATION
-    from .poc import _EXCHANGE_CSS, _VERDICT_SENTENCE, _marked, _shown_entry, shown_time, why_lines, withheld_steps
-    from .probes import proof_shown
+    and the sentence that says why (VER-035), the agent's sentence labelled as its own, what the Verifier left out
+    and the steps the verdict rests on that the page does not show, then each step in its order and why it is a
+    proof."""
+    from .poc import (
+        _EXCHANGE_CSS,
+        _marked,
+        _shown_entry,
+        head_html,
+        shown_time,
+        verdict_sentence,
+        why_html,
+        withheld_steps,
+    )
 
     recorded = {s["step"]: _shown_entry(s) for s in steps}
     withheld, marks = withheld_steps(history), presentation.get("marks", [])
-    verdict, cls = result.verdict, getattr(ctx.plan, "cls", None) or "finding"
-    title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
-    shown = (proof_shown(result.proof, cls) or (None,))[0] if verdict == "confirmed" else None
-    checked = f"accepted: {shown}" if shown else _VERDICT_SENTENCE.get(verdict, "No completed proof.")
+    verdict = result.verdict
+    why = (getattr(result, "poc", None) or {}).get("why")
+    # The verdict and why, as on the Verifier's own images (VER-035): why_summary, else the reason it is not one.
+    sentence = (why or {}).get("lead") or verdict_sentence(ctx, verdict, result)
     lead = ("What the attacker did and obtained" if verdict == "confirmed"
             else "What the steps show and what is missing")
     first = recorded[presentation["steps"][0]["step"]]
     left_out, not_shown = presentation.get("left_out") or [], presentation.get("not_shown") or []
-    lines = [f"<b>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), cls, title, verdict))))}</b>",
-             *([f"<span class=s><span class=k>{lead}:</span> {html.escape(presentation['summary'])} "
-                "<small>(the test agent's words)</small></span>"] if presentation.get("summary") else []),
-             # Why the verdict follows (poc.why_summary), else the proof check's result in one line.
-             *(why_lines((getattr(result, "poc", None) or {}).get("why"))
-               or [f"<span class=k>Proof check:</span> {html.escape(checked)}"]),
-             *([f"<small>Left out by the Verifier: {html.escape('; '.join(left_out))}.</small>"] if left_out else []),
-             *([f"<small>Also part of the proof, not shown here: step{'s' if len(not_shown) > 1 else ''} "
-                f"{', '.join(map(str, not_shown))} (in the report and the HAR file).</small>"] if not_shown else []),
-             f"<small>AppSec Verifier · steps, excerpts and marks chosen by the test agent and found in the record"
-             f"{' in ' + html.escape(har_path) if har_path else ''} captured "
-             f"{html.escape(shown_time(first.get('startedDateTime', '')))}; nothing sent again. Requests shown "
-             "URL-decoded; yellow marks what a request sent, a red frame what an answer shows.</small>"]
-    parts, total = [f"<header>{chr(10).join(lines)}</header>"], 0
+    more = "".join([
+        *([f"<p class=s><span class=k>{lead}:</span> {html.escape(presentation['summary'])} "
+           "<small class=own>(the test agent's words)</small></p>"] if presentation.get("summary") else []),
+        *([f"<small>Left out by the Verifier: {html.escape('; '.join(left_out))}.</small>"] if left_out else []),
+        *([f"<small>Also part of the proof, not shown here: step{'s' if len(not_shown) > 1 else ''} "
+           f"{', '.join(map(str, not_shown))} (in the report and the HAR file).</small>"] if not_shown else []),
+        f"<small>AppSec Verifier · steps, excerpts and marks chosen by the test agent and found in the record"
+        f"{' in ' + html.escape(har_path) if har_path else ''} captured "
+        f"{html.escape(shown_time(first.get('startedDateTime', '')))}; nothing sent again. Requests shown "
+        "URL-decoded; yellow marks what a request sent, a red frame what an answer shows.</small>"])
+    parts, total = [head_html(ctx, verdict, sentence, more)], 0
     for item in presentation["steps"]:
         n, kind = item["step"], item["role"]
         e = recorded[n]
@@ -441,6 +446,7 @@ def document(ctx, history: list[dict], steps: list[dict], presentation: dict, re
                      + "".join(f"<div class=facts><b>{html.escape(f)}</b></div>" for f in facts)
                      + f"<div class=cols><div><h3>Request</h3><pre>{req_html}</pre></div>"
                      f"<div><h3>Response</h3><pre>{res_html}</pre></div></div></section>")
+    parts.append(why_html(why))
     page = (f"<!doctype html><html><head><meta charset=utf-8><style>{_EXCHANGE_CSS}{_CSS}</style></head>"
             f"<body>{''.join(parts)}</body></html>")
     return page, total

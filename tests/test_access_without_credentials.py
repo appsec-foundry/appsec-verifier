@@ -387,10 +387,11 @@ def test_a_confirmed_comparison_reads_as_the_same_answer_on_the_console_in_the_r
     facts = [f for s in result.poc["shown"] for f in s["facts"]]
     assert any("same status 200, the identical answer, compared in code over the whole body" in f for f in facts)
     page = "".join(pages)
-    assert f"Without a login, GET {PATH} returns the same answer as for account-1." in page   # the lead
+    assert (f"Missing authentication, because without a login, GET {PATH} returns the same answer as for "
+            "account-1.") in page                                                     # the sentence that heads it
     assert "Only the declared allowed accounts may access this resource. Source: operator:" in page
     assert "identical to step 2, compared in code" in page and "<td>refused</td>" in page  # the attack's row
-    assert page.count("<li class=yes>") == 3 and "<li class=no>" not in page     # access, control and rule hold
+    assert page.count("<p><b>") == 3 and "<b>✗ " not in page                     # access, control and rule hold
     assert "so the target does not answer every path alike" in page
     assert "Confirmed: the access violates the rule." in page
     assert "got the identical answer, compared in code" in page and "s3cr3t" in page       # the answer, shown once
@@ -495,10 +496,11 @@ def test_the_comparison_image_says_when_no_rule_rates_the_access_and_shortens_lo
     result, _, _ = _run(tmp_path, target, browser=browser, declared=False)
     assert result.verdict == "inconclusive" and len(pages) == 1          # one image holds the whole comparison
     page = pages[0]
-    assert f"Without a login, GET {PATH} returns the same answer as for account-1." in page
+    assert (f"Missing authentication not confirmed, although without a login, GET {PATH} returns the same answer "
+            "as for account-1.") in page
     assert "No access rule is declared or accepted for this finding" in page and "<td>not declared</td>" in page
     assert "class='attack access unrated'" in page and "<td>refused</td>" not in page
-    assert page.count("<li class=yes>") == 2 and "<li class=no><b>Rule</b>" in page      # only the rule is missing
+    assert page.count("<p><b>") == 3 and page.count("<b>✗ ") == 1 and "<p><b>✗ Rule</b>" in page  # rule missing
     assert "Inconclusive: the access is shown, but no rule rates it." in page
     assert digest not in page and "1c8bfe8f…3032 (64 hex characters)" in page
     order = [page.index(f"<span class=role>{role}<") for role in ("Normal request", "Attack", "Control")]
@@ -528,8 +530,8 @@ def test_the_report_says_why_a_comparison_has_its_verdict(tmp_path):
         text = to_markdown({"meta": {}, "results": [{
             "result_id": "VF-1", "finding_ref": {"id": "T-1", "title": "Access"}, "class": "access-control",
             "verdict": result.verdict, "confidence": result.confidence, "proof": result.proof, "poc": result.poc}]})
-        lead = f"Without a login, GET {PATH} returns the same answer as for account-1."
-        assert "**What the test showed:** " + lead in text
+        assert f"without a login, GET {PATH} returns the same answer as for account-1." in comparison["lead"]
+        assert "**What the test showed:** " + comparison["lead"] in text
         assert [line[2] for line in text.splitlines() if line.startswith(("- ✓ **", "- ✗ **"))] == marks
         assert closing in text and "**Expected access:**" not in text      # the rule line names it once
         roles = [line.split(" · ")[0].strip("*") for line in text.splitlines() if " · step " in line and "**" in line]

@@ -32,16 +32,22 @@ finding whose response is an HTML page, the proof browser renders that
 recorded response without a new request and marks the values the verdict
 names. Live application observations are attached before this renderer. The
 report displays application images and marked HTTP excerpts; exchange images
-are saved for later use, not embedded. An access-control comparison gets one image of its own (`comparison_document`):
-the observed access, the expected one, a table row per identity and the answer once; an injection experiment one
-with a table row per step and one comparison in detail. Images and report say why a confirmed result is confirmed
-(`why_summary`). Every finding with decisive steps
-also gets an image of those
-exchanges: as the test agent presents them, with what verify/presentation.py left out and the steps it does not
-show named, the report showing those steps after the agent's (VER-059); where the Verifier shows its own presentation
-instead, as described here, with the reason in its header and in the observations. One whose verdict
-cites none (a limit stopped it) gets an image of its answered requests after the last test plan, whose
-header says it proves nothing: request and response side by side, built here as escaped HTML with
+are saved for later use, not embedded. Every image starts with the verdict and one
+sentence that says why (`headline`, `verdict_sentence`, VER-035): the weakness, the
+tested input and because what the proof showed, or the reason the report gives.
+An access-control comparison gets one image of its own (`comparison_document`):
+a table row per identity, the answer once, and why the verdict follows. Images
+and report say why a confirmed result is confirmed (`why_summary`): the rule
+that makes it a proof and every step it rests on. Every finding with decisive
+steps also gets an image of those exchanges: as the test agent presents them,
+with what verify/presentation.py left out and the steps it does not show named,
+the report showing those steps after the agent's (VER-059); where the Verifier
+shows its own presentation instead, one image of the steps the proof compares,
+two side by side with the attack first or one with its request beside its
+answer, the other steps named below, the reason in its small print and in the
+observations; an injection experiment's image comes first. One whose verdict
+cites none (a limit stopped it) gets an image of its answered requests after
+the last test plan that says so, built here as escaped HTML with
 what the code can locate marked, each kind labelled by a red tag: the
 identities an access-control proof compares, the XSS payload (in a request
 URL-decoded; in an answer its HTML source lines), the SSRF marker, the
@@ -54,9 +60,11 @@ marker file, a callback hit, an authenticated artifact, an engine error or a
 returned generated marker; VER-048, VER-049, VER-053) is shown by that, framed
 where its answer shows it, not by a status or answer difference.
 Where the accepted test plan or the finding's payload says what a step is
-(`step_roles`), the image shows a normal request on top and the attack below
-it, with a line on how the attack's answer compares; an injection experiment's
-response shows the observed value, entries the normal answer lacks marked `+`.
+(`step_roles`), its heading names it; a line says how an attack's answer
+compares only where the image does not show what it is compared with. An
+injection experiment's JSON answer is shortened around the observed field,
+which is framed (`_json_excerpt`); a deeper field is shown by its value view,
+entries the compared answer lacks marked `+`.
 The report lists normal requests before attacks, with the same comparison.
 Response bodies and screenshots can show target data and are marked for
 review before sharing (VER-022).
@@ -829,6 +837,68 @@ def _value_view(pointer: str, value, normal=_MISSING, other="the normal request"
     return "\n".join(lines), marks
 
 
+_EXCERPT_KEYS = 12
+
+
+def _short(value, limit: int = 50) -> str:
+    """A JSON value in one short line: a string or number cut at `limit` characters, an object or list as {…} or […]."""
+    if isinstance(value, dict):
+        return "{}" if not value else "{…}"
+    if isinstance(value, list):
+        return "[]" if not value else "[…]"
+    text = json.dumps(value, ensure_ascii=False)
+    return text if len(text) <= limit else text[:limit - 2] + "…" + text[-1] * isinstance(value, str)
+
+
+def _entry(item) -> str:
+    """One entry of an observed list as shortened JSON: its identifier and name, else its first two plain fields."""
+    if not isinstance(item, dict):
+        return _short(item, 80)
+    lower = {str(k).lower(): k for k in list(item)[:64]}
+    keys = [k for k in (next((lower[k] for k in group if k in lower), None) for group in (_ID_KEYS, _NAME_KEYS))
+            if k is not None and not isinstance(item[k], dict | list)]
+    keys = keys or [k for k in list(item)[:32] if not isinstance(item[k], dict | list)][:2]
+    fields = ", ".join(f"{json.dumps(str(k), ensure_ascii=False)}: {_short(item[k])}" for k in keys)
+    return "{" + fields + (", …" if len(item) > len(keys) else "") + "}"
+
+
+def _json_excerpt(e: dict, pointer, value, other=_MISSING) -> tuple[str, list[tuple[str, str]]] | None:
+    """A JSON object answer for an image, shortened around the top-level field an injection experiment observes
+    (VER-035): that field in full, a list there one entry per line, every other value cut short. Returns the text
+    and the field to frame, with how it compares with `other`, the value in the step compared with; None where the
+    answer is no object or the pointer names no top-level field of it."""
+    from ..agent.experiments import token
+
+    if not isinstance(pointer, str) or pointer.count("/") != 1 or e["response"]["content"].get("_omitted"):
+        return None
+    doc = _json(e)
+    key = pointer[1:].replace("~1", "/").replace("~0", "~")
+    if not isinstance(doc, dict) or key not in doc:
+        return None
+    lines, field = ["{"], ""
+    keys = list(doc)[:_EXCERPT_KEYS]
+    for i, k in enumerate(keys):
+        comma = "," if i < len(keys) - 1 or len(doc) > len(keys) else ""
+        name = json.dumps(str(k), ensure_ascii=False)
+        if k != key:
+            lines.append(f" {name}: {_short(doc[k])}{comma}")
+            continue
+        if isinstance(value, list) and value:
+            rows = [f"  {_entry(item)}{',' if j < min(len(value), _VIEW_ROWS) - 1 else ''}"
+                    for j, item in enumerate(value[:_VIEW_ROWS])]
+            more = [f"  … {len(value) - _VIEW_ROWS} more; full record in HAR"] if len(value) > _VIEW_ROWS else []
+            field = "\n".join([f"{name}: [", *rows, *more, " ]" + comma])
+        else:
+            field = f"{name}: {_short(value, 120)}{comma}"
+        lines.append(" " + field)
+    lines += [" …"] if len(doc) > len(keys) else []
+    lines.append("}")
+    if other is _MISSING or token(other) == token(value):
+        return "\n".join(lines), []
+    both = isinstance(value, list) and isinstance(other, list)
+    return "\n".join(lines), [(f"{_brief(value)} instead of {len(other) if both else _brief(other)}", field)]
+
+
 _OWNER_KEYS = {"userid", "user_id", "ownerid", "owner_id", "owner", "customerid", "accountid", "email", "username"}
 
 
@@ -979,7 +1049,12 @@ def _marked(text: str, needles=(), lines=(), *, sent: bool = False) -> tuple[str
         else:             # an answer's value: a red frame, the note beside it
             note = f"<span class=note>◀ {words}</span>" if new else ""
             hit = f"<span class=hit>{marked}{note}</span>"
-        out += [html.escape(text[last:a]), hit]
+        before = text[last:a]
+        cut = len(before.rstrip(" ")) - 1
+        if block and not sent and before[cut:cut + 1] == "\n":    # a block starts its own line; the report's
+            out += [html.escape(before[:cut]), f"<span class=nl>{html.escape(before[cut:])}</span>", hit]
+        else:                                                      # excerpt keeps the break and the indent
+            out += [html.escape(before), hit]
         last = b
         if block and text[b:b + 1] == "\n":     # a block ends its own line; the report's excerpt keeps the break
             out.append("<span class=nl>\n</span>")
@@ -1385,7 +1460,7 @@ def _xss_source(text: str, marks) -> str | None:
 def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
     res = e["response"]
     lines = [f"HTTP/1.1 {res['status']} {res['statusText']}".rstrip()]
-    keep = {"location", "www-authenticate", "set-cookie"}
+    keep = {"content-length", "location", "www-authenticate", "set-cookie"}
     lines += [f"{h['name']}: {h['value']}" for h in res["headers"]
               if h["name"].lower() in keep or any(h["name"].lower() + ":" == prefix.lower()
                                                 for _, prefix in marked_lines)]
@@ -1422,29 +1497,32 @@ def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
     return _image_excerpt("\n".join(lines), limit=450) + "\n\n" + _image_excerpt(text, marks)
 
 
-_EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 ui-monospace,Menlo,Consolas,monospace}
+_EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
+pre,code{font-family:ui-monospace,Menlo,Consolas,monospace}
 header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #b00020;white-space:pre-wrap}
 header b{font-size:20px}header .k{color:#ffeb3b;font-weight:bold}header small{color:#bbb;font-size:13px}
-header .lead{font-size:19px;font-weight:bold}header b.closing{font-size:16px}
-header .yes:before{content:"\\2713  ";color:#7ddc8a;font-weight:bold}
-header .no:before{content:"\\2717  ";color:#ffb74d;font-weight:bold}
-table.steps{border-collapse:collapse;margin:14px;width:calc(100% - 28px);font:15px/1.4 system-ui,Helvetica,Arial,
-sans-serif}table.steps th{text-align:left;font-size:13px;color:#555;padding:4px 8px;border-bottom:2px solid #999}
-table.steps td{padding:6px 8px;border-bottom:1px solid #ccc;vertical-align:top}table.steps td.in{font-family:
-ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere}table.steps .role{white-space:nowrap}
-table.steps tr.normal .role{background:#2e7d32}table.steps tr.control .role{background:#546e7a}
-table.steps tr.attack .role{background:#b00020}table.steps tr.effect .role{background:#e65100}
-table.steps tr.attack td{background:#fdecea}table.steps td.seen{font-weight:bold}
-section>h4{margin:0;padding:4px 10px;font:13px sans-serif;color:#555;background:#fafafa;border-bottom:1px solid #ccc}
+header.head{white-space:normal;padding:12px 16px 14px}header.head .id{font-size:14px;color:#bbb}
+header.head .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
+header.head p{margin:6px 0 0}header.head small{display:block;margin-top:6px}
+.verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
+text-transform:uppercase;vertical-align:2px}.verdict.confirmed{background:#b00020}
+.verdict.inconclusive{background:#b26a00}
+.what{margin:10px 14px 0;font-size:15px}
+.pair{display:flex;gap:14px;margin:10px 14px 0}.pair section{flex:1;min-width:0;margin:0}
+.pair h3{padding-top:6px}pre.req{border-bottom:1px solid #ddd}.dec{color:#555}
+.why{margin:12px 14px 0;padding:8px 12px;background:#111;color:#fff;border-radius:4px;font-size:15px}
+.why b{color:#ffeb3b;margin-right:6px}.why p{margin:0}.why p+p{margin-top:4px}
+.why .closing{color:#ccc;font-size:13px}
+footer{margin:8px 14px 12px;color:#777;font-size:12px}
 .hit.block{display:block}.block mark{display:block;background:none;outline:none;border:2px solid #b00020}
 .sent mark{background:#ffeb3b;outline:2px solid #b00020;outline-offset:0}
 .note{color:#b00020;font:bold 14px sans-serif;margin-left:8px}.block .note{display:block;margin:0 0 3px}
 .nl{display:none}
 section{margin:14px;border:1px solid #ccc}
-h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:16px;border-bottom:1px solid #ccc}
+h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:15px;border-bottom:1px solid #ccc}
 .facts{padding:4px 10px;border-bottom:1px solid #ccc}.cols{display:flex}.cols>div{flex:1;min-width:0}
-.cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:15px;color:#555}
-pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
+.cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px 0;font-size:13px;color:#666;font-weight:normal}
+pre{margin:0;padding:4px 10px 8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}
 mark{background:none;color:#000;outline:2px solid #b00020;outline-offset:1px}.hit{display:inline-block;max-width:100%}
 .hit:not(.block)>mark{display:inline-block}
 .tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}
@@ -1456,61 +1534,6 @@ section.attack{border:2px solid #b00020}section.effect{border:2px solid #e65100}
 .normal .role{background:#2e7d32}.control .role{background:#546e7a}.attack .role{background:#b00020}
 .effect .role{background:#e65100}
 .diff{padding:6px 10px;border-bottom:1px solid #ccc;background:#fff8e1;font-weight:bold}"""
-
-
-def _quoted(value) -> str:
-    return json.dumps(value, ensure_ascii=False)[:60]
-
-
-def _test_line(ctx, history: list[dict]) -> str:
-    """What the test did, in one sentence from the accepted plan and the finding's class; "" when unknown."""
-    from ..agent.experiments import latest_plan
-    from ..agent.proof import redirect_host
-
-    _, plan = latest_plan(history)
-    cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
-    target = f"{plan.get('method', 'GET')} {plan['path']}" if plan.get("path") else "the finding's request"
-    if cls == "injection" and plan.get("error_set") and plan.get("input_name"):
-        names = " ".join(str(entry["name"]) for entry in plan["error_set"])
-        return (f"{target} with {plan['input_name']} carrying each syntax break ({names}) and its balanced "
-                "counterpart; proof: an engine error that only the break raises")
-    if cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
-        normal = f"{target} with {plan['input_name']} = {_quoted(plan.get('baseline'))} as the normal input, then"
-        if plan["kind"] == "timing":
-            return f"{normal} with a condition that delays the answer; compared: the answer time"
-        compared = (plan.get("pointer") or (f"the text {_quoted(plan['text'])}" if plan.get("text") else None)
-                    or "each result in the answer")     # VER-055: a page or text answer
-        if plan.get("expression_template"):
-            return f"{normal} with computed expressions; compared: {plan.get('pointer') or 'each result in the answer'}"
-        return f"{normal} with injected conditions that are true and false; compared: {compared}"
-    if cls == "access-control" and plan.get("kind") == "access-control":
-        resource, owner = _declared_resource(ctx, plan), plan.get("owner")
-        if resource is not None:
-            return (f"{resource.get('method', 'GET')} {resource.get('path')} as an identity allowed to read it and "
-                    "as one that must not")
-        if owner and isinstance(plan.get("change"), dict):
-            return (f"{owner} creates a record with the test marker, another account changes it with "
-                    f"{plan['change'].get('method')} {plan['change'].get('path')}, then {owner} reads it again")
-        if owner:
-            return (f"{owner} creates a record with the test marker; {owner}, a request without login and another "
-                    "account read it")
-        if plan.get("reference"):
-            return f"{target} as the privileged account {plan['reference']}, without login and as a normal account"
-        if plan.get("signed_in"):        # VER-057
-            return (f"{target} as {plan['signed_in']}, without login, and without login to a random path next to it; "
-                    "compared in code: whether the answers are identical")
-    if cls == "xss":
-        return ("the page opened in a browser with an XSS payload that calls alert() with a random marker; "
-                "proof: the script runs and the dialog shows the marker")
-    if cls == "open-redirect" and (host := redirect_host(marker)):
-        return f"a request that names {host} as the redirect target; proof: a redirect to that host"
-    if cls == "path-traversal":
-        return "a request for the operator's marker file; proof: the file's content in the answer"
-    if cls == "ssrf":
-        return "a request that makes the target call the Verifier's listener; proof: the listener gets the marker"
-    if cls == "session" and (attribute := _SESSION_ATTRIBUTES.get(getattr(ctx.plan, "cwe", None))):
-        return f"the session cookie as the target sets it; checked: its {attribute} attribute"
-    return ""
 
 
 _VERDICT_SENTENCE = {
@@ -1565,21 +1588,89 @@ def observation_groups(ctx, history: list[dict], everything: list[tuple[int, dic
     return [(name, steps, values) for name, (steps, values) in groups.items()]
 
 
-def _result_line(ctx, history: list[dict], everything: list[tuple[int, dict]], roles, verdict: str,
-                 cited: bool) -> str:
-    """What the steps showed, per kind of step, and what the verdict makes of it."""
-    groups = observation_groups(ctx, history, everything, roles)
-    shown = [f"{name}: {', '.join(seen[:3])}" for name, _, seen in groups[:5]]
-    closing = (_VERDICT_SENTENCE.get(verdict, "No completed proof.") if cited
-               else "The verdict cites no step; these recorded attempts have no completed proof.")
-    return " · ".join(shown) + ". " + closing
+def weakness(ctx) -> str:
+    """The finding's weakness by a short name, for the sentence that heads its images and report entry (VER-035)."""
+    from .probes import CLASS_NAMES, WEAKNESS_NAMES
+
+    return (WEAKNESS_NAMES.get(str(getattr(ctx.plan, "cwe", "") or ""))
+            or CLASS_NAMES.get(str(getattr(ctx.plan, "cls", "") or "")) or "The finding")
+
+
+def _input_name(ctx, history: list[dict]) -> str | None:
+    """The input an injection experiment tests, as its accepted plan names it; None for other classes."""
+    from ..agent.experiments import latest_plan
+
+    if getattr(ctx.plan, "cls", None) != "injection":
+        return None
+    name = latest_plan(history)[1].get("input_name")
+    return str(name)[:60] if isinstance(name, str) and name else None
+
+
+def headline(ctx, history: list[dict], form: str | None) -> str:
+    """A confirmed finding's sentence (VER-035): the weakness, the input it was tested through, and because what the
+    checked proof form showed, e.g. `NoSQL injection through id, because a condition added to id changes what the
+    database query returns.`"""
+    from .probes import BECAUSE, QUERY_NOUNS
+
+    name = _input_name(ctx, history)
+    query = QUERY_NOUNS.get(str(getattr(ctx.plan, "cwe", "") or ""), "the server")
+    because = BECAUSE.get(form or "", "").format(input=name or "the input", query=query)
+    return f"{weakness(ctx)}{' through ' + name if name else ''}" + (f", because {because}." if because else ".")
+
+
+def verdict_sentence(ctx, verdict: str, result=None) -> str:
+    """The sentence that heads an image without a `why_summary` (VER-035): for a finding the proof does not confirm,
+    the weakness and the reason the report gives (VER-024), else what the verdict means."""
+    if verdict == "confirmed":
+        return f"{weakness(ctx)}. {_VERDICT_SENTENCE['confirmed']}"
+    reason = None
+    if result is not None and verdict == "inconclusive":
+        from .report import why_not_confirmed
+
+        reason = why_not_confirmed({"verdict": verdict, "limits_hit": getattr(result, "limits_hit", None),
+                                    "rationale": getattr(result, "rationale", None),
+                                    "observations": getattr(result, "observations", None) or [],
+                                    "proof": getattr(result, "proof", None) or {},
+                                    "class": getattr(ctx.plan, "cls", None)})
+    return f"{weakness(ctx)} not confirmed. " + (reason or _VERDICT_SENTENCE.get(verdict, "No completed proof."))
+
+
+def head_html(ctx, verdict: str, sentence: str, more: str = "") -> str:
+    """An image's head (VER-035): the finding, then its verdict and the sentence that says why, then `more` (HTML the
+    caller escaped). Every recorded value is escaped."""
+    from ..planning import _TITLE_LOCATION
+    from .report import _VERDICT_LABEL
+
+    title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
+    label = _VERDICT_LABEL.get(verdict, verdict)
+    return (f"<header class=head><div class=id>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), title))))}"
+            f"</div><div class=lead><span class='verdict {html.escape(verdict)}'>{html.escape(label)}</span>"
+            f"{html.escape(sentence)}</div>{more}</header>")
+
+
+def why_html(why: dict | None) -> str:
+    """The checks and conclusion of `why_summary` as one block below an image's steps, escaped; the sentence that
+    heads the image is its `lead`."""
+    if not why:
+        return ""
+    checks = "".join(f"<p><b>{'' if c['ok'] else '✗ '}{html.escape(c['name'])}</b> {html.escape(c['text'])}</p>"
+                     for c in why["checks"])
+    closing = f"<p class=closing>{html.escape(why['closing'])}</p>" if why.get("closing") else ""
+    return f"<div class=why>{checks}{closing}</div>"
+
+
+# Proof forms whose controls carry values the Verifier generated at random for the finding (VER-011 to VER-013).
+_RANDOM_CONTROLS = ("predicate", "returned-marker", "computed-expression", "out-of-band", "auth-artifact",
+                    "auth-resource")
+CHECKED_IN_CODE = ("The Verifier checked this in code against the recorded steps; a model's verdict alone never "
+                   "confirms.")
 
 
 def why_summary(ctx, history: list[dict], shown: list[tuple[int, dict]], result) -> dict | None:
-    """Why a result has its verdict, for its images and the report (VER-034, VER-035): `lead`, what the proof showed;
-    `checks`, what each kind of step showed and the rule that makes it a proof, each with whether it holds;
-    `closing`, the conclusion. An access-control comparison names its controls and the access rule (VER-010); any
-    other class only a confirmation the proof check accepted. None where there is nothing to explain."""
+    """Why a result has its verdict, for its images and the report (VER-034, VER-035): `lead`, the sentence that
+    names the weakness and says because what; `checks`, the rule that makes it a proof and every step the proof
+    rests on with what it showed; `closing`, that the code checked it. An access-control comparison names its
+    controls and the access rule (VER-010). None where the proof check confirmed nothing."""
     from .probes import PROOF_FORMS, PROOF_RULES, proof_shown
 
     cls, proof = getattr(ctx.plan, "cls", None), result.proof or {}
@@ -1592,73 +1683,27 @@ def why_summary(ctx, history: list[dict], shown: list[tuple[int, dict]], result)
         return None
     form = next(k for k, v in PROOF_FORMS.items() if v is said)
     roles = step_roles(ctx, history, shown)
-    checks = [{"ok": True, "name": name[:1].upper() + name[1:],
-               "text": f"step{'s' if len(steps) > 1 else ''} {', '.join(map(str, steps))}: {', '.join(seen[:3])}."}
-              for name, steps, seen in observation_groups(ctx, history, shown, roles)[:6]]
-    checks.append({"ok": True, "name": "Why this proves it", "text": PROOF_RULES[form]})
-    return {"lead": said[1] + ".", "checks": checks, "closing": f"Confirmed: {said[0]}."}
-
-
-def why_lines(why: dict | None) -> list[str]:
-    """`why_summary` as the lines of an image header, escaped."""
-    if not why:
-        return []
-    return [f"<span class=lead>{html.escape(why['lead'])}</span>",
-            *(f"<span class={'yes' if c['ok'] else 'no'}></span><span class=k>{html.escape(c['name'])}</span> "
-              f"{html.escape(c['text'])}" for c in why["checks"]),
-            f"<b class=closing>{html.escape(why['closing'])}</b>"]
-
-
-def _shown_line(panel: list[tuple[int, dict]], roles) -> str:
-    """The steps in this image, top and below."""
-    parts = []
-    for i, (n, e) in enumerate(panel):
-        kind, label = roles.get(n, ("", ""))
-        what = (f"the {ROLE_TITLES[kind].lower()} ({label})" if kind else
-                f"{e['request']['method']} as {e.get('_role') or 'anonymous'} → {e['response']['status']}")
-        parts.append(("top: " if i == 0 else "below: ") * (len(panel) > 1) + f"step {n}, {what}")
-    return "; ".join(parts)
-
-
-def experiment_table(ctx, history: list[dict], everything: list[tuple[int, dict]], roles) -> str:
-    """Every step of an experiment as one table row (VER-035): what the step is, the value it sent for the declared
-    input, and what the proof read from its answer, so the pattern of a comparison is seen at a glance. "" where
-    the plan places fewer than two steps. Every recorded value is escaped."""
-    from ..agent.experiments import latest_plan
-
-    _, plan = latest_plan(history)
-    placed = [(n, e) for n, e in by_role(everything, roles) if roles.get(n, ("",))[0]]
-    if len(placed) < 2:
-        return ""
-    timing = plan.get("kind") == "timing"
-    name = str(plan.get("input_name") or "")
-    rows = [f"<tr><th></th><th>Step</th><th>What it is</th><th>Sent{' as ' + html.escape(name) if name else ''}"
-            "</th><th>Answer</th><th>What the proof reads</th></tr>"]
-    for n, e in sorted(placed, key=lambda s: s[0])[:16]:
-        kind, label = roles[n]
-        args = (history[n - 1].get("args") or {}) if 1 <= n <= len(history) else {}
-        sent = _sink(plan, args) if name else _MISSING
-        sent = "" if sent is _MISSING else (sent if isinstance(sent, str) else json.dumps(sent, ensure_ascii=False))
-        sent = sent if len(sent) <= 120 else sent[:119] + "…"
-        seen = _step_observation(ctx, history, n, e, everything, roles, timing)
-        res = e["response"]
-        rows.append(f"<tr class={kind}><td><span class=role>{html.escape(ROLE_TITLES[kind])}</span></td>"
-                    f"<td>{n}</td><td>{html.escape(label)}</td><td class=in>{html.escape(sent)}</td>"
-                    f"<td>{res['status']} {html.escape(res['statusText'])}</td>"
-                    f"<td class=seen>{html.escape(seen)}</td></tr>")
-    return f"<table class=steps>{''.join(rows)}</table>"
+    groups = observation_groups(ctx, history, shown, roles)[:6]
+    steps = "; ".join(f"{name}, step{'s' if len(numbers) > 1 else ''} {', '.join(map(str, numbers))}: "
+                      f"{', '.join(seen[:3])}" for name, numbers, seen in groups)
+    checks = [{"ok": True, "name": "Why this proves it", "text": PROOF_RULES[form]}]
+    if sum(len(numbers) for _, numbers, _ in groups) > 1:       # one step: its image and excerpt say it all
+        checks.append({"ok": True, "name": "All steps", "text": steps + "." + (
+            " The Verifier generated the values at random." if form in _RANDOM_CONTROLS else "")})
+    return {"lead": headline(ctx, history, form), "checks": checks, "closing": CHECKED_IN_CODE}
 
 
 def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
                       highlight=None, *, cited: bool = True, comparison=None, composed: str | None = None,
-                      why: dict | None = None, table: bool = False) -> tuple[str, int]:
-    """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): request and
-    response side by side per step, what the verdict rests on marked. Without `cited` they are the answered
-    requests after the last test plan of a verdict that cites no step, and the header says so; `composed` says why
-    the test agent's presentation is not used (VER-059). Returns the page and the number of marks. Every recorded
-    value is escaped; the page has no script."""
+                      why: dict | None = None, result=None) -> tuple[str, int]:
+    """The decisive exchanges of a finding as one HTML page for its screenshot (VER-035): a head with the verdict and
+    the sentence that says why (`why`, else `verdict_sentence`), the steps as recorded, two side by side as the proof
+    compares them with the attack first, one with its request beside its response, what the verdict rests on marked,
+    then why that is a proof, or what the steps showed. Without `cited` they are the answered requests after the
+    last test plan of a verdict that cites no step, and the page says so; `composed` says why the test agent's
+    presentation is not used (VER-059). Returns the page and the number of marks. Every recorded value is escaped;
+    the page has no script."""
     from ..agent.experiments import latest_plan
-    from ..planning import _TITLE_LOCATION
 
     cls = getattr(ctx.plan, "cls", None) or "finding"
     captured = shown[0][1].get("startedDateTime", "") if shown else ""
@@ -1667,66 +1712,95 @@ def exchange_document(ctx, history: list[dict], shown: list[tuple[int, dict]], v
     shown = by_role(shown, roles)[:6]
     opposite = opposites(history)
     # Compared with the step of its kind in the same image, else the closest one of the finding. A step another one
-    # in this image is compared with is that one's reference: it stands above it and is compared with nothing.
+    # in this image is compared with is that one's reference: it stands after it and is compared with nothing.
     refs = {n: compared_with(n, e, shown, roles, opposite) or compared_with(n, e, everything, roles, opposite)
             for n, e in shown}
     referenced = {ref[0] for ref in refs.values() if ref and any(ref[0] == m for m, _ in shown)}
-    shown = [s for s in shown if s[0] in referenced] + [s for s in shown if s[0] not in referenced]
-    title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
-    test = _test_line(ctx, history)
-    if not test and cited and not latest_plan(history)[0]:
-        test = "no accepted test plan; shown are the requests the verdict cites"
-    lines = [f"<b>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), cls, title, verdict))))}</b>",
-             *([f"<span class=k>Test:</span> {html.escape(test)}"] if test else []),
-             # Why the verdict follows (why_summary), else what the steps showed in one line.
-             *(why_lines(why) or [f"<span class=k>Result:</span> "
-                                  f"{html.escape(_result_line(ctx, history, everything, roles, verdict, cited))}"]),
-             f"<span class=k>Shown{' in detail' if table else ''}:</span> "
-             f"{html.escape(_shown_line(shown, roles))}",
-             *([f"<small>Composed by the Verifier: {html.escape(composed)}.</small>"] if composed else []),
-             f"<small>AppSec Verifier · recorded and redacted{' in ' + html.escape(har_path) if har_path else ''}"
-             f" at {html.escape(shown_time(captured))}; nothing sent again. "
-             f"{'Requests shown URL-decoded, excerpts' if cls == 'xss' else 'Excerpts'} shortened; yellow marks what "
-             "a request sent, a red frame what an answer shows.</small>"]
+    # The attack first, then what it is compared with: its reference, a normal request, a control.
+    shown.sort(key=lambda s: (roles.get(s[0], ("",))[0] not in ("attack", "effect"), s[0] in referenced))
+    pair = len(shown) == 2
     pointer = latest_plan(history)[1].get("pointer")
+    name = _input_name(ctx, history)
     # VER-011: a boolean experiment's value is framed only where its proof counts the split, never against the
     # baseline; the line under the true condition says why a difference from the false one does not count.
     reason = _split_reason(ctx, history, everything, roles) if opposite else ""
     counts = verdict == "confirmed" and reason is None
-    parts, total = [f"<header>{chr(10).join(lines)}</header>"], 0
-    if table:
-        parts.append(experiment_table(ctx, history, everything, roles))
-    for n, e in shown:
+    sentence = (why or {}).get("lead") or verdict_sentence(ctx, verdict, result)
+    described = "; ".join(f"step {n}{', ' + roles[n][1] if roles.get(n, ('', ''))[1] else ''}" for n, _ in shown)
+    intro = (f"{'The proof' if cited and verdict == 'confirmed' else 'The steps'} as recorded: {described}. "
+             if cited else f"The last answered requests, which the verdict does not cite: {described}. ")
+    parts = [head_html(ctx, verdict, sentence),
+             f"<p class=what>{html.escape(intro)}Yellow marks what a request sent, a red frame what the proof reads "
+             "in an answer.</p>"]
+    sections, total = [], 0
+    for i, (n, e) in enumerate(shown):
         kind, label = roles.get(n, ("", ""))
         req_marks, res_marks, res_lines, facts = _exchange_marks(ctx, history, n, e, everything, highlight, shown)
         facts = [(t, d) for t, d in facts if d or not t.startswith("answered in")]   # a time only where it decides
+        decoded = [t.removeprefix("input, decoded: ") for t, _ in facts if t.startswith("input, decoded: ")]
+        facts = [(t, d) for t, d in facts if not t.startswith("input, decoded: ")]
         ref = None if n in referenced else refs[n]
         ref_label = roles[ref[0]][1] if ref and roles.get(ref[0], ("",))[0] == "attack" else None
+        partner = shown[1 - i] if pair else ref
         view, value = None, observed(ctx, history, e)
         if value is not _MISSING:
-            framed = ref and (not opposite or (ref_label is not None and counts))
-            view, view_lines = _value_view(pointer, value, observed(ctx, history, ref[1]) if framed else _MISSING,
-                                           f"the {ref_label}" if ref_label else "the normal request")
-            res_marks = [m for m in res_marks if m[0] != "answer differs"]    # the view shows the difference
-            res_lines = [*res_lines, *view_lines]
+            both = kind == "attack" and partner is not None and roles.get(partner[0], ("",))[0] == "attack"
+            framed = partner is not None and (not opposite or (both and counts))
+            other = observed(ctx, history, partner[1]) if framed else _MISSING
+            excerpt = _json_excerpt(e, pointer, value, other)
+            if excerpt is not None:
+                view, needles = excerpt
+                res_marks = [m for m in res_marks if m[0] != "answer differs"] + needles
+            else:
+                partner_label = roles.get(partner[0], ("", ""))[1] if partner else ""
+                view, view_lines = _value_view(pointer, value, other,
+                                               f"the {partner_label}" if partner_label else "the normal request")
+                res_marks = [m for m in res_marks if m[0] != "answer differs"]    # the view shows the difference
+                res_lines = [*res_lines, *view_lines]
         if ref and cls == "access-control":       # e.g. the owner's UserId in another account's answer
             res_lines = [*res_lines, *_same_owner_fields(e, ref)]
-        req_html, a = _marked(_image_request(e, req_marks, decoded=cls == "xss"), req_marks, sent=True)
+        req_html, a = _marked(_image_request(e, req_marks, decoded=cls == "xss").rstrip(), req_marks, sent=True)
+        req_html += "".join(f"\n<span class=dec>decoded{' ' + html.escape(name) if name else ''}: "
+                            f"{html.escape(d)}</span>" for d in decoded)
         res_html, b = _marked(_image_response(ctx, e, res_marks, res_lines, view), res_marks, res_lines)
         fact_html = " · ".join(f"<b>{html.escape(t)}</b>" if decides else html.escape(t) for t, decides in facts)
         total += a + b
         who = html.escape(e.get("_role") or "anonymous")
-        banner = (f"<span class=role>{html.escape(ROLE_TITLES[kind])}</span>{html.escape(label)} · "
-                  if kind else "")
-        diff = (difference(ctx, history, e, ref, ref_label, reason if ref_label and opposite else None, step=n)
-                if ref else "")
-        parts.append(f"<section{' class=' + kind if kind else ''}><h2>{banner}Step {n} · "
-                     f"{html.escape(e['request']['method'])} as {who} → "
-                     f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"
-                     + (f"<div class=diff>{html.escape(diff)}</div>" if diff else "")
-                     + (f"<div class=facts>{fact_html}</div>" if facts else "")
-                     + f"<div class=cols><div><h3>Request</h3><pre>{req_html}</pre></div>"
-                     f"<div><h3>Response</h3><pre>{res_html}</pre></div></div></section>")
+        chip = f"<span class=role>{html.escape(label or ROLE_TITLES[kind])}</span>" if kind else ""
+        # A comparison the image does not show, or one the proof does not count, is said in words.
+        shows_ref = ref is not None and any(ref[0] == m for m, _ in shown)
+        discount = reason if ref_label and opposite else None
+        diff = (difference(ctx, history, e, ref, ref_label, discount, step=n)
+                if ref and (discount or not shows_ref) else "")
+        head = (f"<h2>{chip}Step {n} · {html.escape(e['request']['method'])} as {who} → "
+                f"{e['response']['status']} {html.escape(e['response']['statusText'])}</h2>"
+                + (f"<div class=diff>{html.escape(diff)}</div>" if diff else "")
+                + (f"<div class=facts>{fact_html}</div>" if facts else ""))
+        if pair:
+            sections.append(f"<section{' class=' + kind if kind else ''}>{head}<h3>Request as sent</h3>"
+                            f"<pre class=req>{req_html}</pre><h3>Response as received</h3><pre>{res_html}</pre>"
+                            "</section>")
+        else:
+            sections.append(f"<section{' class=' + kind if kind else ''}>{head}<div class=cols><div><h3>Request as "
+                            f"sent</h3><pre>{req_html}</pre></div><div><h3>Response as received</h3><pre>{res_html}"
+                            "</pre></div></div></section>")
+    parts.append(f"<div class=pair>{''.join(sections)}</div>" if pair else "".join(sections))
+    if why:
+        parts.append(why_html(why))
+    else:
+        groups = observation_groups(ctx, history, everything, roles)
+        seen = " · ".join(f"{label}: {', '.join(values[:3])}" for label, _, values in groups[:5])
+        parts.append(f"<div class=why><p><b>What the steps showed</b> {html.escape(seen)}.</p></div>" if seen else "")
+    hidden = sorted({n for n, _ in everything} - {n for n, _ in shown})
+    notes = [*([f"Also {'part of the proof' if cited else 'recorded'}, not shown here: "
+                f"step{'s' if len(hidden) > 1 else ''} {', '.join(map(str, hidden))} (in the report and the HAR "
+                "file)."] if hidden else []),
+             *([f"Composed by the Verifier: {composed}."] if composed else []),
+             f"AppSec Verifier · recorded and redacted{' in ' + har_path if har_path else ''} at "
+             f"{shown_time(captured)}; nothing sent again. "
+             f"{'Requests shown URL-decoded, excerpts' if cls == 'xss' else 'Excerpts'} shortened (…); the HAR file "
+             "has the complete exchanges."]
+    parts.append("<footer>" + "<br>".join(html.escape(note) for note in notes) + "</footer>")
     page = (f"<!doctype html><html><head><meta charset=utf-8><style>{_EXCHANGE_CSS}</style></head>"
             f"<body>{''.join(parts)}</body></html>")
     return page, total
@@ -1766,46 +1840,45 @@ def _for_model(e: dict) -> dict:
 
 def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]], verdict: str, har_path,
                          highlight, *, cited: bool = True, composed: str | None = None, why: dict | None = None,
-                         table: bool = False) -> list[dict]:
-    """The Verifier's own images of the exchanges; `composed` says why the test agent's presentation is not used
-    (VER-059), `why` is the result's reason (why_summary). With `table` one image: every step as a table row and
-    the first comparison in detail."""
-    shots = []
+                         overview: bool = False, result=None) -> list[dict]:
+    """The Verifier's own image of the exchanges (VER-035): the steps the proof compares, as the first panel holds
+    them (`panels`), the other steps named below them. `composed` says why the test agent's presentation is not used
+    (VER-059), `why` is the result's reason (why_summary); `overview` marks the image a revised presentation of the
+    test agent keeps beside it (VER-042)."""
     withheld = withheld_steps(history) & {n for n, _ in shown}
-    # What a model reviews of the panels (VER-042) is the page as it would look with every withheld answer
-    # replaced by a notice; the image itself keeps the answer for the operator.
+    # What a model reviews of the image (VER-042) is the page as it would look with every withheld answer replaced
+    # by a notice; the image itself keeps the answer for the operator.
     safe = {n: _for_model(e) if n in withheld else e for n, e in shown}
-    # Two exchanges per panel preserve the comparison without a long full-page image.
-    for panel in panels(shown, step_roles(ctx, history, shown), opposite=opposites(history))[:1 if table else None]:
-        page, marked = exchange_document(ctx, history, panel, verdict, har_path, highlight, cited=cited,
-                                         comparison=shown, composed=composed, why=why, table=table)
-        model_page = page
-        if withheld:
-            model_page, _ = exchange_document(ctx, history, [(n, safe[n]) for n, _ in panel], verdict, har_path,
-                                              highlight, cited=cited, comparison=list(safe.items()),
-                                              composed=composed, why=why, table=table)
-        visible = _VisibleText()
-        visible.feed(model_page)
-        # `overview`: the table of all steps, which a revised presentation of the test agent keeps beside it.
-        ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16,
-                                    **({"overview": True} if table else {})})
-        try:
-            shots += [{**shot, "composed_by": "verifier", **({"overview": True} if table else {})}
-                      for shot in ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)]
-        except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
-            break
-    return shots
+    first = panels(shown, step_roles(ctx, history, shown), opposite=opposites(history))[:1]
+    if not first:
+        return []
+    page, marked = exchange_document(ctx, history, first[0], verdict, har_path, highlight, cited=cited,
+                                     comparison=shown, composed=composed, why=why, result=result)
+    model_page = page
+    if withheld:
+        model_page, _ = exchange_document(ctx, history, [(n, safe[n]) for n, _ in first[0]], verdict, har_path,
+                                          highlight, cited=cited, comparison=list(safe.items()), composed=composed,
+                                          why=why, result=result)
+    visible = _VisibleText()
+    visible.feed(model_page)
+    ctx.evidence_panels.append({"text": "\n".join(visible.parts)[:8000], "body_font_px": 16,
+                                **({"overview": True} if overview else {})})
+    try:
+        return [{**shot, "composed_by": "verifier", **({"overview": True} if overview else {})}
+                for shot in ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)]
+    except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it
+        return []
 
 
 _COMPARISON_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
 header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #b00020}
-header .id{font-size:14px;color:#bbb}header .chip{font:bold 13px sans-serif;padding:1px 8px;border-radius:3px;
-background:#555;color:#fff;margin-left:8px;text-transform:uppercase}header .chip.confirmed{background:#b00020}
-header .chip.inconclusive{background:#b26a00}header p{margin:6px 0 0}header .lead{font-size:21px;font-weight:bold}
-header ul{list-style:none;margin:8px 0 0;padding:0}header li{padding:1px 0 1px 26px;position:relative}
-header li:before{position:absolute;left:0;font-weight:bold}header li.yes:before{content:"\\2713";color:#7ddc8a}
-header li.no:before{content:"\\2717";color:#ffb74d}header li b{color:#ffeb3b;margin-right:6px}
-header .closing{font-weight:bold}
+header .id{font-size:14px;color:#bbb}header .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
+.verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
+text-transform:uppercase;vertical-align:2px}.verdict.confirmed{background:#b00020}
+.verdict.inconclusive{background:#b26a00}
+.why{margin:0 16px 12px;padding:8px 12px;background:#111;color:#fff;border-radius:4px;font-size:15px}
+.why b{color:#ffeb3b;margin-right:6px}.why p{margin:0}.why p+p{margin-top:4px}
+.why .closing{color:#ccc;font-size:13px}
 table{border-collapse:collapse;margin:16px;width:calc(100% - 32px)}
 th{text-align:left;font-size:13px;color:#555;padding:4px 10px;border-bottom:2px solid #999}
 td{padding:8px 10px;border-bottom:1px solid #ccc;vertical-align:top}td.req,pre{font-family:ui-monospace,Menlo,
@@ -1882,19 +1955,22 @@ def comparison_summary(ctx, history: list[dict], rows: list[dict], result) -> di
     target = f"{operation.get('method', 'GET')} {operation.get('path', '')}".strip()
     restriction = proof.get("access_restriction") if isinstance(proof.get("access_restriction"), dict) else None
     if not access:
-        return {"lead": "The comparison did not show the access. "
+        return {"lead": f"{weakness(ctx)} not confirmed. The comparison did not show the access. "
                         + _VERDICT_SENTENCE.get(verdict, "No completed proof."),
                 "checks": [], "closing": "", "restricted": bool(restriction)}
     if plan.get("signed_in"):
-        lead = f"Without a login, {target} returns the same answer as for {plan['signed_in']}."
+        shown = f"without a login, {target} returns the same answer as for {plan['signed_in']}"
     elif plan.get("reference"):
-        lead = f"{attack['who']} gets the same answer from {target} as the privileged account {plan['reference']}."
+        shown = f"{attack['who']} gets the same answer from {target} as the privileged account {plan['reference']}"
     elif isinstance(plan.get("change"), dict):
-        lead = f"Another account changed the record that {plan.get('owner')} created."
+        shown = f"another account changed the record that {plan.get('owner')} created"
     elif plan.get("owner"):
-        lead = f"{attack['who']} reads the record that {plan['owner']} created."
+        shown = f"{attack['who']} reads the record that {plan['owner']} created"
     else:
-        lead = f"{attack['who']} gets what the allowed identity gets from {target}."
+        shown = f"{attack['who']} gets what the allowed identity gets from {target}"
+    # VER-035: the weakness and because what, or what was shown although the verdict is not a confirmation.
+    lead = (f"{weakness(ctx)}, because {shown}." if verdict == "confirmed"
+            else f"{weakness(ctx)} not confirmed, although {shown}.")
     if restriction:
         expected = (f"{str(restriction.get('restriction') or 'Access is restricted').rstrip('.')}. "
                     f"Source: {str(restriction.get('source') or 'not named').rstrip('.')}.")
@@ -1925,21 +2001,11 @@ def comparison_document(ctx, history: list[dict], shown: list[tuple[int, dict]],
     the verdict follows (`comparison_summary`), one table row per identity with its request and answer, and the
     answer the attack received once, since an identical answer of the account is not kept (VER-057). Every recorded
     value is escaped; the page has no script."""
-    from ..planning import _TITLE_LOCATION
-
     rows = comparison_rows(ctx, history, shown)
     if rows is None:
         return None
     summary = comparison_summary(ctx, history, rows, result)
     verdict, restriction, access = result.verdict, summary["restricted"], bool(summary["checks"])
-    title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
-    head = [f"<div class=id>{html.escape(str(ctx.plan.id))} · {html.escape(title)}"
-            f"<span class='chip {html.escape(verdict)}'>{html.escape(verdict)}</span></div>",
-            f"<p class=lead>{html.escape(summary['lead'])}</p>"]
-    if access:
-        head.append("<ul>" + "".join(
-            f"<li class={'yes' if c['ok'] else 'no'}><b>{html.escape(c['name'])}</b> {html.escape(c['text'])}</li>"
-            for c in summary["checks"]) + f"</ul><p class=closing>{html.escape(summary['closing'])}</p>")
     body_row = next((r for r in rows if r["kind"] in ("attack", "effect")
                      and not r["entry"]["response"]["content"].get("_omitted") and _text(r["entry"])), None)
     table = ["<tr><th></th><th>Identity</th><th>Request</th><th>Answer</th><th>Expected</th></tr>"]
@@ -1967,7 +2033,7 @@ def comparison_document(ctx, history: list[dict], shown: list[tuple[int, dict]],
             f"{html.escape(url.path + ('?' + url.query if url.query else ''))}</td>"
             f"<td class=got>{html.escape(answer)}" + (f"<small>{html.escape(detail)}</small>" if detail else "")
             + f"</td><td>{html.escape(wanted)}</td></tr>")
-    parts, total = [f"<header>{''.join(head)}</header>", f"<table>{''.join(table)}</table>"], 0
+    parts, total = [head_html(ctx, verdict, summary["lead"]), f"<table>{''.join(table)}</table>"], 0
     if body_row is not None:
         n, e = body_row["step"], body_row["entry"]
         _, res_marks, res_lines, _ = _exchange_marks(ctx, history, n, e, shown, highlight, shown)
@@ -1980,6 +2046,8 @@ def comparison_document(ctx, history: list[dict], shown: list[tuple[int, dict]],
             caption += ("; " + " and ".join(f"{r['who']} (step {r['step']})" for r in twins)
                         + " got the identical answer, compared in code")
         parts.append(f"<section><h2>{html.escape(caption)}</h2><pre>{marked}</pre></section>")
+    if access:
+        parts.append(why_html(summary))
     captured = shown[0][1].get("startedDateTime", "") if shown else ""
     record = " in " + html.escape(har_path) if har_path else ""
     parts.append(f"<footer>AppSec Verifier · recorded and redacted{record} at "
@@ -2135,9 +2203,9 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     why = why_summary(ctx, history, shown_entries, result) if shown_entries else None
     if why:             # why the result has its verdict, for the report as for the images
         why = result.poc["why"] = ctx.sessions.redact(why) if ctx.sessions is not None else why
-    # An injection experiment's steps as one table before any other image: the pattern at a glance.
+    # An injection experiment's proof image comes before any other: the comparison its proof rests on.
     placed = step_roles(ctx, history, shown_entries)
-    tabled = cls == "injection" and sum(bool(placed.get(n, ("",))[0]) for n, _ in shown_entries) >= 2
+    overview = cls == "injection" and sum(bool(placed.get(n, ("",))[0]) for n, _ in shown_entries) >= 2
     if browser is not None and cls in getattr(browser, "screenshots", ()):
         if result.verdict == "confirmed" and cls == "access-control" and not any(
                 e.get("presentation") == "application" for e in result.evidence):
@@ -2146,16 +2214,18 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
         compared = (_comparison_screenshot(ctx, history, shown_entries, result, har_path, highlight)
                     if cls == "access-control" and shown_entries else None)
         shots += compared or []
-        if tabled:
+        if overview:
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight,
-                                          composed=None if accepted else composed, why=why, table=True)
+                                          composed=None if accepted else composed, why=why, overview=True,
+                                          result=result)
         if accepted:                             # the exchanges as the test agent presents them
             shots += composed_screenshots(ctx, history, steps, accepted, result, har_path)
-        elif shown_entries and compared is None and not tabled:   # the exchanges, also beside a proof page
+        elif shown_entries and compared is None and not overview:   # the exchanges, also beside a proof page
             shots += _exchange_screenshot(ctx, history, shown_entries, result.verdict, har_path, highlight,
-                                          composed=composed, why=why)
+                                          composed=composed, why=why, result=result)
         elif compared is None and not decisive and (tried := _tried(history, steps)):     # e.g. a limit stopped it
-            shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False)
+            shots += _exchange_screenshot(ctx, history, tried, result.verdict, har_path, highlight, cited=False,
+                                          result=result)
     result.evidence = [*(result.evidence or []), *shots]
     if result.verdict == "confirmed" and not any(
         e.get("presentation") == "application" for e in result.evidence

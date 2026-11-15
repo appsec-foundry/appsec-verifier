@@ -208,7 +208,8 @@ def test_arithmetic_proof_rechecks_its_computed_values_after_an_observation_corr
     for n in range(3, 7):
         entry = {"response": {"content": {"text": ctx.responses[n]["body"]}}}
         assert poc._proof_observation(ctx, script.history, n, entry)[:2] == ("result_returned", True)
-    assert "compared: each result in the answer" in poc._test_line(ctx, script.history)
+    said = poc.headline(ctx, script.history, result.proof["form"])        # what the images and the report say
+    assert said.startswith("Template injection through ") and "the result of an expression sent in" in said
 
 
 @pytest.mark.parametrize("vulnerable", [True, False])

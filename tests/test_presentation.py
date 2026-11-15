@@ -7,6 +7,7 @@ a presentation never costs the checked verdict, and an evidence review can ask f
 from __future__ import annotations
 
 import copy
+import html
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -81,9 +82,10 @@ def test_an_accepted_presentation_leads_the_images_and_the_report(tmp_path):
     assert "GET ⟦/rest/basket/2⟧" in result.poc["shown"][1]["request_excerpt"]
     page = browser.pages[-1]
     assert "(the test agent's words)" in page and "class=outcome" in page and "Outcome" in page
-    # Why the verdict follows, in the Verifier's words, replaces the one-line proof check.
-    assert "<b class=closing>Confirmed: " in page and "Proof check:" not in page
-    assert page.count("<span class=yes></span>") == len(result.poc["why"]["checks"])
+    # The verdict and why, in the Verifier's words, head the agent's presentation; the reason follows its steps.
+    assert f"<span class='verdict confirmed'>confirmed</span>{html.escape(result.poc['why']['lead'])}" in page
+    assert page.count("<div class=why><p><b>") == 1 and "Proof check:" not in page
+    assert page.index("(the test agent's words)") < page.index("<div class=why>")
     images = [e for e in result.evidence if e.get("kind") == "screenshot"]
     assert images[0]["composed_by"] == "verifier"                 # the comparison table leads (VER-010)
     assert images[1:] and all(e["composed_by"] == "test-agent" and e["reviewable"] is True for e in images[1:])

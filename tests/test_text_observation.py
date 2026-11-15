@@ -196,9 +196,9 @@ def test_a_boolean_experiment_declares_exactly_one_observation(tmp_path, extra, 
         AgentTools(ctx).plan_test(**args, **extra)
 
 
-def test_a_confirmed_experiment_gets_one_image_with_every_step_in_a_table_and_the_reason(tmp_path):
-    """VER-035: the Verifier's image of an injection experiment is one table of all steps, why the proof holds, and
-    one comparison in detail, instead of an image per pair."""
+def test_a_confirmed_experiment_gets_one_image_of_the_pair_its_proof_compares_and_the_reason(tmp_path):
+    """VER-035: the Verifier's image of an injection experiment shows the true and the false condition side by
+    side, names every other step the proof rests on and says why the proof holds, instead of an image per pair."""
     pages = []
     ctx = _inj_ctx(tmp_path, _page_target([]))
     ctx.evidence_dir = tmp_path / "evidence"
@@ -209,10 +209,11 @@ def test_a_confirmed_experiment_gets_one_image_with_every_step_in_a_table_and_th
     images = [e for e in result.evidence if e.get("kind") == "screenshot"]
     assert [(e["composed_by"], e.get("overview")) for e in images] == [("verifier", True)]
     page = pages[0]
-    rows = page[page.index("<table class=steps>"):page.index("</table>")].count("<tr class=")
-    assert rows == sum(s["decisive"] for s in result.poc["steps"]) >= 5       # every step the proof rests on
-    assert "<td class=seen>text present</td>" in page and "<td class=seen>text absent</td>" in page
+    assert page.count("<section class=attack>") == 2 and "<div class=pair>" in page
+    decisive = [s["step"] for s in result.poc["steps"] if s["decisive"]]
+    assert len(decisive) >= 5 and "Also part of the proof, not shown here: steps " in page   # every other step named
     why = result.poc["why"]
-    assert why["closing"] == "Confirmed: response follows fresh controls."
-    assert {"True condition", "False condition", "Why this proves it"} <= {c["name"] for c in why["checks"]}
-    assert "<b class=closing>Confirmed: response follows fresh controls.</b>" in page
+    assert why["lead"].endswith(", because a condition added to q changes what the database query returns.")
+    assert [c["name"] for c in why["checks"]] == ["Why this proves it", "All steps"]
+    assert "true condition, steps " in why["checks"][1]["text"] and ": text present;" in why["checks"][1]["text"]
+    assert f"<p class=closing>{html.escape(why['closing'])}</p>" in page

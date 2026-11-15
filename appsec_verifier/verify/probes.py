@@ -7,7 +7,9 @@ target (VER-008) and returns a ProbeResult. No probe is implemented yet, so
 client and must honour `ProbeContext.safe` (VER-030) and `read_only` (VER-014).
 Technical QA state is separate from proof, with correction allowances shared
 across a finding's variants (VER-046). `PROOF_FORMS` says what each checked proof
-form showed, for the console and the report (VER-013).
+form showed, for the console and the report (VER-013); `BECAUSE`, `WEAKNESS_NAMES`
+and `PROOF_RULES` word the sentence that heads a finding's images and report entry
+and why its proof holds (VER-035).
 """
 
 from __future__ import annotations
@@ -95,14 +97,14 @@ PROOF_RULES = {
     "archive-marker": "An entry of the uploaded archive was written outside its directory and read back with the "
                       "Verifier's marker.",
     "cookie-attribute": "The target set the session cookie without the attribute in repeated responses.",
-    "predicate": "The answer changed with the truth of conditions whose values the Verifier generated fresh, so "
-                 "the declared input changes the backend's logic. A slower answer alone never counts.",
+    "predicate": "A server that reads the input as a plain value gives a true and a false condition the same "
+                 "answer; here the answer followed whether the condition held. A slower answer alone never counts.",
     "engine-error": "Only the syntax break raised a backend engine error, its balanced counterpart did not, so "
-                    "the backend parses the declared input as code.",
+                    "the backend parses the input as code.",
     "returned-marker": "The answer returned the marker the Verifier generated for one control and not for its "
                        "complement, so the injected statement ran.",
-    "computed-expression": "Each answer holds the result of an expression the Verifier generated fresh for it, so "
-                           "the backend evaluated the declared input.",
+    "computed-expression": "Each answer holds the result of an expression the Verifier generated at random for it, "
+                           "so the backend evaluated the input.",
     "out-of-band": "The Verifier's listener received the nonce of one control and not the complementary one's, so "
                    "the injected statement ran on the target.",
     "auth-artifact": "Only the true-predicate controls yielded an authenticated artifact; the false ones and the "
@@ -122,6 +124,50 @@ PROOF_RULES = {
     "comparison-without-credentials": "A request without credentials got the identical answer of the signed-in "
                                       "account, and a random path next to it did not.",
 }
+# Why a confirmed finding is the weakness, as the end of the sentence that heads its images and its report entry
+# (VER-035): "<weakness> through <input>, because …". {input} is the tested input's name, {query} what it reaches.
+BECAUSE = {
+    "script-executed": "a script sent in the request ran in the browser",
+    "listener-hit": "the target called the Verifier's listener at an address the request chose",
+    "marker-redirect": "the target redirected to a host the request chose",
+    "marker-file": "the answer holds the content of the operator's marker file",
+    "archive-marker": "an entry of the uploaded archive was written outside its directory",
+    "cookie-attribute": "the target set the session cookie without it in repeated responses",
+    "predicate": "a condition added to {input} changes what {query} returns",
+    "engine-error": "only a syntax break in {input} makes the backend fail with an engine error",
+    "returned-marker": "a statement added to {input} returned the Verifier's marker",
+    "computed-expression": "the answer holds the result of an expression sent in {input}",
+    "out-of-band": "a statement added to {input} made the target call the Verifier's listener",
+    "auth-artifact": "a true condition in {input} signs in and a false one does not",
+    "auth-resource": "a true condition in {input} signs in and reaches the protected resource",
+    "selected-access": "the field or text declared as protected reached an identity the declaration denies",
+    "declared-exposure": "reads without credentials showed the marker declared as protected",
+    "identity-contrast": "the identities' answers show the access the finding describes",
+    "record-marker": "another account read the record the owner created",
+    "record-change": "another account changed the record the owner created",
+    "privileged-comparison": "a normal account got the privileged account's answer",
+    "comparison-without-credentials": "a request without credentials got the signed-in account's answer",
+}
+# The weakness as a short name for that sentence, per CWE of data/verifiable-cwes.yaml, else per class.
+WEAKNESS_NAMES = {
+    "CWE-79": "Cross-site scripting", "CWE-639": "Insecure direct object reference",
+    "CWE-862": "Missing authorization", "CWE-863": "Incorrect authorization", "CWE-285": "Improper authorization",
+    "CWE-306": "Missing authentication", "CWE-200": "Exposure of sensitive information",
+    "CWE-497": "Exposure of system information", "CWE-530": "Exposed backup file",
+    "CWE-538": "Sensitive information in an accessible file", "CWE-548": "Directory listing",
+    "CWE-552": "Files accessible to outsiders", "CWE-89": "SQL injection", "CWE-943": "NoSQL injection",
+    "CWE-22": "Path traversal", "CWE-23": "Relative path traversal", "CWE-73": "External control of a file path",
+    "CWE-601": "Open redirect", "CWE-918": "Server-side request forgery", "CWE-614": "Session cookie without Secure",
+    "CWE-1004": "Session cookie without HttpOnly", "CWE-1275": "Session cookie with improper SameSite",
+    "CWE-78": "OS command injection", "CWE-1336": "Template injection", "CWE-94": "Code injection",
+    "CWE-95": "Eval injection", "CWE-643": "XPath injection", "CWE-90": "LDAP injection",
+}
+CLASS_NAMES = {"xss": "Cross-site scripting", "access-control": "Broken access control", "injection": "Injection",
+               "path-traversal": "Path traversal", "open-redirect": "Open redirect",
+               "ssrf": "Server-side request forgery", "session": "Session cookie weakness"}
+# What a condition in the input reaches, per CWE, for the predicate form's sentence; otherwise "the server".
+QUERY_NOUNS = {"CWE-89": "the database query", "CWE-943": "the database query", "CWE-643": "the XPath query",
+               "CWE-90": "the LDAP query"}
 # The form a result saved without one stands for: its class's usual proof.
 DEFAULT_FORMS = {"xss": "script-executed", "ssrf": "listener-hit", "open-redirect": "marker-redirect",
                  "path-traversal": "marker-file", "session": "cookie-attribute", "injection": "predicate",

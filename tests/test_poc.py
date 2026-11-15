@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import html
 import json
+import pathlib
 import re
 import stat
 from types import SimpleNamespace
@@ -385,7 +386,7 @@ def test_exchange_image_marks_the_input_and_answer_that_differ(tmp_path):
     assert page.count("<mark>") == 4 and "HTTP/<mark>" not in page             # once, not wherever "1" recurs
     assert page.count("<span class=tag>input ▸</span><mark>x%27+OR+1%3D") == 2       # each mark says what it is
     assert page.count("<span class=note>◀ answer differs</span>") == 2       # a red note beside the answer's mark
-    assert "<b>input, decoded: x&#x27; OR 1=1--</b>" in page
+    assert "<span class=dec>decoded: x&#x27; OR 1=1--</span>" in page                # below the request it decodes
     assert "answered in" not in page                                           # no time: not a timing proof
 
 
@@ -398,7 +399,7 @@ def test_each_steps_input_is_marked_and_decoded_once_whatever_its_partners(tmp_p
     _, shot = _shot(tmp_path, "injection", transport,
                     [*(_get(None, "/search", q=q) for q in queries),
                      {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1, 2, 3, 4]}}])
-    lines = re.findall(r"<b>input, decoded: [^<]*</b>", shot["html"])
+    lines = re.findall(r"<span class=dec>decoded: [^<]*</span>", shot["html"])
     assert lines and len(lines) == len(set(lines))          # each shown step's input once, none repeated
 
 
@@ -445,7 +446,8 @@ def test_exchange_image_escapes_everything_the_target_sent(tmp_path):
                     [_get("customer-a"), {"verdict": {"verdict": "blocked-by-control", "rationale": "r",
                                                       "proof_steps": [1]}}])
     page = shot["html"]
-    assert "<script" not in page and "<img" not in page and "<b>" not in page.split("</header>", 1)[1]
+    steps = page.split("</header>", 1)[1].split("<div class=why>", 1)[0]
+    assert "<script" not in page and "<img" not in page and "<b>" not in steps
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
 
 
@@ -454,7 +456,7 @@ def test_a_verdict_that_cites_no_step_gets_an_image_that_says_it_proves_nothing(
     result, shot = _shot(tmp_path, "injection", lambda m, u, h, **k: Resp(),
                          [_get(None, "/search"), {"verdict": {"verdict": "not-reproducible", "rationale": "r"}}])
     assert "Step 1 · GET as anonymous" in shot["html"]
-    assert "The verdict cites no step; these recorded attempts have no completed proof." in shot["html"]
+    assert "The last answered requests, which the verdict does not cite: step 1." in shot["html"]
     assert "what the verdict rests on" not in shot["html"]
     assert result.poc["shown"] == [] and not any(s["decisive"] for s in result.poc["steps"])
 
@@ -463,9 +465,10 @@ def test_a_finding_a_limit_stopped_gets_the_image_of_its_requests(tmp_path):
     browser = RenderBrowser()
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp(500, "{}"), cls="injection", browser=browser)
     result, _ = _run(ctx, [_get(None, "/search", q=str(n)) for n in range(5)], max_steps=3)
-    assert result.limits_hit == "attempts" and len(browser.exchanges) == 2
-    assert all("cites no step" in panel["html"] for panel in browser.exchanges)
-    assert sum(panel["html"].count("<section>") for panel in browser.exchanges) == 3
+    assert result.limits_hit == "attempts" and len(browser.exchanges) == 1        # one image, two steps side by side
+    page = browser.exchanges[0]["html"]
+    assert "which the verdict does not cite: step 1; step 2." in page and page.count("<section>") == 2
+    assert "Also recorded, not shown here: step 3 (in the report and the HAR file)." in page
 
 
 def test_the_uncited_image_shows_only_answered_requests_after_the_last_plan():
@@ -544,7 +547,7 @@ def test_a_reflected_xss_image_shows_the_decoded_payload_and_where_the_answer_re
             f"<span class=hit><mark>{shown}</mark><span class=note>◀ XSS payload in the answer</span></span>"
             "&lt;/pre&gt;\n&lt;/form&gt;\n[…] excerpt; full record in HAR") in html_page
     assert "filler" not in html_page and "more</p>" not in html_page and "carries the XSS payload" in html_page
-    assert "nothing sent again. Requests shown URL-decoded, excerpts shortened;" in html_page
+    assert "nothing sent again. Requests shown URL-decoded, excerpts shortened (…);" in html_page
 
 
 def test_the_xss_source_excerpt_stays_short_in_minified_html():
@@ -655,9 +658,10 @@ def _split(q):
     return {"x": '{"items":[{"id":1,"name":"a"}]}'}.get(q, _ROWS if "7=7" in q or "8<>7" in q else '{"items":[]}')
 
 
-def test_a_boolean_image_shows_the_true_condition_below_the_false_one_and_frames_the_split_it_proves():
-    """VER-035, VER-011: the proof compares the true with the false condition, so each form's image shows the true
-    condition below the false one, framed in red with why it counts; a last image shows the baseline above."""
+def test_a_boolean_image_shows_the_true_condition_beside_the_false_one_and_frames_the_split_it_proves():
+    """VER-035, VER-011: the proof compares the true with the false condition, so the image shows the true
+    condition first and the false one beside it, each answer's observed field framed in red with how it differs;
+    the baseline beside the true condition is context, never framed."""
     ctx, history, shown = _conditions(_split)
     roles = poc.step_roles(ctx, history, shown)
     assert roles == {2: ("normal", "baseline input"), 3: ("attack", "true condition"),
@@ -666,37 +670,34 @@ def test_a_boolean_image_shows_the_true_condition_below_the_false_one_and_frames
     first, second, third = poc.panels(shown, roles, opposite=poc.opposites(history))
     assert [[n for n, _ in p] for p in (first, second, third)] == [[4, 3], [6, 5], [2, 3]]
     page, _ = poc.exchange_document(ctx, history, first, "confirmed", "evidence/T-001-poc.har", comparison=shown)
-    assert page.index("<span class=role>Attack</span>false condition · Step 4") < page.index(
-        "<span class=role>Attack</span>true condition · Step 3")
-    assert "top: step 4, the attack (false condition); below: step 3, the attack (true condition)" in page
-    assert ("Compared with the false condition in step 4: same status 200; /items has 0 entries there and 3 entries "
-            "here, 3 of them not in the false condition&#x27;s answer.") in page
-    assert page.count("Compared with") == 1                     # the false condition is the reference
-    assert "<mark>/items: 3 entries</mark><span class=note>◀ 3 entries instead of 0</span>" in page
-    assert "  [1] id 2 · name &quot;&lt;b&gt;z&lt;/b&gt;&quot;" in page and "<b>z</b>" not in page
-    assert "▼" not in page                     # against an empty answer the count already says every entry is new
+    assert page.index("<span class=role>true condition</span>Step 3") < page.index(
+        "<span class=role>false condition</span>Step 4") and "<div class=pair>" in page
+    assert "The proof as recorded: step 3, true condition; step 4, false condition." in page
+    assert "Compared with" not in page                      # both answers stand side by side
+    assert ('<span class="hit block"><span class=note>▼ 3 entries instead of 0</span><mark>&quot;items&quot;: [\n'
+            '  {&quot;id&quot;: 1, &quot;name&quot;: &quot;a&quot;},') in page
+    assert "<mark>&quot;items&quot;: []</mark><span class=note>◀ 0 entries instead of 3</span>" in page
+    assert "{&quot;id&quot;: 2, &quot;name&quot;: &quot;&lt;b&gt;z&lt;/b&gt;&quot;}" in page and "<b>z</b>" not in page
     assert "<span class=tag>input ▸</span>" in page
-    assert ("<span class=k>Result:</span> baseline input: 1 entry · true condition: 3 entries · false condition: "
-            "0 entries. The proof check accepted it.") in page
-    # The baseline gives context; a difference from it is no proof, so it is spelled out but not framed.
+    assert ("<b>What the steps showed</b> baseline input: 1 entry · true condition: 3 entries · false condition: "
+            "0 entries.") in page
+    # The baseline gives context; a difference from it is no proof, so nothing is framed.
     page, _ = poc.exchange_document(ctx, history, third, "confirmed", "evidence/T-001-poc.har", comparison=shown)
-    assert ("Compared with the normal request in step 2: same status 200; /items has 1 entry there and 3 entries "
-            "here, 2 of them not in the normal answer.") in page
+    assert page.index("Step 3 ·") < page.index("Step 2 ·") and "Compared with" not in page
     assert "◀" not in page and "▼" not in page
     # Without a confirmed verdict nothing is framed as proof.
     page, _ = poc.exchange_document(ctx, history, first, "inconclusive", None, comparison=shown)
     assert "◀" not in page and "▼" not in page
 
 
-def test_a_boolean_image_frames_the_entries_only_the_true_condition_gets():
-    """VER-035: the entries the true condition adds to the false condition's answer share one red frame."""
+def test_a_boolean_image_frames_each_conditions_field_with_how_it_differs():
+    """VER-035: each condition's observed field is one red frame, its note how it differs from the other's."""
     ctx, history, shown = _conditions(
         lambda q: _ROWS if "7=7" in q or "8<>7" in q else '{"items":[{"id":1,"name":"a"}]}')
     first = poc.panels(shown, poc.step_roles(ctx, history, shown), opposite=poc.opposites(history))[0]
     page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown)
-    assert "<mark>/items: 3 entries</mark><span class=note>◀ 3 entries instead of 1</span>" in page
-    assert ('<span class="hit block"><span class=note>▼ 2 entries the false condition does not get</span>'
-            '<mark>+ [1] id 2' in page and '+ [2] id 3 · name &quot;c&quot;</mark></span></pre>' in page)
+    assert "<span class=note>▼ 3 entries instead of 1</span>" in page
+    assert "<span class=note>▼ 1 entry instead of 3</span>" in page
 
 
 def test_a_boolean_image_frames_no_effect_where_true_and_false_answer_alike():
@@ -754,7 +755,7 @@ def test_an_injection_image_marks_only_differences_between_its_own_steps():
     page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown)
     assert page.count("◀ status differs") == 2
     page, _ = poc.exchange_document(ctx, history, second, "confirmed", None, comparison=shown)
-    assert "Compared with the normal request in step 2: same status 401, the identical answer." in page
+    assert page.index("Step 4 ·") < page.index("Step 2 ·")                  # the attack, then its normal request
     assert "differs</span>" not in page                     # neither "status differs" nor "answer differs"
     assert "<span class=tag>input ▸</span><mark>x%27+OR+1%3D2--</mark>" in page      # what the attack sent
 
@@ -793,8 +794,8 @@ def test_an_engine_error_image_frames_the_error_its_proof_reads_not_the_status()
     assert "differs</span>" not in page                                  # neither status nor answer difference
     assert "<b>engine error: yes</b>" in page and "<b>engine error: no</b>" in page
     assert html.escape("balanced \"'\": no engine error · syntax break \"'\": engine error.") in page
-    assert "with q carrying each syntax break (&#x27;) and its balanced counterpart" in page
-    assert "true and false" not in page
+    assert page.index("<span class=role>syntax break") < page.index("<span class=role>balanced")
+    assert "true condition" not in page
     roles = poc.step_roles(ctx, history, shown)
     report = poc._report_excerpts(ctx, history, 2, shown[0][1], shown, None, None, roles)
     assert report["response_excerpt"].count("⟦SQLITE_ERROR: near \"'%'\": syntax error⟧") == 1
@@ -869,7 +870,7 @@ def test_the_poc_marks_a_withheld_answer_and_the_images_follow_the_checked_plan(
     assert [s.get("withheld") for s in out.poc["shown"]] == [True, True]
     assert [p["step"] for p in out.planning] == [1, 4]                  # the report still lists both plans
     page, _ = poc.exchange_document(ctx, poc_view(history, later), shown, "confirmed", None)
-    assert "with q carrying each syntax break" in page
+    assert "step 2, syntax break" in page and "delay condition" not in page
 
 
 def poc_view(history, later):
@@ -942,7 +943,6 @@ def test_a_text_observation_image_frames_the_selected_text_its_proof_reads():
     assert "<b>the selected text in the answer: yes</b>" in page
     assert "<b>the selected text in the answer: no</b>" in page
     assert "true condition: text present · false condition: text absent." in page
-    assert "compared: the text &quot;Item number 2&quot;" in page
 
 
 @pytest.mark.parametrize("answer", ["<pre>Welcome to the result</pre>", "Welcome &amp; result"])
@@ -1047,7 +1047,7 @@ def test_steps_outside_the_declared_comparison_get_no_role():
     assert poc.step_roles(ctx, [{"tool": "plan_test", "args": _EXPERIMENT, "result": {"error": "no"}},
                                 *history[1:]], shown) == {}
     page, _ = poc.exchange_document(ctx, [{}, *history[1:]], shown[:2], "inconclusive", None)
-    assert "top: step 2, GET as anonymous → 200; below: step 3" in page and "class=role" not in page
+    assert "The steps as recorded: step 2; step 3." in page and "class=role" not in page
 
 
 def test_an_access_image_puts_the_owners_read_above_the_other_accounts():
@@ -1065,7 +1065,7 @@ def test_an_access_image_puts_the_owners_read_above_the_other_accounts():
     # The owner's UserId in the other account's answer is framed; the owner's own answer is not.
     assert page.count("<mark>/UserId: 1</mark><span class=note>◀ customer-b gets the same UserId as customer-a"
                       "</span>") == 1
-    assert page.index("same UserId") > page.index("<span class=role>Attack</span>")
+    assert page.index("same UserId") > page.index("<span class=role>another account reads")
     assert poc.difference(ctx, history, shown[3][1], shown[1]) == (
         "Compared with the normal request in step 3: same status 200, the identical answer.")
 
@@ -1319,10 +1319,16 @@ def test_report_excerpts_are_marked_while_http_images_stay_saved(tmp_path):
 # ── why a result has its verdict, and the table of an experiment (VER-034, VER-035) ──────────
 
 
-def test_every_proof_form_says_why_it_is_a_proof():
-    from appsec_verifier.verify.probes import PROOF_FORMS, PROOF_RULES
+def test_every_proof_form_says_why_it_is_a_proof_and_every_weakness_has_a_name():
+    import yaml
 
-    assert PROOF_RULES.keys() == PROOF_FORMS.keys() and all(rule.endswith(".") for rule in PROOF_RULES.values())
+    from appsec_verifier.verify.probes import BECAUSE, PROOF_FORMS, PROOF_RULES, WEAKNESS_NAMES
+
+    assert PROOF_RULES.keys() == PROOF_FORMS.keys() == BECAUSE.keys()
+    assert all(rule.endswith(".") for rule in PROOF_RULES.values())
+    assert not any(text.endswith(".") or text[:1].isupper() for text in BECAUSE.values())  # the end of a sentence
+    listed = yaml.safe_load((pathlib.Path(__file__).parents[1] / "data" / "verifiable-cwes.yaml").read_text())
+    assert {entry["cwe"] for entry in listed["verifiable_cwes"]} <= WEAKNESS_NAMES.keys()
 
 
 def test_a_confirmed_result_says_why_in_its_image_and_report_and_another_verdict_does_not(tmp_path):
@@ -1334,47 +1340,83 @@ def test_a_confirmed_result_says_why_in_its_image_and_report_and_another_verdict
                          lambda m, u, h, **k: Resp(302, "", {"location": f"https://{host}/"}),
                          [*steps, {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}])
     why = result.poc["why"]
-    assert why["lead"] == "The target redirected to the Verifier's marker host."
-    assert [(c["name"], c["text"]) for c in why["checks"][:-1]] == [("Carries the payload", "step 1: 302.")]
-    assert why["checks"][-1]["name"] == "Why this proves it"
-    assert "a host name the Verifier generated for this finding" in why["checks"][-1]["text"]
-    assert why["closing"] == "Confirmed: redirect to the marker host."
+    lead = "Insecure direct object reference, because the target redirected to a host the request chose."
+    assert why["lead"] == lead                                            # the fixture's CWE-639, its class's proof
+    assert [c["name"] for c in why["checks"]] == ["Why this proves it"]   # one step: its image says the rest
+    assert "a host name the Verifier generated for this finding" in why["checks"][0]["text"]
+    assert why["closing"] == poc.CHECKED_IN_CODE
     page = shot["html"]
-    assert "<span class=lead>The target redirected to the Verifier&#x27;s marker host.</span>" in page
-    assert page.count("<span class=yes></span>") == 2 and "<span class=k>Result:</span>" not in page
-    assert "<b class=closing>Confirmed: redirect to the marker host.</b>" in page
+    assert f"<span class='verdict confirmed'>confirmed</span>{html.escape(lead)}</div>" in page
+    assert "<div class=why><p><b>Why this proves it</b> The Location of the redirect" in page
+    assert html.escape(poc.CHECKED_IN_CODE) in page and "What the steps showed" not in page
     text = to_markdown({"meta": {}, "results": [{
         "result_id": "VF-1", "finding_ref": {"id": "T-1", "title": "Redirect"}, "class": "open-redirect",
         "verdict": "confirmed", "confidence": "high", "proof": result.proof, "poc": result.poc}]})
-    assert "**What the test showed:** The target redirected to the Verifier's marker host." in text
+    assert f"**What the test showed:** {lead}" in text
     assert "- ✓ **Why this proves it:** The Location of the redirect is a host name" in text
-    assert "Confirmed: redirect to the marker host." in text
-    # Not confirmed: nothing claims a proof; the image keeps its one-line result.
+    assert poc.CHECKED_IN_CODE in text
+    # Not confirmed: nothing claims a proof; the image says so and what the steps showed.
     result, shot = _shot(tmp_path / "b", "open-redirect", lambda m, u, h, **k: Resp(200, "ok"),
                          [*steps, {"verdict": {"verdict": "confirmed", "rationale": "r", "proof_steps": [1]}}])
     assert result.verdict != "confirmed" and "why" not in result.poc
-    assert "<span class=k>Result:</span>" in shot["html"] and "class=lead" not in shot["html"]
+    assert "Insecure direct object reference not confirmed. " in shot["html"]
+    assert "<b>What the steps showed</b>" in shot["html"] and "Why this proves it" not in shot["html"]
 
 
-def test_an_experiment_table_lists_every_step_and_the_image_details_one_comparison():
+def test_an_injection_image_shows_the_pair_its_proof_compares_and_names_every_step():
+    """VER-035: the sentence names the weakness, the input and because what; the image shows the true and the false
+    condition side by side, and the reason lists every step with what it showed."""
     ctx, history, shown = _conditions(_split)
     result = SimpleNamespace(verdict="confirmed", proof={"checked": True, "form": "predicate"})
     why = poc.why_summary(ctx, history, shown, result)
-    assert [(c["name"], c["text"]) for c in why["checks"][:3]] == [
-        ("Baseline input", "step 2: 1 entry."), ("True condition", "steps 3, 5: 3 entries."),
-        ("False condition", "steps 4, 6: 0 entries.")]
-    assert why["checks"][3]["name"] == "Why this proves it" and "A slower answer alone never counts" in (
-        why["checks"][3]["text"])
+    assert why["lead"] == ("SQL injection through q, because a condition added to q changes what the database query "
+                           "returns.")
+    assert [c["name"] for c in why["checks"]] == ["Why this proves it", "All steps"]
+    assert "A slower answer alone never counts" in why["checks"][0]["text"]
+    assert why["checks"][1]["text"] == ("baseline input, step 2: 1 entry; true condition, steps 3, 5: 3 entries; "
+                                        "false condition, steps 4, 6: 0 entries. The Verifier generated the values "
+                                        "at random.")
     roles = poc.step_roles(ctx, history, shown)
     first = poc.panels(shown, roles, opposite=poc.opposites(history))[0]
-    page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown, why=why, table=True)
-    table = page[page.index("<table class=steps>"):page.index("</table>")]
-    assert table.count("<tr class=") == 5 and "Sent as q" in table                # every step, in the order sent
-    assert [table.index(f"<td>{n}</td>") for n in (2, 3, 4, 5, 6)] == sorted(table.index(f"<td>{n}</td>")
-                                                                           for n in (2, 3, 4, 5, 6))
-    assert "<td class=in>x&#x27; AND 7=7--</td>" in table and "<td class=seen>3 entries</td>" in table
-    assert "<td class=in>x&#x27; AND 8&lt;&gt;8--</td>" in table and "<td class=seen>0 entries</td>" in table
-    assert "<span class=k>Shown in detail:</span>" in page and page.count("<section class=attack>") == 2
-    assert poc.experiment_table(ctx, history, shown[:1], roles) == ""             # one step is no comparison
+    page, _ = poc.exchange_document(ctx, history, first, "confirmed", None, comparison=shown, why=why)
+    assert page.count("<section class=attack>") == 2 and "<div class=pair>" in page and "<table" not in page
+    assert "Also part of the proof, not shown here: steps 2, 5, 6 (in the report and the HAR file)." in page
+    assert "<b>All steps</b> baseline input, step 2: 1 entry;" in page
     # Without a confirmation the checked proof is not claimed.
     assert poc.why_summary(ctx, history, shown, SimpleNamespace(verdict="inconclusive", proof={})) is None
+
+
+def test_a_not_confirmed_image_names_the_reason_the_report_gives():
+    ctx = _role_ctx("injection")
+    result = SimpleNamespace(limits_hit="attempts", rationale="r", observations=[], proof={})
+    assert poc.verdict_sentence(ctx, "inconclusive", result) == (
+        "SQL injection not confirmed. Limit reached: the test agent's steps for this finding; raise them with "
+        "--max-attempts.")
+    assert poc.verdict_sentence(ctx, "not-reproducible") == (
+        "SQL injection not confirmed. Not reproduced in these attempts, which does not prove absence.")
+    assert poc.verdict_sentence(ctx, "confirmed") == "SQL injection. The proof check accepted it."  # no reason kept
+
+
+def test_a_json_answer_is_shortened_around_the_observed_field_and_frames_only_that():
+    """VER-035: the observed top-level field in full, a list one entry per line, every other value cut short and
+    escaped later; a deeper pointer or no object falls back to the value view."""
+    body = json.dumps({"status": "success", "meta": {"page": 1}, "note": "n" * 80,
+                       "data": [{"_id": "a1", "message": "<i>hi</i>", "likes": 3}, {"_id": "b2", "message": "x"}]})
+    e = _exchange("/search", body)
+    text, needles = poc._json_excerpt(e, "/data", json.loads(body)["data"], [])
+    assert text == ('{\n "status": "success",\n "meta": {…},\n "note": "' + "n" * 47 + '…",\n "data": [\n'
+                    '  {"_id": "a1", "message": "<i>hi</i>", …},\n  {"_id": "b2", "message": "x"}\n ]\n}')
+    assert needles == [("2 entries instead of 0", '"data": [\n  {"_id": "a1", "message": "<i>hi</i>", …},\n'
+                                                  '  {"_id": "b2", "message": "x"}\n ]')]
+    assert poc._json_excerpt(e, "/data", json.loads(body)["data"], json.loads(body)["data"])[1] == []   # alike
+    assert poc._json_excerpt(e, "/data/0/_id", "a1") is None and poc._json_excerpt(_exchange("/s", "[1]"), "/0", 1) \
+        is None
+    page, _ = poc._marked(text, needles)
+    assert "<i>" not in page and "&lt;i&gt;hi&lt;/i&gt;" in page
+
+
+def test_a_framed_block_starts_its_own_line_and_the_report_keeps_the_text():
+    text = '{\n "items": [\n  1\n ]\n}'
+    page, marked = poc._marked(text, [("framed", '"items": [\n  1\n ]')])
+    assert marked == 1 and '{<span class=nl>\n </span><span class="hit block">' in page     # no blank line above it
+    assert poc._code_excerpt(text, [("framed", '"items": [\n  1\n ]')]) == '{\n ⟦"items": [\n  1\n ]⟧\n}'
