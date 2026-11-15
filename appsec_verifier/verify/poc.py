@@ -312,7 +312,7 @@ def _text(e: dict) -> str:
 
 def _focus(ctx, shown: list[dict], e: dict) -> int:
     """Where the decisive part of a response begins: the marker file's content,
-    the XSS marker, the first difference between two injection answers, or 0."""
+    the XSS marker, the earliest place where an injection answer differs from another (`_answer_difference`), or 0."""
     text, cls = _text(e), getattr(ctx.plan, "cls", None)
     needle = None
     if cls == "path-traversal":
@@ -324,8 +324,10 @@ def _focus(ctx, shown: list[dict], e: dict) -> int:
     if cls == "injection":
         others = [_text(o) for o in shown if o is not e and o["request"]["url"].split("?")[0]
                   == e["request"]["url"].split("?")[0]]
-        if others:
-            return min(len(os.path.commonprefix([text, o])) for o in others)
+        at = [_located(text, d) for o in others if (d := _answer_difference(text, o))]
+        at = [i for i in at if i >= 0] or [len(os.path.commonprefix([text, o])) for o in others]
+        if at:
+            return min(at)
     return 0
 
 
@@ -443,16 +445,13 @@ def _page_screenshots(ctx, steps: list[dict], highlight) -> list[dict]:
 
 # ── the exchange image (VER-035) ─────────────────────────────────────────────
 
-_TOKEN_START = set(" \n&?=\"':,{[")
-_TOKEN_END = set(" \n&\"',;}]")
+_TOKEN_START = set(" \t\n&?=\"':,{[")
+_TOKEN_END = set(" \t\n&\"',;}]")
+_TAG = re.compile(r"<[^<>]*>")      # [^<>] keeps the scan linear in an answer full of unclosed "<"
+_LINE_MARK = 300                    # the longest answer line framed whole as where two answers differ
 
 
-def _diff_token(a: str, b: str, region: str) -> tuple[str, str, str] | None:
-    """The token of `a` around its first difference from `b`, e.g. the value of the changed parameter, as
-    (region, the text before it, token): marked once, where it stands, not wherever it recurs."""
-    i = len(os.path.commonprefix([a, b]))
-    if i >= len(a):
-        return None
+def _token_at(a: str, i: int, region: str) -> tuple[str, str, str] | None:
     start, end = i, i
     while start > 0 and a[start - 1] not in _TOKEN_START:
         start -= 1
@@ -460,6 +459,54 @@ def _diff_token(a: str, b: str, region: str) -> tuple[str, str, str] | None:
         end += 1
     token = (a[start:end] or a[i:i + 40])[:200]
     return (region, a[max(0, start - 24):start], token) if token.strip() else None
+
+
+def _diff_token(a: str, b: str, region: str) -> tuple[str, str, str] | None:
+    """The token of `a` around its first difference from `b`, e.g. the value of the changed parameter, as
+    (region, the text before it, token): marked once, where it stands, not wherever it recurs."""
+    i = len(os.path.commonprefix([a, b]))
+    return None if i >= len(a) else _token_at(a, i, region)
+
+
+def _shown_text(line: str) -> str:
+    return " ".join(_TAG.sub(" ", line).split())
+
+
+def _answer_difference(a: str, b: str) -> tuple[str, str, str] | None:
+    """Where answer `a` differs from answer `b` for a reader, as `_diff_token` gives it (VER-035): the first line
+    whose text, without tags and spacing, no line of `b` has, such as an error message or another page title, framed
+    without its indentation and, beyond _LINE_MARK characters, to the end of a word before it; in a line `b` has in
+    changed form (it begins like one of them for at least half its length), the value where it starts to differ.
+    Tags and spacing alone are no difference, unless the answers differ in nothing else; where `a` only lacks lines
+    of `b`, nothing of `a` is marked."""
+    lines_b = b.split("\n")
+    texts_b = {_shown_text(line) for line in lines_b}
+    pos = 0
+    for line in a.split("\n"):
+        text = _shown_text(line)
+        if text and text not in texts_b:
+            shown = line.strip()
+            start = pos + line.index(shown)
+            same = max((len(os.path.commonprefix([shown, o.strip()])) for o in lines_b), default=0)
+            if 2 * same < len(shown):
+                cut = shown if len(shown) <= _LINE_MARK else shown[:_LINE_MARK].rsplit(" ", 1)[0]
+                return "body", a[max(0, start - 24):start], cut
+            return _token_at(a, start + min(same, len(shown) - 1), "body")
+        pos += len(line) + 1
+    if texts_b - {_shown_text(line) for line in a.split("\n")}:
+        return None
+    return _diff_token(a, b, "body")
+
+
+def _located(text: str, needle) -> int:
+    """Where a mark stands in `text`: a (region, context, token) after its context, else, like a plain string, at
+    the first occurrence of its token; -1 if absent."""
+    if isinstance(needle, tuple):
+        _, context, needle = needle
+        i = text.find(context + needle) if needle else -1
+        if i >= 0:
+            return i + len(context)
+    return text.find(needle) if needle else -1
 
 
 def _target(url: str) -> str:
@@ -1081,7 +1128,7 @@ def _exchange_marks(ctx, history: list[dict], n: int, e: dict, shown: list[tuple
                 continue        # the proof reads the step's own observation, not how the answers differ
             if beside is not None and not any(o is b for _, b in beside):
                 continue        # a difference from a step in another image is not marked in this one
-            token = _diff_token(_text(e), _text(o), "body")
+            token = _answer_difference(_text(e), _text(o))
             if token and ("answer differs", token) not in res_marks:
                 res_marks.append(("answer differs", token))
             status_differs = status_differs or e["response"]["status"] != o["response"]["status"]
@@ -1237,8 +1284,7 @@ class _VisibleText(HTMLParser):
 
 def _image_excerpt(text: str, needles=(), *, limit=700) -> str:
     """An explicitly shortened window around the first located evidence value."""
-    values = [v[2] if isinstance(v, tuple) else v for _, v in needles]
-    focus = next((text.index(v) for v in values if v and v in text), 0)
+    focus = next((i for _, v in needles if (i := _located(text, v)) >= 0), 0)
     start = max(0, focus - 100) if len(text) > limit else 0
     excerpt = text[start:start + limit]
     lines = excerpt.splitlines()
@@ -1400,6 +1446,7 @@ h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:16px;border-bottom:1px
 .cols>div+div{border-left:1px solid #ccc}h3{margin:0;padding:4px 10px;font-size:15px;color:#555}
 pre{margin:0;padding:6px 10px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
 mark{background:none;color:#000;outline:2px solid #b00020;outline-offset:1px}.hit{display:inline-block;max-width:100%}
+.hit:not(.block)>mark{display:inline-block}
 .tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}
 section.normal{border:2px solid #2e7d32}section.control{border:2px solid #546e7a}
 section.attack{border:2px solid #b00020}section.effect{border:2px solid #e65100}
@@ -1770,6 +1817,7 @@ tr.attack.access td,tr.effect.access td{background:#fdecea}tr.access td.got{font
 section{margin:16px;border:1px solid #ccc}h2{margin:0;padding:6px 10px;background:#f0f0f0;font-size:15px;
 border-bottom:1px solid #ccc}pre{margin:0;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px}
 mark{background:none;color:#000;outline:2px solid #b00020;outline-offset:1px}.hit{display:inline-block;max-width:100%}
+.hit:not(.block)>mark{display:inline-block}
 .note{color:#b00020;font:bold 13px sans-serif;margin-left:8px}.nl{display:none}
 .tag{background:#b00020;color:#fff;font:bold 13px sans-serif;padding:1px 5px;margin-right:3px;border-radius:3px}
 tr.access.unrated td{background:#fff4e0}tr.access.unrated td.got{color:#b26a00}td.req{width:36%}

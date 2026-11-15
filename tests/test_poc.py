@@ -971,6 +971,60 @@ def test_an_html_difference_is_marked_in_the_excerpt_actually_shown():
     assert "This does not complete the required proof." in page
 
 
+_HELP_HEAD = ('<!DOCTYPE html>\n<html>\n<head>\n\t<meta http-equiv="Content-Type" content="text/html" />\n'
+              "\t<title>Help</title>\n</head>\n<body class=\"light\">\n")
+_HELP_PAGE = (_HELP_HEAD + '\t<div id="container">\n\t<h1>Help - Cross Site Scripting (Reflected)</h1>\n'
+              + "\t<p>help text</p>\n" * 30 + "\t</div>\n</body>\n</html>")
+_WARNING = ("<b>Warning</b>:  file_get_contents(../vulnerabilities/../../dvwa/includes/help/help.php): Failed to "
+            "open stream: No such file or directory in <b>/var/www/html/view_help.php</b> on line <b>20</b><br />")
+_WARNING_PAGE = _HELP_HEAD + '<div class="body_padded">\n\t<br />\n' + _WARNING + "\n</div>\n</body>\n</html>"
+
+
+def test_two_html_answers_are_marked_where_their_text_differs_not_where_their_markup_parts():
+    """VER-035: without an accepted plan, two answers of different pages are marked at the first line whose text
+    the other lacks, the help page's title and the warning that names the sent path, not at the first tag or
+    indentation where the two pages part; image and report agree."""
+    history = [_sent("/search", q="xss_r"), _sent("/search", q="../../dvwa/includes")]
+    shown = [(1, _probe_exchange("xss_r", 200, _HELP_PAGE, "text/html")),
+             (2, _probe_exchange("../../dvwa/includes", 200, _WARNING_PAGE, "text/html"))]
+    ctx = _role_ctx("injection")
+    page, _ = poc.exchange_document(ctx, history, shown, "inconclusive", None)
+    title = html.escape("<h1>Help - Cross Site Scripting (Reflected)</h1>")
+    assert f"<mark>{title}</mark><span class=note>◀ answer differs</span>" in page
+    assert f"<mark>{html.escape(_WARNING)}</mark><span class=note>◀ answer differs</span>" in page
+    assert page.count("◀ answer differs") == 2
+    assert "<mark>\t&lt;div</mark>" not in page and "<mark>\t&lt;br</mark>" not in page
+    roles = poc.step_roles(ctx, history, shown)
+    help_excerpt = poc._report_excerpts(ctx, history, 1, shown[0][1], shown, None, None, roles)["response_excerpt"]
+    assert "⟦<h1>Help - Cross Site Scripting (Reflected)</h1>⟧" in help_excerpt
+    warning_excerpt = poc._report_excerpts(ctx, history, 2, shown[1][1], shown, None, None, roles)["response_excerpt"]
+    assert f"⟦{_WARNING}⟧" in warning_excerpt
+
+
+def test_an_answer_difference_is_shown_where_it_stands_not_where_its_word_first_occurs():
+    """VER-035: the excerpt is cut around the marked difference, not around an earlier, unchanged use of the
+    same word, such as Content-Type in the page head."""
+    text = '<meta http-equiv="Content-Type" />\n' + "filler line\n" * 40 + "<h1>Help - Content</h1>\n" + "end\n" * 40
+    excerpt = poc._image_excerpt(text, [("answer differs", ("body", "<h1>Help - ", "Content"))])
+    assert "<h1>Help - Content</h1>" in excerpt and "Content-Type" not in excerpt
+
+
+def test_answer_difference_reads_text_lines_values_and_markup():
+    one = poc._answer_difference
+    # a value in a line the other answer has in changed form: the value, as before
+    assert one('{"items":[1,2,3]}', '{"items":[]}') == ("body", '{"items":[', "1")
+    # a line the other answer lacks, beyond the framed length: its start, to the end of a word
+    long_line = "<b>Fatal error</b>: " + "word " * 100
+    region, _, token = one("<p>a</p>\n" + long_line, "<p>a</p>\n<p>b</p>")
+    assert token.startswith("<b>Fatal error</b>: word") and len(token) <= 300 and token.endswith("word")
+    # an answer that only lacks the other's lines marks nothing; identical answers neither
+    assert one("<ul>\n</ul>", "<ul>\n<li>row</li>\n</ul>") is None and one(_HELP_PAGE, _HELP_PAGE) is None
+    # answers that differ in markup alone: the token at the first difference
+    assert one('<input value="b">', '<input value="a">') == ("body", '<input value="', "b")
+    # an answer full of unclosed "<" is read in linear time
+    assert one("<" * 200_000 + "x", "y") is not None
+
+
 def test_an_arithmetic_image_frames_each_controls_own_result_not_a_longer_number():
     """VER-055: each control's own computed result is framed where it stands as a whole number."""
     plan = {**{k: v for k, v in _EXPERIMENT.items() if k != "pointer"}, "expression_template": "{{ {{expression}} }}",
