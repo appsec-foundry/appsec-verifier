@@ -159,7 +159,9 @@ def test_acceptance_names_the_restriction_of_the_own_resource_and_privileged_for
     assert function.proof["access_restriction"]["denied_roles"] == ["account-1", "account-2"]
 
 
-def test_the_guided_run_takes_the_restrictions_after_a_yes_and_asks_nothing_more():
+def test_the_guided_run_no_longer_takes_the_findings_restrictions_on_a_question():
+    """VER-010/031: the guided run asks who may use a request instead (test_guided); the findings' restrictions
+    count only with --accept-finding-restrictions."""
     from test_guided import SCOPE
 
     from appsec_verifier.cli import build_guided_parser
@@ -168,14 +170,131 @@ def test_the_guided_run_takes_the_restrictions_after_a_yes_and_asks_nothing_more
 
     plan = classify({"id": "T-1", "cwe": "CWE-306", "title": "Management exposure",
                      "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
-    for answer, accepted in (("yes", True), ("no", False)):
-        args, asked, shown = build_guided_parser().parse_args(["assessment.yaml"]), [], []
+    args, asked = build_guided_parser().parse_args(["assessment.yaml"]), []
+    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or "no", lambda _: None), args, dict(SCOPE), [plan])
+    assert asked == ["Prepare harmless test resources for selected findings? [y/N]: "]
+    assert args.accept_finding_restrictions is False
 
-        def ask(prompt, answer=answer, asked=asked):
-            asked.append(prompt)
-            return answer if len(asked) == 1 else "no"
 
-        _access_preparation(Dialog(ask, shown.append), args, dict(SCOPE), [plan])
-        assert args.accept_finding_restrictions is accepted
-        assert len(asked) == (1 if accepted else 2)
-        assert any("T-1 · Management exposure: The request requires a signed-in account." in line for line in shown)
+# ── the operator's access rule for a request ─────────────────────────────────
+
+def rule(request, may, source=None):
+    return {"request": request, "may": may, **({"source": source} if source else {})}
+
+
+@pytest.mark.parametrize("may, confirmed", [("signed-in", True), ("owner", True), ("admin", True), ("anyone", False)])
+def test_access_without_credentials_breaks_every_rule_but_anyone(may, confirmed):
+    from test_access_without_credentials import PATH, _check, comparison
+
+    result = _check(comparison(), scope={"access_rules": [rule(f"GET {PATH}", may)]})
+    assert (result.verdict == "confirmed") is confirmed, result.rationale
+    if confirmed:
+        taken = result.proof["access_restriction"]
+        assert taken["source"] == f"the operator's access rule for GET {PATH} (scope)"
+        assert "accepted_from_finding" not in taken and taken["denied_roles"] == ["anonymous"]
+    else:
+        assert result.proof["observed_access"] and "allows it" in result.rationale
+
+
+@pytest.mark.parametrize("may, confirmed", [("owner", True), ("admin", True), ("signed-in", False), ("anyone", False)])
+def test_another_accounts_read_of_the_owners_record_breaks_owner_and_admin(may, confirmed):
+    from test_own_access import _check, owned
+
+    result = _check(owned(), scope={"access_rules": [rule("GET /api/Feedbacks/:id", may, "guided run")]})
+    assert (result.verdict == "confirmed") is confirmed, result.rationale
+    if confirmed:
+        assert result.proof["access_restriction"]["source"].endswith("(guided run)")
+
+
+@pytest.mark.parametrize("may, confirmed", [("admin", True), ("signed-in", False), ("owner", False)])
+def test_a_normal_accounts_privileged_answer_breaks_only_admin(may, confirmed):
+    from test_own_access import FN, _check, privileged
+
+    result = _check(privileged(), scope={"access_rules": [rule(f"GET {FN}", may)]}, cwe="CWE-862")
+    assert (result.verdict == "confirmed") is confirmed, result.rationale
+
+
+def test_a_rule_decides_before_the_accepted_restriction_and_only_for_its_own_request():
+    from test_access_without_credentials import PATH, _check, comparison
+
+    public = {"access_rules": [rule(f"GET {PATH}", "anyone")]}
+    assert _check(comparison(), scope=public, accept=True).verdict == "inconclusive"
+    for other in (f"POST {PATH}", "GET /rest/admin", f"GET {PATH}/more"):
+        result = _check(comparison(), scope={"access_rules": [rule(other, "admin")]})
+        assert result.verdict == "inconclusive" and "allows it" not in result.rationale
+    declared = _check(comparison(), scope={**public, "access_policies": [policy(PATH)]})
+    assert declared.verdict == "confirmed" and declared.proof["access_restriction"]["source"].startswith("operator:")
+    # The comparison itself still has to hold.
+    assert _check(comparison(anonymous_status=403), scope={"access_rules": [rule(f"GET {PATH}", "admin")]}
+                  ).verdict != "confirmed"
+
+
+def test_a_placeholder_in_a_rule_stands_for_one_segment():
+    from appsec_verifier.agent.access_policy import access_rule
+
+    scope = {"access_rules": [rule("GET /api/Recycles/:id", "owner")]}
+    assert access_rule(scope, "GET", "/api/Recycles/7")["may"] == "owner"
+    assert access_rule(scope, "GET", "/api/Recycles/:id?x=1") is not None
+    for method, path in (("GET", "/api/Recycles"), ("GET", "/api/Recycles/7/items"), ("PUT", "/api/Recycles/7")):
+        assert access_rule(scope, method, path) is None
+
+
+def test_scope_access_rules_need_a_method_a_path_and_a_known_rule():
+    from pathlib import Path
+
+    import yaml
+    from jsonschema import Draft202012Validator
+
+    validator = Draft202012Validator(
+        yaml.safe_load(Path("schemas/scope.schema.yaml").read_text())["properties"]["access_rules"])
+    assert validator.is_valid([rule("GET /api/Users", "admin"), rule("PUT /api/Items/:id", "owner", "policy 4")])
+    for bad in (rule("GET /api/Users", "everyone"), rule("/api/Users", "admin"), rule("GET https://x.test/a", "admin"),
+                rule("GET /a?b=1", "admin"), rule("DELETE /a", "admin"), {**rule("GET /a", "admin"), "allow": 1}):
+        assert not validator.is_valid([bad]), bad
+
+
+def test_a_scope_holds_one_rule_per_request_and_only_rules_inside_its_target():
+    from test_guided import SCOPE
+
+    from appsec_verifier.cli import _validate_scope
+
+    assert _validate_scope({**SCOPE, "access_rules": [rule("GET /api/Users", "admin")]}) == []
+    twice = {**SCOPE, "access_rules": [rule("GET /a", "admin"), rule("GET /a", "owner")]}
+    assert any("one rule per request" in e for e in _validate_scope(twice))
+    outside = {**SCOPE, "path_prefixes": ["/api/"], "access_rules": [rule("GET /admin/x", "admin")]}
+    assert any("outside the target scope" in e for e in _validate_scope(outside))
+
+
+def _users_plan():
+    from appsec_verifier.endpoints import Endpoint
+    from appsec_verifier.loader import FindingPlan
+
+    return FindingPlan(id="T-1", cwe="CWE-862", severity="high", title="users", match_key="a|CWE-862",
+                       instance="a:1", status="dynamic", cls="access-control", reason="test",
+                       endpoints=(Endpoint("GET", "/api/Users", True), Endpoint("PUT", "/api/Users/:id", True)))
+
+
+ACCOUNTS = [{"role": "account-1"}, {"role": "admin-1", "privileged": True}]
+
+
+def test_a_finding_whose_requests_anyone_may_use_is_not_tested():
+    from appsec_verifier.cli import _blocker
+
+    def need(rules, safe=True):
+        return _blocker(_users_plan(), identities=ACCOUNTS, browser=None, listener=None,
+                        scope={"access_rules": rules}, safe=safe)
+
+    assert need([rule("GET /api/Users", "anyone")]) == ("rule", "your access rule lets anyone use GET /api/Users")
+    assert need([rule("GET /api/Users", "admin")]) is None and need([]) is None
+
+
+def test_the_agent_learns_the_rule_and_which_access_breaks_it():
+    from appsec_verifier.agent.prompts import _access_hint
+
+    ctx = SimpleNamespace(plan=_users_plan(), scope={"access_rules": [rule("GET /api/Users", "admin")]},
+                          identities=ACCOUNTS, safe=True, read_only=True)
+    hint = _access_hint(ctx)
+    assert "GET /api/Users: Only an admin may use the request." in hint and "breaks admin" in hint
+    assert "never a finding claim" not in hint
+    ctx.scope = {}
+    assert "never a finding claim" in _access_hint(ctx)

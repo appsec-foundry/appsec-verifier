@@ -303,6 +303,23 @@ properties:
             pointer: {type: string, pattern: '^/|^$', maxLength: 256}
             value: {type: [string, number, boolean], minLength: 3, maxLength: 200}
 
+  access_rules:
+    type: array
+    maxItems: 200
+    description: |
+      Who may use a request, declared by the operator (VER-010): the record's owner, any signed-in account, an
+      admin, or anyone. The request is a method and a path; a placeholder such as :id matches any one segment. A
+      rule states intended access only; it grants no request, identity or write permission. An access_policies
+      entry or test resource of the finding takes precedence.
+    items:
+      type: object
+      additionalProperties: false
+      required: [request, may]
+      properties:
+        request: {type: string, maxLength: 2010, pattern: '^(GET|HEAD|OPTIONS|POST|PUT|PATCH) /[^?#\s]*$'}
+        may: {enum: [owner, signed-in, admin, anyone]}
+        source: {type: string, minLength: 3, maxLength: 1000}
+
   test_resources:
     type: array
     maxItems: 100

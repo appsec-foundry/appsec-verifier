@@ -34,20 +34,24 @@ IDENTITY = {"identities": [{"role": "alice", "method": "bearer", "auth": {"token
 SECRET_WORDS = ("password", "token", "secret", "key")
 
 
-_ACCESS_PROMPTS = ("Prepare access rules", "Do these expectations hold")
+_ACCESS_PROMPTS = ("Prepare harmless test resources", "      Who may use it?")
 
 
 class Script:
     """Answers the prompts in order; running out of answers is end of input."""
 
-    def __init__(self, *answers):
+    def __init__(self, *answers, rules=()):
         self.answers = list(answers)
+        self.rules = list(rules)
         self.prompts: list[str] = []
 
     def __call__(self, prompt):
         self.prompts.append(prompt)
         if prompt.startswith(_ACCESS_PROMPTS):
-            return "no"  # Existing scenarios explicitly decline optional preparation; tested separately below.
+            # Scenarios decline optional preparation and leave access rules open unless they give `rules`.
+            if prompt.startswith(_ACCESS_PROMPTS[0]):
+                return "no"
+            return self.rules.pop(0) if self.rules else ""
         if not self.answers:
             raise EOFError
         answer = self.answers.pop(0)
@@ -80,9 +84,9 @@ def env(tmp_path, monkeypatch):
     e.run, e.cwd, e.calls, e.kws = run, cwd, calls, kws
     e.assessment = run / "assessment.yaml"
 
-    def go(*answers, extra=(), interactive=True, environ=None, hidden=(), pasted=()):
+    def go(*answers, extra=(), interactive=True, environ=None, hidden=(), pasted=(), rules=()):
         args = cli.build_guided_parser().parse_args([str(e.assessment), *extra])
-        script, lines = Script(*answers), []
+        script, lines = Script(*answers, rules=rules), []
         e.hidden, e.pasted = Script(*hidden), Script(*pasted)
         rc = guided.run_guided(args, interactive=interactive, ask=script, out=lines.append,
                                environ={} if environ is None else environ, ask_secret=e.hidden, ask_block=e.pasted)
@@ -97,7 +101,8 @@ def env(tmp_path, monkeypatch):
 def test_with_a_scope_file_only_optional_preparation_is_asked_and_defaults_apply(env):
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
-    assert len(env.preparation_prompts) == 2  # the findings' restrictions, then the declarations
+    # the offer of test resources; no access rule, since no account can compare
+    assert env.preparation_prompts == ["Prepare harmless test resources for selected findings? [y/N]: "]
     assert "3 runtime candidates of 4 · critical 1 · high 1 · medium 1\n" in out
     assert "to verify" not in out              # the selection is shown once, with the run settings
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
@@ -583,7 +588,7 @@ def test_run_only_preparation_reaches_verify_but_never_skips_confirmation(env, m
         "evidence": {"file": "app.py", "line": 1}}]}))
     (env.run / "scope.yaml").unlink()
     before = set(env.run.iterdir())
-    answers = iter(["no", "yes", "yes", "/admin/config", "admin", "anonymous", "Administrator access required",
+    answers = iter(["yes", "yes", "/admin/config", "admin", "anonymous", "Administrator access required",
                     "Operator access policy", "/marker", "harmless-config-marker", "yes"])
     confirmed = []
 
@@ -601,3 +606,73 @@ def test_run_only_preparation_reaches_verify_but_never_skips_confirmation(env, m
     assert args._guided_resources[0]["anonymous_only"] is True
     assert set(env.run.iterdir()) == before
     assert "run-only access declarations" in capsys.readouterr().out
+
+
+# ── who may use a request (VER-010, VER-031) ─────────────────────────────────
+
+RULED = [
+    {"id": "T-5", "cwe": "CWE-862", "severity": "high",
+     "title": "User list readable by any account — routes/users.ts:12",
+     "scenario": "A signed-in account calls GET /api/Users, and PUT /api/Users/:id changes any account.",
+     "evidence": {"file": "u.ts", "line": 5}},
+    {"id": "T-6", "cwe": "CWE-306", "severity": "high", "title": "User list without login",
+     "scenario": "GET /api/Users answers without a login.", "evidence": {"file": "u.ts", "line": 9}},
+    {"id": "T-7", "cwe": "CWE-862", "severity": "high", "title": "Recycle records by id",
+     "scenario": "GET /api/Recycles/:id returns any record.", "evidence": {"file": "r.ts", "line": 3}},
+]
+ACCOUNTS = ["--account", "jim=JIM_PASS", "--admin-account", "root=ROOT_PASS"]
+RULE_PROMPT = "      Who may use it? [o/s/a/p/?]: "
+
+
+def test_the_rules_are_asked_per_request_the_run_tests_with_an_explanation_and_kept_for_this_run(env):
+    env.assessment.write_text(yaml.safe_dump({"threats": RULED}))
+    rc, args, prompts, out = env.go(extra=ACCOUNTS, rules=["a", ""])
+    assert rc == 0 and prompts == []
+    assert env.preparation_prompts == ["Prepare harmless test resources for selected findings? [y/N]: ",
+                                       RULE_PROMPT, RULE_PROMPT]
+    lines = out.split("\n")
+    start = lines.index("Who may use these requests?")
+    assert lines[start + 1] == "─" * len("Who may use these requests?")
+    assert "the Verifier needs your rule for its request" in out and "cannot be confirmed" in out
+    for legend in ("  o  only the record's owner", "  s  any signed-in account", "  a  only an admin",
+                   "  p  anyone, also without login (the finding is then not tested)", "  ?  don't know (Enter)"):
+        assert legend in lines
+    # One block per request, numbered, with its findings; a safe run's write is not asked about.
+    users = lines.index("[1/2] GET /api/Users")
+    assert lines[users + 1:users + 3] == ["      T-5  User list readable by any account",
+                                          "      T-6  User list without login"]
+    assert "[2/2] GET /api/Recycles/:id" in lines and "PUT /api/Users" not in out
+    assert args._guided_rules == [{"request": "GET /api/Users", "may": "admin", "source": "guided run"}]
+    assert "  GET /api/Users          admin only   T-5 T-6" in lines
+    assert "  GET /api/Recycles/:id   don't know   T-7" in lines
+    excerpt = "\n".join(lines[lines.index("  access_rules:"):])
+    kept = {**SCOPE, **yaml.safe_load(excerpt)}
+    assert kept["access_rules"] == [{"request": "GET /api/Users", "may": "admin"}] and cli._validate_scope(kept) == []
+    assert "access rules given here: put them in access_rules" in env.calls[0][1]
+    assert not (env.run / "scope.yaml").read_text().count("access_rules")      # nothing is written
+
+
+def test_an_unknown_answer_is_asked_again_and_enter_leaves_every_rule_open(env):
+    env.assessment.write_text(yaml.safe_dump({"threats": RULED}))
+    rc, args, _, out = env.go(extra=ACCOUNTS, rules=["maybe", "p"])
+    assert rc == 0 and "      answer o, s, a, p or ?" in out.split("\n")
+    assert args._guided_rules == [{"request": "GET /api/Users", "may": "anyone", "source": "guided run"}]
+    rc, args, _, out = env.go(extra=ACCOUNTS)
+    assert rc == 0 and getattr(args, "_guided_rules", None) is None
+    assert "No rule given: these findings report the access they observe, without confirming it." in out
+
+
+@pytest.mark.parametrize("extra", [[], [*ACCOUNTS, "--accept-finding-restrictions"]])
+def test_no_rule_is_asked_without_accounts_to_compare_or_with_the_findings_restrictions(env, extra):
+    env.assessment.write_text(yaml.safe_dump({"threats": RULED}))
+    rc, _, _, out = env.go(extra=extra)
+    assert rc == 0 and RULE_PROMPT not in env.preparation_prompts and "Who may use these requests?" not in out
+
+
+def test_a_request_the_scope_has_a_rule_for_is_not_asked_again(env):
+    env.assessment.write_text(yaml.safe_dump({"threats": RULED}))
+    (env.run / "scope.yaml").write_text(yaml.safe_dump(
+        {**SCOPE, "access_rules": [{"request": "GET /api/Users", "may": "admin"}]}))
+    rc, _, _, out = env.go(extra=ACCOUNTS)
+    assert rc == 0 and env.preparation_prompts.count(RULE_PROMPT) == 1
+    assert "[1/1] GET /api/Recycles/:id" in out.split("\n") and "GET /api/Users" not in out

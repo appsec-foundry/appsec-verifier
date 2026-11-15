@@ -215,7 +215,7 @@ def test_guided_preparation_is_run_only_validated_and_declining_contacts_nothing
     from appsec_verifier.cli import build_guided_parser
 
     args = build_guided_parser().parse_args(["assessment.yaml"])
-    answers = iter(["no", "yes", "yes", PATH, "admin", "anonymous", "Only administrators may read configuration",
+    answers = iter(["yes", "yes", PATH, "admin", "anonymous", "Only administrators may read configuration",
                     "Operator policy", "/marker", MARKER, "yes"])
     scope = copy.deepcopy(SCOPE)
     before = copy.deepcopy(scope)

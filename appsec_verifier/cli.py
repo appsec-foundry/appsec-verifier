@@ -250,6 +250,13 @@ def _validate_scope(scope: dict, *, url_only: bool = False) -> list[str]:
                         errors.append(f"{key}: declared request is outside the target scope")
                 if key == "access_policies" and set(item["allowed_roles"]) & set(item["denied_roles"]):
                     errors.append("access_policies: allowed and denied roles must be disjoint")
+        requests = [r["request"] for r in scope.get("access_rules", [])]
+        if len(requests) != len(set(requests)):
+            errors.append("access_rules: one rule per request")
+        for request in requests:
+            url = scope["base_url"].rstrip("/") + "/" + request.partition(" ")[2].lstrip("/")
+            if not guard.authorize(url, "target").allowed or not same_origin(url, scope["base_url"]):
+                errors.append(f"access_rules: {request} is outside the target scope")
         resources = scope.get("test_resources", [])
         ids = [r["id"] for r in resources]
         if len(ids) != len(set(ids)):
@@ -707,8 +714,10 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
                 "give --url as http(s)://host[:port], or a scope file with --scope",
             )
 
-    if getattr(args, "_guided_resources", None):
-        scope = {**scope, "test_resources": [*scope.get("test_resources", []), *args._guided_resources]}
+    guided = {key: getattr(args, attr, None) for key, attr in (("test_resources", "_guided_resources"),
+                                                                  ("access_rules", "_guided_rules"))}
+    if any(guided.values()):
+        scope = {**scope, **{key: [*scope.get(key, []), *items] for key, items in guided.items() if items}}
         errors = _validate_scope(scope, url_only=not args.scope)
         if errors:
             return _blocked("The run's access declarations cannot be used", errors)
@@ -1544,6 +1553,9 @@ _NEEDS = {
                "steps nor as an attack_surface entry whose handler is at its location; with --source, a route "
                "declared in the finding's file up to 40 lines before its location can supply one (docs/cli.md, "
                "Continuous control)"]),
+    "rule": ("access restriction", "your access rule lets anyone use its requests",
+             ["your access rule says that anyone may use the finding's requests, so no access breaks it; if the "
+              "request should be protected, change its entry in access_rules (docs/cli.md, Scope file)"]),
 }
 # Only an access-control finding can name its request in a scope entry (VER-010); other classes have none for it.
 _ACCESS_ROUTE = ("; for access control a test_resources entry",
@@ -1578,6 +1590,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
     A finding that names no request is tried only with `source`, the run's SourceReader, where a literal
     route near its location can supply one (agent/controller.py); in safe mode not when every route the source
     registers for its handlers writes (VER-008), the routes its test agent would start from (agent/loop.py)."""
+    from .agent.access_policy import access_rule, rule_requests
     from .agent.experiments import EXPOSURE_CWES, RECORD_CWES, access_methods
     from .endpoints import WRITE_METHODS
     from .verification_context import missing_capabilities, record_segment
@@ -1608,6 +1621,12 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
         if not methods:
             return "resource", ("no declared test resource, and neither two normal accounts with --allow-intrusive "
                                 "nor a privileged account")
+        # VER-010: no access breaks the operator's rule that anyone may use every request a comparison would use.
+        ruled = rule_requests(plan, writes="owner" in methods)
+        if ruled and "resource" not in methods and not any(
+                r["finding_id"] == plan.id for r in scope.get("access_policies", [])) and all(
+                (access_rule(scope, m, p) or {}).get("may") == "anyone" for m, p in ruled):
+            return "rule", "your access rule lets anyone use " + ", ".join(f"{m} {p}" for m, p in ruled)
         roles = {i["role"] for i in identities} | {"anonymous"}
         resources = [r for r in scope.get("test_resources", []) if r["finding_id"] == plan.id]
         if "resource" in methods and not any(
@@ -1700,13 +1719,19 @@ def _wrap_whole(text: str, width: int) -> list[str]:
 
 def _access_setup_hints(plans, scope, accepted: bool = False):
     """Actionable offline preparation for missing access declarations (VER-031); none when the operator took
-    the restrictions from the findings (VER-010)."""
+    the restrictions from the findings (VER-010). A finding whose requests all have an access rule is declared."""
+    from .agent.access_policy import access_rule, rule_requests
+
     declared = {r["finding_id"] for key in ("test_resources", "access_policies") for r in scope.get(key, [])}
+    declared |= {p.id for p in plans if (ruled := rule_requests(p, writes=True))
+                 and all(access_rule(scope, m, path) for m, path in ruled)}
     missing = sorted({p.id for p in plans if p.cls == "access-control" and p.id not in declared})
     if not missing or accepted:
         return []
     return ["Access restriction missing for " + ", ".join(printable(p) for p in missing) + ".",
-            "  --accept-finding-restrictions takes it from each finding. To declare it instead, add "
+            "  Say who may use each request in the scope: access_rules: [{request: 'GET /route/:id', may: owner}], "
+            "with may one of owner, signed-in, admin or anyone. --accept-finding-restrictions takes the restriction "
+            "from each finding instead. For one exact path, add "
             "access_policies: [{finding_id: ID, path: /protected, allowed_roles: [account-1], "
             "denied_roles: [anonymous], restriction: 'Sign-in is required', source: 'Operator access policy'}] "
             "to the scope; use test_resources with pointer and value for a harmless field or text marker. "

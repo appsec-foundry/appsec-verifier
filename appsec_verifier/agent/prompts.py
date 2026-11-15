@@ -20,6 +20,7 @@ import json
 from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
 from ..verification_context import missing_capabilities, proof_limitations
 from ..verify.presentation import PRESENTATION_HELP
+from .access_policy import ACCESS_RULES, access_rule, rule_requests
 from .derivation import page_candidates, page_source
 from .experiments import EXPOSURE_CWES, OBSERVATION_SCHEMA, PLAN_SCHEMA, access_methods
 from .prerequisites import SCHEMA as PREREQUISITE_SCHEMA
@@ -494,9 +495,18 @@ def _access_hint(ctx) -> str:
     if not methods:
         return ("\nAccess-control cannot be confirmed in this run: there is no configured test_resource and no "
                 "accounts this finding's proof can use. Report the missing prerequisite.")
+    ruled = [(m, p, rule["may"]) for m, p in rule_requests(plan, writes="owner" in methods)
+             if (rule := access_rule(getattr(ctx, "scope", None), m, p))]
     hint = ("\nAn access_policies observation selects a declared field or text marker instead of the whole "
             "response; the engine checks it.\nAccess comparisons establish observed access only. "
-            + ("The operator accepted the assessment's access restrictions for this run, so a checked comparison "
+            + ("The operator's access rules for this finding's requests: "
+               + "; ".join(f"{m} {p}: {ACCESS_RULES[may]}" for m, p, may in ruled)
+               + " A checked comparison on such a request confirms only when the access it shows breaks the rule: "
+               "access without credentials breaks every rule except that anyone may use it; another normal account "
+               "reading or changing the owner's record breaks owner and admin; a normal account getting the "
+               "privileged account's identical answer breaks admin. Choose the comparison that fits the rule."
+               if ruled else
+               "The operator accepted the assessment's access restrictions for this run, so a checked comparison "
                "can confirm." if getattr(ctx, "accept_finding_restrictions", False) is True else
                "Confirmation additionally requires an "
                "independent operator-declared test resource or access_policies restriction, never a finding claim."))

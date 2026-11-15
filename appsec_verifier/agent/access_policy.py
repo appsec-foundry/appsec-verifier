@@ -2,14 +2,16 @@
 
 Policies describe intended access only. They grant no route, identity, write permission or proof.
 Model interpretations never create policy entries; a finding's restriction counts only after the operator
-accepted the assessment's restrictions for the run.
+accepted the assessment's restrictions for the run. An operator's access rule says who may use a request;
+it takes precedence over that acceptance.
 """
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
-from ..verification_context import route_matches
+from ..verification_context import record_segment, route_matches
 from .experiments import latest_plan, normal_roles
 
 
@@ -65,6 +67,16 @@ FINDING_RESTRICTIONS = {
 }
 
 
+def _compared(ctx, plan, form):
+    """The request and identities of the checked comparison `form`: the identity it reads or changes as, and the
+    identities whose access it observed."""
+    operation = plan.get("change") or plan
+    denied = (["anonymous"] if form == "signed_in" else
+              sorted(set(normal_roles(getattr(ctx, "identities", []))) - {plan[form]}))
+    return {"path": urlsplit(operation.get("path", "")).path, "method": operation.get("method", "GET"),
+            "allowed_roles": [plan[form]], "denied_roles": denied}
+
+
 def finding_restriction(ctx, history):
     """The finding's restriction for the comparison form that was checked, only when the operator accepted the
     assessment's restrictions for the run (VER-010). The text comes from the form, never from a model."""
@@ -74,30 +86,89 @@ def finding_restriction(ctx, history):
     form = next((f for f in FINDING_RESTRICTIONS if plan.get(f)), None)
     if form is None:
         return None
-    operation = plan.get("change") or plan
-    denied = (["anonymous"] if form == "signed_in" else
-              sorted(set(normal_roles(getattr(ctx, "identities", []))) - {plan[form]}))
     return {"source": f"finding {ctx.plan.id} of the assessment, accepted by the operator for this run",
-            "restriction": FINDING_RESTRICTIONS[form], "accepted_from_finding": True,
-            "path": urlsplit(operation.get("path", "")).path, "method": operation.get("method", "GET"),
-            "allowed_roles": [plan[form]], "denied_roles": denied}
+            "restriction": FINDING_RESTRICTIONS[form], "accepted_from_finding": True, **_compared(ctx, plan, form)}
+
+
+# Who may use a request by the operator's access rule (VER-010), and which rules the access each comparison form
+# observes breaks: a request without credentials every rule but anyone, another normal account's read or change of
+# the owner's record owner and admin, a normal account's answer identical to the privileged one admin.
+ACCESS_RULES = {
+    "owner": "Only the account that owns the record may read or change it.",
+    "signed-in": "The request requires a signed-in account.",
+    "admin": "Only an admin may use the request.",
+    "anyone": "Anyone may use the request, also without signing in.",
+}
+BROKEN_BY = {"signed_in": {"owner", "signed-in", "admin"}, "owner": {"owner", "admin"}, "reference": {"admin"}}
+
+
+def access_rule(scope, method: str, path: str):
+    """The operator's access rule for a request, matched by method and route, or None."""
+    for rule in (scope or {}).get("access_rules", []):
+        rule_method, _, rule_path = rule["request"].partition(" ")
+        if rule_method == method and route_matches(rule_path, urlsplit(path).path):
+            return rule
+    return None
+
+
+def rule_requests(plan, *, writes: bool) -> list[tuple[str, str]]:
+    """The requests of `plan` an access comparison reads or, with `writes`, changes, whose rule decides it: the GET
+    requests the finding names, and the writes that change a record by its identifier."""
+    variants = (getattr(plan, "verification_context", None) or {}).get("variants", [])
+    named = [(v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants] or [
+        (e.method, e.path) for e in getattr(plan, "endpoints", ())]
+    requests = []
+    for method, path in named:
+        path = urlsplit(path).path
+        if re.fullmatch(r"/[^?#\s]{0,2000}", path) and (method == "GET" or (
+                writes and method in ("PUT", "PATCH") and record_segment(path) is not None)):
+            if (method, path) not in requests:
+                requests.append((method, path))
+    return requests
+
+
+def operator_restriction(ctx, history):
+    """(rule, restriction): the operator's access rule for the checked comparison's request, and the restriction
+    it establishes when the observed access breaks it, else None (VER-010)."""
+    _, plan = latest_plan(history)
+    form = next((f for f in FINDING_RESTRICTIONS if plan.get(f)), None)
+    operation = plan.get("change") or plan
+    rule = access_rule(getattr(ctx, "scope", None), operation.get("method", "GET"), operation.get("path", ""))
+    if rule is None or form is None or rule["may"] not in BROKEN_BY[form]:
+        return rule, None
+    return rule, {"source": f"the operator's access rule for {rule['request']} ({rule.get('source') or 'scope'})",
+                  "restriction": ACCESS_RULES[rule["may"]], **_compared(ctx, plan, form)}
 
 
 def require_restriction(ctx, history, cited, result):
-    """Retain the checked comparison as an observation when its authorization meaning is unestablished."""
+    """Retain the checked comparison as an observation when its authorization meaning is unestablished. An
+    operator's access rule for the request decides before the finding's accepted restriction."""
     if result.verdict != "confirmed" or getattr(ctx.plan, "cls", None) != "access-control":
         return result
-    policy = restriction(ctx, history, cited) or finding_restriction(ctx, history)
+    rule, policy = None, restriction(ctx, history, cited)
+    if policy is None:
+        rule, policy = operator_restriction(ctx, history)
+    if policy is None and rule is None:
+        policy = finding_restriction(ctx, history)
     if policy is not None:
         result.proof["access_restriction"] = policy
         return result
     result.verdict, result.confidence = "inconclusive", "low"
+    if rule is not None:
+        result.proof.update(checked=False, observed_access=True,
+                            missing=["the observed access does not break the operator's access rule"])
+        result.observations = [*result.observations, "The recorded comparison established access that the "
+                               f"operator's access rule for {rule['request']} allows."]
+        result.rationale = (f"Access observed, but the operator's access rule allows it: {ACCESS_RULES[rule['may']]} "
+                            "Only a comparison whose access breaks the rule can confirm.")
+        return result
     result.proof.update(checked=False, observed_access=True,
                         missing=["observed access has no independently established access restriction"])
     result.observations = [*result.observations, "The recorded comparison established access; whether it violates "
                            "the application's intended access policy remains unproven."]
-    result.rationale = "Access observed, authorization violation unproven: accept the assessment's restrictions " \
-                       "with --accept-finding-restrictions, declare the expected restriction and its source in " \
+    result.rationale = "Access observed, authorization violation unproven: say who may use the request in " \
+                       "scope.access_rules or the guided run, accept the assessment's restrictions with " \
+                       "--accept-finding-restrictions, or declare the expected restriction and its source in " \
                        "scope.access_policies or use an operator-declared test resource."
     return result
 
