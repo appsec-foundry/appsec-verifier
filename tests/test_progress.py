@@ -55,6 +55,11 @@ def _rows(stream) -> list[str]:
     return stream.getvalue().splitlines()
 
 
+def _unruled(rows: list[str]) -> list[str]:
+    """The rows, a category heading (VER-026) as its text without the rule around it."""
+    return [match.group(1) if (match := re.fullmatch(r"── (.+?) ─+", row)) else row for row in rows]
+
+
 def test_durations_read_like_the_analyzer():
     assert [duration(s) for s in (0, 45, 185, 3725)] == ["0s", "45s", "3m05s", "1h02m"]
 
@@ -75,7 +80,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     progress.agent_finished(_plan(), result)
     progress.finished(_plan(), result)
     progress.close()
-    header, gap, heading, start, agent, step, finished, proof, done, footer = _rows(out)[1:]
+    header, gap, heading, start, agent, step, finished, proof, done, footer = _unruled(_rows(out))[1:]
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
     # VER-026: the category stands before its findings, and after them what they showed and the time it took.
     assert gap == "" and heading == "Access control · 2 findings"
@@ -1067,7 +1072,7 @@ def test_each_category_stands_between_a_heading_and_a_line_with_its_results():
         clock.now += took
         progress.finished(plan, ProbeResult(verdict=verdict, rationale="r"))
     progress.close()
-    rows = _rows(out)
+    rows = _unruled(_rows(out))
     first = rows.index("Cross-Site Scripting (XSS) · 2 findings")
     closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 2m00s")
     assert rows[first - 1] == "" and " 1/3 T-1  start " in rows[first + 1] and first < closing
@@ -1076,8 +1081,9 @@ def test_each_category_stands_between_a_heading_and_a_line_with_its_results():
 
 
 def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_terminal():
-    """The heading's name is bold and its count muted; in the closing line each result has its colour, as in the
-    finding's done line, so the category's outcome is found without colouring its heading."""
+    """The heading's rule is in the accent colour, its name bold and its count muted; in the closing line each
+    result has its colour, as in the finding's done line, so the category's outcome is found without colouring its
+    heading."""
     out = Tty()
     progress = RunProgress(out, clock=Clock(), env={}, live=False)
     st = progress.st
@@ -1087,8 +1093,24 @@ def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_ter
     progress.finished(plan, ProbeResult(verdict="confirmed", rationale="r"))
     progress.close()
     text = out.getvalue()
-    assert st("Cross-Site Scripting (XSS)", "bold") + st(" · 1 finding", "muted") in text
+    heading = st("── ", "accent") + st("Cross-Site Scripting (XSS)", "bold") + st(" · 1 finding ", "muted")
+    assert heading + st("───", "accent").removesuffix("\033[0m") in text
     assert st("1 of 1 confirmed", "ok") in text and "Cross-Site Scripting (XSS): " in text
+
+
+def test_a_category_heading_is_a_rule_across_the_grid(monkeypatch):
+    """VER-026: a category's heading stands out from the findings' bold titles as a rule across the grid's width,
+    at most AppSec Analyzer's 140 columns, with the name and number of findings in it; also without a terminal."""
+    for width, expected in (("100", 99), ("400", RunProgress.MAX_COLUMNS - 1)):
+        monkeypatch.setenv("COLUMNS", width)
+        out = io.StringIO()
+        progress = RunProgress(out, clock=Clock(), env={})
+        plan = _category_plan("T-1", "xss")
+        progress.begin([plan])
+        progress.finding(plan)
+        progress.close()
+        heading = next(row for row in _rows(out) if row.startswith("── "))
+        assert heading.startswith("── Cross-Site Scripting (XSS) · 1 finding ───") and len(heading) == expected
 
 
 def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_own():
@@ -1104,7 +1126,7 @@ def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_o
         progress.finding(plan)
         progress.finished(plan, ProbeResult(verdict=verdict, rationale="r"))
     progress.close()
-    rows = _rows(out)
+    rows = _unruled(_rows(out))
     closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 0s")
     assert rows[closing + 1:closing + 3] == ["", "Further variants of confirmed findings · 1 run"]
     assert " 1/2 T-1  start " in rows[closing + 3]
@@ -1123,7 +1145,7 @@ def test_a_prerequisite_of_another_category_gets_a_heading_of_its_own():
         progress.finding(plan)
         progress.finished(plan, ProbeResult(verdict="inconclusive", rationale="r"))
     progress.close()
-    headings = [row for row in _rows(out) if row.endswith(" finding")]
+    headings = [row for row in _unruled(_rows(out)) if row.endswith(" finding")]
     assert headings == ["Cross-Site Scripting (XSS) · 1 finding", "Access control · 1 finding",
                         "Cross-Site Scripting (XSS) · 1 finding"]
 

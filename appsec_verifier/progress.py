@@ -7,10 +7,10 @@ FINDING is the finding under test with its position among the findings that get 
 agent step, ``proof`` for the proof check, ``↻`` for a step the step contract refused and ``⚠`` for a
 limit that stopped the finding. A blank line sets each finding apart.
 The findings of a category (VER-026) stand between two lines outside the grid, unlike AppSec Analyzer's phases,
-whose bounds are grid entries, since FINDING here holds findings: before them its name in bold and
-its number of findings, after them its name with the count of each result in that result's colour and the time
-the category took. The remaining variants of confirmed findings follow under a line of their own with the number
-of their runs, and without a closing line, since each of their findings already has its result.
+whose bounds are grid entries, since FINDING here holds findings: before them a rule across the grid with its name
+in bold and its number of findings, after them its name with the count of each result in that result's colour and
+the time the category took. The remaining variants of confirmed findings follow under a rule of their own with the
+number of their runs, and without a closing line, since each of their findings already has its result.
 The ``start`` entry gives the finding's title, then its severity, class and the requests the assessment
 names. The ``agent`` entry after it says that the test agent started: its model in AppSec Analyzer's short
 form (``Sonnet 4.5``) and runtime, its step budget, the identities it may act as and whether it may read
@@ -787,8 +787,9 @@ class RunProgress:
         return self._redact(value) if self._redact is not None else value
 
     def _open_group(self, kind: str, finding: str) -> None:
-        """The line before a category's findings, ``Cross-Site Scripting (XSS) · 3 findings``, or before the
-        further variants of confirmed findings with the number of their runs (VER-026)."""
+        """The line before a category's findings, ``── Cross-Site Scripting (XSS) · 3 findings ───…``, or before
+        the further variants of confirmed findings with the number of their runs (VER-026). The rule runs across
+        the grid's width, so the heading stands out from the findings' bold titles."""
         if kind == _FURTHER:
             size, name, noun = self.runs - self.runs_started, _FURTHER, "run"
         else:
@@ -797,8 +798,11 @@ class RunProgress:
             size, name, noun = max(next(later, len(self._order) - start), 1), category_name(kind), "finding"
         self._group, self._group_size, self._group_ids, self._group_runs = kind, size, [], 0
         self._group_verdicts, self._group_at = {}, self._clock()
+        count = f" · {size} {noun}{'' if size == 1 else 's'} "
+        rule = "─" * max(min(columns(), self.MAX_COLUMNS) - 1 - len(f"── {name}{count}"), 3)
         self._write("")
-        self._write(self.st(name, "bold") + self.st(f" · {size} {noun}{'' if size == 1 else 's'}", "muted"))
+        self._write(self.st("── ", "accent") + self.st(name, "bold") + self.st(count, "muted")
+                    + self.st(rule, "accent"))
 
     def _close_group(self) -> None:
         """The line after a category's findings: how many of them it confirmed, the other results, each in its
