@@ -4,6 +4,7 @@ kept across the threads, write requests only by a finding tested alone, and a ca
 from __future__ import annotations
 
 import io
+import re
 import threading
 import time
 from pathlib import Path
@@ -442,6 +443,9 @@ def test_the_status_line_names_each_finding_under_test(monkeypatch):
     assert "T-2 finding T-2" in rows[1]
     # The status line counts them and names no single finding.
     assert "2 running · 0 of 2 done" in rows[2] and "T-1" not in rows[2]
+    # As in AppSec Analyzer each finding's row starts in the DETAIL column, where the status line's bar starts.
+    plain = [re.sub(r"\033\[[0-9;?]*[A-Za-z]|\r", "", row) for row in rows]
+    assert [len(row) - len(row.lstrip()) for row in plain[:2]] == [plain[2].index("─")] * 2
 
 
 def test_verify_parallel_runs_the_agent_loop_and_its_requests_in_worker_threads(tmp_path, monkeypatch, capsys):
@@ -492,3 +496,38 @@ def test_verify_parallel_runs_the_agent_loop_and_its_requests_in_worker_threads(
     # The run's request limit holds across the findings: no fifth request leaves, and the run says so.
     assert len(sent) <= 4
     assert any(r["limits_hit"] == "requests" for r in report["results"])
+
+
+@pytest.mark.parametrize(("profile", "options", "findings", "shown"), [
+    ("anthropic-api", [], 5, "4 findings at the same time"),
+    ("codex-cli", [], 5, "2 findings at the same time"),
+    ("copilot-cli", [], 5, "2 findings at the same time"),
+    ("anthropic-api", ["--parallel", "3"], 5, "3 findings at the same time"),
+    ("codex-cli", ["--parallel", "4"], 5, "4 findings at the same time"),
+    ("anthropic-api", [], 3, "3 findings at the same time"),
+    ("anthropic-api", [], 1, None),
+    ("anthropic-api", ["--parallel", "1"], 5, None),
+    ("anthropic-api", ["--allow-intrusive"], 5, "one finding at a time: this run may send write requests"),
+])
+def test_without_parallel_a_run_tests_as_many_findings_at_once_as_appsec_analyzer(tmp_path, monkeypatch, capsys,
+                                                                                  profile, options, findings, shown):
+    """Four, two on the codex-cli and copilot-cli subscriptions, never more than there are findings to test; a
+    value the operator sets applies as given, and an intrusive run still tests one finding at a time."""
+    import yaml
+
+    from appsec_verifier import cli
+
+    scope = {"schema_version": 1, "base_url": "https://app.example.com", "owner": {"name": "tester"},
+             "window": {"from": "2026-01-01T00:00:00Z", "until": "2099-12-31T23:59:59Z"}}
+    threats = [{"id": f"T-{n}", "cwe": "CWE-89", "severity": "high", "title": f"sqli {n}",
+                "scenario": f"GET /rest/search{n}?q=' breaks the query.",
+                "evidence": {"file": f"routes/search{n}.ts", "line": 3}} for n in range(1, findings + 1)]
+    for name, doc in (("a.yaml", {"threats": threats}), ("s.yaml", scope)):
+        (tmp_path / name).write_text(yaml.safe_dump(doc))
+    info = {"profile": profile, "model": "m", "runtime": "fake", "auth": "none"}
+    monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (object, info))
+    cli.main(["verify", "--assessment", str(tmp_path / "a.yaml"), "--scope", str(tmp_path / "s.yaml"),
+              "--output", str(tmp_path / "out"), "--dry-run", "--yes", "--screenshots", "none", *options])
+    rows = [line.split(":", 1)[1].strip() for line in capsys.readouterr().out.splitlines()
+            if line.strip().startswith("Parallel ")]
+    assert rows == ([shown] if shown else [])

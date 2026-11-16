@@ -91,7 +91,7 @@ Each finding gets one of these verdicts. A negative verdict applies only to the 
 
 `verify` sends attack requests to a running system. These rules are enforced in the Verifier's code, not by the model:
 
-- Requests go only to the scope, during its test period, never to cloud metadata addresses, and only after you confirm the test plan. Requests, rate, model calls, cost and run time are limited ([defaults](data/limits.yaml)).
+- Requests go only to the scope, during its test period, never to cloud metadata addresses, and only after you confirm the test plan. Requests, rate, model calls, cost and run time are limited for the whole run ([defaults](data/limits.yaml)), also while it tests up to four findings at the same time ([`--parallel`](docs/cli.md)).
 - Only GET, HEAD and OPTIONS, unless you allow writes with `--allow-intrusive` or your yes; never DELETE. Created records stay on the target, so allow writes only on an instance you can reset.
 - Passwords and tokens are not stored and never reach the model, the logs or the report.
 - The agent has no shell and writes no files. It sees the target's responses and, with `--source`, its source code, so target data reaches the model.

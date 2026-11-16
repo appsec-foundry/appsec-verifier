@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .auth.accounts import FROM_TARGET
-from .limits import MAX_PARALLEL, Limits, RunBudget
+from .limits import DEFAULT_PARALLEL, MAX_PARALLEL, SUBSCRIPTION_PARALLEL, Limits, RunBudget
 from .loader import AssessmentError, plans_from, read_assessment, select
 from .preflight import (
     Check,
@@ -764,8 +764,8 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             [str(exc)],
             "check --cost-limit, --max-calls, --max-requests, --max-attempts, --max-duration and --rate",
         )
-    parallel = 1 if getattr(args, "parallel", None) is None else args.parallel
-    if not 1 <= parallel <= MAX_PARALLEL:
+    parallel = getattr(args, "parallel", None)     # without --parallel the profile's default, below (VER-065)
+    if parallel is not None and not 1 <= parallel <= MAX_PARALLEL:
         return _blocked("Invalid limits", [f"--parallel must be between 1 and {MAX_PARALLEL}, not {parallel}"],
                         "check --parallel")
     existing, resumed = None, None
@@ -854,6 +854,9 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     from .tools import GuardedHttpClient
     from .tools.httpx_transport import transport_from_scope
 
+    if parallel is None:
+        parallel = SUBSCRIPTION_PARALLEL if agent_info["profile"] in SUBSCRIPTION_PROFILES else DEFAULT_PARALLEL
+
     http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
     sessions = _sessions(identities, http, env, args, interactive, target)
     source = SourceReader(args.source) if args.source else None
@@ -878,6 +881,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     may_ask = safe and not args.read_only and scope.get("allow_state_change") is not False and can_prompt(interactive)
     skipped = {fid: reason for fid, (_, reason) in blocked.items()}
     contact = any(evidence_id(p) not in skipped for p in probed)
+    parallel = max(1, min(parallel, len({p.id for p in probed if evidence_id(p) not in skipped})))  # those to test
 
     summary = _assessment_summary(doc)
     st = Style.for_stream(sys.stdout)
@@ -2383,7 +2387,8 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     lim.add_argument("--max-duration", type=float, metavar="SECONDS", help="run time")
     lim.add_argument("--rate", type=float, metavar="N", help="requests per second; 0 for no rate limit")
     lim.add_argument("--parallel", type=int, metavar="N",
-                     help=f"findings tested at the same time, 1 to {MAX_PARALLEL} (default 1); the limits stay "
+                     help=f"findings tested at the same time, 1 to {MAX_PARALLEL} (default {DEFAULT_PARALLEL}, "
+                          f"{SUBSCRIPTION_PARALLEL} with codex-cli and copilot-cli); the limits stay "
                           "those of the run, and a finding that may send write requests is tested alone")
 
     mode = vf.add_argument_group("mode")

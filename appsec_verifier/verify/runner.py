@@ -202,7 +202,11 @@ def run_verification(
         browser.private_text = _private_text(sessions, scope)
         browser.redact = sessions.redact if sessions is not None else lambda value: value
 
-    parallel = max(1, int(parallel))
+    probed = [
+        p.status == "dynamic" and registry.get(p.cls) is not None and evidence_id(p) not in skipped for p in plans
+    ]
+    # No more threads than findings to test, so a run that tests one finding looks as it always has (VER-065).
+    parallel = max(1, min(int(parallel), len({plan.id for plan, shown in zip(plans, probed, strict=True) if shown})))
     asking = getattr(budget, "lock", None) or threading.RLock()
     together = parallel > 1 and progress is not None
     if parallel > 1:
@@ -287,9 +291,6 @@ def run_verification(
         contexts[evidence_id(plan)] = ctx
         return ctx
 
-    probed = [
-        p.status == "dynamic" and registry.get(p.cls) is not None and evidence_id(p) not in skipped for p in plans
-    ]
     if progress is not None:
         progress.begin([plan for plan, shown in zip(plans, probed, strict=True) if shown])
     def _variant_signature(plan):

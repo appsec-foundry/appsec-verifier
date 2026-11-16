@@ -135,7 +135,7 @@ def test_an_interrupted_run_writes_what_it_found_and_exits_130(tmp_path, monkeyp
                 raise KeyboardInterrupt
             return {"verdict": {"verdict": "not-attempted", "rationale": "checked"}}
 
-    rc, _ = _verify(tmp_path, monkeypatch, Interrupted)
+    rc, _ = _verify(tmp_path, monkeypatch, Interrupted, "--parallel", "1")    # test_parallel.py: Ctrl-C beside others
     assert rc == cli.EXIT_INTERRUPTED and "interrupted" in capsys.readouterr().err
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
     assert doc["meta"]["interrupted"] is True
@@ -188,18 +188,18 @@ def _saved_checked_results(tmp_path, count, out=None):
 
 
 def test_resume_tests_only_the_findings_without_a_verdict_and_keeps_the_rest(tmp_path, monkeypatch, capsys):
-    assert _verify(tmp_path, monkeypatch, InterruptedAtT3)[0] == cli.EXIT_INTERRUPTED
+    assert _verify(tmp_path, monkeypatch, InterruptedAtT3, "--parallel", "1")[0] == cli.EXIT_INTERRUPTED
     _saved_checked_results(tmp_path, 2)
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
-    assert Checked.asked == ["T-3", "T-4"]
+    assert sorted(Checked.asked) == ["T-3", "T-4"]                               # tested together
     assert "remaining variants are tested separately" in capsys.readouterr().out
     doc = yaml.safe_load((tmp_path / "out" / "verification.yaml").read_text())
     assert [(r["finding_ref"]["id"], r["rationale"]) for r in doc["results"]] == [
         ("T-1", "first run"), ("T-2", "first run"), ("T-3", "checked"), ("T-4", "checked")]
     assert doc["meta"]["interrupted"] is False and doc["meta"]["previous_generated"]
     log = [json.loads(line) for line in (tmp_path / "out" / "agent-log.jsonl").read_text().splitlines()]
-    assert log[0]["finding"] == "T-1" and log[-1]["finding"] == "T-4"           # both runs in one log
+    assert log[0]["finding"] == "T-1" and log[-1]["finding"] in ("T-3", "T-4")  # both runs in one log
 
 
 def test_resume_with_nothing_left_contacts_nothing(tmp_path, monkeypatch, capsys):
@@ -228,7 +228,7 @@ def test_resume_refuses_a_report_of_another_assessment_or_target(tmp_path, monke
 def test_resume_without_a_report_runs_as_usual(tmp_path, monkeypatch):
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume")[0] == cli.EXIT_OK
-    assert Checked.asked == ["T-1", "T-2", "T-3", "T-4"]
+    assert sorted(Checked.asked) == ["T-1", "T-2", "T-3", "T-4"]       # tested together
 
 
 # ── without --output each run gets a private directory of its own (VER-058) ─────
@@ -277,7 +277,7 @@ def test_without_output_an_unusable_data_directory_blocks_before_any_contact(tmp
 def test_resume_without_output_continues_the_newest_run_for_the_same_assessment_and_target(
         tmp_path, monkeypatch, capsys):
     runs = _project_runs(tmp_path, monkeypatch)
-    assert _verify(tmp_path, monkeypatch, InterruptedAtT3, output=False)[0] == cli.EXIT_INTERRUPTED
+    assert _verify(tmp_path, monkeypatch, InterruptedAtT3, "--parallel", "1", output=False)[0] == cli.EXIT_INTERRUPTED
     (earlier,) = runs.iterdir()
     _saved_checked_results(tmp_path, 2, out=earlier)
     other = _verify(tmp_path, monkeypatch, Checked, threats=THREATS[:3], output=False)   # newer, other assessment
@@ -285,7 +285,7 @@ def test_resume_without_output_continues_the_newest_run_for_the_same_assessment_
     capsys.readouterr()
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume", output=False)[0] == cli.EXIT_OK
-    assert Checked.asked == ["T-3", "T-4"] and len(list(runs.iterdir())) == 2
+    assert sorted(Checked.asked) == ["T-3", "T-4"] and len(list(runs.iterdir())) == 2
     assert f"continues {earlier / 'verification.yaml'}" in capsys.readouterr().out
     doc = yaml.safe_load((earlier / "verification.yaml").read_text())
     assert [r["rationale"] for r in doc["results"]] == ["first run", "first run", "checked", "checked"]
@@ -296,7 +296,7 @@ def test_resume_without_output_and_without_a_fitting_run_starts_a_new_one(tmp_pa
     assert _verify(tmp_path, monkeypatch, Checked, threats=THREATS[:3], output=False)[0] == cli.EXIT_OK
     Checked.asked = []
     assert _verify(tmp_path, monkeypatch, Checked, "--resume", output=False)[0] == cli.EXIT_OK
-    assert Checked.asked == ["T-1", "T-2", "T-3", "T-4"] and len(list(runs.iterdir())) == 2
+    assert sorted(Checked.asked) == ["T-1", "T-2", "T-3", "T-4"] and len(list(runs.iterdir())) == 2
 
 
 # ── unreadable input files block with exit 2 ───────────────────────────────────

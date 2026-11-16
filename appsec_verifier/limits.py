@@ -59,6 +59,10 @@ class _DeadlineExpired(BaseException):
 
 
 MAX_PARALLEL = 8        # findings a run may test at the same time (VER-065)
+# Without --parallel, as AppSec Analyzer's execution_limits: four, and two on a subscription whose rate limits the
+# Verifier does not know.
+DEFAULT_PARALLEL = 4
+SUBSCRIPTION_PARALLEL = 2
 _worker = threading.local()
 
 

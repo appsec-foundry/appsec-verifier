@@ -946,13 +946,20 @@ class RunProgress:
         st = self.st
         filled = round(self.BAR_WIDTH * min(unit["step"], unit["of"]) / unit["of"]) if unit["of"] else 0
         bar = st("━" * filled, "accent") + st("─" * (self.BAR_WIDTH - filled), "muted")
+        # As in AppSec Analyzer the row starts in the DETAIL column, where the status line's bar starts; where the
+        # window leaves that column narrower than 40, after the time stamp.
+        cols = min(columns(), self.MAX_COLUMNS) - 1
+        share, elapsed, left = self._run(now)
+        start = 10 + self._id_width + 2 + 7 + 2 + len(f"{share:>8}  {elapsed:>7}  {left:>6}") + 2
+        if cols - start < 40:
+            start = 10
         # The name takes at most a third of the row beside the bar, so a narrow window still shows what runs.
-        room = min(columns(), self.MAX_COLUMNS) - 1 - 10 - 2 - 2 - self.BAR_WIDTH - 2
+        room = cols - start - 2 - 2 - self.BAR_WIDTH - 2
         width = max(8, min(36, name_width, room // 3))
         spin = st(SPINNER[self._frame % len(SPINNER)], "accent")
         name = st(_clip(unit["name"], width).ljust(width), "bold")
         age = duration(now - unit["at"])
-        return f"{'':10}{spin} {name}  {bar}  {_clip(unit['text'], max(10, room - width - len(age) - 3))} · {age}"
+        return f"{'':{start}}{spin} {name}  {bar}  {_clip(unit['text'], max(10, room - width - len(age) - 3))} · {age}"
 
     def _spend(self, *, qualified: bool = True) -> list[tuple]:
         """The run's spend against its cost limit, ``$0.42 of $10.00``, the amount highlighted as in AppSec

@@ -383,6 +383,7 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
     assert "how to provide each, with lines to copy: appsec-verifier preflight" in out
     assert "create an identities file" not in out and "the injection proof sends every control twice" not in out
     assert "Identities  :" not in out            # what is missing is said once, in the test plan
+    assert "Parallel  " not in out               # one finding to test, so none is tested beside it (VER-065)
     listed = out[out.index("\nResults\n"):]
     assert "T-1  critical  injection       not attempted (low)" in listed
     assert "no answered target request" in listed
@@ -398,9 +399,10 @@ def test_verify_shows_the_test_plan_and_does_not_test_what_this_run_cannot_confi
 
 
 def test_test_all_tests_them_anyway(tmp_path, monkeypatch, capsys):
-    assert _verify(tmp_path, monkeypatch, "--test-all")[1] == ["T-1", "T-2", "T-3"]
+    assert sorted(_verify(tmp_path, monkeypatch, "--test-all")[1]) == ["T-1", "T-2", "T-3"]   # tested together
     out = capsys.readouterr().out
     assert "Test plan     3 of 3 findings will be tested" in out and "cannot be confirmed" in out
+    assert "Parallel   : 3 findings at the same time" in out
 
 
 def test_when_nothing_can_be_tested_nothing_is_contacted_or_written(tmp_path, monkeypatch, capsys):

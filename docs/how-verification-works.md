@@ -15,7 +15,7 @@ flowchart LR
     E --> F["verification.md<br/>evidence/"]
 ```
 
-Nothing is sent to the target before the confirmation. Each finding is tested on its own, with a fresh agent, its own marker, its own step budget and its own proof check; results of other findings reach it only where the assessment lists them as dependencies. With `--parallel` several findings are tested at the same time under the run's shared limits; a finding that may send write requests is tested alone ([CLI reference](cli.md)). A finding with several variants (different requests for the same weakness) tests each variant in a run of its own, one after another. Different variants continue after a confirmation. Only a completed equivalent test with matching request, inputs, hypothesis, prerequisites and proof conditions permits reuse; a shared URL alone does not.
+Nothing is sent to the target before the confirmation. Each finding is tested on its own, with a fresh agent, its own marker, its own step budget and its own proof check; results of other findings reach it only where the assessment lists them as dependencies. Up to four findings are tested at the same time (`--parallel`) under the run's shared limits; a finding that may send write requests is tested alone ([CLI reference](cli.md)). A finding with several variants (different requests for the same weakness) tests each variant in a run of its own, one after another. Different variants continue after a confirmation. Only a completed equivalent test with matching request, inputs, hypothesis, prerequisites and proof conditions permits reuse; a shared URL alone does not.
 
 ## Before the first request
 
