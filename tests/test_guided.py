@@ -34,7 +34,7 @@ IDENTITY = {"identities": [{"role": "alice", "method": "bearer", "auth": {"token
 SECRET_WORDS = ("password", "token", "secret", "key")
 
 
-_ACCESS_PROMPTS = ("Prepare harmless test resources", "      Who may use it?")
+_ACCESS_PROMPTS = ("Name such records", "      Who may use it?")
 
 
 class Script:
@@ -102,7 +102,7 @@ def test_with_a_scope_file_only_optional_preparation_is_asked_and_defaults_apply
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
     # the offer of test resources; no access rule, since no account can compare
-    assert env.preparation_prompts == ["Prepare harmless test resources for selected findings? [y/N]: "]
+    assert env.preparation_prompts == ["Name such records? [y/N]: "]
     assert "3 runtime candidates of 4 · critical 1 · high 1 · medium 1\n" in out
     assert "to verify" not in out              # the selection is shown once, with the run settings
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
@@ -628,7 +628,7 @@ def test_the_rules_are_asked_per_request_the_run_tests_with_an_explanation_and_k
     env.assessment.write_text(yaml.safe_dump({"threats": RULED}))
     rc, args, prompts, out = env.go(extra=ACCOUNTS, rules=["a", ""])
     assert rc == 0 and prompts == []
-    assert env.preparation_prompts == ["Prepare harmless test resources for selected findings? [y/N]: ",
+    assert env.preparation_prompts == ["Name such records? [y/N]: ",
                                        RULE_PROMPT, RULE_PROMPT]
     lines = out.split("\n")
     start = lines.index("Who may use these requests?")

@@ -215,15 +215,44 @@ def test_guided_preparation_is_run_only_validated_and_declining_contacts_nothing
     from appsec_verifier.cli import build_guided_parser
 
     args = build_guided_parser().parse_args(["assessment.yaml"])
-    answers = iter(["yes", "yes", PATH, "admin", "anonymous", "Only administrators may read configuration",
-                    "Operator policy", "/marker", MARKER, "yes"])
+    answers = iter(["yes", "yes", PATH, "admin", "anonymous", MARKER, "yes"])
     scope = copy.deepcopy(SCOPE)
     before = copy.deepcopy(scope)
     _access_preparation(Dialog(lambda _: next(answers), lambda _: None), args, scope, [plan])
     assert args._guided_resources[0]["anonymous_only"] is True
     assert _validate_scope(scope) == []
     assert {k: v for k, v in scope.items() if k != "test_resources"} == before
-    assert scope["test_resources"][0]["source"] == "Operator policy"
+    # The operator's answer about who may see the record is the restriction, the operator its source.
+    resource = scope["test_resources"][0]
+    assert (resource["restriction"], resource["source"]) == (f"Only admin may see {PATH}", "operator, guided run")
+    assert (resource["pointer"], resource["value"]) == ("", MARKER)
+
+
+def test_guided_preparation_names_the_runs_accounts_and_explains_anonymous():
+    from test_guided import SCOPE
+
+    from appsec_verifier.cli import build_guided_parser
+    from appsec_verifier.guided import Dialog, _access_preparation
+    from appsec_verifier.loader import classify, load_verifiable_cwes
+
+    plan = classify({"id": "T-1", "cwe": "CWE-639", "title": "Basket of another account",
+                     "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
+    args = build_guided_parser().parse_args(["assessment.yaml", "--account", "jim=JIM_PASS",
+                                             "--account", "bender=BENDER_PASS", "--admin-account", "root=ROOT_PASS"])
+    asked, lines = [], []
+    answers = iter(["yes", "no"])
+    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or next(answers), lines.append),
+                        args, copy.deepcopy(SCOPE), [plan])
+    assert "Access control: records you know (optional)" in lines
+    assert "1 access-control finding can also be tested on a record that only certain accounts may see." in lines
+    assert asked == ["Name such records? [y/N]: ", "  Name a record? [y/N]: "]
+    answers = iter(["yes", "yes", PATH, "account-1", "account-2", MARKER])
+    asked.clear()
+    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or next(answers), lines.append),
+                        args, copy.deepcopy(SCOPE), [plan])
+    assert "  Who may see it (account-1, account-2, admin-1): " in asked
+    assert "  Who must not (account-1, account-2, admin-1, anonymous = no login): " in asked
+    assert args._guided_resources[0]["allowed_roles"] == ["account-1"]
 
 
 def test_real_form_login_observations_are_bounded_and_survive_redirects():

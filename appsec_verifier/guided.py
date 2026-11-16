@@ -196,8 +196,10 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
 
 
 def _access_preparation(d, args, scope, plans):
-    """Collect optional run-only test resources, never network authority (VER-031/061). Who may use a request is
-    asked once the identities and the mode are known (_ask_access_rules)."""
+    """Collect optional run-only test resources, never network authority (VER-031/061): a record the operator knows
+    that only certain accounts may see, with a text only it contains. The restriction is the operator's answer
+    about who may see it, with the operator as its source. Who may use a request is asked once the identities and
+    the mode are known (_ask_access_rules)."""
     selected = [p for p in cli._select(args, plans) if p.cls == "access-control"
                 and not any(r["finding_id"] == p.id for key in ("test_resources", "access_policies")
                             for r in scope.get(key, []))]
@@ -205,30 +207,39 @@ def _access_preparation(d, args, scope, plans):
         return
     from .agent.experiments import EXPOSURE_CWES
 
-    d.out("A test resource is a record on the target that you name, with a harmless marker that only allowed roles "
-          "may see. With one, an access-control finding is tested without creating data.")
-    if not d.yes("Prepare harmless test resources for selected findings?"):
+    st = Style.for_stream(sys.stdout)
+    width = max(min(columns() - 1, 100), 40)
+    heading = "Access control: records you know (optional)"
+    d.out("")
+    d.out(st(heading, "bold"))
+    d.out(st("─" * len(heading), "accent"))
+    d.out(f"{len(selected)} access-control finding{'' if len(selected) == 1 else 's'} can also be tested on a "
+          "record that only certain accounts may see.")
+    if not d.yes("Name such records?"):
         return
 
+    roles = ", ".join(clean(i["role"]) for i in _run_identities(args, None))
+    may = f"  Who may see it ({roles})" if roles else "  Who may see it (names of your choice, comma-separated)"
+    must_not = f"  Who must not ({roles}, anonymous = no login)" if roles else "  Who must not (anonymous = no login)"
     additions = []
-    for plan in selected:
-        if not d.yes(f"Prepare {clean(plan.id)}: {clean(plan.title)}?"):
+    for n, plan in enumerate(selected, 1):
+        title, room = clean(_short_title(plan.title)), width - 8 - len(clean(plan.id))
+        d.out("")
+        d.out(f"{st(f'[{n}/{len(selected)}]', 'muted')} {st(clean(plan.id), 'bold')}  "
+              f"{title if len(title) <= room else title[:room - 1] + '…'}")
+        if not d.yes("  Name a record?"):
             continue
         while True:
-            path = d.question("Concrete read path (for example /reports/private)")
-            allowed = d.question("Roles allowed to read it (comma-separated)")
-            denied = d.question("Roles denied access (comma-separated; anonymous means no credentials)")
-            restriction = d.question("Expected access restriction")
-            source = d.question("Source of this restriction (requirement or operator policy)")
-            pointer = d.question("JSON Pointer of a harmless marker (Enter for plain text)", "")
-            value = d.question("Harmless test marker, never a credential or personal data")
-            anonymous = plan.cwe in EXPOSURE_CWES and denied.strip() == "anonymous" and d.yes(
-                "Prove this declared exposure without a reference account?")
+            path = d.question("  Path (for example /api/orders/17)")
+            allowed = [r.strip() for r in d.question(may).split(",")]
+            denied = [r.strip() for r in d.question(must_not).split(",")]
+            value = d.question("  A text only in this record, nothing secret")
+            anonymous = plan.cwe in EXPOSURE_CWES and denied == ["anonymous"] and d.yes(
+                "  Check only that it is readable without login?")
             item = {"id": "guided-" + plan.id, "finding_id": plan.id, "path": path, "method": "GET",
-                    "allowed_roles": [r.strip() for r in allowed.split(",")],
-                    "denied_roles": [r.strip() for r in denied.split(",")], "restriction": restriction,
-                    "source": source, "pointer": pointer, "value": value,
-                    **({"anonymous_only": True} if anonymous else {})}
+                    "allowed_roles": allowed, "denied_roles": denied,
+                    "restriction": f"Only {', '.join(allowed)} may see {path}", "source": "operator, guided run",
+                    "pointer": "", "value": value, **({"anonymous_only": True} if anonymous else {})}
             candidate = {**scope, "test_resources": [*scope.get("test_resources", []), item]}
             errors = cli._validate_scope(candidate, url_only=not args.scope)
             if not errors:
@@ -236,12 +247,12 @@ def _access_preparation(d, args, scope, plans):
                 additions.append(item)
                 break
             for error in errors:
-                d.out("  " + clean(error))
-            if not d.yes("Correct this declaration?"):
+                d.out("    " + clean(error))
+            if not d.yes("  Correct it?"):
                 break
     if additions:
         args._guided_resources = additions
-        d.out("Access declarations apply to this run only; no configuration file was written.")
+        d.out("These records apply to this run only; no file was written.")
 
 
 # ── access rules (VER-010, VER-031) ──────────────────────────────────────────
