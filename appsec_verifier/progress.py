@@ -1,5 +1,5 @@
 """The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-015,
-VER-016, VER-017, VER-024, VER-026, VER-039, VER-042).
+VER-016, VER-017, VER-024, VER-026, VER-039, VER-042, VER-065).
 
 Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
@@ -51,6 +51,13 @@ model call runs, otherwise the request) and its age. While the question for a hi
 line follows after ``HEARTBEAT_SECONDS`` without output. Text from the assessment, the model or the target passes
 the run's redaction and `printable` before it is shown, so no credential value, line break or escape sequence
 from it reaches the console.
+
+When a run tests findings at the same time (VER-065), `ParallelProgress` keeps the grid as above: each finding's
+entries stand together in the planned order, with the times they happened, and a line before the first category
+says so. On a terminal each finding under test has a row above the status line, as AppSec Analyzer shows the
+components it analyses side by side: a spinner, the finding's id and title, a bar of the steps its agent has taken,
+the running step and its age. The status line then names no single finding: it gives the run's spend, the findings
+running and the runs done, and PROGRESS counts every finished run.
 
 With ``--console-log``, `console_log` copies what `verify` prints to standard output and standard error to
 ``console.log`` in the output directory, without colour codes or, ``color``, with the console's colour; the
@@ -442,6 +449,9 @@ class RunProgress:
         self._thread: threading.Thread | None = None
         self._shown = False
         self._paused = False        # a question waits for the operator: no status line, no heartbeat
+        self._status_lines = 1      # the rows the status line takes, with the findings tested at the same time
+        self._units = None          # ParallelProgress: () -> (the findings under test, the runs finished)
+        self._on_resume = None      # ParallelProgress: called when a question to the operator is over
         self._frame = 0
         self.total = self.number = 0            # findings of the grid, and the number of the one under test
         self.runs = self.runs_started = self.runs_done = 0     # runs: a finding's variants each count, for PROGRESS
@@ -544,14 +554,19 @@ class RunProgress:
 
     def activity(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> None:
         """What runs now, for the status line and the heartbeat: a model call or a tool call."""
-        what = f"{self._model} plans" if tool is None else _action(tool, self._text(args or {}))
+        what = self.doing(step, of, tool, args)
         with self._lock:
             now = self._clock()
             if tool is None:
                 self._asked = (step, now)
             elif self._asked is not None and self._asked[0] == step:
                 self._took = (step, now - self._asked[1])
-            self._activity, self._activity_at = f"step {step}/{of} · {what}", now
+            self._activity, self._activity_at = what, now
+
+    def doing(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> str:
+        """``step 3/12 · Sonnet 4.5 plans``: the step and what runs in it, a model call or a tool call."""
+        what = f"{self._model} plans" if tool is None else _action(tool, self._text(args or {}))
+        return f"step {step}/{of} · {what}"
 
     def step(self, record: dict) -> None:
         """One line per tool call, refused step and stopping limit of the action log (VER-017)."""
@@ -805,6 +820,22 @@ class RunProgress:
             with self._lock:
                 self._paused = False
                 self.last = self._clock()
+                if self._on_resume is not None:
+                    self._on_resume()
+
+    @contextmanager
+    def at(self, now: float, spent: float | None):
+        """Show the entries written inside as of an earlier moment, with the run's spend of that moment: the
+        entries of a finding that was tested while another one's were shown (VER-065)."""
+        with self._lock:
+            clock, cost = self._clock, self._spent
+            self._clock = lambda: now
+            if cost is not None:
+                self._spent = lambda: spent
+            try:
+                yield
+            finally:
+                self._clock, self._spent = clock, cost
 
     def raise_cost_limit(self, limit: float) -> None:
         """The higher cost ceiling the operator typed, for the run's spend shown from now on (VER-015)."""
@@ -895,12 +926,33 @@ class RunProgress:
             now = self._clock()
             age = duration(now - self._activity_at) if self._activity else ""
             spend = self._spend(qualified=False) if self._spent is not None else []
+            activity, units, where = self._activity, [], self._where()
+            if self._units is not None:     # findings tested at the same time: each has a row above the status line,
+                units, done = self._units()     # which names no single finding or category
+                activity, age, where = f"{len(units)} running · {done} of {self.runs} done", "", ""
             if self.live:
                 self._frame += 1
                 self._status(self._row(SPINNER[self._frame % len(SPINNER)],
-                                       [_line(self._where(), spend, self._activity, age)], now, live=True))
+                                       [_line(where, spend, activity, age)], now, live=True, named=not units),
+                             [self._unit_row(unit, now, max(len(u["name"]) for u in units)) for unit in units])
             elif now - self.last >= self.HEARTBEAT_SECONDS:
-                self._record("·", _line(spend, self._activity or "working", age))
+                names = ", ".join(f"{unit['name'].partition(' ')[0]} step {unit['step']}/{unit['of']}"
+                                  for unit in units if unit["of"])
+                self._record("·", _line(spend, (activity + (f": {names}" if names else "")) or "working", age))
+
+    def _unit_row(self, unit: dict, now: float, name_width: int = 36) -> str:
+        """A finding under test beside others, as AppSec Analyzer shows a component analysed beside others: a
+        spinner, its id and title, a bar of the steps its agent has taken, what runs now and for how long."""
+        st = self.st
+        filled = round(self.BAR_WIDTH * min(unit["step"], unit["of"]) / unit["of"]) if unit["of"] else 0
+        bar = st("━" * filled, "accent") + st("─" * (self.BAR_WIDTH - filled), "muted")
+        # The name takes at most a third of the row beside the bar, so a narrow window still shows what runs.
+        room = min(columns(), self.MAX_COLUMNS) - 1 - 10 - 2 - 2 - self.BAR_WIDTH - 2
+        width = max(8, min(36, name_width, room // 3))
+        spin = st(SPINNER[self._frame % len(SPINNER)], "accent")
+        name = st(_clip(unit["name"], width).ljust(width), "bold")
+        age = duration(now - unit["at"])
+        return f"{'':10}{spin} {name}  {bar}  {_clip(unit['text'], max(10, room - width - len(age) - 3))} · {age}"
 
     def _spend(self, *, qualified: bool = True) -> list[tuple]:
         """The run's spend against its cost limit, ``$0.42 of $10.00``, the amount highlighted as in AppSec
@@ -918,10 +970,14 @@ class RunProgress:
         grew, self._step_spent_at = total > self._step_spent_at, total
         return [("run" + _NBSP,), (f"${total:.2f}", "accent")] if grew else []
 
+    def _finished(self) -> int:
+        """The runs finished: among findings tested at the same time also those whose entries are yet to show."""
+        return self._units()[1] if self._units is not None else self.runs_done
+
     def _run(self, now: float) -> tuple[str, str, str]:
         """PROGRESS, ELAPSED and LEFT for the whole run."""
         elapsed = now - self.started
-        done = min(self.runs_done, self.runs)     # a run begin() did not see counts toward no total
+        done = min(self._finished(), self.runs)     # a run begin() did not see counts toward no total
         share = f"{round(100 * done / self.runs)}%" if self.runs else ""
         if done >= self.runs:
             return share, duration(elapsed), ""
@@ -934,12 +990,12 @@ class RunProgress:
         return share, duration(elapsed), left
 
     def _row(self, event: str, lines: list[list[tuple]], now: float, *, live: bool = False,
-             role: str | None = None, hang: int = 0) -> str:
+             role: str | None = None, hang: int = 0, named: bool = True) -> str:
         """The grid columns, then the entry's ``lines`` of segments. On a terminal each line starts a row of
         its own and wraps; the rows after the first are indented by ``hang`` more. Off a terminal, and on
         the status line, the lines are joined into one."""
         st = self.st
-        finding = f"{self.number}/{self.total} {self._id}" if self._id else ""
+        finding = f"{self.number}/{self.total} {self._id}" if self._id and named else ""
         share, elapsed, left = self._run(now)
         stamp = time.strftime("%H:%M:%S", time.localtime(now))
         bar = f"{self._bar()}  " if live else ""
@@ -975,7 +1031,7 @@ class RunProgress:
         return "".join(pieces)
 
     def _bar(self) -> str:
-        filled = round(self.BAR_WIDTH * min(self.runs_done, self.runs) / self.runs) if self.runs else 0
+        filled = round(self.BAR_WIDTH * min(self._finished(), self.runs) / self.runs) if self.runs else 0
         return self.st("━" * filled, "accent") + self.st("─" * (self.BAR_WIDTH - filled), "muted")
 
     def _record(self, event: str, *lines: list[tuple], role: str | None = None, hang: int = 0) -> None:
@@ -989,18 +1045,133 @@ class RunProgress:
             self._stream.write(line + "\n")
             self._stream.flush()
 
-    def _status(self, line: str) -> None:
-        """Overwrite the status line in place; a line too wide for the terminal or ``MAX_COLUMNS`` is cut, not
-        wrapped."""
+    def _status(self, line: str, above: list[str] | None = None) -> None:
+        """Overwrite the status line in place, with the rows ``above`` it; a line too wide for the terminal or
+        ``MAX_COLUMNS`` is cut, not wrapped. Each row clears its own tail and the last one the rows a taller
+        status left below, as in AppSec Analyzer, so the area does not flicker."""
         width = min(columns(), self.MAX_COLUMNS) - 1
-        if len(_ANSI.sub("", line)) > width:
-            line = _ANSI.sub("", line)[: max(width - 1, 0)] + "…"
-        self._stream.write(_FRAME_OPEN + line + "\033[K" + _FRAME_CLOSE)
+        lines = [*(above or ()), line]
+        for index, text in enumerate(lines):
+            if len(_ANSI.sub("", text)) > width:
+                lines[index] = _ANSI.sub("", text)[: max(width - 1, 0)] + "…"
+        up = self._status_lines - 1 if self._shown else 0
+        tall = up or len(lines) > 1
+        self._stream.write(_FRAME_OPEN + (f"\033[{up}A" if up else "") + "\033[K\n".join(lines) + "\033[K"
+                           + ("\033[J" if tall else "") + _FRAME_CLOSE)
         self._stream.flush()
-        self._shown = True
+        self._shown, self._status_lines = True, len(lines)
 
     def _clear(self) -> None:
         if self._shown:
-            self._stream.write(_CLEAR)
+            up = self._status_lines - 1
+            self._stream.write(f"\r\033[{up}A\033[J" if up else _CLEAR)
             self._stream.flush()
-            self._shown = False
+            self._shown, self._status_lines = False, 1
+
+
+class ParallelProgress:
+    """The progress of a run that tests findings at the same time (VER-065), in front of a `RunProgress`.
+
+    A unit is what one thread tests in a row: a finding with the variants that follow it. The units are shown
+    in the order they started, which is the planned order, so the grid reads as in a run that tests one finding
+    at a time: the first unit's entries appear as they happen, a later unit's are kept and appear, with their
+    own times and the run's spend of their moment, once every unit before it has ended. Meanwhile each finding
+    under test has a row above the status line. While a question waits for the operator, every entry is kept.
+    """
+
+    def __init__(self, progress: RunProgress, parallel: int = 2):
+        self._inner = progress
+        self._parallel = parallel
+        self._lock = progress._lock
+        self._local = threading.local()
+        self._open: list[dict] = []     # the units that have not ended or wait to be shown, in start order
+        self._done = 0
+        progress._units = self._running
+        progress._on_resume = self._show
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def begin(self, plans: list) -> None:
+        inner = self._inner
+        inner.begin(plans)
+        if inner.total:     # why a finding's TIME and ELAPSED start before the end of the finding above it
+            inner._write(inner.st(f"Up to {self._parallel} findings are tested at the same time. The entries of "
+                                  "each finding stand together, with the times they happened.", "muted"))
+
+    def start_unit(self) -> None:
+        with self._lock:
+            unit = {"calls": [], "ended": False, "name": "", "step": 0, "of": 0, "text": "", "at": 0.0}
+            self._open.append(unit)
+            self._local.unit = unit
+
+    def end_unit(self) -> None:
+        unit = getattr(self._local, "unit", None)
+        if unit is None:
+            return
+        self._local.unit = None
+        with self._lock:
+            unit["ended"] = True
+            self._show()
+
+    def _show(self) -> None:
+        """Show what the first unit kept, and after a unit that has ended the next one's."""
+        inner = self._inner
+        while self._open and not inner._paused:
+            unit = self._open[0]
+            calls, unit["calls"] = unit["calls"], []
+            for name, args, kwargs, now, spent in calls:
+                with inner.at(now, spent):
+                    getattr(inner, name)(*args, **kwargs)
+            if calls:
+                inner.last = inner._clock()
+            if not unit["ended"]:
+                return
+            self._open.pop(0)
+
+    def _running(self) -> tuple[list[dict], int]:
+        return [unit for unit in self._open if unit["name"] and not unit["ended"]], self._done
+
+    def _event(self, name: str, *args, **kwargs) -> None:
+        inner = self._inner
+        with self._lock:
+            unit = getattr(self._local, "unit", None)
+            if unit is None or (self._open[0] is unit and not unit["calls"] and not inner._paused):
+                getattr(inner, name)(*args, **kwargs)
+            else:
+                unit["calls"].append((name, args, kwargs, inner._clock(),
+                                      inner._spent() if inner._spent is not None else None))
+
+    def _note(self, **fields) -> None:
+        unit = getattr(self._local, "unit", None)
+        if unit is not None:
+            with self._lock:
+                unit.update(fields, at=self._inner._clock())
+
+    def finding(self, plan, **kwargs) -> None:
+        inner = self._inner
+        self._note(name=f"{_clip(plan.id, 16)} {_clip(inner._text(plan.title or plan.cwe or ''))}".strip(),
+                   step=0, of=0, text="starts")
+        self._event("finding", plan, **kwargs)
+
+    def activity(self, step: int, of: int, tool: str | None = None, args: dict | None = None) -> None:
+        self._note(step=step, of=of, text=self._inner.doing(step, of, tool, args))
+        self._event("activity", step, of, tool, args)
+
+    def step(self, record: dict) -> None:
+        self._event("step", record)
+
+    def evidence_review(self, finding: str, stage: str, round_: int, detail: str) -> None:
+        if stage in ("review", "revise"):
+            self._note(text=f"evidence {stage}")
+        self._event("evidence_review", finding, stage, round_, detail)
+
+    def agent_finished(self, plan, result) -> None:
+        self._note(text="agent finished")
+        self._event("agent_finished", plan, result)
+
+    def finished(self, plan, result, rating: dict | None = None) -> None:
+        self._note(name="")
+        with self._lock:
+            self._done += 1
+        self._event("finished", plan, result, rating=rating)

@@ -1,5 +1,5 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
-VER-020, VER-037, VER-046, VER-051). Pure, injectable logic: the probe registry, HTTP client, budget, and
+VER-020, VER-037, VER-046, VER-051, VER-065). Pure, injectable logic: the probe registry, HTTP client, budget, and
 clock are all passed in, so the whole flow is tested offline. An optional
 `progress` (progress.RunProgress) shows each finding with a probe, its
 steps, its proof and, once its last variant is done, a changed rating
@@ -20,12 +20,23 @@ A finding the run cannot confirm (cli._blocker) is not tested and says why,
 also one that only safe mode keeps from being tested. In a terminal the test
 agent can ask for a write while it tests: a yes runs that finding in intrusive
 mode; each answer is kept on its result (VER-052).
+
+With `parallel` above 1 that many worker threads test findings at the same time
+(VER-065), in the same order: each takes the next entry whose finding is not
+under test and whose dependencies are done, so the variants of one finding stay
+in their order on one thread. The budget, the request rate and the sessions are
+the run's. An entry that may send write requests is tested alone; one the
+operator allows writes for while it is tested waits until the others under test
+have ended. The main thread serves the workers' browser calls (parallel.py) and
+takes Ctrl-C, which cancels the budget and stops the model calls in progress.
+The results are numbered in test order once the run is over.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -167,6 +178,7 @@ def run_verification(
     skipped: dict[str, str] | None = None,
     ask_writes=None,
     failures=None,
+    parallel: int = 1,
 ) -> dict:
     """`skipped` maps a finding id to why this run cannot confirm it; such a
     finding is not tested and reports that reason (not-attempted).
@@ -175,7 +187,8 @@ def run_verification(
 
     `ask_writes` (write_prompt.WritePrompt), in an interactive run that may ask, decides write requests safe
     mode does not send (VER-052): the test agent of a finding can ask while it tests. A finding the operator
-    allows writes for runs in intrusive mode."""
+    allows writes for runs in intrusive mode.
+    `parallel` is how many findings are tested at the same time (VER-065); 1 tests them one after another."""
     now = now or datetime.now(timezone.utc)
     from ..planning import evidence_id
 
@@ -189,6 +202,19 @@ def run_verification(
         browser.private_text = _private_text(sessions, scope)
         browser.redact = sessions.redact if sessions is not None else lambda value: value
 
+    parallel = max(1, int(parallel))
+    asking = getattr(budget, "lock", None) or threading.RLock()
+    together = parallel > 1 and progress is not None
+    if parallel > 1:
+        from .parallel import MainThread, MainThreadBrowser
+
+        main = MainThread()
+        if browser is not None:
+            browser = MainThreadBrowser(browser, main)
+        if progress is not None:
+            from ..progress import ParallelProgress
+
+            progress = ParallelProgress(progress, parallel)
     contexts = {}
     technical_review_budgets = {}
 
@@ -197,9 +223,22 @@ def run_verification(
         key = evidence_id(plan)
         writes = ask_writes is not None and ask_writes.covered(key)    # the operator allowed them (VER-052)
 
+        current = planned[id(plan)]
+
         def ask(requests, reason, identity):
-            return ask_writes(budget, key=key, finding=f"{plan.id} · {plan.title or plan.cwe or ''}",
-                              requests=requests, reason=reason, identity=identity, asked="by the test agent")
+            with asking:        # one question to the operator at a time (VER-065)
+                allowed = ask_writes(budget, key=key, finding=f"{plan.id} · {plan.title or plan.cwe or ''}",
+                                     requests=requests, reason=reason, identity=identity, asked="by the test agent")
+            if allowed:
+                alone(current)
+            return allowed
+
+        with lock:
+            # The finding's variants in test order: the tested ones, the one under test, then those to come.
+            variants = [(m, entry_results.get(m)) for m in (
+                *sorted((m for m in order if entries[m][0].id == plan.id), key=order.__getitem__),
+                *sorted(m for m in pending if entries[m][0].id == plan.id))]
+            earlier = [r for r in tested() if r["finding_ref"]["id"] in related][-12:]
 
         ctx = ProbeContext(
             plan=plan,
@@ -224,17 +263,15 @@ def run_verification(
             progress=progress,
             technical_review_budget=technical_review_budgets.setdefault(plan.id, {}),
             variant_status=[
-                {"variant": p.variant_id or evidence_id(p), "active": n == len(results),
+                {"variant": p.variant_id or evidence_id(p), "active": m == current,
                  "request": [v["request"] for v in p.verification_context.get("variants", [])],
                  "hypothesis": [v.get("hypothesis", "") for v in p.verification_context.get("variants", [])],
                  "prerequisites": [v.get("prerequisites", []) for v in p.verification_context.get("variants", [])],
-                 "identities_used": results[n].get("identities_used", []) if n < len(results) else [],
-                 "reason": results[n].get("rationale") if n < len(results) else None,
-                 "status": results[n]["verdict"] if n < len(results) else
-                           "active" if n == len(results) else "pending",
-                 "proof_checked": bool((results[n].get("proof") or {}).get("checked"))
-                                  if n < len(results) else False}
-                for n, (p, _) in enumerate(queue) if p.id == plan.id   # in test order, as `results`
+                 "identities_used": r.get("identities_used", []) if r else [],
+                 "reason": r.get("rationale") if r else None,
+                 "status": r["verdict"] if r else "active" if m == current else "pending",
+                 "proof_checked": bool((r.get("proof") or {}).get("checked")) if r else False}
+                for m, r in variants for p in (entries[m][0],)
             ][:32],
             prior_results=[
                 {
@@ -243,9 +280,8 @@ def run_verification(
                     "tested_scope": r.get("proof"),
                     "transition": "unverified; this result does not establish the next prerequisite",
                 }
-                for r in results
-                if r["finding_ref"]["id"] in related
-            ][-12:],
+                for r in earlier
+            ],
         )
 
         contexts[evidence_id(plan)] = ctx
@@ -271,19 +307,75 @@ def run_verification(
             return None
         return json.dumps(variant, sort_keys=True, separators=(",", ":"))
 
-    results = []
-    groups = {}
+    entries = list(zip(plans, probed, strict=True))   # in the planned order; an entry is named by its position
     planned = {id(p): n for n, p in enumerate(plans)}
-    queue = list(zip(plans, probed, strict=True))
+    lock = threading.Condition()            # guards the run's state below when findings are tested together
+    pending = set(range(len(entries)))
+    running: dict[int, str] = {}            # the entries under test and their findings
+    order: dict[int, tuple] = {}            # a started entry's place in the test order
+    entry_results: dict[int, dict] = {}
+    groups = {}
     deferred: set[str] = set()  # VER-026: findings whose remaining variants wait behind the other findings
     confirmed_ids: set[str] = set()  # Findings eligible for evidence review.
     tested_signatures: dict[str, set] = {}  # VER-039: a request already tested is not tested again
-    stopped: str | None = None  # the run-wide limit that stopped an earlier finding
-    interrupted = False
-    i = 0
-    while i < len(queue):
-        plan, shown = queue[i]
-        i += 1
+    # stopped: the run-wide limit that stopped an earlier finding. writer: the entry that may send write requests,
+    # tested alone; waiting: entries under test that wait to become it (VER-065). failed: an error that ends the run.
+    state = {"stopped": None, "interrupted": False, "failed": None, "writer": None, "waiting": 0}
+
+    def tested() -> list[dict]:
+        """The results so far in test order: the planned order, a confirmed finding's further variants last."""
+        with lock:
+            return [entry_results[n] for n in sorted(entry_results, key=order.__getitem__)]
+
+    def take() -> int | None:
+        """The next entry to test, started: the first in test order whose finding is not under test and whose
+        earlier dependencies are done. An entry that may send write requests starts only when nothing else is
+        tested, and nothing starts beside it (VER-065). The caller holds the lock."""
+        if state["failed"] is not None or state["writer"] is not None or state["waiting"]:
+            return None
+        busy = set(running.values())
+        for n in sorted(pending, key=lambda n: (entries[n][0].id in deferred, n)):
+            plan, shown = entries[n]
+            if plan.id in busy:
+                continue
+            needs = set(plan.context.get("dependencies", []))
+            if needs and any(m < n and entries[m][0].id in needs and entries[m][0].id not in deferred
+                             for m in (*pending, *running)):
+                continue
+            writes = shown and (not (safe or read_only) or getattr(ask_writes, "whole_run", False))
+            if writes and running:
+                return None
+            pending.discard(n)
+            running[n] = plan.id
+            order[n] = (plan.id in deferred, n)
+            if writes:
+                state["writer"] = n
+            return n
+        return None
+
+    def alone(n: int) -> None:
+        """Wait until entry `n`, which the operator allowed writes for, is the only one tested (VER-065)."""
+        with lock:
+            if state["writer"] == n:
+                return
+            state["waiting"] += 1
+            lock.notify_all()
+            lock.wait_for(lambda: state["writer"] is None and len(running) <= state["waiting"])
+            state["waiting"] -= 1
+            state["writer"] = n
+
+    def interrupt() -> None:
+        with lock:
+            state["interrupted"] = True
+        if parallel > 1:        # the other findings under test cannot be interrupted: end their calls and requests
+            from ..agent.hosts import stop_running
+
+            budget.cancel()
+            stop_running()
+
+    def test(n: int) -> None:
+        plan, shown = entries[n]
+        key = evidence_id(plan)
         started = _iso(datetime.now(timezone.utc))
         budget.begin_finding(plan.id)
         finding_exhausted = False
@@ -291,9 +383,12 @@ def run_verification(
             budget.check_finding_cost()
         except LimitExceeded:
             finding_exhausted = True
-        if evidence_id(plan) in skipped:
-            res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[evidence_id(plan)]}")
-        elif shown and _variant_signature(plan) in tested_signatures.get(plan.id, set()):
+        with lock:
+            repeated = shown and _variant_signature(plan) in tested_signatures.get(plan.id, set())
+            interrupted, stopped = state["interrupted"], state["stopped"]
+        if key in skipped:
+            res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[key]}")
+        elif repeated:
             res = ProbeResult(
                 verdict="not-attempted",
                 rationale="not tested: another variant of this finding already completed an equivalent test",
@@ -318,73 +413,148 @@ def run_verification(
         else:
             if shown and progress is not None:
                 progress.finding(plan)
+            cut = False
             try:
                 res = _verify_one(plan, registry, ctx_factory, log, failures)
             except KeyboardInterrupt:
-                interrupted = True
+                interrupt()
+                cut = True
+            else:
+                # Ctrl-C reaches the main thread; a finding another thread was testing ended at its cancelled
+                # calls and is reported like the one the main thread was testing.
+                cut = parallel > 1 and state["interrupted"] and res.verdict == "inconclusive"
+            if cut:
                 if log is not None:
                     log({"finding": plan.id, "step": None, "interrupted": True})
                 res = ProbeResult(
                     verdict="inconclusive", rationale="the run was interrupted while this finding was tested"
                 )
-            if shown and progress is not None and not interrupted:
+            if shown and progress is not None and not state["interrupted"]:
                 progress.agent_finished(plan, res)
-            if res.limits_hit in _RUN_LIMITS:
-                stopped = res.limits_hit
-            if res.verdict == "confirmed":
-                confirmed_ids.add(plan.id)
-                # VER-026: the finding is confirmed, so its remaining variants wait until every other selected
-                # finding has been tested, then run in the planned order.
-                deferred.add(plan.id)
-                queue[i:] = sorted(queue[i:], key=lambda e: (e[0].id in deferred, planned[id(e[0])]))
-            signature = _variant_signature(plan)
-            if shown and signature is not None and (res.proof or {}).get("checked") is True:
-                tested_signatures.setdefault(plan.id, set()).add(signature)
-        results.append(_result_entry(i, plan, res))
-        if ask_writes is not None and evidence_id(plan) in ask_writes.records:   # each answer, for its finding
-            results[-1]["write_permission"] = dict(ask_writes.records[evidence_id(plan)])
-        if res.verdict != "not-attempted":
-            results[-1]["timing"] = {"started": started, "finished": _iso(datetime.now(timezone.utc))}
-        ctx = contexts.get(evidence_id(plan))
-        if ctx is not None and res.verdict != "not-attempted":
-            groups.setdefault(plan.id, []).append((i - 1, plan, ctx, res))
-        # A finding is reviewed and rated once, after its last variant; deferral (above) keeps a confirmed
-        # finding's later variants together, so this is still a single group of all its tested variants.
-        last_variant = all(e[0].id != plan.id for e in queue[i:])
-        if last_variant and plan.id in groups:
+            with lock:
+                if res.limits_hit in _RUN_LIMITS:
+                    state["stopped"] = res.limits_hit
+                if res.verdict == "confirmed":
+                    confirmed_ids.add(plan.id)
+                    # VER-026: the finding is confirmed, so its remaining variants wait until every other selected
+                    # finding has been tested, then run in the planned order.
+                    deferred.add(plan.id)
+                signature = _variant_signature(plan)
+                if shown and signature is not None and (res.proof or {}).get("checked") is True:
+                    tested_signatures.setdefault(plan.id, set()).add(signature)
+        group = review_reason = None
+        with lock:
+            entry_results[n] = _result_entry(0, plan, res)      # numbered once the run is over
+            if ask_writes is not None and key in ask_writes.records:   # each answer, for its finding
+                entry_results[n]["write_permission"] = dict(ask_writes.records[key])
+            if res.verdict != "not-attempted":
+                entry_results[n]["timing"] = {"started": started, "finished": _iso(datetime.now(timezone.utc))}
+            ctx = contexts.get(key)
+            if ctx is not None and res.verdict != "not-attempted":
+                groups.setdefault(plan.id, []).append((n, plan, ctx, res))
+            # A finding is reviewed and rated once, after its last variant; deferral (above) keeps a confirmed
+            # finding's later variants together, so this is still a single group of all its tested variants.
+            last_variant = all(entries[m][0].id != plan.id for m in pending)
+            if last_variant and plan.id in groups:
+                group = groups.pop(plan.id)
+                # VER-042: the evidence presentation is reviewed only for a finding with a confirmed variant; an
+                # unconfirmed finding records a not-reviewed state without a model call. A run interruption or
+                # limit takes precedence as the reason.
+                if state["interrupted"]:
+                    review_reason = "interrupted"
+                elif state["stopped"]:
+                    review_reason = state["stopped"]
+                elif plan.id not in confirmed_ids:
+                    review_reason = "no confirmed variant to present"
+        if group is not None:
             from .evidence_review import review_finding
 
-            group = groups.pop(plan.id)
-            # VER-042: the evidence presentation is reviewed only for a finding with a confirmed variant; an
-            # unconfirmed finding records a not-reviewed state without a model call. A run interruption or limit
-            # takes precedence as the reason.
-            if interrupted:
-                review_reason = "interrupted"
-            elif stopped:
-                review_reason = stopped
-            elif plan.id not in confirmed_ids:
-                review_reason = "no confirmed variant to present"
-            else:
-                review_reason = None
             review_stop = review_finding([(c, r) for _, _, c, r in group], stop=review_reason)
             if review_stop == "interrupted":
-                interrupted = True
-            elif review_stop in _RUN_LIMITS:
-                stopped = review_stop
-            for idx, reviewed_plan, _, reviewed_result in group:
-                timing = results[idx].get("timing")
-                results[idx] = _result_entry(idx + 1, reviewed_plan, reviewed_result)
-                if timing is not None:
-                    results[idx]["timing"] = timing
-                contexts.pop(evidence_id(reviewed_plan), None)
-        if shown and progress is not None and not interrupted:
+                interrupt()
+            with lock:
+                if review_stop in _RUN_LIMITS:
+                    state["stopped"] = review_stop
+                for idx, reviewed_plan, _, reviewed_result in group:
+                    timing = entry_results[idx].get("timing")
+                    entry_results[idx] = _result_entry(0, reviewed_plan, reviewed_result)
+                    if timing is not None:
+                        entry_results[idx]["timing"] = timing
+                    contexts.pop(evidence_id(reviewed_plan), None)
+        if shown and progress is not None and not state["interrupted"]:
             rating = None
             if last_variant:      # the rating rests on all variants of the finding (VER-039)
                 from .report import rating_after_verification
 
-                rating = rating_after_verification(plan.rating, [r for r in results
+                rating = rating_after_verification(plan.rating, [r for r in tested()
                                                                  if r["finding_ref"]["id"] == plan.id])
             progress.finished(plan, res, rating=rating)
+
+    def work() -> None:
+        """Test entries until none is left: the whole run in a run that tests one finding at a time, one of
+        its worker threads otherwise. Ending an entry and starting the next is one step, so a finding's next
+        variant follows on the same thread and in the same place of the console."""
+        done = shown_finding = None
+        try:
+            while True:
+                with lock:
+                    if done is not None:
+                        running.pop(done, None)
+                        if state["writer"] == done:
+                            state["writer"] = None
+                        done = None
+                        lock.notify_all()
+                    while (n := take()) is None and pending and state["failed"] is None:
+                        lock.wait(1.0)
+                    if n is None:
+                        return
+                    if together and entries[n][0].id != shown_finding:
+                        progress.end_unit()
+                        progress.start_unit()
+                        shown_finding = entries[n][0].id
+                done = n
+                test(n)
+        except BaseException as exc:
+            with lock:
+                state["failed"] = state["failed"] or exc
+            raise
+        finally:
+            with lock:
+                if done is not None:
+                    running.pop(done, None)
+                    if state["writer"] == done:
+                        state["writer"] = None
+                lock.notify_all()
+            if together:
+                progress.end_unit()
+
+    if parallel > 1:
+        from ..limits import worker_thread
+
+        def worker() -> None:
+            with worker_thread():
+                try:
+                    work()
+                except BaseException:  # noqa: BLE001 - kept in state["failed"]; the main thread raises it
+                    pass
+
+        threads = [threading.Thread(target=worker, name=f"appsec-verifier-finding-{k + 1}", daemon=True)
+                   for k in range(parallel)]
+        for thread in threads:
+            thread.start()
+        while any(thread.is_alive() for thread in threads):
+            try:
+                main.serve(lambda: not any(thread.is_alive() for thread in threads))
+            except KeyboardInterrupt:
+                interrupt()
+        if state["failed"] is not None:
+            raise state["failed"]
+    else:
+        work()
+    results = tested()
+    for number, entry in enumerate(results, 1):
+        entry["result_id"] = f"VF-{number:03d}"
+    interrupted = state["interrupted"]
     if sessions is not None:
         results = sessions.redact(results)  # VER-016: model text never carries a credential into the report
 

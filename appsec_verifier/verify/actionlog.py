@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,13 +31,15 @@ class ActionLog:
         fd = os.open(self.path, flags, 0o600)
         self.path.chmod(0o600)            # also when an earlier run left the file with wider rights
         self._fh = os.fdopen(fd, "a" if append else "w", encoding="utf-8")
+        self._lock = threading.Lock()     # findings tested at the same time write whole records (VER-065)
 
     def __call__(self, record: dict) -> None:
         if self._redact is not None:
             record = self._redact(record)
         stamp = self._clock().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-        self._fh.write(json.dumps({"time": stamp, **record}, default=str) + "\n")
-        self._fh.flush()
+        with self._lock:
+            self._fh.write(json.dumps({"time": stamp, **record}, default=str) + "\n")
+            self._fh.flush()
 
     def close(self) -> None:
         self._fh.close()

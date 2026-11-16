@@ -15,6 +15,14 @@ In an interactive run `RunBudget.ask_ceiling` asks the operator for a higher
 cost ceiling when the run reaches it (budget_prompt.py); only an amount the
 operator typed raises it, and each raise is kept in `ceiling_raises`. No other
 limit is raised this way.
+
+A run that tests several findings at the same time (VER-065) shares one
+`RunBudget`: its counters, the request rate and the question for a higher
+ceiling are serialised, the finding a model call is charged to is kept per
+thread, and `cancel` ends the run's remaining requests and model calls. A
+deadline can interrupt only the main thread; a worker thread the runner marks
+(`worker_thread`) checks it when the bounded work returns, and that work must
+carry the timeout itself (the model call, the request to the target).
 """
 
 from __future__ import annotations
@@ -50,15 +58,48 @@ class _DeadlineExpired(BaseException):
         self.kind = kind
 
 
+MAX_PARALLEL = 8        # findings a run may test at the same time (VER-065)
+_worker = threading.local()
+
+
+@contextmanager
+def worker_thread():
+    """Mark the current thread as a worker of a run that tests findings at the same time (VER-065)."""
+    _worker.active = True
+    try:
+        yield
+    finally:
+        _worker.active = False
+
+
+def deadline_left() -> float | None:
+    """Seconds until the innermost deadline of this worker thread; None without one or off a worker thread."""
+    until = getattr(_worker, "until", None)
+    return None if until is None else max(0.0, until - time.monotonic())
+
+
 @contextmanager
 def execution_deadline(seconds: float, *, kind: str = "time"):
     """Interrupt synchronous work, including blocked I/O; restore enclosing timers.
 
     The CLI runs on the main thread. Refuse execution where a real interrupt is
-    unavailable instead of leaving a worker running after a thread timeout.
+    unavailable instead of leaving a worker running after a thread timeout. The
+    exception is a marked worker thread (`worker_thread`): its work carries its
+    own timeout, and the deadline is checked when that work returns.
     """
     if seconds <= 0:
         raise LimitExceeded(kind, "execution deadline reached")
+    if getattr(_worker, "active", False):
+        outer = getattr(_worker, "until", None)
+        until = time.monotonic() + seconds
+        _worker.until = until if outer is None else min(until, outer)
+        try:
+            yield
+        finally:
+            _worker.until = outer
+        if time.monotonic() >= until:
+            raise LimitExceeded(kind, "execution deadline reached")
+        return
     if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
         raise LimitExceeded(kind, "execution deadlines require a POSIX main thread")
     started = time.monotonic()
@@ -141,16 +182,28 @@ class RunBudget:
         self.calls = 0
         self._next_request_at: float | None = None
         self._cost_unknown = False
-        self._finding_id = None
+        self.lock = threading.RLock()      # counters and the ceiling question, for findings tested together
+        self._pace_lock = threading.Lock()  # one request rate for the run (VER-065)
+        self._local = threading.local()     # the finding this thread's model calls are charged to
+        self.cancelled = False
         self._finding_costs = {}  # VER-051: all variants and reviews share the finding's spend.
         self.ask_ceiling = None         # interactive run: budget -> a higher ceiling the operator typed, or None
         self.ceiling_raises: list[dict] = []    # {"from": USD, "to": USD} per raise the operator approved
 
+    @property
+    def _finding_id(self):
+        return getattr(self._local, "finding", None)
+
     def begin_finding(self, finding_id: str | None = None) -> None:
-        """Activate a finding's cumulative accounting, including interleaved variants and reviews (VER-051).
-        Without an id, start a fresh anonymous finding for standalone callers."""
-        self._finding_id = finding_id if finding_id is not None else object()
-        self._finding_costs.setdefault(self._finding_id, 0.0)
+        """Activate a finding's cumulative accounting, including interleaved variants and reviews (VER-051), for
+        the calling thread. Without an id, start a fresh anonymous finding for standalone callers."""
+        self._local.finding = finding_id if finding_id is not None else object()
+        with self.lock:
+            self._finding_costs.setdefault(self._finding_id, 0.0)
+
+    def cancel(self) -> None:
+        """End the run: no time is left, so no further request or model call starts (VER-015, VER-065)."""
+        self.cancelled = True
 
     def finding_cost_cap(self) -> float | None:
         """USD a single finding may spend: a share of the run ceiling, never below the floor, or None when the
@@ -171,19 +224,23 @@ class RunBudget:
         spaced at least 1/rate_rps seconds apart, with no burst (VER-015)."""
         if not self.limits.rate_rps or self.limits.rate_rps <= 0:
             return
-        now = self._clock()
-        if self._next_request_at is not None and now < self._next_request_at:
-            self._sleep(min(self._next_request_at - now, self.remaining_time()))
-            self.check_time()
-            now = self._next_request_at
-        self._next_request_at = now + 1.0 / self.limits.rate_rps
+        with self._pace_lock:
+            now = self._clock()
+            if self._next_request_at is not None and now < self._next_request_at:
+                self._sleep(min(self._next_request_at - now, self.remaining_time()))
+                self.check_time()
+                now = self._next_request_at
+            self._next_request_at = now + 1.0 / self.limits.rate_rps
 
     def note_call(self) -> None:
         """Count one model call; refuse it once the run's call cap is reached."""
-        if self.limits.max_calls and self.calls >= self.limits.max_calls:
-            raise LimitExceeded("calls", f"model call cap {self.limits.max_calls} reached")
-        self.check_finding_cost()
-        self.calls += 1
+        with self.lock:
+            if self.cancelled:
+                raise LimitExceeded("time", "the run was interrupted")
+            if self.limits.max_calls and self.calls >= self.limits.max_calls:
+                raise LimitExceeded("calls", f"model call cap {self.limits.max_calls} reached")
+            self.check_finding_cost()
+            self.calls += 1
 
     def remaining_cost(self) -> float | None:
         """USD left under the cost ceiling, or None when it is unbounded."""
@@ -192,11 +249,18 @@ class RunBudget:
         return max(0.0, self.limits.cost_limit_usd - self.cost)
 
     def note_request(self) -> None:
-        if self.limits.max_requests and self.requests >= self.limits.max_requests:
-            raise LimitExceeded("requests", f"request cap {self.limits.max_requests} reached")
-        self.requests += 1
+        with self.lock:
+            if self.cancelled:
+                raise LimitExceeded("time", "the run was interrupted")
+            if self.limits.max_requests and self.requests >= self.limits.max_requests:
+                raise LimitExceeded("requests", f"request cap {self.limits.max_requests} reached")
+            self.requests += 1
 
     def note_cost(self, usd: float) -> None:
+        with self.lock:        # the question for a higher ceiling is asked once at a time; other findings wait
+            self._note_cost(usd)
+
+    def _note_cost(self, usd: float) -> None:
         if self._cost_unknown or isinstance(usd, bool) or not isinstance(usd, int | float) \
                 or not math.isfinite(usd) or usd < 0:
             self._cost_unknown = True
@@ -210,9 +274,10 @@ class RunBudget:
 
     def check_cost(self) -> None:
         """Before a model call: none once the cost ceiling is reached or a cost could not be bounded."""
-        self.note_cost(0.0)
-        if self.limits.cost_limit_usd and self.cost >= self.limits.cost_limit_usd:
-            self._ceiling_reached("cost ceiling reached")
+        with self.lock:
+            self._note_cost(0.0)
+            if self.limits.cost_limit_usd and self.cost >= self.limits.cost_limit_usd:
+                self._ceiling_reached("cost ceiling reached")
 
     def _ceiling_reached(self, detail: str) -> None:
         """Stop at the cost ceiling, unless the operator, asked in an interactive run, typed a higher one."""
@@ -224,11 +289,15 @@ class RunBudget:
         self.limits.cost_limit_usd = higher
 
     def check_time(self) -> None:
+        if self.cancelled:
+            raise LimitExceeded("time", "the run was interrupted")
         if self.limits.max_duration_s and (self._clock() - self.start) >= self.limits.max_duration_s:
             raise LimitExceeded("time", f"run time budget {self.limits.max_duration_s}s exceeded")
 
     def remaining_time(self) -> float | None:
         """Seconds left in the run time budget, or None when it is unbounded."""
+        if self.cancelled:
+            return 0.0
         if not self.limits.max_duration_s:
             return None
         return max(0.0, self.limits.max_duration_s - (self._clock() - self.start))

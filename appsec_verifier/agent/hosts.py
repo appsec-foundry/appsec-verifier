@@ -27,6 +27,7 @@ import re
 import selectors
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -131,15 +132,35 @@ def classify(text: str) -> str:
     return next((code for code, markers in rules if any(m in text for m in markers)), "host_error")
 
 
+_running: dict = {}                  # host processes with a call in progress
+_running_lock = threading.Lock()
+
+
+def stop_running() -> None:
+    """Stop every host process with a call in progress: a cancelled run that tests findings at the same time
+    cannot interrupt the threads that wait for them (VER-015, VER-065)."""
+    with _running_lock:
+        procs = list(_running.values())
+    for proc in procs:
+        try:
+            _stop_group(proc)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def run_process(argv: list[str], *, input: str, cwd, env: dict, timeout: float) -> tuple[int, str, str]:
     """Run one host process in its own process group and stop the whole group
     afterwards, so a CLI cannot leave helpers running. Raises OSError or a
     subprocess.SubprocessError (including TimeoutExpired)."""
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True)
+    with _running_lock:
+        _running[id(proc)] = proc
     try:
         out, err = _communicate_bounded(proc, input.encode("utf-8"), timeout)
     finally:
+        with _running_lock:
+            _running.pop(id(proc), None)
         _stop_group(proc)
     return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 

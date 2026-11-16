@@ -173,7 +173,8 @@ def test_shipped_limits_file_names_only_enforced_limits():
     assert set(doc) == set(Limits.__dataclass_fields__)
 
 
-@pytest.mark.parametrize("flag, value", [("--rate", "-1"), ("--max-requests", "0"), ("--max-duration", "-5")])
+@pytest.mark.parametrize("flag, value", [("--rate", "-1"), ("--max-requests", "0"), ("--max-duration", "-5"),
+                                         ("--parallel", "0"), ("--parallel", "9")])
 def test_cli_blocks_on_an_invalid_limit_before_contact(tmp_path, monkeypatch, capsys, flag, value):
     import yaml
 

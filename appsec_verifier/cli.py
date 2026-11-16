@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .auth.accounts import FROM_TARGET
-from .limits import Limits, RunBudget
+from .limits import MAX_PARALLEL, Limits, RunBudget
 from .loader import AssessmentError, plans_from, read_assessment, select
 from .preflight import (
     Check,
@@ -764,6 +764,10 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             [str(exc)],
             "check --cost-limit, --max-calls, --max-requests, --max-attempts, --max-duration and --rate",
         )
+    parallel = 1 if getattr(args, "parallel", None) is None else args.parallel
+    if not 1 <= parallel <= MAX_PARALLEL:
+        return _blocked("Invalid limits", [f"--parallel must be between 1 and {MAX_PARALLEL}, not {parallel}"],
+                        "check --parallel")
     existing, resumed = None, None
     if args.output is None:
         try:
@@ -910,6 +914,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
                            and any(p.cls == "access-control" for p in sel) else [])],
                 floor=args.min_severity,
                 guided=invocation is not None,
+                parallel=parallel,
             )
         )
     )
@@ -1064,6 +1069,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             skipped=skipped,
             ask_writes=write_prompt,
             failures=debug_file,
+            parallel=parallel,
         )
     finally:
         if progress is not None:
@@ -1894,7 +1900,7 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
 
 
 def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only, agent_info,
-                     notes=(), floor=None, guided=False) -> list[str]:
+                     notes=(), floor=None, guided=False, parallel=1) -> list[str]:
     """The settings before the confirmation (VER-002). The guided run has shown the logo, the assessment and its
     findings already, so they are not repeated there."""
     # `sel` may hold one entry per variant; the settings count findings.
@@ -1936,6 +1942,9 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
         ("Profile", " · ".join(v for v in (agent_info.get(k) for k in ("profile", "model", "runtime", "auth")) if v)),
         ("Limits", f"{cost} · ≤ {limits.max_calls} model calls · ≤ {limits.max_requests} requests · ≤ "
                    + (f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds} s") + f" · {rate}"),
+        # VER-065: findings that may send write requests are tested alone, so an intrusive run tests one at a time.
+        *([("Parallel", f"{parallel} findings at the same time" if safe or read_only else
+            "one finding at a time: this run may send write requests")] if parallel > 1 else []),
     ]
     for key, note in notes:
         if note:
@@ -2373,6 +2382,9 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     lim.add_argument("--max-attempts", type=int, metavar="N", help="agent steps per finding")
     lim.add_argument("--max-duration", type=float, metavar="SECONDS", help="run time")
     lim.add_argument("--rate", type=float, metavar="N", help="requests per second; 0 for no rate limit")
+    lim.add_argument("--parallel", type=int, metavar="N",
+                     help=f"findings tested at the same time, 1 to {MAX_PARALLEL} (default 1); the limits stay "
+                          "those of the run, and a finding that may send write requests is tested alone")
 
     mode = vf.add_argument_group("mode")
     mode.add_argument(

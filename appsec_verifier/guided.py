@@ -599,7 +599,8 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("login_url", "--login-url"), ("source", "--source"), ("output", "--output"),
                   ("category", "--category"), ("cls", "--class"), ("severity", "--severity"),
                   ("min_severity", "--min-severity"), ("cwe", "--cwe"), ("only", "--only"),
-                  *((attr, flag) for attr, flag, _ in _LIMITS), ("profile", "--profile"), ("model", "--model"),
+                  *((attr, flag) for attr, flag, _ in _LIMITS), ("parallel", "--parallel"),
+                  ("profile", "--profile"), ("model", "--model"),
                   ("screenshots", "--screenshots"), ("console_log", "--console-log"))
 _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "--overwrite"),
           ("annotate", "--annotate"), ("allow_intrusive", "--allow-intrusive"),

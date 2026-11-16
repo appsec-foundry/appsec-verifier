@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,6 +157,7 @@ class FailureDebug:
         self.code: dict[str, dict] = {}
         self.written = 0             # how many findings the file on disk holds
         self.disabled = False
+        self._lock = threading.Lock()
 
     def record(self, plan, ctx, result, error: BaseException | None = None) -> None:
         """Keep the finding when its verification failed, and rewrite the file."""
@@ -165,9 +167,10 @@ class FailureDebug:
             why = failure(ctx, result, error)
             if why is None:
                 return
-            self.findings.append(self._entry(plan, ctx, result, why))
-            self._write()
-            self.written = len(self.findings)
+            with self._lock:        # findings tested at the same time (VER-065)
+                self.findings.append(self._entry(plan, ctx, result, why))
+                self._write()
+                self.written = len(self.findings)
         except Exception as exc:  # noqa: BLE001 - the debug file must never change the run or replace its error
             self.disabled = True
             print(f"debug file not written ({type(exc).__name__}); the run goes on", file=sys.stderr)

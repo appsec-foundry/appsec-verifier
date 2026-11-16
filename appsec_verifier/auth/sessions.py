@@ -52,8 +52,10 @@ same account (VER-010, VER-032).
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -162,6 +164,16 @@ class Session:
     renew_at: float | None = None            # set when kept: when to renew a renewable session
 
 
+def _locked(method):
+    """One thread at a time in the session manager: findings tested at the same time share its sessions, so a
+    role is logged in once and no credential list changes while it is read (VER-065)."""
+    @functools.wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
+
+
 class SessionManager:
     def __init__(self, identities: list[dict], http, *, env=None, ui=None, base_dir=None,
                  clock=time.time, sleep=time.sleep, run_program=None, target: str | None = None):
@@ -190,9 +202,11 @@ class SessionManager:
         self._observing_role = None
         self._cookie_repeated: set[str] = set()
         self._no_renewal: set[str] = set()     # roles whose renewal was answered 401 again
+        self._lock = threading.RLock()         # findings tested at the same time share the sessions (VER-065)
 
     # ── public interface ─────────────────────────────────────────────────────
 
+    @_locked
     def headers_for(self, role: str) -> dict:
         """Headers to attach to target requests for `role`. Cached per role and
         renewed before a known expiry (VER-028)."""
@@ -218,6 +232,7 @@ class SessionManager:
         self._keep(role, session)
         return dict(session.headers)
 
+    @_locked
     def sign_in_with_fields(self, role: str, candidates: list[tuple[str, str]]) -> tuple[str, str]:
         """VER-041: log the `form` identity `role` in with the first (username_field, password_field) pair whose
         login obtains a session, at most two attempts, and return the pair the login used (an HTML login form
@@ -247,6 +262,7 @@ class SessionManager:
         self._refused[role] = f"form login obtained no session with the fields {', '.join(tried)}{cause}"
         raise AuthError(self._refused[role])
 
+    @_locked
     def refuse(self, role: str, reason: str) -> None:
         """`role` obtains no session in this run; asking for one names `reason` and logs nothing in (VER-028)."""
         self._refused[role] = reason
@@ -255,13 +271,16 @@ class SessionManager:
         """No more logins that need a person: the run is about to test findings (VER-028)."""
         self._ui = None
 
+    @_locked
     def accounts(self) -> dict[str, tuple[str, str]]:
         """Role -> (iss, sub) for every role whose token names its account."""
         return dict(self._accounts)
 
+    @_locked
     def invalidate(self, role: str) -> None:
         self._cache.pop(role, None)
 
+    @_locked
     def remember_secret(self, value: str, kind: str = "credential") -> None:
         """Keep a credential observed during the run out of later responses, prompts and evidence (VER-016): a login
         artifact, or a `session cookie` whose value can be a session (`session_like`). Other cookie values are
@@ -271,6 +290,7 @@ class SessionManager:
         self._issued.add(value)
         self._observed[value] = kind
 
+    @_locked
     def renew(self, role: str) -> bool:
         """After a 401 for `role`: drop its session so the next headers_for() logs in again, and return True;
         False, keeping the session, while a renewal was already answered 401 and nothing accepted since (VER-028)."""
@@ -280,6 +300,7 @@ class SessionManager:
         self._renewed.add(role)
         return True
 
+    @_locked
     def answered(self, role: str, status) -> None:
         """Note the target's answer to a request sent with `role`'s session."""
         if status != 401:
@@ -289,6 +310,7 @@ class SessionManager:
             self._renewed.discard(role)
             self._no_renewal.add(role)
 
+    @_locked
     def redact(self, value):
         """`value` (str, or dicts and lists of them) with every credential value replaced by its placeholder
         (VER-016), in one pass, so no replacement is made inside a placeholder. Other types pass unchanged.
@@ -321,6 +343,7 @@ class SessionManager:
 
         return walk(value)
 
+    @_locked
     def origin_for(self, role: str) -> str | None:
         """The identity's declared `target_origin`, or None for the target base
         URL. Its credentials are attached only to that origin (VER-018)."""
@@ -395,6 +418,7 @@ class SessionManager:
                 out[form] = label if out.get(form, label) == label else MIXED_CREDENTIAL
         return out
 
+    @_locked
     def holds_placeholder(self, text: str) -> bool:
         """Whether `text` holds a placeholder of a secret value, so it does not show the value (VER-016)."""
         return MIXED_CREDENTIAL in text or any(label in text for label in set(self._placeholders().values()))
@@ -435,6 +459,7 @@ class SessionManager:
                 "origin": urlsplit(url)._replace(path="", query="", fragment="").geturl(),
                 "status": response.status_code, "session_cookies": cookies})
 
+    @_locked
     def observe_login(self, role):
         """Repeat a configured noninteractive login once, retaining only cookie facts (VER-062)."""
         ident = self._by_role.get(role, {})
