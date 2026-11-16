@@ -171,8 +171,8 @@ def test_the_guided_run_no_longer_takes_the_findings_restrictions_on_a_question(
     plan = classify({"id": "T-1", "cwe": "CWE-306", "title": "Management exposure",
                      "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
     args, asked = build_guided_parser().parse_args(["assessment.yaml"]), []
-    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or "no", lambda _: None), args, dict(SCOPE), [plan])
-    assert asked == ["Name such records? [y/N]: "]
+    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or "", lambda _: None), args, dict(SCOPE), [plan])
+    assert asked == ["Findings you know a record for (numbers, for example 1,4; Enter for none): "]
     assert args.accept_finding_restrictions is False
 
 

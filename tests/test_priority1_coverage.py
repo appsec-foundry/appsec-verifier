@@ -204,55 +204,89 @@ def test_scope_refuses_external_followup_and_ambiguous_observations():
     assert _validate_scope(scope)
 
 
+_ACCOUNTS = ["--account", "jim=JIM_PASS", "--account", "bender=BENDER_PASS", "--admin-account", "root=ROOT_PASS"]
+_SELECT = "Findings you know a record for (numbers, for example 1,4; Enter for none): "
+
+
+def _prepare(cwe, answers, accounts=()):
+    """The guided record questions for one finding of `cwe`: (args, scope, prompts asked, lines shown)."""
+    from test_guided import SCOPE
+
+    from appsec_verifier.cli import build_guided_parser
+    from appsec_verifier.guided import Dialog, _access_preparation
+    from appsec_verifier.loader import classify, load_verifiable_cwes
+
+    plan = classify({"id": "T-1", "cwe": cwe, "title": "Record of another account", "severity": "high",
+                     "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
+    args = build_guided_parser().parse_args(["assessment.yaml", *accounts])
+    scope, asked, lines, answers = copy.deepcopy(SCOPE), [], [], iter(answers)
+    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or next(answers), lines.append), args, scope,
+                        [plan])
+    return args, scope, asked, lines
+
+
 def test_guided_preparation_is_run_only_validated_and_declining_contacts_nothing():
     from test_guided import SCOPE
 
-    from appsec_verifier.guided import Dialog, _access_preparation
-    from appsec_verifier.loader import classify, load_verifiable_cwes
-
-    plan = classify({"id": "T-1", "cwe": "CWE-306", "title": "Management exposure",
-                     "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
-    from appsec_verifier.cli import build_guided_parser
-
-    args = build_guided_parser().parse_args(["assessment.yaml"])
-    answers = iter(["yes", "yes", PATH, "admin", "anonymous", MARKER, "yes"])
-    scope = copy.deepcopy(SCOPE)
-    before = copy.deepcopy(scope)
-    _access_preparation(Dialog(lambda _: next(answers), lambda _: None), args, scope, [plan])
-    assert args._guided_resources[0]["anonymous_only"] is True
+    # An exposure without an account of the run asks only the path and the text (VER-061).
+    args, scope, asked, lines = _prepare("CWE-306", ["1", PATH, MARKER])
+    assert asked == [_SELECT, "  Path (Enter skips): ", "  A text only in this record, nothing secret: "]
     assert _validate_scope(scope) == []
-    assert {k: v for k, v in scope.items() if k != "test_resources"} == before
-    # The operator's answer about who may see the record is the restriction, the operator its source.
+    assert {k: v for k, v in scope.items() if k != "test_resources"} == SCOPE
     resource = scope["test_resources"][0]
-    assert (resource["restriction"], resource["source"]) == (f"Only admin may see {PATH}", "operator, guided run")
+    assert resource["anonymous_only"] is True and resource["denied_roles"] == ["anonymous"]
+    # The operator's answers are the restriction, the operator its source.
+    assert (resource["restriction"], resource["source"]) == (f"Only signed-in accounts may see {PATH}",
+                                                             "operator, guided run")
     assert (resource["pointer"], resource["value"]) == ("", MARKER)
+    assert "  The Verifier checks whether it can be seen without login." in lines
+    # The answers are shown as a scope excerpt, so a later run can take them without the dialog.
+    excerpt = lines[lines.index("  test_resources:") + 1]
+    assert json.loads(excerpt.removeprefix("    - ")) == resource
 
 
-def test_guided_preparation_names_the_runs_accounts_and_explains_anonymous():
-    from test_guided import SCOPE
+def test_guided_preparation_asks_only_whose_record_it_is_and_derives_who_must_not_see_it():
+    # IDOR: the first normal account is offered, the other normal account must not see it.
+    args, scope, asked, lines = _prepare("CWE-639", ["1", PATH, "", MARKER], _ACCOUNTS)
+    assert asked == [_SELECT, "  Path (Enter skips): ", "  Account that may see it [account-1]: ",
+                     "  A text only in this record, nothing secret: "]
+    resource = scope["test_resources"][0]
+    assert (resource["allowed_roles"], resource["denied_roles"]) == (["account-1"], ["account-2"])
+    assert resource["restriction"] == f"Only account-1 may see {PATH}" and "anonymous_only" not in resource
+    assert "  The Verifier checks that account-1 sees it and account-2 does not." in lines
+    assert _validate_scope(scope) == []
+    # A privileged account's record: no normal account may see it; an unknown name is asked again.
+    args, scope, asked, lines = _prepare("CWE-862", ["1", PATH, "root", "admin-1", MARKER], _ACCOUNTS)
+    assert "    choose one of account-1, account-2, admin-1" in lines
+    resource = scope["test_resources"][0]
+    assert (resource["allowed_roles"], resource["denied_roles"]) == (["admin-1"], ["account-1", "account-2"])
+    # An exposure with an account compares that account with a request without login; nothing is asked about it.
+    args, scope, asked, lines = _prepare("CWE-200", ["1", PATH, MARKER], _ACCOUNTS)
+    assert "  Account that may see it [account-1]: " not in asked
+    resource = scope["test_resources"][0]
+    assert (resource["allowed_roles"], resource["denied_roles"]) == (["account-1"], ["anonymous"])
+    assert "anonymous_only" not in resource
+    assert "  The Verifier checks that account-1 sees it and a request without login does not." in lines
+    # Without a known account, the other classes name both roles; the sessions are taken later.
+    args, scope, asked, lines = _prepare("CWE-639", ["1", PATH, "alice", "bob", MARKER])
+    resource = scope["test_resources"][0]
+    assert (resource["allowed_roles"], resource["denied_roles"]) == (["alice"], ["bob"])
 
-    from appsec_verifier.cli import build_guided_parser
-    from appsec_verifier.guided import Dialog, _access_preparation
-    from appsec_verifier.loader import classify, load_verifiable_cwes
 
-    plan = classify({"id": "T-1", "cwe": "CWE-639", "title": "Basket of another account",
-                     "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
-    args = build_guided_parser().parse_args(["assessment.yaml", "--account", "jim=JIM_PASS",
-                                             "--account", "bender=BENDER_PASS", "--admin-account", "root=ROOT_PASS"])
-    asked, lines = [], []
-    answers = iter(["yes", "no"])
-    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or next(answers), lines.append),
-                        args, copy.deepcopy(SCOPE), [plan])
-    assert "Access control: records you know (optional)" in lines
-    assert "1 access-control finding can also be tested on a record that only certain accounts may see." in lines
-    assert asked == ["Name such records? [y/N]: ", "  Name a record? [y/N]: "]
-    answers = iter(["yes", "yes", PATH, "account-1", "account-2", MARKER])
-    asked.clear()
-    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or next(answers), lines.append),
-                        args, copy.deepcopy(SCOPE), [plan])
-    assert "  Who may see it (account-1, account-2, admin-1): " in asked
-    assert "  Who must not (account-1, account-2, admin-1, anonymous = no login): " in asked
-    assert args._guided_resources[0]["allowed_roles"] == ["account-1"]
+def test_guided_preparation_skips_on_enter_and_explains_errors_in_plain_words():
+    # A wrong selection is asked again; Enter at the path skips the finding.
+    args, scope, asked, lines = _prepare("CWE-639", ["9", "1", ""], _ACCOUNTS)
+    assert asked.count(_SELECT) == 2 and "  answer numbers from 1 to 1, or Enter for none" in lines
+    assert "test_resources" not in scope and not getattr(args, "_guided_resources", None)
+    # Without the text, the record cannot be recognised: skipped, with the reason.
+    args, scope, asked, lines = _prepare("CWE-639", ["1", PATH, "", ""], _ACCOUNTS)
+    assert "    skipped: the Verifier recognises the record only by such a text" in lines
+    assert "test_resources" not in scope
+    # A path outside the target is refused in plain words and asked again, never declared.
+    args, scope, asked, lines = _prepare("CWE-639", ["1", "https://other.example/x", "", MARKER, ""], _ACCOUNTS)
+    assert "    This path is outside the target; enter another, or Enter to skip." in lines
+    assert not any("test_resources/" in line for line in lines)
+    assert "test_resources" not in scope and asked.count("  Path (Enter skips): ") == 2
 
 
 def test_real_form_login_observations_are_bounded_and_survive_redirects():

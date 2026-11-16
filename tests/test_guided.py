@@ -34,7 +34,7 @@ IDENTITY = {"identities": [{"role": "alice", "method": "bearer", "auth": {"token
 SECRET_WORDS = ("password", "token", "secret", "key")
 
 
-_ACCESS_PROMPTS = ("Name such records", "      Who may use it?")
+_ACCESS_PROMPTS = ("Findings you know a record for", "      Who may use it?")
 
 
 class Script:
@@ -50,7 +50,7 @@ class Script:
         if prompt.startswith(_ACCESS_PROMPTS):
             # Scenarios decline optional preparation and leave access rules open unless they give `rules`.
             if prompt.startswith(_ACCESS_PROMPTS[0]):
-                return "no"
+                return ""
             return self.rules.pop(0) if self.rules else ""
         if not self.answers:
             raise EOFError
@@ -102,7 +102,7 @@ def test_with_a_scope_file_only_optional_preparation_is_asked_and_defaults_apply
     rc, args, prompts, out = env.go(extra=["--cost-limit", "5"])
     assert rc == 0 and prompts == []
     # the offer of test resources; no access rule, since no account can compare
-    assert env.preparation_prompts == ["Name such records? [y/N]: "]
+    assert env.preparation_prompts == ["Findings you know a record for (numbers, for example 1,4; Enter for none): "]
     assert "3 runtime candidates of 4 · critical 1 · high 1 · medium 1\n" in out
     assert "to verify" not in out              # the selection is shown once, with the run settings
     assert (args.category, args.min_severity, args.profile) == (None, "high", "claude")
@@ -588,8 +588,7 @@ def test_run_only_preparation_reaches_verify_but_never_skips_confirmation(env, m
         "evidence": {"file": "app.py", "line": 1}}]}))
     (env.run / "scope.yaml").unlink()
     before = set(env.run.iterdir())
-    answers = iter(["yes", "yes", "/admin/config", "admin", "anonymous", "Administrator access required",
-                    "Operator access policy", "/marker", "harmless-config-marker", "yes"])
+    answers = iter(["1", "/admin/config", "harmless-config-marker"])
     confirmed = []
 
     def no_network(*a, **k):
@@ -628,7 +627,7 @@ def test_the_rules_are_asked_per_request_the_run_tests_with_an_explanation_and_k
     env.assessment.write_text(yaml.safe_dump({"threats": RULED}))
     rc, args, prompts, out = env.go(extra=ACCOUNTS, rules=["a", ""])
     assert rc == 0 and prompts == []
-    assert env.preparation_prompts == ["Name such records? [y/N]: ",
+    assert env.preparation_prompts == ["Findings you know a record for (numbers, for example 1,4; Enter for none): ",
                                        RULE_PROMPT, RULE_PROMPT]
     lines = out.split("\n")
     start = lines.index("Who may use these requests?")
@@ -675,4 +674,5 @@ def test_a_request_the_scope_has_a_rule_for_is_not_asked_again(env):
         {**SCOPE, "access_rules": [{"request": "GET /api/Users", "may": "admin"}]}))
     rc, _, _, out = env.go(extra=ACCOUNTS)
     assert rc == 0 and env.preparation_prompts.count(RULE_PROMPT) == 1
-    assert "[1/1] GET /api/Recycles/:id" in out.split("\n") and "GET /api/Users" not in out
+    rules = out[out.index("Who may use these requests?"):]
+    assert "[1/1] GET /api/Recycles/:id" in rules.split("\n") and "GET /api/Users" not in rules

@@ -197,15 +197,16 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
 
 def _access_preparation(d, args, scope, plans):
     """Collect optional run-only test resources, never network authority (VER-031/061): a record the operator knows
-    that only certain accounts may see, with a text only it contains. The restriction is the operator's answer
-    about who may see it, with the operator as its source. Who may use a request is asked once the identities and
-    the mode are known (_ask_access_rules)."""
+    that only certain accounts may see, with a text only it contains. Asked is only what the operator alone knows:
+    which findings, the record's path, the account that may see it and the text. Who must not see it follows from
+    the finding's class and the run's accounts; the restriction is the operator's answer, with the operator as its
+    source. Who may use a request is asked once the identities and the mode are known (_ask_access_rules)."""
     selected = [p for p in cli._select(args, plans) if p.cls == "access-control"
                 and not any(r["finding_id"] == p.id for key in ("test_resources", "access_policies")
                             for r in scope.get(key, []))]
     if not selected or getattr(args, "accept_finding_restrictions", False):
         return
-    from .agent.experiments import EXPOSURE_CWES
+    from .agent.access_policy import rule_requests
 
     st = Style.for_stream(sys.stdout)
     width = max(min(columns() - 1, 100), 40)
@@ -215,44 +216,95 @@ def _access_preparation(d, args, scope, plans):
     d.out(st("─" * len(heading), "accent"))
     d.out(f"{len(selected)} access-control finding{'' if len(selected) == 1 else 's'} can also be tested on a "
           "record that only certain accounts may see.")
-    if not d.yes("Name such records?"):
-        return
-
-    roles = ", ".join(clean(i["role"]) for i in _run_identities(args, None))
-    may = f"  Who may see it ({roles})" if roles else "  Who may see it (names of your choice, comma-separated)"
-    must_not = f"  Who must not ({roles}, anonymous = no login)" if roles else "  Who must not (anonymous = no login)"
-    additions = []
+    requests = {p.id: " ".join(next(iter(rule_requests(p, writes=False)), ())) for p in selected}
+    digits = len(str(len(selected)))
     for n, plan in enumerate(selected, 1):
-        title, room = clean(_short_title(plan.title)), width - 8 - len(clean(plan.id))
+        lead, request = f"  {n:>{digits}}  {clean(plan.id)}  ", clean(requests[plan.id])
+        title, room = clean(_short_title(plan.title)), max(width - len(lead) - len(request) - 2, 20)
+        title = title if len(title) <= room else title[:room - 1] + "…"
+        d.out(f"{lead}{title:<{room}}  {st(request, 'muted')}".rstrip())
+    while True:
+        answer = d.question("Findings you know a record for (numbers, for example 1,4; Enter for none)")
+        picked = re.split(r"[\s,]+", answer.strip()) if answer.strip() else []
+        if all(p.isdigit() and 1 <= int(p) <= len(selected) for p in picked):
+            break
+        d.out(f"  answer numbers from 1 to {len(selected)}, or Enter for none")
+    additions = []
+    identities = _run_identities(args, None)
+    for plan in [selected[i - 1] for i in dict.fromkeys(int(p) for p in picked)]:
         d.out("")
-        d.out(f"{st(f'[{n}/{len(selected)}]', 'muted')} {st(clean(plan.id), 'bold')}  "
-              f"{title if len(title) <= room else title[:room - 1] + '…'}")
-        if not d.yes("  Name a record?"):
-            continue
-        while True:
-            path = d.question("  Path (for example /api/orders/17)")
-            allowed = [r.strip() for r in d.question(may).split(",")]
-            denied = [r.strip() for r in d.question(must_not).split(",")]
-            value = d.question("  A text only in this record, nothing secret")
-            anonymous = plan.cwe in EXPOSURE_CWES and denied == ["anonymous"] and d.yes(
-                "  Check only that it is readable without login?")
-            item = {"id": "guided-" + plan.id, "finding_id": plan.id, "path": path, "method": "GET",
-                    "allowed_roles": allowed, "denied_roles": denied,
-                    "restriction": f"Only {', '.join(allowed)} may see {path}", "source": "operator, guided run",
-                    "pointer": "", "value": value, **({"anonymous_only": True} if anonymous else {})}
-            candidate = {**scope, "test_resources": [*scope.get("test_resources", []), item]}
-            errors = cli._validate_scope(candidate, url_only=not args.scope)
-            if not errors:
-                scope["test_resources"] = candidate["test_resources"]
-                additions.append(item)
-                break
-            for error in errors:
-                d.out("    " + clean(error))
-            if not d.yes("  Correct it?"):
-                break
+        d.out(f"{st(clean(plan.id), 'bold')}  {clean(_short_title(plan.title))}")
+        item = _ask_record(d, args, scope, plan, requests[plan.id], identities)
+        if item:
+            scope["test_resources"] = [*scope.get("test_resources", []), item]
+            additions.append(item)
     if additions:
         args._guided_resources = additions
-        d.out("These records apply to this run only; no file was written.")
+        d.out("")
+        d.out("These records apply to this run only. To keep them for later runs, add this to a scope file:")
+        d.out("  test_resources:")
+        for item in additions:
+            d.out(f"    - {clean(json.dumps(item))}")
+
+
+def _ask_record(d: Dialog, args, scope: dict, plan, request: str, identities: list[dict]) -> dict | None:
+    """The test resource for one finding, or None when the operator skips it. Asked are the path, the text and,
+    except for missing authentication and exposure, the account that may see the record, since only the operator
+    knows whose it is. Who must not see it is derived: no login for missing authentication and exposure; otherwise
+    the run's other normal accounts, which for a privileged account's record are all of them, or no login when
+    there is none. Without an account the run knows yet, an exposure is proved without a reference account
+    (VER-061) and the other classes name both roles."""
+    from .agent.experiments import EXPOSURE_CWES
+
+    roles = [str(i["role"]) for i in identities if i.get("role")]
+    privileged = {str(i["role"]) for i in identities if i.get("privileged")}
+    normal = [r for r in roles if r not in privileged]
+    exposure = plan.cwe in EXPOSURE_CWES
+    hint = f"{request} with a real id; " if ":" in request else (f"{request}; " if request else "")
+    while True:
+        path = d.question(f"  Path ({clean(hint)}Enter skips)")
+        if not path:
+            return None
+        if roles and exposure:
+            allowed, denied = (normal or roles)[0], ["anonymous"]
+        elif roles:
+            while (allowed := d.question("  Account that may see it", (normal or roles)[0])) not in roles:
+                d.out(f"    choose one of {', '.join(clean(r) for r in roles)}")
+            denied = [r for r in normal if r != allowed] or ["anonymous"]
+        elif exposure:
+            allowed, denied = "signed-in", ["anonymous"]
+        else:
+            allowed = d.question("  Account that may see it (a name of your choice)")
+            denied = [d.question("  Account that must not see it (a name of your choice; anonymous = no login)")]
+        value = d.question("  A text only in this record, nothing secret")
+        if not value:
+            d.out("    skipped: the Verifier recognises the record only by such a text")
+            return None
+        item = {"id": "guided-" + plan.id, "finding_id": plan.id, "path": path, "method": "GET",
+                "allowed_roles": [allowed], "denied_roles": denied,
+                "restriction": f"Only {'signed-in accounts' if exposure else allowed} may see {path}",
+                "source": "operator, guided run", "pointer": "", "value": value,
+                **({"anonymous_only": True} if exposure and not roles else {})}
+        errors = cli._validate_scope({**scope, "test_resources": [*scope.get("test_resources", []), item]},
+                                     url_only=not args.scope)
+        if not errors:
+            others = " and ".join("a request without login" if r == "anonymous" else clean(r) for r in denied)
+            d.out("  The Verifier checks whether it can be seen without login." if item.get("anonymous_only")
+                  else f"  The Verifier checks that {clean(allowed)} sees it and {others} does not.")
+            return item
+        d.out("    " + _record_problem(errors))
+
+
+def _record_problem(errors: list[str]) -> str:
+    """The validation errors of a record in the operator's words."""
+    text = " ".join(errors)
+    if "outside the target scope" in text:
+        return "This path is outside the target; enter another, or Enter to skip."
+    if "/path" in text:
+        return "Enter a path on the target, such as /api/orders/17, or Enter to skip."
+    if "disjoint" in text or "roles" in text:
+        return "Name two different accounts."
+    return clean(errors[0])
 
 
 # ── access rules (VER-010, VER-031) ──────────────────────────────────────────
