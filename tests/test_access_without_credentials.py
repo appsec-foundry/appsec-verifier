@@ -454,7 +454,7 @@ def _qa_run(tmp_path, *, secret_exposed, replies, second_verdict="inconclusive")
 
 def _review(*issues):
     return {"action": "review", "status": "needs-attention" if issues else "clear", "issues": list(issues),
-            "steps": [], "pointer": None, "offset": 0}
+            "steps": [], "pointer": None, "offset": 0, "observations": []}
 
 
 def test_qa_sends_a_public_resource_objection_back_once_and_a_checked_confirmation_replaces_the_first(tmp_path):

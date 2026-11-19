@@ -26,7 +26,8 @@ from appsec_verifier.verify.report import _entry, _review_markdown
 # VER-059: after its verdict the agent answers the Verifier's presentation request; this answer has none.
 NO_PRESENTATION = {"verdict": {"verdict": "inconclusive", "rationale": "no presentation"}}
 
-CLEAR = {"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0}
+CLEAR = {"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None,
+         "offset": 0, "observations": []}
 
 
 def question(detail="Only the first payload was tested.",
@@ -397,3 +398,44 @@ def test_a_failed_host_call_names_its_fixed_reason_in_the_qa_status(tmp_path):
     qa, host = reviewer(ctx, [HostReply(error="rate_limit (exit 1)", usd=0.01)])
     assert consider(ctx, qa) is None
     assert qa.state["reason"] == "Technical QA stopped: offline fake call failed: rate_limit (exit 1)."
+
+
+@pytest.mark.parametrize(("verdict", "status", "summary"), [
+    ("inconclusive", "open", "The response does not establish the running configuration."),
+    ("inconclusive", "observed", "The recorded response identifies the running configuration."),
+    ("not-attempted", "open", "The response leaves the runtime prerequisite open."),
+])
+def test_final_report_cites_qa_observation_without_changing_verdict(tmp_path, verdict, status, summary):
+    from appsec_verifier.verify.report import to_markdown
+
+    ctx = context(tmp_path)
+    ctx.agent_history = [{"tool": "read_source", "result": {}} for _ in range(4)] + [
+        {"tool": "http_request", "args": {}, "result": {"status": 200}}]
+    if status == "observed":
+        ctx.agent_history[-1]["result"]["body"] = '{"configuration":"training"}'
+    ctx.sessions.remember_secret("fixture-report-secret")
+    reply = question() if status == "open" else CLEAR
+    qa, host = reviewer(ctx, [{**reply, "observations": [
+        {"step": 5, "status": status, "summary": summary + " fixture-report-secret"}]}])
+    consider(ctx, qa, remaining=0)
+    result = asdict(ProbeResult(verdict, technical_review=qa.state))
+    result.update(result_id="T-046", finding_ref={"id": "T-046"}, **{"class": "xss"})
+    rendered = to_markdown({"meta": {}, "results": [result]})
+    assert f"Step 5 ({status})" in rendered and summary in rendered
+    assert "fixture-report-secret" not in rendered
+    assert result["verdict"] == verdict and not result["proof"]
+    assert ctx.budget.requests == 0 and len(host.calls) == 1
+    schema = yaml.safe_load(Path("schemas/verification.schema.yaml").read_text())
+    Draft202012Validator(schema["$defs"]["technical_review"]).validate(qa.state)
+
+
+def test_report_only_observation_stays_with_its_review_and_variant(tmp_path):
+    ctx = context(tmp_path)
+    ctx.agent_history = [{"tool": "http_request", "args": {}, "result": {"status": 200}}]
+    note = {"step": 1, "status": "open", "summary": "Which configuration was active?"}
+    qa, _ = reviewer(ctx, [{**question(), "observations": [note, {**note, "step": 99}]}, CLEAR])
+    feedback = consider(ctx, qa)
+    assert "observations" not in feedback
+    assert consider(ctx, qa) is None
+    assert qa.state["status"] == "clear"
+    assert qa.state["observations"] == [{**note, "review": 1}]

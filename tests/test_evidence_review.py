@@ -393,7 +393,8 @@ def test_rendered_panel_escapes_explanation_and_retains_quote_label():
 
 
 @pytest.mark.parametrize("schema,reply", [(REVIEW_SCHEMA, CLEAR), (QA_SCHEMA, {"action": "review",
-                         "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0})])
+                         "status": "clear", "issues": [], "steps": [], "pointer": None, "offset": 0,
+                         "observations": []})])
 def test_all_five_hosts_forward_review_schema_without_enabling_tools(schema, reply):
     from test_host_anthropic import _host, _msg
     from test_hosts import (

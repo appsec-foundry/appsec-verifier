@@ -28,7 +28,7 @@ from .tools import ToolError
 _TEXT = {"type": "string", "minLength": 1, "maxLength": 600}
 QA_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["action", "status", "issues", "steps", "pointer", "offset"],
+    "required": ["action", "status", "issues", "steps", "pointer", "offset", "observations"],
     "properties": {
         "action": {"enum": ["review", "read_response"]},
         "status": {"enum": ["clear", "needs-attention"]},
@@ -39,6 +39,10 @@ QA_SCHEMA = {
                            "detail": _TEXT, "question": _TEXT}}},
         "steps": {"type": "array", "maxItems": 2, "uniqueItems": True,
                   "items": {"type": "integer", "minimum": 1}},
+        "observations": {"type": "array", "maxItems": 4, "items": {
+            "type": "object", "additionalProperties": False, "required": ["step", "status", "summary"],
+            "properties": {"step": {"type": "integer", "minimum": 1}, "status": {"enum": ["observed", "open"]},
+                           "summary": _TEXT}}},
         "pointer": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "pattern": "^/"},
         "offset": {"type": "integer", "minimum": 0, "maximum": 64000},
     },
@@ -59,6 +63,9 @@ follow-up QUESTIONS within the finding, supported tools, proof_contract and rema
 question its routes or proof forms cannot answer costs test steps without changing the result; never demand
 an unrelated scan, secret access, destructive payload, arbitrary shell or wider authority. Accept a
 well-explained inconclusive result when the necessary capability is unavailable. Do not invent proof.
+For the final report, put each recorded observation you refer to in observations. Cite its step in this
+variant and summarize what the observation establishes (observed) or which question remains open (open).
+These are your interpretations for the report. Return [] when none are cited and for read_response.
 Use action read_response to select one or two existing response step numbers, optionally a JSON pointer
 or text offset; this sends no request. Return status needs-attention, no issues and those steps for a read.
 At most two such selections are available across all variants. For a judgment use action review, steps [],
@@ -203,8 +210,8 @@ class TechnicalReview:
                     raise ValueError("invalid technical QA response")
                 reply = clean(ctx, reply)
                 if reply["action"] == "read_response":
-                    if (not reply["steps"] or reply["issues"] or reply["status"] != "needs-attention"
-                            or self.shared.get("reads", 0) >= 2):
+                    if (not reply["steps"] or reply["observations"] or reply["issues"]
+                            or reply["status"] != "needs-attention" or self.shared.get("reads", 0) >= 2):
                         raise ValueError("invalid or exhausted evidence selection")
                     self.shared["reads"] = self.shared.get("reads", 0) + 1
                     # This exact operation only reads this finding's cached, redacted responses.
@@ -220,6 +227,15 @@ class TechnicalReview:
                 self.shared["reviews"] = self.shared.get("reviews", 0) + 1
                 self.state.update(status=reply["status"], issues=reply["issues"],
                                   reviews=self.state["reviews"] + 1)
+                # Report-only interpretations, retained across judgments and excluded from agent feedback.
+                shown_steps = {item["step"] for item in payload["steps"] if item["result"] is not None
+                               and item["tool"] not in ("qa_feedback", "presentation_request")}
+                for item in reply["observations"]:
+                    if item["step"] in shown_steps or item["step"] in self.state["inspected_steps"]:
+                        self.state.setdefault("observations", []).append({
+                            "step": int(item["step"]), "status": item["status"], "review": self.state["reviews"],
+                            "summary": item["summary"][:_TEXT["maxLength"]],  # redaction can expand the text
+                        })
                 if not reply["issues"]:
                     self.state["reason"] = "No unresolved technical objections in the reviewed attempts."
                     return None

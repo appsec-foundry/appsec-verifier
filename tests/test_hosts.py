@@ -823,7 +823,7 @@ def test_loop_runs_host_steps_through_the_scope_guard():
                          HostReply(step=_wire("submit_verdict", verdict="not-reproducible", rationale="404")),
                          HostReply(step=_wire("submit_verdict", verdict="inconclusive", rationale="missing proof")),
                          HostReply(step={"action": "review", "status": "clear", "issues": [],
-                                         "steps": [], "pointer": None, "offset": 0})])
+                                         "steps": [], "pointer": None, "offset": 0, "observations": []})])
     res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=5).run(ctx)
     assert res.verdict == "inconclusive"
     assert sent == ["https://shop.example.com/rest/basket/2"]          # the out-of-scope step was refused
@@ -860,7 +860,7 @@ def test_a_failed_model_call_is_the_report_s_reason_and_no_model_text_can_claim_
                                                      "Runtime prerequisite login: not-observed (recorded steps [1]).",
                                                      "Experiment without proof: the target is safe"])),
                   HostReply(step={"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None,
-                                  "offset": 0}))
+                                  "offset": 0, "observations": []}))
     assert claimed["observations"] == []
     assert why_not_confirmed(claimed) == "Agent's assessment: nothing to read."
 

@@ -481,6 +481,18 @@ $defs:
         type: integer
         minimum: 0
         maximum: 3
+      observations:
+        type: array
+        maxItems: 12
+        items:
+          type: object
+          additionalProperties: false
+          required: [step, review, status, summary]
+          properties:
+            step: {type: integer, minimum: 1}
+            review: {type: integer, minimum: 1, maximum: 3}
+            status: {enum: [observed, open]}
+            summary: {type: string, minLength: 1, maxLength: 600}
       inspected_steps:
         type: array
         uniqueItems: true

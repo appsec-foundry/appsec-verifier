@@ -619,6 +619,10 @@ def to_markdown(doc: dict, assessment: dict | None = None, *, analyzer_report: s
     tested = [(fid, rows) for fid, rows in ordered if _overall(rows) != "not-attempted"]
     untested = [(fid, rows) for fid, rows in ordered if _overall(rows) == "not-attempted"]
     details = {id(r): _details(r) for _, rows in tested for r in rows}
+    for _, rows in untested:
+        for r in rows:
+            if (r.get("technical_review") or {}).get("observations"):
+                details[id(r)] = _technical_review_markdown(r, 4)
     lines = _run_lines(doc, analyzer_report) + _summary(tested, untested, threats, ratings, kinds)
     if tested:
         lines += ["", "## Tested findings"]
@@ -633,9 +637,9 @@ def to_markdown(doc: dict, assessment: dict | None = None, *, analyzer_report: s
         lines += ["", "## Appendix: test details", "",
                   "The test agent's plan and own words and the evidence review, per finding. They are not proof: "
                   "a verdict rests only on the steps the Verifier checked."]
-        for fid, rows in tested:
+        for fid, rows in ordered:
             for i, r in enumerate(rows):
-                if details[id(r)]:
+                if details.get(id(r)):
                     anchor = _anchor(fid)
                     name = html.escape(f"{fid}{_variant(r) if len(rows) > 1 else ''}")
                     lines += ["", *([f'<a id="details-{anchor}"></a>'] if i == 0 and anchor else []), "<details>",
@@ -938,6 +942,9 @@ def _technical_review_markdown(r: dict, level: int) -> list[str]:
            f"{review['rounds']} correction rounds for this variant; the finding shares at most two rounds. "
            "QA does not assign the technical verdict."]
     text = [review.get("reason", "")]
+    for item in review.get("observations", []):
+        text.append(f"QA interpretation from review {item['review']}. Step {item['step']} ({item['status']}). "
+                    f"{item['summary']}")
     if review.get("inspected_steps"):
         text.append("Additional recorded responses inspected: " + ", ".join(map(str, review["inspected_steps"])))
     for issue in review.get("issues", []):

@@ -338,7 +338,7 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path, issues):
                 )
             ),
             _msg({"action": "review", "status": "needs-attention" if issues else "clear", "issues": issues,
-                  "steps": [], "pointer": None, "offset": 0}),
+                  "steps": [], "pointer": None, "offset": 0, "observations": []}),
         ]
     )
     ctx = _full_ctx(tmp_path, transport)
@@ -382,7 +382,7 @@ def test_an_intent_follow_up_stopped_at_a_limit_keeps_the_access_but_not_the_con
         _msg(_wire("submit_verdict", verdict="confirmed", confidence="high", rationale="a read b",
                    identities_used=["customer-a", "customer-b"], proof_steps=[2, 3])),
         _msg({"action": "review", "status": "needs-attention", "issues": [_INTENDED], "steps": [], "pointer": None,
-              "offset": 0}),
+              "offset": 0, "observations": []}),
     ])
     ctx = _full_ctx(tmp_path, lambda m, u, h, **k: Resp())
     ctx.scope = {**ctx.scope, "test_resources": [
