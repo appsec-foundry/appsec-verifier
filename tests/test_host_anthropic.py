@@ -371,6 +371,31 @@ def test_scripted_model_confirms_idor_through_tools(tmp_path, issues):
     assert '"status": 200' in client.calls[2]["messages"][0]["content"]  # results reach the model as data
 
 
+def test_an_intent_follow_up_stopped_at_a_limit_keeps_the_access_but_not_the_confirmation(tmp_path):
+    """VER-046: with steps left, QA's intent objection goes back to the test agent; when the follow-up stops at a
+    limit, the observed access is kept and the unresolved objection leaves the result inconclusive."""
+    host, _ = _host([
+        _msg(_wire("plan_test", kind="access-control", strategy=STRATEGY, hypothesis="A reads the known basket of B",
+                   path="/rest/basket/2", resource="basket")),
+        _msg(_wire("http_request", role="customer-a", path="/rest/basket/2")),
+        _msg(_wire("http_request", role="customer-b", path="/rest/basket/2")),
+        _msg(_wire("submit_verdict", verdict="confirmed", confidence="high", rationale="a read b",
+                   identities_used=["customer-a", "customer-b"], proof_steps=[2, 3])),
+        _msg({"action": "review", "status": "needs-attention", "issues": [_INTENDED], "steps": [], "pointer": None,
+              "offset": 0}),
+    ])
+    ctx = _full_ctx(tmp_path, lambda m, u, h, **k: Resp())
+    ctx.scope = {**ctx.scope, "test_resources": [
+        {"id": "basket", "finding_id": "T-001", "path": "/rest/basket/2", "allowed_roles": ["customer-b"],
+         "denied_roles": ["customer-a"], "pointer": "/UserId", "value": 2}]}
+    ctx.budget = RunBudget(Limits(max_calls=5))         # the follow-up's first model call is over the cap
+    res = AgentProbe("access-control", lambda: HostPlanner(host), max_steps=6).run(ctx)
+    assert res.verdict == "inconclusive" and res.limits_hit == "calls"
+    assert res.proof["observed_access"] and res.proof["checked"] is False and res.proof["steps"] == [2, 3]
+    assert res.technical_review["rounds"] == 1 and res.technical_review["issues"] == [_INTENDED]
+    assert "Technical QA follow-up stopped before a revised conclusion." in res.observations
+
+
 def test_cache_write_then_read_preserves_the_prompt_and_prices_each_call():
     first = _msg(_wire("http_request", path="/x"), usage=(100, 200, 2000, 0))
     first.usage.cache_creation = SimpleNamespace(ephemeral_5m_input_tokens=2000, ephemeral_1h_input_tokens=0)

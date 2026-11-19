@@ -487,8 +487,14 @@ class AgentProbe:
                 feedback = None
                 confirmed_checked = result.verdict == "confirmed" and (result.proof or {}).get("checked") is True
                 intent_only = confirmed_checked and self.cls == "access-control"
-                if confirmed_checked and not intent_only and not qa.shared.get("reviews", 0):
-                    qa.state["reason"] = "A confirmed verdict whose proof check passed is not reviewed (VER-046)."
+                if confirmed_checked and not intent_only:
+                    # VER-046: not reviewed, also after QA engaged the finding, so no question can lead the agent to
+                    # replace the checked proof with a later claim. A question QA asked this variant is answered by
+                    # the follow-up's checked proof and is not left as an open objection beside it.
+                    asked = qa.state["rounds"] > 0
+                    qa.state.update(status="not-reviewed", issues=[], reason=(
+                        "The follow-up QA asked for produced a checked proof, which is not reviewed (VER-046)."
+                        if asked else "A confirmed verdict whose proof check passed is not reviewed (VER-046)."))
                 else:
                     # VER-046: no question about a test this run's mode does not send (VER-052).
                     feedback = qa.consider(history, result, tools, controller, self._max_steps - decision,

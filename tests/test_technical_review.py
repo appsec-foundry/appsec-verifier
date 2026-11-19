@@ -228,28 +228,41 @@ def test_qa_question_returns_to_same_loop_and_follow_up_produces_checked_proof(t
     actions = [{"tool": "http_request", "args": {"path": "/go"}},
                {"verdict": {"verdict": "inconclusive", "rationale": "The first response showed no redirect"}},
                attempt(), conclusion(3)]
-    factory, host, instances, histories = scripted_factory(actions, [question(), CLEAR])
+    factory, host, instances, histories = scripted_factory(actions, [question()])
     result = AgentProbe("open-redirect", factory, max_steps=4).run(ctx)
     assert result.verdict == "confirmed" and result.proof["checked"] and result.proof["steps"] == [3]
-    assert len(sent) == 2 and len(instances) == 2 and len(host.calls) == 2
+    assert len(sent) == 2 and len(instances) == 2 and len(host.calls) == 1
     assert histories[2][-1]["tool"] == "qa_feedback" and len(histories[2]) == 2
-    assert result.technical_review["status"] == "clear" and result.technical_review["rounds"] == 1
+    # The checked proof answers QA's question; it is not reviewed and leaves no open objection beside it (VER-046).
+    review = result.technical_review
+    assert review["status"] == "not-reviewed" and review["rounds"] == 1 and review["issues"] == []
+    assert "follow-up QA asked for produced a checked proof" in review["reason"]
 
 
-def test_follow_up_cannot_reset_repetitions_and_retains_already_checked_proof(tmp_path):
+def test_follow_up_cannot_reset_repetitions(tmp_path):
     sent = []
     ctx = context(tmp_path, redirect_target(sent))
-    # QA engaged the finding on an earlier variant, so it reviews this variant's confirmed proof (VER-046); its
-    # follow-up cannot reset the repetition allowance, and the already-checked proof is retained when the
-    # follow-up stops at stagnation.
-    ctx.technical_review_budget["reviews"] = 1
-    actions = [attempt(), conclusion(1), attempt(), attempt()]
-    factory, _, _, _ = scripted_factory(actions, [question()])
+    # A follow-up QA asks for keeps the finding's repetition allowance: the same read request runs at most twice.
+    actions = [attempt(), {"verdict": {"verdict": "inconclusive", "rationale": "The redirect may be generic"}},
+               attempt(), attempt()]
+    factory, _, _, histories = scripted_factory(actions, [question()])
     result = AgentProbe("open-redirect", factory, max_steps=6).run(ctx)
+    assert histories[2][-1]["tool"] == "qa_feedback" and result.technical_review["rounds"] == 1
     assert len(sent) == 2 and result.limits_hit == "stagnation"
-    assert result.verdict == "confirmed" and result.proof["checked"]
-    assert result.technical_review["status"] == "needs-attention" and result.technical_review["rounds"] == 1
-    assert "follow-up stopped" in " ".join(result.observations)
+
+
+def test_a_checked_confirmation_stays_unreviewed_after_qa_engaged_the_finding(tmp_path):
+    """VER-046: QA that reviewed an earlier variant does not review this variant's checked confirmation, so no
+    question can lead the test agent to replace the checked proof with a later claim."""
+    sent = []
+    ctx = context(tmp_path, redirect_target(sent))
+    ctx.technical_review_budget["reviews"] = 1
+    actions = [attempt(), conclusion(1),
+               {"verdict": {"verdict": "inconclusive", "rationale": "QA doubts the redirect"}}]
+    factory, host, _, _ = scripted_factory(actions, [question(), CLEAR])
+    result = AgentProbe("open-redirect", factory, max_steps=6).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] and result.proof["steps"] == [1]
+    assert len(sent) == 1 and not host.calls and result.technical_review["status"] == "not-reviewed"
 
 
 def test_a_variant_gets_one_correction_round_and_a_second_objection_is_only_reported(tmp_path):
