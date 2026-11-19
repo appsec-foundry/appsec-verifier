@@ -1265,7 +1265,7 @@ def test_interrupted_har_write_does_not_replace_previous_evidence(tmp_path, monk
     path = ctx.evidence_dir / "T-001-poc.har"
     path.write_text("previous complete record")
 
-    def interrupted(*args):
+    def interrupted(*args, **kwargs):
         raise LimitExceeded("time", "interrupted")
 
     monkeypatch.setattr(poc.os, "replace", interrupted)
@@ -1420,3 +1420,11 @@ def test_a_framed_block_starts_its_own_line_and_the_report_keeps_the_text():
     page, marked = poc._marked(text, [("framed", '"items": [\n  1\n ]')])
     assert marked == 1 and '{<span class=nl>\n </span><span class="hit block">' in page     # no blank line above it
     assert poc._code_excerpt(text, [("framed", '"items": [\n  1\n ]')]) == '{\n ⟦"items": [\n  1\n ]⟧\n}'
+
+
+def test_short_numeric_session_cookie_is_private_in_both_directions():
+    raw = _raw(headers=[("Cookie", "sessionid=0123456789; theme=dark")],
+               response_headers=[("Set-Cookie", "sessionid=7654321; HttpOnly")])
+    rendered = json.dumps(poc.entry(raw))
+    assert "0123456789" not in rendered and "7654321" not in rendered
+    assert rendered.count("sessionid=[session cookie]") == 2 and "theme=dark" in rendered

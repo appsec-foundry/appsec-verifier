@@ -172,17 +172,18 @@ def is_privileged(ident: dict) -> bool:
 
 
 def choose_fields(host, budget, *, endpoint: str, handler: str | None = None, excerpt: str | None = None,
-                  timeout: float = 300.0) -> list[tuple[str, str]]:
+                  timeout: float = 300.0, sessions=None) -> list[tuple[str, str]]:
     """Ask the model once for up to two (username_field, password_field) pairs for `endpoint`. Counted against
     the run's call, cost and time limits. Raises AccountError when the call fails or the answer is not a valid
     `login_fields` step; the reply is validated against a strict schema before anything uses it."""
     from ..agent.hosts import HostReply
     from ..agent.steps import parse_step
     from ..limits import LimitExceeded, execution_deadline
+    from .model_data import model_data
 
-    prompt = json.dumps({"endpoint": endpoint, "handler": handler, "handler_source": excerpt})
+    prompt = json.dumps(model_data({"endpoint": endpoint, "handler": handler, "handler_source": excerpt}, sessions))
     try:
-        budget.note_cost(0.0)
+        budget.check_cost()
         budget.note_call()
         remaining = budget.remaining_time()
         limit = timeout if remaining is None else min(timeout, remaining)

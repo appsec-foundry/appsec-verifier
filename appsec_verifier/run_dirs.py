@@ -70,8 +70,9 @@ def new_run(project_dir: Path, now: datetime | None = None) -> Path:
 def latest_run(project_dir: Path, fits: Callable[[Path], bool]) -> Path | None:
     """The newest run in project_dir whose report `fits`, or None."""
     try:
-        runs = sorted((p for p in project_dir.iterdir() if (p / REPORT).is_file()), key=lambda p: p.name,
-                      reverse=True)
+        runs = sorted((p for p in project_dir.iterdir() if RUN_NAME.fullmatch(p.name) and not p.is_symlink()
+                       and not (p / REPORT).is_symlink() and (p / REPORT).is_file()),
+                      key=lambda p: p.name, reverse=True)
     except FileNotFoundError:
         return None
     return next((run for run in runs if fits(run / REPORT)), None)
@@ -79,38 +80,57 @@ def latest_run(project_dir: Path, fits: Callable[[Path], bool]) -> Path | None:
 
 def remove_if_empty(run: Path) -> None:
     """Remove a run directory nothing was written to; one that holds anything stays."""
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError), hold_run(run):
         run.rmdir()
 
 
 @contextlib.contextmanager
 def hold_run(run: Path) -> Iterator[None]:
-    """Mark run as in progress while the block lasts: a lock on a file in it, which the system also releases when
-    the process ends. The file is removed afterwards, so an empty run stays removable. A run another process
-    already holds is left as it is."""
-    try:
-        handle = open(run / LOCK, "a+b")
-    except OSError:
-        yield
-        return
-    locked = _lock(handle)
-    try:
-        yield
-    finally:
-        handle.close()
-        if locked:
-            with contextlib.suppress(OSError):
-                (run / LOCK).unlink()
+    """Take an exclusive, nonblocking lock for both writers and removal."""
+    if run.is_symlink():
+        raise OSError("refusing a linked run directory")
+    if os.name != "nt":
+        import fcntl
+
+        # The directory inode is stable even while its contents are removed.
+        fd = os.open(run, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise BlockingIOError("run is already in progress") from exc
+            if not os.path.samestat(os.fstat(fd), run.stat(follow_symlinks=False)):
+                raise OSError("run directory changed while locking")
+            # Respect runs started with the earlier file-lock implementation.
+            legacy = run / LOCK
+            if legacy.is_file():
+                with legacy.open("rb") as handle:
+                    if not _lock(handle):
+                        raise BlockingIOError("run is already in progress")
+            yield
+        finally:
+            os.close(fd)
+    else:
+        # Keep the lock inode outside the directory so deletion can hold it on Windows.
+        lock_file = run.with_name("." + run.name + ".lock")
+        if lock_file.is_symlink():
+            raise OSError("refusing a linked run lock")
+        with lock_file.open("a+b") as handle:
+            if not _lock(handle):
+                raise BlockingIOError("run is already in progress")
+            if not run.is_dir():
+                raise FileNotFoundError(run)
+            yield
 
 
 def in_progress(run: Path) -> bool:
-    """Whether a process holds run (hold_run)."""
     try:
-        handle = open(run / LOCK, "rb")
-    except OSError:
+        with hold_run(run):
+            return False
+    except FileNotFoundError:
         return False
-    with handle:
-        return not _lock(handle)
+    except OSError:
+        return True
 
 
 def _lock(handle: IO[bytes]) -> bool:

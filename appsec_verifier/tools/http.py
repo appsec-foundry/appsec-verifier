@@ -1,4 +1,4 @@
-"""Scope- and budget-confined HTTP client (VER-001, VER-017, VER-018, VER-015).
+"""Scope- and budget-confined HTTP client (VER-001, VER-015, VER-016, VER-017, VER-018).
 
 Every request, each redirect hop included, is authorised by the ScopeGuard and
 checked against the authorisation window before it is sent, paced to the
@@ -66,6 +66,7 @@ class GuardedHttpClient:
         self._default_purpose = default_purpose
         self._max_redirects = max_redirects
         self._protected: set[str] = set()
+        self.observe_response_cookies: Callable | None = None
 
     def protect_headers(self, names) -> None:
         """Treat these header names like Authorization: never forwarded across origins (VER-018)."""
@@ -116,6 +117,8 @@ class GuardedHttpClient:
 
             status = getattr(resp, "status_code", None)
             resp_headers = getattr(resp, "headers", {}) or {}
+            if self.observe_response_cookies:
+                self.observe_response_cookies(resp_headers)
             location = resp_headers.get("Location") or resp_headers.get("location")
             if follow_redirects and status and 300 <= status < 400 and location and hops < self._max_redirects:
                 try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import struct
@@ -140,8 +141,9 @@ def _review(tmp_path, replies, evidence, *, recapture=None):
     return ctx, res, host
 
 
-def shot(name, **extra):
-    return {"kind": "screenshot", "path": f"evidence/{name}", **extra}
+def shot(name, data=None, **extra):
+    return {"kind": "screenshot", "path": f"evidence/{name}",
+            "sha256": hashlib.sha256(data or png()).hexdigest(), **extra}
 
 
 def test_only_cleared_application_screenshots_reach_the_model_and_the_report_names_them(tmp_path):
@@ -165,7 +167,7 @@ def test_only_cleared_application_screenshots_reach_the_model_and_the_report_nam
 def test_at_most_three_screenshots_per_review_call(tmp_path):
     names = [f"a{n}.png" for n in range(5)]
     ctx, res, host = _review(tmp_path, [CLEAR], {n: png(tag=n.encode()) for n in names})
-    res.evidence = [shot(n, presentation="application", reviewable=True) for n in names]
+    res.evidence = [shot(n, png(tag=n.encode()), presentation="application", reviewable=True) for n in names]
     review_finding([(ctx, res)])
     assert len(host.calls[0]["images"]) == MAX_REVIEW_IMAGES == 3
 
@@ -188,7 +190,7 @@ def test_an_unclear_screenshot_can_be_replaced_by_another_page_once_per_round(tm
     def recapture(proposal):
         proposals.append(proposal)
         (ctx.evidence_dir / "better.png").write_bytes(png(tag=b"better"))
-        res.evidence[:] = [shot("better.png", presentation="application", reviewable=True)]
+        res.evidence[:] = [shot("better.png", png(tag=b"better"), presentation="application", reviewable=True)]
         return True
 
     page = {"path": "/#/basket", "step": 1, "values": ["bob@shop.test"], "role": None}
@@ -234,3 +236,11 @@ def test_the_run_check_finds_credential_values_and_marker_file_content():
     assert check("Welcome bob") is False
     assert check("token tok-123") is True and check("x marker-file-content-42 y") is True
     assert _private_text(None, {})("anything") is False
+
+
+def test_changed_image_is_withheld_even_when_its_original_was_cleared(tmp_path):
+    ctx, res, host = _review(tmp_path, [CLEAR], {"page.png": png(tag=b"changed")})
+    res.evidence = [shot("page.png", presentation="application", reviewable=True)]
+    review_finding([(ctx, res)])
+    assert host.calls[0]["images"] == []
+    assert res.evidence_review["images_reviewed"] == []

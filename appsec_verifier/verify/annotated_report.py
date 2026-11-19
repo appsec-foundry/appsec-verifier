@@ -254,6 +254,10 @@ def _section(t: dict, results: dict) -> list[str]:
             continue
         if block.get("variants"):
             out += ["", f"**Variant {_one_line(r['finding_ref'].get('variant'))}:** {_verdict(r)}"]
+        if r.get("retained"):
+            build = r.get("tested_build") or {}
+            out += ["", "Retained from a previous run. Tested build: "
+                    + _one_line(build.get("detected_build") or build.get("build_match") or "unknown") + "."]
         if r.get("rationale"):            # the model's words as text, as in verification.md: no section, no markup
             out += ["", "**Test agent's explanation** (not proof)", "", _fenced(str(r["rationale"]), "text")]
         out += _poc_markdown(r, level=6) + _review_markdown(r, 6)

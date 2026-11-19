@@ -187,6 +187,7 @@ class RunBudget:
         self._next_request_at: float | None = None
         self._cost_unknown = False
         self.lock = threading.RLock()      # counters and the ceiling question, for findings tested together
+        self._paid_call = threading.Lock()
         self._pace_lock = threading.Lock()  # one request rate for the run (VER-065)
         self._local = threading.local()     # the finding this thread's model calls are charged to
         self.cancelled = False
@@ -245,6 +246,25 @@ class RunBudget:
                 raise LimitExceeded("calls", f"model call cap {self.limits.max_calls} reached")
             self.check_finding_cost()
             self.calls += 1
+
+    @contextmanager
+    def model_slot(self, profile):
+        if profile in ("codex-cli", "copilot-cli"):
+            yield
+            return
+        if not self._paid_call.acquire(blocking=False):
+            while True:
+                self.check_time()
+                left = deadline_left()
+                if left is not None and left <= 0:
+                    raise LimitExceeded("time", "model call wait reached its deadline")
+                wait = min(t for t in (0.25, self.remaining_time(), left) if t is not None)
+                if self._paid_call.acquire(timeout=wait):
+                    break
+        try:
+            yield
+        finally:
+            self._paid_call.release()
 
     def remaining_cost(self) -> float | None:
         """USD left under the cost ceiling, or None when it is unbounded."""

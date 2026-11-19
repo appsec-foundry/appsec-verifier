@@ -454,6 +454,13 @@ properties:
             started:  { type: [string, "null"] }
             finished: { type: [string, "null"] }
 
+        retained: { type: boolean }
+        tested_build:
+          type: object
+          required: [detected_build, build_match]
+          properties:
+            detected_build: { type: [string, "null"] }
+            build_match: { enum: [match, mismatch, unknown, null] }
         source_generated:
           type: [string, "null"]
           description: Original report time retained on merge; fallback for older results without a test timestamp.

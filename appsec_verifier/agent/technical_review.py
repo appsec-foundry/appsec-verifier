@@ -17,6 +17,7 @@ import json
 
 from jsonschema import Draft202012Validator
 
+from ..auth.model_data import model_data
 from ..limits import LimitExceeded
 from ..planning import evidence_id
 from ..verification_context import bounded
@@ -131,16 +132,8 @@ def proof_contract(ctx, controller) -> dict:
 
 
 def clean(ctx, value):
-    if ctx.sessions is not None:
-        value = ctx.sessions.redact(value)
     marker = (ctx.scope.get("marker_file") or {}).get("content")
-    if isinstance(value, str):
-        return value.replace(marker, "[marker-file]") if marker else value
-    if isinstance(value, list):
-        return [clean(ctx, v) for v in value]
-    if isinstance(value, dict):
-        return {k: clean(ctx, v) for k, v in value.items()}
-    return value
+    return model_data(value, ctx.sessions, marker=marker)
 
 
 class TechnicalReview:

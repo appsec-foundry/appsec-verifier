@@ -83,3 +83,23 @@ def test_verify_writes_the_log_with_the_refused_request(tmp_path, monkeypatch):
     assert first["args"] == {"path": "/rest/%2e%2e/admin"} and "out of scope" in first["result"]["error"]
     assert last["verdict"] == "inconclusive" and last["step"] == 2
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_linked_report_and_log_leave_external_file_untouched(tmp_path):
+    import pytest
+
+    from appsec_verifier.progress import ConsoleLog
+    from appsec_verifier.verify.report import write_text_atomically
+
+    outside = tmp_path / "existing"
+    outside.write_bytes(b"operator file")
+    outside.chmod(0o640)
+    out = tmp_path / "out"
+    out.mkdir()
+    link = out / "linked"
+    link.symlink_to(outside)
+    for open_file in (lambda: ActionLog(link), lambda: ConsoleLog().start(link),
+                      lambda: write_text_atomically(link, "report")):
+        with pytest.raises(OSError):
+            open_file()
+        assert outside.read_bytes() == b"operator file" and stat.S_IMODE(outside.stat().st_mode) == 0o640

@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 from .preflight import printable
-from .run_dirs import REPORT, RUN_NAME, data_base, in_progress, remove_if_empty
+from .run_dirs import REPORT, RUN_NAME, data_base, hold_run, in_progress, remove_if_empty
 from .term_style import Style
 
 EXIT_OK = 0
@@ -112,11 +112,12 @@ def runs_command(remove: list[str] | None = None, older_than: int | None = None)
 def _remove(runs: list[Run]) -> int:
     removed, freed, failed = 0, 0, []
     for run in runs:
-        if in_progress(run.path):           # started again since it was listed
+        try:
+            with hold_run(run.path):
+                shutil.rmtree(run.path)
+        except BlockingIOError:
             print(f"{run.key} is in progress and stays.")
             continue
-        try:
-            shutil.rmtree(run.path)         # refuses a symbolic link and does not follow one inside
         except OSError as exc:
             failed.append(f"{run.key}: {type(exc).__name__}")
             continue

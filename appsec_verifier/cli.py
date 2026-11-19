@@ -62,7 +62,7 @@ def _csv(value: str | None) -> set[str] | None:
 
 def _select(args: argparse.Namespace, plans):
     """Apply the selection options of `args` (VER-026)."""
-    from .planning import add_quick, category_order, dependency_order, severity_order, supplement
+    from .planning import category_order, dependency_order, severity_order
 
     filters = dict(
         categories=_csv(args.category),
@@ -73,13 +73,6 @@ def _select(args: argparse.Namespace, plans):
         ids=_csv(args.only),
     )
     selected = select(plans, **filters)
-    strict = getattr(args, "strict_severity", False)
-    if args.min_severity and not args.only and not args.severity:
-        eligible = select(plans, **{**filters, "min_severity": None})
-        selected = supplement(selected, eligible, enabled=not strict)
-    if (args.min_severity or args.severity) and not args.only and not strict:
-        # The `quick` findings below a severity selection are tested too, within the other selectors.
-        selected = add_quick(selected, select(plans, **{**filters, "min_severity": None, "severities": None}))
     return dependency_order(category_order(severity_order(selected)))
 
 
@@ -159,6 +152,8 @@ def _default_output(args, doc: dict, assessment: Path, target: str) -> Path:
     from .run_dirs import data_base, latest_run, new_run, project_name
 
     project = data_base() / project_name(doc)
+    if project.is_symlink():
+        raise OSError("refusing a linked project directory")
     if args.resume:
         from .verify.report import resume_problems
         from .verify.runner import _sha256
@@ -531,11 +526,12 @@ def _sign_in_accounts(sessions, identities: list[dict], login: dict, host, budge
             from .agent.source_reader import SourceAccessError, SourceReader
 
             try:
-                excerpt = SourceReader(source_dir).read_window(handler[0], handler[1], context=15)["text"]
+                reader = SourceReader(source_dir, sessions=sessions)
+                excerpt = reader.read_window(handler[0], handler[1], context=15)["text"]
             except SourceAccessError:
                 excerpt = None
         try:
-            pairs = choose_fields(host, budget, endpoint=f"POST {path}",
+            pairs = choose_fields(host, budget, sessions=sessions, endpoint=f"POST {path}",
                                   handler=f"{handler[0]}:{handler[1]}" if handler else None, excerpt=excerpt)
         except AccountError as exc:
             for ident in identities:      # no later login with field names the model did not choose
@@ -586,7 +582,7 @@ def _ask_secret(prompt: str) -> str:
         return ""
 
 
-def _sessions(identities: list[dict], http, env, args, interactive: bool, target: str | None = None):
+def _sessions(identities: list[dict], http, env, args, interactive: bool, target: str | None = None, *, scope=None):
     """The run's SessionManager: values from `env` (environment plus hidden input), sign-ins that need a
     person only in an interactive run, login programs started from the identities file's directory, HTML form
     logins checked against the target URL (VER-041)."""
@@ -594,8 +590,12 @@ def _sessions(identities: list[dict], http, env, args, interactive: bool, target
     from .auth.interactive import LoginUI
 
     base_dir = Path(args.identities).parent if getattr(args, "identities", None) else None
-    return SessionManager(identities, http, env=env, ui=LoginUI() if interactive else None, base_dir=base_dir,
-                          target=target)
+    sessions = SessionManager(identities, http, env=env, ui=LoginUI() if interactive else None, base_dir=base_dir,
+                              target=target)
+    password_var = ((scope or {}).get("proxy") or {}).get("password_env")
+    if password_var and env.get(password_var):
+        sessions.remember_secret(env[password_var], "proxy password")
+    return sessions
 
 
 def _login_programs(identities: list[dict]) -> str | None:
@@ -778,8 +778,20 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     from .run_dirs import data_base, hold_run
 
     if Path(args.output).resolve().is_relative_to(data_base().resolve()):   # also a run named with --output
-        held.enter_context(hold_run(Path(args.output)))
-    existing_path = Path(args.output) / "verification.yaml"
+        try:
+            Path(args.output).mkdir(mode=0o700, parents=True, exist_ok=True)
+            held.enter_context(hold_run(Path(args.output)))
+        except OSError as exc:
+            return _blocked("The run directory cannot be locked", [str(exc)], "choose an idle run directory")
+    from .output_files import check_destination
+    out_dir = Path(args.output)
+    try:
+        for name in ("verification.yaml", "verification.md", "agent-log.jsonl", "console.log", "evidence",
+                     "failed-findings.json", f"{assessment.stem}.annotated.md", f"{assessment.stem}.annotated.yaml"):
+            check_destination(out_dir / name)
+    except OSError as exc:
+        return _blocked("Unsafe output directory", [str(exc)], "choose a directory without linked output files")
+    existing_path = out_dir / "verification.yaml"
     if not args.resume and not args.overwrite and report_exists(args.output):
         return _blocked(
             f"There is already a report in {args.output}",
@@ -858,8 +870,8 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         parallel = SUBSCRIPTION_PARALLEL if agent_info["profile"] in SUBSCRIPTION_PROFILES else DEFAULT_PARALLEL
 
     http = GuardedHttpClient(guard, budget, transport_from_scope(scope))
-    sessions = _sessions(identities, http, env, args, interactive, target)
-    source = SourceReader(args.source) if args.source else None
+    sessions = _sessions(identities, http, env, args, interactive, target, scope=scope)
+    source = SourceReader(args.source, sessions=sessions) if args.source else None
     registry = agent_registry(planner_factory, max_steps=limits.max_attempts)
     browser, browser_note, browser_missing = _proof_browser(args, http, sel)
     listener, listener_note = _callback_listener(scope, sel, auto=auto_callback)
@@ -1246,7 +1258,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             http = GuardedHttpClient(guard, RunBudget(Limits.load()), transport_from_scope(scope))
             add(check_target(http, target, proxy=via))
             if not failed(checks):
-                sessions = _sessions(identities, http, env, args, interactive, target)
+                sessions = _sessions(identities, http, env, args, interactive, target, scope=scope)
                 if login:
                     add(*_sign_in_accounts(sessions, identities, login, host, RunBudget(Limits.load()), doc, None))
                 add(*check_identities(sessions, identities, http, target, scope=scope))
@@ -2362,7 +2374,7 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     sel.add_argument(
         "--strict-severity",
         action="store_true",
-        help="do not add lower-severity quick or management findings or declared prerequisites",
+        help="keep the severity selection exact (the default; accepted for compatibility)",
     )
     sel.add_argument(
         "--only", metavar="IDS", help="finding ids, comma-separated, e.g. T-003,T-009; overrides the other selectors"

@@ -66,6 +66,8 @@ $defs:
       verdict:
         enum: [confirmed, not-reproducible, blocked-by-control, inconclusive, not-attempted]
       confidence: { enum: [high, medium, low, null] }
+      retained: { type: boolean }
+      tested_build: { type: object }
       verified_at: { type: [string, "null"] }
       verifier_version: { type: [string, "null"] }
       result_ref:

@@ -65,3 +65,18 @@ def test_runner_keeps_actual_test_times_after_evidence_review():
     assert before <= started <= finished <= after
     assert "timing" not in doc["results"][1]
     assert exported(doc)["T-1"] == timing["finished"]
+
+
+def test_resumed_build_is_bound_to_each_result_including_legacy_reports():
+    old = report(OLD, [row("T-1"), row("T-2")])
+    old["meta"]["target"] = {"detected_build": "build-A", "build_match": "mismatch"}
+    new = report(NEW, [row("T-2")])
+    new["meta"]["target"] = {"detected_build": "build-B", "build_match": "match"}
+    merged = merge_reports(old, new)
+    annotations = build_annotations(merged, verification_report="verification.yaml")["annotations"]
+    assert [(a["retained"], a["tested_build"]["detected_build"]) for a in annotations] == [
+        (True, "build-A"), (False, "build-B")]
+    assert "Previous run · build-A" in to_markdown(merged)
+    assert merge_reports(merged, new)["results"][0]["tested_build"] == old["meta"]["target"]
+    old["meta"]["previous_generated"] = OLD  # legacy aggregate with no reliable per-row attribution
+    assert merge_reports(old, new)["results"][0]["tested_build"] == {"detected_build": None, "build_match": "unknown"}

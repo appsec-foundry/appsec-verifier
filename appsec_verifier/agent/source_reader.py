@@ -10,13 +10,19 @@ file system cannot use, or a file it cannot read, is a SourceAccessError, which
 the agent sees as a tool error. This tool never writes.
 """
 
+from __future__ import annotations
+
 import os
 from collections import Counter
 from pathlib import Path
 
+from ..auth.model_data import model_data
+
 # Matched case-insensitively against every part of the resolved path below the repository root.
 _SECRET_DIRS = frozenset({".git", ".hg", ".svn", ".ssh", ".aws", ".gnupg", ".docker", ".kube"})
-_SECRET_NAMES = frozenset({".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd", ".git-credentials",
+_SECRET_PATHS = {(".claude", ".credentials.json"), (".codex", "auth.json"), ("gh", "hosts.yml"), ("gh", "hosts.yaml"),
+                 (".config", "gcloud", "application_default_credentials.json")}
+_SECRET_NAMES = frozenset({".envrc", ".netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd", ".git-credentials",
                            "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"})
 _SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 MAX_SOURCE_BYTES = 1_048_576  # total read cap, before decoding or splitting (VER-036)
@@ -38,13 +44,17 @@ class SourceAccessError(Exception):
 def _holds_secrets(rel: Path) -> bool:
     parts = [p.lower() for p in rel.parts]
     name = parts[-1]
+    if any(tuple(parts[-len(suffix):]) == suffix for suffix in _SECRET_PATHS):
+        return True
     if any(p in _SECRET_DIRS for p in parts) or name in _SECRET_NAMES or name.endswith(_SECRET_SUFFIXES):
         return True
     return name == ".env" or (name.startswith(".env.") and not name.endswith(_ENV_TEMPLATES))
 
 
 class SourceReader:
-    def __init__(self, repo_root, *, max_bytes: int = 20000, context_lines: int = 40, max_lines: int = 400):
+    def __init__(self, repo_root, *, max_bytes: int = 20000, context_lines: int = 40,
+                 max_lines: int = 400, sessions=None):
+        self.sessions = sessions
         self.root = Path(repo_root).resolve()
         self.max_bytes = max_bytes
         self.context_lines = context_lines
@@ -53,12 +63,14 @@ class SourceReader:
     def _resolve(self, relpath: str) -> Path:
         if "\x00" in str(relpath):
             raise SourceAccessError(f"not a file path: {relpath!r}")
-        p = (self.root / relpath).resolve()
+        path = self.root / relpath
+        p = path.resolve()
         try:
             rel = p.relative_to(self.root)
         except ValueError as exc:
             raise SourceAccessError(f"path escapes the repository: {relpath!r}") from exc
-        if rel.parts and _holds_secrets(rel):
+        if (path.is_relative_to(self.root) and path != self.root and _holds_secrets(path.relative_to(self.root))) or (
+                rel.parts and _holds_secrets(rel)):
             raise SourceAccessError(f"{relpath!r} holds credentials or VCS data and is not read (VER-016)")
         try:
             is_file = p.is_file()
@@ -82,11 +94,14 @@ class SourceReader:
                 scanned += 1
                 if scanned > _FIND_SCAN_CAP:
                     return {"query": query, "matches": sorted(matches), "truncated": True}
+                path = Path(dirpath) / name
+                if _holds_secrets(path.relative_to(self.root)):
+                    continue
                 try:
-                    rel = (Path(dirpath) / name).resolve().relative_to(self.root)
+                    rel = path.resolve().relative_to(self.root)
                 except (OSError, ValueError):
                     continue
-                if _holds_secrets(rel):
+                if not rel.parts or _holds_secrets(rel):
                     continue
                 if needle in str(rel).replace("\\", "/").lower():
                     matches.append(str(rel))
@@ -134,10 +149,15 @@ class SourceReader:
                 scanned += 1
                 if scanned > _FIND_SCAN_CAP:
                     return done(True)
+                path = Path(dirpath) / name
+                if _holds_secrets(path.relative_to(self.root)):
+                    continue
                 try:
-                    resolved = (Path(dirpath) / name).resolve()
+                    resolved = path.resolve()
                     rel = resolved.relative_to(self.root)
-                    if _holds_secrets(rel) or not resolved.is_file() or resolved.stat().st_size > MAX_SOURCE_BYTES:
+                    if not rel.parts or _holds_secrets(rel) or not resolved.is_file():
+                        continue
+                    if resolved.stat().st_size > MAX_SOURCE_BYTES:
                         continue
                     if read + resolved.stat().st_size > _SEARCH_READ_CAP:
                         return done(True)
@@ -149,7 +169,8 @@ class SourceReader:
                 if len(data) > MAX_SOURCE_BYTES or b"\x00" in data[:8192]:   # grown since stat, or binary
                     continue
                 unshown = 0
-                for number, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+                clean = model_data(data.decode("utf-8", errors="replace"), self.sessions)
+                for number, line in enumerate(clean.splitlines(), 1):
                     if needle in line.lower():
                         if len(matches) < limit:
                             matches.append({"path": str(rel), "line": number, "text": line.strip()[:_SEARCH_LINE_CAP]})
@@ -173,7 +194,7 @@ class SourceReader:
         return data.decode("utf-8", errors="replace")
 
     def read_window(self, relpath: str, around_line: int | None = None, context: int | None = None) -> dict:
-        lines = self.read_all(relpath).splitlines()
+        lines = model_data(self.read_all(relpath), self.sessions).splitlines()
         ctx = self.context_lines if context is None else context
         if around_line:
             lo = max(0, around_line - 1 - ctx)

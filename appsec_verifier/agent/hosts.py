@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from ..auth.model_data import model_data
 from ..limits import LimitExceeded, execution_deadline
 from .steps import Unusable, inconclusive, parse_step, prompt, step_schema, system_prompt
 
@@ -273,6 +274,17 @@ class HostPlanner:
         return self._call(ctx, system, payload, schema=schema, review=review, images=images)
 
     def _call(self, ctx, system: str, payload: str, *, schema=None, review=False, images=()):
+        sessions = getattr(ctx, "sessions", None)
+        # Subscription hosts report no spend. A metered host may use the remaining ceiling,
+        # so keep that allowance exclusive until the call's usage has been accounted for.
+        with ctx.budget.model_slot(getattr(self._host, "profile", None)):
+            system = model_data(system, sessions)
+            payload = model_data(payload, sessions)
+            return self._billed_call(ctx, system, payload, schema=schema, review=review, images=images)
+
+    def _billed_call(self, ctx, system, payload, *, schema, review, images):
+        if guard := getattr(ctx, "guard", None):
+            guard.check_window()
         host = self._host
         if host.broken:
             raise HostCallError(f"{host.label} stopped for this run: {host.broken}")

@@ -41,7 +41,8 @@ def test_missing_file_refused(tmp_path):
 
 @pytest.mark.parametrize("relpath", [".env", ".env.local", "config/.env.production", ".ENV", ".git/config",
                                      "sub/.git/config", ".git", ".aws/credentials", "certs/server.key",
-                                     "certs/tls.PEM", ".ssh/id_ed25519", "id_rsa", ".npmrc", ".git-credentials"])
+                                     "certs/tls.PEM", ".ssh/id_ed25519", ".codex/auth.json", ".config/gh/hosts.yml",
+                                     ".envrc", "id_rsa", ".npmrc", ".git-credentials"])
 def test_files_holding_secrets_are_refused(tmp_path, relpath):
     """Credential stores and VCS internals never reach the model, though inside the repository (VER-016)."""
     r = _repo(tmp_path)
@@ -54,6 +55,7 @@ def test_files_holding_secrets_are_refused(tmp_path, relpath):
     with pytest.raises(SourceAccessError, match="not read") as exc:
         r.read_window(relpath)
     assert "hunter2" not in str(exc.value)
+    assert not r.search("DB_PASSWORD")["matches"]
 
 
 def test_symlink_to_a_secret_file_is_refused(tmp_path):
@@ -199,3 +201,28 @@ def test_search_bounds_the_list_of_further_files(tmp_path):
 def test_search_rejects_a_query_out_of_bounds(tmp_path, text):
     with pytest.raises(SourceAccessError):
         _search_repo(tmp_path).search(text)
+
+
+def test_model_source_masks_credentials_before_selecting_lines_and_cutting(tmp_path):
+    from appsec_verifier.auth.sessions import SessionManager
+
+    sessions = SessionManager([{"role": "demo", "auth": {"token_env": "TOKEN"}}], None, env={"TOKEN": "testCanary123"})
+    reader = SourceReader(tmp_path, max_bytes=100, sessions=sessions)
+    source = tmp_path / "example.txt"
+    source.write_text("-----BEGIN PRIVATE KEY-----\nprivate-canary\n-----END PRIVATE KEY-----\n"
+                      "selected = 'testCanary123'\napi_key = 'sourceCanary'\n")
+    assert reader.read_window(source.name, around_line=2, context=0)["text"] == ""
+    assert reader.read_window(source.name, around_line=4, context=0)["text"].startswith("selected")
+    assert "Canary" not in reader.read_window(source.name)["text"]
+    assert reader.search("private-canary")["matches"] == []
+    assert "testCanary" not in reader.search("selected")["matches"][0]["text"]
+
+
+def test_model_source_masks_common_camel_case_fields_and_numeric_json(tmp_path):
+    source = tmp_path / "config.txt"
+    source.write_text('clientSecret = "sourceCanary"\n{"accessToken": 207391}\n'
+                      'echo sourceCanary 207391\npassword: |-\n  blockCanary\n'
+                      'api_key = "incompleteCanary')
+    excerpt = SourceReader(tmp_path).read_window(source.name)["text"]
+    assert "Canary" not in excerpt and "207391" not in excerpt
+    assert "clientSecret" in excerpt and "accessToken" in excerpt

@@ -466,7 +466,9 @@ def screenshots(ctx, history: list[dict], steps: list[dict], presentation: dict,
     ctx.evidence_panels.append({"text": text[:8000], "body_font_px": 16})
     sessions = getattr(ctx, "sessions", None)
     marker = ((getattr(ctx, "scope", None) or {}).get("marker_file") or {}).get("content")
-    reviewable = (sessions is None or sessions.redact(text) == text) and not (marker and marker in text)
+    from ..auth.model_data import model_data
+
+    reviewable = model_data(text, sessions) == text and not (marker and marker in text)
     try:
         shots = ctx.browser.render_exchanges(html=page, name=evidence_name(ctx.plan), marked=marked)
     except Exception:  # noqa: BLE001 - a screenshot only illustrates; the verdict stands without it

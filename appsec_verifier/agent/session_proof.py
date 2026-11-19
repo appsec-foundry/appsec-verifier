@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.cookies import CookieError, SimpleCookie
 
+from ..auth.sessions import secret_cookie
 from .experiments import latest_plan
 
 
@@ -26,7 +27,7 @@ def cookie_observations(response, sessions=None):
         except CookieError:
             continue
         for name, cookie in cookies.items():
-            if sessions is not None and cookie.value:
+            if sessions is not None and secret_cookie(name, cookie.value):
                 sessions.remember_secret(cookie.value, "session cookie")
             active = bool(cookie.value)
             try:

@@ -93,7 +93,7 @@ Each finding gets one of these verdicts. A negative verdict applies only to the 
 
 - Requests go only to the scope, during its test period, never to cloud metadata addresses, and only after you confirm the test plan. Requests, rate, model calls, cost and run time are limited for the whole run ([defaults](data/limits.yaml)), also while it tests up to four findings at the same time ([`--parallel`](docs/cli.md)).
 - Only GET, HEAD and OPTIONS, unless you allow writes with `--allow-intrusive` or your yes; never DELETE. Created records stay on the target, so allow writes only on an instance you can reset.
-- Passwords and tokens are not stored and never reach the model, the logs or the report.
+- The Verifier uses test credentials for sign-in and target requests and masks them in model prompts, logs and reports. It also masks recognizable secrets in source files and target responses before sending excerpts to a model.
 - The agent has no shell and writes no files. It sees the target's responses and, with `--source`, its source code, so target data reaches the model.
 
 ## Scope and test accounts
@@ -138,7 +138,7 @@ The CLIs run without tools, MCP servers, settings or session history; using a su
 | `runs` | Lists earlier runs written without `--output` and removes the ones you name or older ones after you confirm. |
 | `update` | Updates a pipx installation after you confirm. |
 
-Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. A severity selection also includes findings below it that are cheap to confirm, such as XSS and SQL injection ([details](docs/cli.md#select-what-to-verify-ver-026)). All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
+Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. Severity filters apply exactly, including to quick findings ([details](docs/cli.md#select-what-to-verify-ver-026)). All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
 
 ### Run without questions (CI)
 

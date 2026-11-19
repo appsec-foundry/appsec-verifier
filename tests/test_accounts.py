@@ -436,3 +436,12 @@ def test_without_a_login_endpoint_the_accounts_sign_in_at_the_form_the_target_ur
     assert posts == [(URL + "/session", {"login": "jim", "secret": "ncc-1701"}),
                      (URL + "/session", {"login": "bender", "secret": "liquor"})]
     assert seen["identities"] == [("account-1", False), ("account-2", False)]
+
+
+def test_login_field_host_receives_only_cleaned_handler_source():
+    host = FakeHost()
+    sessions = SessionManager([{"role": "demo", "auth": {"token_env": "TOKEN"}}], None, env={"TOKEN": "knownCanary12"})
+    choose_fields(host, RunBudget(Limits()), endpoint="POST /login", handler="routes.ts:3", sessions=sessions,
+                  excerpt='const api_key = "sourceCanary"; // knownCanary12')
+    assert len(host.prompts) == 1 and "routes.ts" in host.prompts[0]
+    assert "sourceCanary" not in host.prompts[0] and "knownCanary12" not in host.prompts[0]

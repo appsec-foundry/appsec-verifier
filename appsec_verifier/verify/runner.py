@@ -71,10 +71,12 @@ def _sha256(path: Path) -> str | None:
 def _private_text(sessions, scope):
     """Whether a text holds a credential value or the marker file's content: such a screenshot never reaches a
     model (VER-012, VER-016, VER-042)."""
+    from ..auth.model_data import model_data
+
     marker = (scope.get("marker_file") or {}).get("content")
 
     def check(text: str) -> bool:
-        return bool(marker and marker in text) or (sessions is not None and sessions.redact(text) != text)
+        return bool(marker and marker in text) or model_data(text, sessions) != text
 
     return check
 
@@ -190,6 +192,7 @@ def run_verification(
     allows writes for runs in intrusive mode.
     `parallel` is how many findings are tested at the same time (VER-065); 1 tests them one after another."""
     now = now or datetime.now(timezone.utc)
+    from ..auth.model_data import model_data
     from ..planning import evidence_id
 
     skipped = skipped or {}
@@ -200,7 +203,7 @@ def run_verification(
     guard = ScopeGuard(scope)
     if browser is not None:
         browser.private_text = _private_text(sessions, scope)
-        browser.redact = sessions.redact if sessions is not None else lambda value: value
+        browser.redact = lambda value: model_data(value, sessions)
 
     probed = [
         p.status == "dynamic" and registry.get(p.cls) is not None and evidence_id(p) not in skipped for p in plans
@@ -629,4 +632,7 @@ def run_verification(
         "contacted_target": bool(contacted),
         "interrupted": interrupted,
     }
+    for row in results:
+        row["tested_build"] = {k: meta["target"][k] for k in ("detected_build", "build_match")}
+        row["retained"] = False
     return {"meta": meta, "results": results}

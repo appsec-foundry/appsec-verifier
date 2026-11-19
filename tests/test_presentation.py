@@ -452,10 +452,12 @@ def test_a_revision_presentation_has_a_strict_form_whose_nulls_are_dropped():
 
 def test_the_reviewer_may_see_a_cleared_image_the_agent_composed_but_not_the_verifier_s():
     res = SimpleNamespace(evidence=[
-        {"kind": "screenshot", "path": "evidence/a.png", "composed_by": "test-agent", "reviewable": True},
+        {"kind": "screenshot", "path": "evidence/panel-marker.png", "composed_by": "test-agent", "reviewable": True},
         {"kind": "screenshot", "path": "evidence/b.png", "composed_by": "test-agent", "reviewable": False},
         {"kind": "screenshot", "path": "evidence/c.png", "composed_by": "verifier"}])
-    items = _images(SimpleNamespace(evidence_dir=None), res)
+    ctx = SimpleNamespace(evidence_dir=None, sessions=None, scope={"marker_file": {"content": "panel-marker"}})
+    items = _images(ctx, res)
+    assert items[0]["path"] == "evidence/[marker-file].png"
     assert [(i["test_agent_composed"], i["cleared_for_model"]) for i in items] == [
         (True, True), (True, False), (False, False)]
 

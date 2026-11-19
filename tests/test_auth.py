@@ -55,6 +55,22 @@ def test_bearer_from_env_no_request():
     assert tr.calls == []
 
 
+def test_redirect_cookie_is_masked_even_when_final_response_only_echoes_its_value():
+    def transport(method, url, headers, **kwargs):
+        if url.endswith("/start"):
+            response = FakeResp(302)
+            response.headers = {"Location": "/end", "Set-Cookie": "sid=579; HttpOnly"}
+        else:
+            response = FakeResp()
+            response.text = "Welcome back 579"
+        return response
+
+    client = GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), transport)
+    sessions = SessionManager([], client, env={})
+    response = client.request("GET", SCOPE["base_url"] + "/start")
+    assert sessions.redact_model(response.text) == "Welcome back [session cookie]"
+
+
 def test_basic_builds_base64():
     mgr, _ = _mgr([{"role": "u", "method": "basic",
                     "auth": {"username_env": "U", "password_env": "P"}}], {"U": "user", "P": "pw"})
@@ -216,9 +232,9 @@ def test_only_a_cookie_value_that_can_be_a_session_is_a_secret():
     assert mgr.redact("allowing a follow-up below") == "allowing a follow-up below"
     assert mgr.redact("Cookie: PHPSESSID=k3j4h5g6f7d8s9a0q1w2; security=low") == "Cookie: [s session]"
     assert mgr.redact("id k3j4h5g6f7d8s9a0q1w2, level low") == "id [s session], level low"
-    mgr.remember_secret("medium", "session cookie")
+    mgr.remember_secret("0123456789", "session cookie")
     mgr.remember_secret("a1b2c3d4e5", "session cookie")
-    assert mgr.redact("medium a1b2c3d4e5") == "medium [session cookie]"
+    assert mgr.redact("0123456789 a1b2c3d4e5") == "[session cookie] [session cookie]"
 
 
 def test_a_page_with_a_user_name_may_reach_a_model_and_one_with_a_password_may_not():

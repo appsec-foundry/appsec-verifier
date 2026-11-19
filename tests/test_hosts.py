@@ -908,3 +908,67 @@ def test_openai_incomplete_answer_still_records_cache_cost_and_usage():
     reply = _openai_cache_reply({"cached_tokens": 800}, status="incomplete")
     assert reply.error == "invalid_response" and reply.usd > 0
     assert reply.usage["cache_read_input_tokens"] == 800
+
+
+def test_every_metered_planner_shares_one_spend_allowance():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from appsec_verifier.limits import worker_thread
+
+    ctx = _ctx(Limits(cost_limit_usd=1))
+    started, second_ready, release = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    class Host:
+        broken = None
+
+        def call(self, system, payload, timeout, budget, **kwargs):
+            calls.append(budget.remaining_cost())
+            started.set()
+            assert release.wait(5)
+            return HostReply(step=_wire("submit_verdict"), usd=1)
+
+    planner = HostPlanner(Host())
+
+    def call(second):
+        with worker_thread():
+            if second:
+                second_ready.set()
+            return planner.next_step(ctx, [])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(call, False)
+        assert started.wait(5)
+        second = pool.submit(call, True)
+        assert second_ready.wait(5)
+        release.set()
+        first.result(timeout=5)
+        with pytest.raises(LimitExceeded, match="cost ceiling"):
+            second.result(timeout=5)
+    assert calls == [1] and ctx.budget.cost == 1
+
+
+def test_secret_values_absent_from_host_requests_and_debug_prompts():
+    from appsec_verifier.auth.sessions import SessionManager
+
+    ctx = _ctx()
+    ctx.sessions = SessionManager([{"role": "demo", "auth": {"password_env": "PW"}}], None, env={"PW": "canaryword"})
+    ctx.model_exchanges = []
+    ctx.plan.title = "Error mentioning prefixcanarywordsuffix"
+    token = "ghp_" + "SyntheticCanary" * 2
+    ctx.plan.context = {"evidence_summary": token}
+    seen = []
+
+    class Host:
+        broken = None
+
+        def call(self, system, payload, timeout, budget, **kwargs):
+            seen.append((system, payload, kwargs["schema"]))
+            return HostReply(step=_wire("submit_verdict"), usd=0)
+
+    probe = HostPlanner(Host())
+    probe.next_step(ctx, [{"tool": "read_source", "result": {"text": 'api_key = "sourceCanary"'}}])
+    assert len(seen) == 1 and "Error mentioning" in seen[0][1]
+    for value in ("canaryword", token, "sourceCanary"):
+        assert value not in json.dumps([seen, ctx.model_exchanges])

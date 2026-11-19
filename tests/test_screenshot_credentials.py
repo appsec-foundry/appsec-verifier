@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -48,7 +49,7 @@ def capture(tmp_path, monkeypatch):
 
     def framed(**kwargs):
         kwargs["path"].write_bytes(b"framed-fake-png")
-        return kwargs["path"], None
+        return kwargs["path"], {"sha256": hashlib.sha256(kwargs["path"].read_bytes()).hexdigest()}
 
     monkeypatch.setattr(browser, "_shoot_recorded", framed)
     return browser, marked, page, calls
@@ -87,7 +88,7 @@ def test_captions_are_masked_before_rendering_and_marked_in_evidence(capture, mo
     def framed(**kwargs):
         frames.append(kwargs["body"])
         kwargs["path"].write_bytes(b"fake-png")
-        return kwargs["path"], None
+        return kwargs["path"], {"sha256": hashlib.sha256(kwargs["path"].read_bytes()).hexdigest()}
 
     monkeypatch.setattr(browser, "_shoot_recorded", framed)
     entries = save(browser, page, URL + "?token=" + SECRET)

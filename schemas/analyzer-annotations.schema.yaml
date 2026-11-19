@@ -113,6 +113,9 @@ properties:
           type: [string, "null"]
           description: Short reason for the verdict. Redacted of sensitive target data.
 
+        retained: { type: boolean }
+        tested_build: { type: object }
+
         verified_at:
           type: [string, "null"]
           description: ISO-8601 UTC time the finding was verified.

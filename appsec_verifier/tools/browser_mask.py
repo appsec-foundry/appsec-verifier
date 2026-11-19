@@ -11,9 +11,12 @@ import base64
 
 from ..limits import execution_deadline
 
-_READ = """() => {
+_READ = r"""() => {
   const items = [], extra = [];
-  let size = 0;
+  let size = 0, opaque = false;
+  const imageStyle = style => style.backgroundImage !== 'none' || style.listStyleImage !== 'none'
+      || style.borderImageSource !== 'none' || (style.maskImage && style.maskImage !== 'none')
+      || /(?:url|image|image-set|cross-fade|gradient)\(/i.test(style.content);
   const add = (node, kind, text, attr = null) => {
     size += text.length;
     if (size > 200000 || items.length >= 10000) throw new Error('capture text limit');
@@ -26,21 +29,29 @@ _READ = """() => {
       if (!node.parentElement?.closest('script,style,noscript')) add(node, 'text', node.nodeValue || '');
     }
     for (const el of root.querySelectorAll('*')) {
+      const style = getComputedStyle(el);
+      const rendered = el.getClientRects().length > 0;
+      if (rendered && (el.matches('img,svg,canvas,video,iframe,object,embed,input[type=image]')
+          || imageStyle(style))) opaque = true;
       if (el.matches('input,textarea,select')) add(el, 'value', el.value || '');
       for (const attr of ['alt', 'placeholder', 'title']) {
         if (el.hasAttribute(attr)) add(el, 'attribute', el.getAttribute(attr), attr);
       }
       for (const pseudo of ['::before', '::after']) {
-        const text = getComputedStyle(el, pseudo).content || '';
+        const pseudoStyle = getComputedStyle(el, pseudo);
+        const text = pseudoStyle.content || '';
         size += text.length;
         if (size > 200000) throw new Error('capture text limit');
-        if (text !== 'none' && text !== 'normal') extra.push(text);
+        if (text !== 'none' && text !== 'normal') {
+          extra.push(text);
+          if (rendered && imageStyle(pseudoStyle)) opaque = true;
+        }
       }
       if (el.shadowRoot) walk(el.shadowRoot);
     }
   };
   walk(document.documentElement);
-  return {items, extra};
+  return {items, extra, opaque};
 }"""
 
 _APPLY = """(snapshot, replacements) => {
@@ -90,7 +101,7 @@ def mask_credentials(page, redact, *, protected=(), timeout=5000) -> tuple[bool,
         return False, "the screenshot text could not be safely masked and checked"
 
 
-def capture_masked(page, redact, *, timeout=5000, clip=None) -> tuple[bytes, str]:
+def capture_masked(page, redact, *, timeout=5000, clip=None) -> tuple[bytes, str | None]:
     """Recheck after annotations and capture the viewport without further DOM changes.
 
     The native capture avoids running page-side screenshot preparation after the last
@@ -99,6 +110,7 @@ def capture_masked(page, redact, *, timeout=5000, clip=None) -> tuple[bytes, str
     """
     with execution_deadline(timeout / 1000, kind="time"):
         checked = page.wait_for_function(_READ, timeout=timeout)
+        opaque = checked.evaluate("s => s.opaque")
         text = checked.evaluate("s => s.items.map(i => i.text).concat(s.extra, document.body?.innerText || '')")
         checked.dispose()
         if redact is None or redact(text) != text:
@@ -106,4 +118,4 @@ def capture_masked(page, redact, *, timeout=5000, clip=None) -> tuple[bytes, str
         session = page.context.new_cdp_session(page)
         result = session.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False,
                               **({"clip": {**clip, "scale": 1}} if clip else {})})
-        return base64.b64decode(result["data"], validate=True), "\n".join(text)
+        return base64.b64decode(result["data"], validate=True), None if opaque else "\n".join(text)

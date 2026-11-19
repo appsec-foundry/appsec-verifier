@@ -65,9 +65,9 @@ def test_a_held_run_is_in_progress_until_the_block_ends_and_leaves_no_lock_behin
 
 def test_a_second_hold_on_a_held_run_leaves_the_first_ones_lock_alone(tmp_path):
     with hold_run(tmp_path):
-        with hold_run(tmp_path):
-            pass
-        assert in_progress(tmp_path) and (tmp_path / LOCK).exists()
+        with pytest.raises(BlockingIOError), hold_run(tmp_path):
+            pytest.fail("a second writer entered the run")
+        assert in_progress(tmp_path)
     assert not in_progress(tmp_path)
 
 

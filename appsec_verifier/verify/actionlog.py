@@ -14,10 +14,11 @@ The file is owner-only, and each line is flushed so a cut-off run keeps its log.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+
+from ..output_files import open_log
 
 
 class ActionLog:
@@ -27,10 +28,7 @@ class ActionLog:
         self.path = Path(path)
         self._redact = redact
         self._clock = clock or (lambda: datetime.now(timezone.utc))
-        flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
-        fd = os.open(self.path, flags, 0o600)
-        self.path.chmod(0o600)            # also when an earlier run left the file with wider rights
-        self._fh = os.fdopen(fd, "a" if append else "w", encoding="utf-8")
+        self._fh = open_log(self.path, append)
         self._lock = threading.Lock()     # findings tested at the same time write whole records (VER-065)
 
     def __call__(self, record: dict) -> None:

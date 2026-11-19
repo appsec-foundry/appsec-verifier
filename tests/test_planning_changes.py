@@ -754,13 +754,8 @@ def test_quick_findings_are_cheap_xss_and_sql_injection_a_read_can_reach():
 
 
 @pytest.mark.parametrize("selector", [{"severity": "critical,high"}, {"min_severity": "high"}])
-def test_a_severity_selection_adds_the_quick_findings_of_other_severities(selector):
-    """VER-026: critical and high, plus every quick finding below, marked as added; nothing else below."""
-    from appsec_verifier.planning import QUICK_REASON
-
-    selected = _selected(_quick_plans(), **selector)
-    assert [p.id for p in selected] == ["T-1", "T-2"]
-    assert selected[0].selection_reason is None and selected[1].selection_reason == QUICK_REASON
+def test_severity_selection_keeps_lower_quick_findings_out(selector):
+    assert [p.id for p in _selected(_quick_plans(), **selector)] == ["T-1"]
 
 
 @pytest.mark.parametrize("selector", [{"severity": "critical", "strict_severity": True},

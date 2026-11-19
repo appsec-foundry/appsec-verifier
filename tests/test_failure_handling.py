@@ -608,10 +608,10 @@ def test_a_refused_login_is_not_tried_again_in_the_run():
 def test_a_failed_write_of_the_annotated_copy_leaves_no_partial_file(tmp_path, monkeypatch):
     real_replace = os.replace
 
-    def replace(src, dst):
+    def replace(src, dst, **directory_fds):
         if Path(dst).name == "a.annotated.yaml":
             raise OSError(errno.ENOSPC, "No space left on device")
-        return real_replace(src, dst)
+        return real_replace(src, dst, **directory_fds)
 
     monkeypatch.setattr(report.os, "replace", replace)
     with pytest.raises(OSError):
@@ -619,7 +619,8 @@ def test_a_failed_write_of_the_annotated_copy_leaves_no_partial_file(tmp_path, m
     assert yaml.safe_load((tmp_path / "a.yaml").read_text()) == {"threats": THREATS}
     out = tmp_path / "out"
     assert not (out / "a.annotated.yaml").exists()
-    assert not [p for p in [*tmp_path.iterdir(), *out.iterdir()] if p.name.endswith(".tmp")]
+    remaining = [*tmp_path.iterdir(), *out.iterdir()]
+    assert not any(p.name.endswith(".tmp") or p.name.startswith(".output-") for p in remaining)
 
 
 # ── annotating writes copies; the Analyzer's files stay as they are (VER-027, VER-038) ──

@@ -312,7 +312,7 @@ def test_a_screenshot_masks_credentials_before_capture_and_review(browser, monke
     shots = [e for e in result["evidence"] if e["kind"] == "screenshot"]
     assert len(shots) == 1 and list((tmp / "evidence").glob("*.png"))
     assert result["executed"] is True
-    assert shots[0]["reviewable"] is True and shots[0]["credential_masked"] is bool(extra)
+    assert shots[0]["reviewable"] is False and shots[0]["credential_masked"] is bool(extra)
     assert captured_text and all("s3cret-token" not in text for text in captured_text)
     assert ("[redacted]" in captured_text[0]) is bool(extra)
     assert all("s3cret-token" not in p.read_text() for p in (tmp / "evidence").glob("*.json"))
@@ -358,7 +358,7 @@ def test_credentials_and_fields_are_masked_or_omitted_if_the_page_restores_them(
         return
     assert not result.get("screenshot_error")
     [shot] = [e for e in result["evidence"] if e["kind"] == "screenshot"]
-    assert result["executed"] and shot["credential_masked"] and shot["reviewable"]
+    assert result["executed"] and shot["credential_masked"] and not shot["reviewable"]
     assert len(seen) == 1 and seen[0]["restored"] == 0
     assert username in seen[0]["text"] and password not in str(seen)
     assert seen[0]["fields"] == [["[customer-a password]", ""], ["", "[customer-a password]"]]
@@ -398,8 +398,11 @@ def test_unmaskable_text_omits_image_but_keeps_xss_proof(browser, monkeypatch, c
         assert any(e["kind"] == "screenshot" and e["credential_masked"] for e in result["evidence"])
 
 
-@pytest.mark.parametrize("sensitive_proof", [False, True])
-def test_application_masking_preserves_visible_effect_and_read_only_capture(tmp_path, sensitive_proof):
+@pytest.mark.parametrize(("sensitive_proof", "media"), [
+    (False, ""), (False, "<canvas></canvas>"),
+    (False, "<style>h1::before{content:' ';background-image:linear-gradient(blue,green)}</style>"), (True, ""),
+])
+def test_application_masking_preserves_visible_effect_and_read_only_capture(tmp_path, sensitive_proof, media):
     import json
 
     secret, effect = "fixture-user@example.invalid", "verifier-test-effect"
@@ -408,7 +411,7 @@ def test_application_masking_preserves_visible_effect_and_read_only_capture(tmp_
     def target(method, url, headers, **kwargs):
         calls.append((method, url))
         return SimpleNamespace(status_code=200, headers={"content-type": "text/html"},
-                               content=f"<html><body><p>{secret}</p><h1>{effect}</h1></body></html>".encode())
+                               content=f"<html><body><p>{secret}</p><h1>{effect}</h1>{media}</body></html>".encode())
 
     b = ProofBrowser(GuardedHttpClient(ScopeGuard(SCOPE), RunBudget(Limits()), target), tmp_path / "evidence")
     b.redact = lambda value: json.loads(json.dumps(value).replace(secret, "[redacted]"))
@@ -426,7 +429,7 @@ def test_application_masking_preserves_visible_effect_and_read_only_capture(tmp_
         assert "decisive observation" in result["error"] and not list((tmp_path / "evidence").glob("*.png"))
     else:
         [image] = result["evidence"]
-        assert image["credential_masked"] and image["reviewable"]
+        assert image["credential_masked"] and image["reviewable"] is (not media)
         assert image["proof_step"] == 4 and image["role"] == "owner"
 
 

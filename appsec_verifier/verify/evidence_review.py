@@ -16,6 +16,7 @@ agent. No output is interpreted as a testing action or changes the verdict.
 from __future__ import annotations
 
 import copy
+import hashlib
 import html
 import json
 import struct
@@ -25,6 +26,7 @@ from jsonschema import Draft202012Validator
 
 from ..agent.hosts import HostCallError
 from ..agent.steps import strict_json
+from ..auth.model_data import model_data
 from ..limits import LimitExceeded, execution_deadline
 from ..planning import evidence_id, evidence_name
 from .poc import WITHHELD_BODY
@@ -150,16 +152,8 @@ why. Otherwise set presentation to null. With a presentation, quotes may be empt
 
 
 def _clean(ctx, value):
-    if ctx.sessions is not None:
-        value = ctx.sessions.redact(value)
     marker = (ctx.scope.get("marker_file") or {}).get("content")
-    if isinstance(value, str):
-        return value.replace(marker, "[marker-file]") if marker else value
-    if isinstance(value, dict):
-        return {_clean(ctx, k): _clean(ctx, v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_clean(ctx, v) for v in value]
-    return value
+    return model_data(value, ctx.sessions, marker=marker)
 
 
 def _validate(raw, schema):
@@ -185,6 +179,8 @@ def _png(ctx, ev) -> bytes | None:
     relative = Path(ev.get("path", ""))
     if not ctx.evidence_dir or len(relative.parts) != 2 or relative.parts[0] != "evidence":
         return None
+    if Path(ctx.evidence_dir).is_symlink():
+        return None
     directory = Path(ctx.evidence_dir).resolve()
     path = directory / relative.name
     if path.is_symlink() or path.resolve().parent != directory:
@@ -209,13 +205,13 @@ def _images(ctx, res):
             continue
         data = _png(ctx, ev)
         application, composed = ev.get("presentation") == "application", ev.get("composed_by") == "test-agent"
-        item = {"path": ev.get("path", "")[:300], "application": application, "test_agent_composed": composed,
-                "available": data is not None, "width": None, "height": None,
+        item = {"path": _clean(ctx, ev.get("path", ""))[:300], "application": application,
+                "test_agent_composed": composed, "available": data is not None, "width": None, "height": None,
                 "cleared_for_model": bool((application or composed) and ev.get("reviewable") is True)}
         if data is not None:
             item["width"], item["height"] = struct.unpack(">II", data[16:24])
         if ev.get("explanation"):
-            item["test_agent_explanation"] = ev["explanation"][:300]
+            item["test_agent_explanation"] = _clean(ctx, ev["explanation"])[:300]
         out.append(item)
     return out
 
@@ -231,26 +227,27 @@ def _variant(ctx, res, presentation):
     # Every shown step, as many as a presentation may list: a revision must list each step the proof relied on
     # (VER-059), such as the ten of a repeated boolean experiment, and can quote only what it receives here.
     shown = [
-        {"step": s["step"], "request": s["request"][:6000],
-         "response": _withheld_response(s["response"]) if s.get("withheld") else s["response"][:6000]}
+        {"step": s["step"], "request": _clean(ctx, s["request"])[:6000],
+         "response": (_withheld_response(_clean(ctx, s["response"].split("\n", 1)[0])) if s.get("withheld")
+                      else _clean(ctx, s["response"])[:6000])}
         for s in poc.get("shown", [])[:MAX_SHOWN_STEPS]
     ]
     return _clean(
         ctx,
         {
             "variant": evidence_id(ctx.plan),
-            "title": ctx.plan.title[:500],
+            "title": _clean(ctx, ctx.plan.title)[:500],
             "verdict": res.verdict,
             "code_checked_proof": res.proof,
             "browser_observations": [
                 {k: e[k] for k in ("presentation", "source", "executed_via", "marked", "proof_step") if k in e}
                 for e in res.evidence if e.get("presentation") == "application"
             ][:6],
-            "capture_limitations": [o[:600] for o in res.observations
+            "capture_limitations": [_clean(ctx, o)[:600] for o in res.observations
                                     if o.startswith("Application screenshot unavailable:")][:4],
-            "rationale": (res.rationale or "")[:2000],
+            "rationale": _clean(ctx, res.rationale or "")[:2000],
             "steps": [
-                {"step": s["step"], "line": s["line"][:1000], "decisive": s["decisive"]}
+                {"step": s["step"], "line": _clean(ctx, s["line"])[:1000], "decisive": s["decisive"]}
                 for s in poc.get("steps", [])[:64]
             ],
             "recorded_excerpts": shown,
@@ -270,7 +267,8 @@ def _attach(group, variants, can_see):
         shots = [e for e in res.evidence if e.get("kind") == "screenshot"]
         for ev, item in zip(shots, variant["images"], strict=True):
             data = _png(c, ev) if can_see and item["cleared_for_model"] and item["available"] else None
-            item["sent_to_model"] = data is not None and len(attached) < MAX_REVIEW_IMAGES
+            item["sent_to_model"] = (data is not None and hashlib.sha256(data).hexdigest() == ev.get("sha256")
+                                     and len(attached) < MAX_REVIEW_IMAGES)
             if item["sent_to_model"]:
                 attached.append((item["path"], data))
                 item["image_index"] = len(attached)

@@ -78,6 +78,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from ..output_files import write_output
 from ..verify.poc import (
     BODY_RESOURCE_TYPES,
     MAX_BROWSER_EXCHANGES,
@@ -831,9 +832,10 @@ class ProofBrowser:
                         except Exception:  # noqa: BLE001 - preserve HTTP proof when the final capture is unsafe
                             result["error"] = "the application screenshot could not be safely captured"
                             return result
-                        shot.write_bytes(image)
+                        write_output(shot, image)
                         result["evidence"] = [self._entry(
-                            shot, "screenshot", redacted=masked, credential_masked=masked, note=SCREENSHOT_NOTE,
+                            shot, "screenshot", sha256=hashlib.sha256(image).hexdigest(), redacted=masked,
+                            credential_masked=masked, note=SCREENSHOT_NOTE,
                             presentation="application", proof_step=observation["step"],
                             finding_id=self.redact(finding_id), role=self.redact(role or "anonymous"),
                             marked=marked["marks"], source="live-browser",
@@ -893,9 +895,9 @@ class ProofBrowser:
 
     @staticmethod
     def _entry(path: Path, kind: str, **extra) -> dict:
-        path.chmod(0o600)
-        return {"kind": kind, "path": f"evidence/{path.name}",
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), **extra}
+        if "sha256" not in extra:
+            extra["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return {"kind": kind, "path": f"evidence/{path.name}", **extra}
 
     def _save(self, page, finding_id: str, url: str, status, events, marker: tuple[str, str],
               role: str | None, *, execution_contexts=None, attempt=None, name: str | None = None) -> list[dict]:
@@ -954,7 +956,7 @@ class ProofBrowser:
                 reviewable = self._reviewable(marked, display_url, display_origin, joined, *lines)
                 shot = self._dir / f"{stem}.png"
                 try:
-                    framed, _ = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200,
+                    framed, frame_info = self._shoot_recorded(url=_EXCHANGE_PAGE, status=200,
                                                      content_type="text/html; charset=utf-8", body=frame,
                                                      name=stem, kind="xss", full_page=True,
                                                      width=1280, path=shot)
@@ -970,11 +972,12 @@ class ProofBrowser:
             except Exception:  # noqa: BLE001 - retain execution facts without unchecked page metadata
                 data = {k: data[k] for k in ("status", "marker", "executed_via", "captured", "screenshot_omitted")
                         if k in data}
-        record.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        write_output(record, json.dumps(data, indent=2).encode("utf-8"))
         entries = [self._entry(record, "browser-event", **(
             {"screenshot_omitted": data["screenshot_omitted"]} if data.get("screenshot_omitted") else {}))]
         if shot is not None:
-            entries.append(self._entry(shot, "screenshot", redacted=masked, credential_masked=masked,
+            entries.append(self._entry(shot, "screenshot", sha256=frame_info["sha256"],
+                                       redacted=masked, credential_masked=masked,
                                        note=SCREENSHOT_NOTE, finding_id=data.get("finding_id"),
                                        role=self.redact(role or "anonymous"),
                                        presentation="application", source="live-browser",
@@ -1024,11 +1027,12 @@ class ProofBrowser:
                                                           clip=marked.get("clip"))
                 except Exception:  # noqa: BLE001 - keep the recorded HTTP proof without an unchecked image
                     return None, marked
-                shot.write_bytes(image)
+                write_output(shot, image)
             else:
-                page.screenshot(path=str(shot), full_page=full_page,
-                                **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
-            return shot, marked
+                image = page.screenshot(full_page=full_page,
+                                        **({"clip": marked["clip"]} if marked and marked.get("clip") else {}))
+                write_output(shot, image)
+            return shot, {**(marked or {}), "sha256": hashlib.sha256(image).hexdigest()}
         finally:
             _quietly(context.close)
 
@@ -1052,7 +1056,8 @@ class ProofBrowser:
             self._shoot_recorded,
             url=url, status=status, content_type=content_type, body=html, name=name,
             kind="access-control", mark=mark, check_credentials=True)
-        return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
+        return [] if shot is None else [self._entry(shot, "screenshot", sha256=marked["sha256"],
+                                                    redacted=True, note=SCREENSHOT_NOTE,
                                                     credential_masked=marked.get("credential_masked", False),
                                                     presentation="application", source="recorded-html",
                                                     marked=marked["marks"] if marked else None,
@@ -1061,8 +1066,9 @@ class ProofBrowser:
     def render_exchanges(self, *, html: str, name: str, marked: int, kind: str = "http") -> list[dict]:
         """A screenshot of the page verify/poc.py built from a finding's recorded exchanges (VER-035), or with
         kind "explanation" of an evidence review's explanation panel (VER-042)."""
-        shot, _ = self._guarded(self._shoot_recorded, url=_EXCHANGE_PAGE, status=200,
+        shot, info = self._guarded(self._shoot_recorded, url=_EXCHANGE_PAGE, status=200,
                                 content_type="text/html; charset=utf-8", body=html, name=name,
                                 kind=kind, full_page=True)
-        return [] if shot is None else [self._entry(shot, "screenshot", redacted=True, note=SCREENSHOT_NOTE,
+        return [] if shot is None else [self._entry(shot, "screenshot", sha256=info["sha256"],
+                                                    redacted=True, note=SCREENSHOT_NOTE,
                                                     marked=marked)]

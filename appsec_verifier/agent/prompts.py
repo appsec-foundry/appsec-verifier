@@ -705,8 +705,9 @@ def _seed(ctx) -> str:
         "dependencies": context.get("dependencies", []),
         "unknowns": getattr(p, "verification_context", {}).get("unknowns", []),
     }
-    if getattr(ctx, "sessions", None) is not None:
-        extra = ctx.sessions.redact(extra)
+    from ..auth.model_data import model_data
+
+    extra = model_data(extra, getattr(ctx, "sessions", None))
     return (
         f"Finding {p.id} ({p.cwe}, class {p.cls}): {p.title}\n"
         f"Evidence location: {p.instance}\n"

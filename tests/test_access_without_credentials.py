@@ -220,8 +220,10 @@ def test_only_the_answer_without_credentials_is_kept_and_only_the_plan_sends_a_r
         out = tools.http_request(**request)
         seen.append((out, tools.take_response(), tools.take_exchanges()))
     (account, _, account_record), (anonymous, response, record), (control, _, control_record) = seen
-    assert anonymous["status"] == 200 and "body_withheld" not in anonymous and "s3cr3t" in anonymous["body_excerpt"]
-    assert "s3cr3t" in response["body"] and "s3cr3t" in record[0]["response"]["content"]["text"]
+    assert anonymous["status"] == 200 and "body_withheld" not in anonymous
+    assert "[credential withheld]" in anonymous["body_excerpt"]
+    assert "s3cr3t" not in json.dumps([anonymous, response, record])
+    assert "[credential withheld]" in record[0]["response"]["content"]["text"]
     for out, kept in ((account, account_record), (control, control_record)):
         assert out["body_withheld"] is True and out["length"] == len(SECRET)
         assert "s3cr3t" not in json.dumps([out, kept])
@@ -306,11 +308,13 @@ def test_a_configuration_served_without_login_is_confirmed_and_shows_what_anyone
     assert sent[2][1].startswith("/rest/admin/" + MARKER[0])
     history = json.loads(seen[-1])
     assert "s3cr3t" not in json.dumps(history[1]) and history[1]["result"]["body_withheld"] is True   # the account
-    assert "s3cr3t" in history[2]["result"]["body_excerpt"]                       # without credentials: shown
+    assert "[credential withheld]" in history[2]["result"]["body_excerpt"]
     feedback = history[4]
     assert feedback["tool"] == "experiment" and "step 3, the answer without credentials" in feedback["result"]["next"]
     har = json.loads(next(Path(tmp_path / "evidence").glob("*-poc.har")).read_text())
-    kept = {e["_step"]: "s3cr3t" in (e["response"]["content"].get("text") or "") for e in har["log"]["entries"]}
+    assert "s3cr3t" not in json.dumps(har)
+    kept = {e["_step"]: "[credential withheld]" in (e["response"]["content"].get("text") or "")
+            for e in har["log"]["entries"]}
     assert kept == {2: False, 3: True, 4: False}
     assert not any("Application screenshot unavailable: the compared answers" in o for o in result.observations)
 
@@ -324,16 +328,16 @@ def test_the_agent_can_quote_the_answer_without_credentials_but_not_the_account_
         return {"summary": "Without a login anyone reads the server secret from the admin configuration.",
                 "steps": [{"step": 2, "role": "normal", "label": "the signed-in account reads the configuration"},
                           {"step": 3, "role": "outcome", "label": "the same answer without a login",
-                           **({"excerpt": '"secret":"s3cr3t-config-value"'} if step == 3 else {})},
+                           **({"excerpt": '"secret":"[credential withheld]"'} if step == 3 else {})},
                           {"step": 4, "role": "control", "label": "a random path next to it: not found",
-                           **({"excerpt": '"secret":"s3cr3t-config-value"'} if step == 2 else {})}]}
+                           **({"excerpt": '"secret":"[credential withheld]"'} if step == 2 else {})}]}
 
     result, _, _ = _run(tmp_path, target, presentation=presentation(3))
     assert result.poc["presentation"]["composed_by"] == "test-agent"
     shown = {s["step"]: s for s in result.poc["shown"]}
-    assert "s3cr3t-config-value" in shown[3]["response_excerpt"] and "s3cr3t" not in shown[2]["response_excerpt"]
+    assert "[credential withheld]" in shown[3]["response_excerpt"] and "s3cr3t" not in shown[2]["response_excerpt"]
     refused = presentation(2)
-    refused["steps"][0]["excerpt"] = '"secret":"s3cr3t-config-value"'          # the account's answer
+    refused["steps"][0]["excerpt"] = '"secret":"[credential withheld]"'          # the account's answer
     result, _, _ = _run(tmp_path, target, presentation=refused)
     assert result.poc["presentation"]["composed_by"] == "test-agent"        # only the quotes are left out
     assert result.poc["presentation"]["left_out"] == [
@@ -394,7 +398,8 @@ def test_a_confirmed_comparison_reads_as_the_same_answer_on_the_console_in_the_r
     assert page.count("<p><b>") == 3 and "<b>✗ " not in page                     # access, control and rule hold
     assert "so the target does not answer every path alike" in page
     assert "Confirmed: the access violates the rule." in page
-    assert "got the identical answer, compared in code" in page and "s3cr3t" in page       # the answer, shown once
+    assert "got the identical answer, compared in code" in page and "[credential withheld]" in page
+    assert "s3cr3t" not in page
     assert "differs from" not in page and "not recorded to compare" not in page
     shown = _shown({"verdict": "confirmed", "class": "access-control", "proof": result.proof, "poc": result.poc})
     assert shown.startswith("Without a login the same answer as account-1, compared in code") and "404" in shown

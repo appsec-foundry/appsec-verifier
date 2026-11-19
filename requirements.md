@@ -8,7 +8,7 @@ It reads a finished `appsec-assessment.yaml`, verifies each finding on its own a
 
 **Authorisation.** Running the Verifier against a system is an active security test. It acts only against targets for which the operator has supplied an explicit, confirmed authorisation scope (see *Target the right system*). These authorisation, scope, secret-handling, and bounded-execution requirements follow the AI Secure Coding Baseline (aiscb); they are controls on a dual-use tool, not optional hardening.
 
-**Implementation status.** This document specifies required behaviour, not proof of implementation. The 2026-11-13 revisions to exact selection and guided setup (VER-026, VER-031), retained build attribution (VER-037), engine-error confirmation (VER-053), and explicit refusal of known state-changing GET probes (VER-030) still require implementation reconciliation. Access-control restriction checks, technical QA objections, comparison records and variant coverage are implemented as described in the CLI reference; unsupported source syntax remains unresolved. [The CLI reference](docs/cli.md) describes the implemented interface and its existing limitations.
+**Implementation status.** This document specifies required behaviour, not proof of implementation. The 2026-11-13 revisions to guided setup (VER-031), engine-error confirmation (VER-053), and explicit refusal of known state-changing GET probes (VER-030) still require implementation reconciliation. Access-control restriction checks, technical QA objections, comparison records and variant coverage are implemented as described in the CLI reference; unsupported source syntax remains unresolved. [The CLI reference](docs/cli.md) describes the implemented interface and its existing limitations.
 
 ---
 

@@ -61,10 +61,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, quote_plus, urljoin, urlsplit
 
-from ..tools.http import same_origin
+from ..tools.http import GuardedHttpClient, same_origin
 
 MIXED_CREDENTIAL = "[test credential]"     # a value that is also a user name, or a secret of several kinds
-_MIN_SECRET_LEN = 4
 _WORD_LEN = 16                              # a letters-only secret shorter than this can be an ordinary word
 RENEW_MARGIN_S = 60                      # renew a session this long before it expires
 _FORM_REDIRECTS = 5                      # redirects an HTML form login follows within its origin
@@ -203,6 +202,18 @@ class SessionManager:
         self._cookie_repeated: set[str] = set()
         self._no_renewal: set[str] = set()     # roles whose renewal was answered 401 again
         self._lock = threading.RLock()         # findings tested at the same time share the sessions (VER-065)
+        if isinstance(http, GuardedHttpClient):
+            http.observe_response_cookies = self._remember_response_cookies
+
+    def _remember_response_cookies(self, headers):
+        """Keep each hop's cookie out of subsequent model input, including browser and redirect responses."""
+        values = (headers.get_list("set-cookie") if hasattr(headers, "get_list") else
+                  [headers.get("Set-Cookie") or headers.get("set-cookie", "")])
+        for header in values:
+            name, _, raw = header.partition(";")[0].partition("=")
+            value = raw.strip().strip('"')
+            if secret_cookie(name, value):
+                self.remember_secret(value, "session cookie")
 
     # ── public interface ─────────────────────────────────────────────────────
 
@@ -283,9 +294,8 @@ class SessionManager:
     @_locked
     def remember_secret(self, value: str, kind: str = "credential") -> None:
         """Keep a credential observed during the run out of later responses, prompts and evidence (VER-016): a login
-        artifact, or a `session cookie` whose value can be a session (`session_like`). Other cookie values are
-        settings such as `security=low`, not secrets."""
-        if kind == "session cookie" and not session_like(value):
+        artifact or a cookie whose name and value do not identify a recognized setting."""
+        if not value:
             return
         self._issued.add(value)
         self._observed[value] = kind
@@ -311,7 +321,7 @@ class SessionManager:
             self._no_renewal.add(role)
 
     @_locked
-    def redact(self, value):
+    def redact(self, value, *, for_model=False):
         """`value` (str, or dicts and lists of them) with every credential value replaced by its placeholder
         (VER-016), in one pass, so no replacement is made inside a placeholder. Other types pass unchanged.
 
@@ -323,25 +333,37 @@ class SessionManager:
         words = {form: label for form, label in placeholders.items() if plain_word(form)}
         anywhere = "|".join(map(re.escape, sorted(set(placeholders) - set(words), key=len, reverse=True)))
         alternatives = [anywhere] if anywhere else []       # longest first, so no fragment of a value is left
-        if words:
+        if words and not for_model:
             names = "|".join(map(re.escape, sorted(words, key=len, reverse=True)))
             alternatives += [rf"(?<==)(?:{names})(?=$|[&;#\s\"'])", rf"(?:(?<=:\")|(?<=: \"))(?:{names})(?=\")"]
+        if for_model and words:
+            # A target may embed a password in an identifier or concatenate it with text.
+            alternatives = ["|".join(map(re.escape, sorted(placeholders, key=len, reverse=True)))]
         pattern = re.compile("|".join(alternatives)) if alternatives else None
         in_names = re.compile(anywhere) if anywhere else None   # keys: a target may key its answer by a token
 
         def text(v, p):
-            return p.sub(lambda m: placeholders[m.group(0)], v) if p else v
+            def replace(match):
+                secret = match.group(0)
+                return "[redacted]" if for_model and secret in words else placeholders[secret]
+            return p.sub(replace, v) if p else v
 
         def walk(v, key=None):
             if isinstance(v, str):
-                return words[v] if v in words and key is not None and key not in _NAME_KEYS else text(v, pattern)
+                if not for_model and v in words and key is not None and key not in _NAME_KEYS:
+                    return words[v]
+                return text(v, pattern)
             if isinstance(v, dict):
-                return {(text(k, in_names) if isinstance(k, str) else k): walk(x, k) for k, x in v.items()}
+                key_pattern = pattern if for_model else in_names
+                return {(text(k, key_pattern) if isinstance(k, str) else k): walk(x, k) for k, x in v.items()}
             if isinstance(v, list | tuple):
                 return [walk(x) for x in v]
             return v
 
         return walk(value)
+
+    def redact_model(self, value):
+        return self.redact(value, for_model=True)
 
     @_locked
     def origin_for(self, role: str) -> str | None:
@@ -356,8 +378,10 @@ class SessionManager:
         values = set()
         for name, value in session.headers.items():
             if name.lower() == "cookie":    # only a value that can be a session; `security=low` is a setting
-                values.update(v for v in (part.partition("=")[2].strip() for part in value.split(";"))
-                              if session_like(v))
+                for pair in value.split(";"):
+                    name, _, cookie = pair.partition("=")
+                    if secret_cookie(name, cookie.strip()):
+                        values.add(cookie.strip())
             else:
                 values.update((value, value.partition(" ")[2]))   # "Bearer <token>" and the bare token
         if session.refresh_token:
@@ -406,7 +430,7 @@ class SessionManager:
                 found.setdefault(value, set()).add((role, "session"))
             elif not role and value not in found:
                 found[value] = {("", self._observed.get(value, "credential"))}
-        values = {v for v in found if len(v) >= _MIN_SECRET_LEN}
+        values = {v for v in found if v}
         out: dict[str, str] = {}
         for value in values:
             kinds = sorted({kind for _, kind in found[value]})
@@ -755,11 +779,12 @@ def _secret_vars(auth: dict) -> list[tuple[str, str]]:
 _NAME_KEYS = frozenset({"input_name", "name"})
 
 
-def session_like(value: str) -> bool:
-    """Whether a cookie value can be a session credential (VER-016): at least 16 characters, or at least 8 with
-    letters and digits mixed. A word or a short number, such as `low` or `1`, is a setting, not a session."""
-    return len(value) >= 16 or (len(value) >= 8 and any(c.isalpha() for c in value)
-                                and any(c.isdigit() for c in value))
+def secret_cookie(name: str, value: str) -> bool:
+    """Only recognized setting names with enumerated values may remain visible."""
+    return bool(value) and (name.strip().lower(), value) not in {
+        ("security", "low"), ("security", "medium"), ("security", "high"), ("security", "impossible"),
+        ("theme", "dark"), ("theme", "light"),
+    }
 
 
 def plain_word(value: str) -> bool:

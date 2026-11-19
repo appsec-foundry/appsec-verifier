@@ -1277,7 +1277,7 @@ class AgentTools:
             resp = self._send(m, url, headers, params, json, form)
             from .session_proof import cookie_observations
 
-            session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
+            session_cookies = cookie_observations(resp, self.ctx.sessions)
             active = getattr(self, "_experiment", {})
             if active.get("auth_artifact"):
                 from .auth_followup import artifact
@@ -1298,7 +1298,7 @@ class AgentTools:
                     and sessions.renew(role):
                 headers = self._session_headers(role)
                 resp = self._send(m, url, headers, params, json, form)
-                session_cookies = cookie_observations(resp, self.ctx.sessions) if self.ctx.plan.cls == "session" else []
+                session_cookies = cookie_observations(resp, self.ctx.sessions)
                 self._record(self._sent(resp, m, url, headers, params, json, form), role, headers, omit=omit)
                 sessions.answered(role, getattr(resp, "status_code", None))
         except ScopeViolation as exc:
@@ -1306,7 +1306,9 @@ class AgentTools:
         except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
             raise ToolError(f"request failed: {type(exc).__name__}") from exc
         text = _body_text(resp)
-        redacted = self.ctx.sessions.redact(text) if self.ctx.sessions is not None else text
+        from ..auth.model_data import model_data
+
+        redacted = model_data(text, self.ctx.sessions)
         redacted = _hide(redacted, self._marker_content)  # before the cut, so no part of the marker remains
         experiment = getattr(self, "_experiment", None) or {}
         # VER-053: classify the engine error from the real body before any body is withheld; the class, not the
@@ -1387,7 +1389,7 @@ class AgentTools:
         location = resp_headers.get("Location") or resp_headers.get("location")
         if isinstance(status, int) and 300 <= status < 400 and location:
             location = str(location)
-            location = self.ctx.sessions.redact(location) if self.ctx.sessions is not None else location
+            location = model_data(location, self.ctx.sessions)
             out["location"] = _hide(location, self._marker_content)[:_LOCATION_CAP]
         if self.ctx.plan.cls == "session":
             out["session_cookies"] = session_cookies

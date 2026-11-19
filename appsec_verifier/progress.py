@@ -349,11 +349,10 @@ class ConsoleLog:
 
     def start(self, path, *, append: bool = False) -> None:
         """Write to ``path``, owner-only; ``append`` continues it (--resume), otherwise it is replaced."""
-        flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
-        fd = os.open(path, flags, 0o600)
-        os.chmod(path, 0o600)             # also when an earlier run left the file with wider rights
+        from .output_files import open_log
+
         with self._lock:
-            self._fh = os.fdopen(fd, "a" if append else "w", encoding="utf-8", buffering=1)
+            self._fh = open_log(path, append)
             self._fh.write("".join(self._held))
             self._held = []
             self.path = path

@@ -29,11 +29,9 @@ time; legacy results retain their original report time as a fallback (VER-037).
 
 from __future__ import annotations
 
-import contextlib
 import html
 import os
 import re
-import secrets
 from pathlib import Path
 from urllib.parse import quote
 
@@ -92,6 +90,14 @@ def remaining_variants(plans, existing):
     return [p for p in expand_variants(plans) if (p.id, p.variant_digest) not in completed]
 
 
+def _tested_build(row, meta):
+    if "tested_build" in row:
+        return row["tested_build"]
+    # An older merged file may already have lost the original target metadata.
+    target = {} if meta.get("previous_generated") else meta.get("target") or {}
+    return {"detected_build": target.get("detected_build"), "build_match": target.get("build_match") or "unknown"}
+
+
 def merge_reports(existing: dict, new: dict) -> dict:
     """Continue a prior report with a new run's results (VER-027, `--resume`): a
     finding tested again replaces its earlier result; findings not re-tested are
@@ -100,8 +106,9 @@ def merge_reports(existing: dict, new: dict) -> dict:
     Each result retains its source report time for legacy timestamp fallback (VER-037)."""
     by_id: dict[str, dict] = {}
     order: list[str] = []
-    rows = [dict(r, source_generated=r.get("source_generated", doc.get("meta", {}).get("generated")))
-            for doc in (existing, new) for r in doc.get("results") or []]
+    rows = [dict(r, source_generated=r.get("source_generated", doc["meta"].get("generated")),
+                 tested_build=_tested_build(r, doc["meta"]), retained=retained)
+            for doc, retained in ((existing, True), (new, False)) for r in doc.get("results") or []]
     for r in rows:
         ref = r.get("finding_ref", {})
         key = (ref.get("id") or r.get("result_id"), ref.get("variant_digest") or
@@ -154,26 +161,10 @@ def read_report(path: Path) -> tuple[dict | None, list[str]]:
 
 
 def write_text_atomically(path: Path, text: str) -> None:
-    """Replace `path` with `text` through a temporary file in the same directory.
-    An existing file keeps its permissions; a new one gets those open() would give it.
-    A symbolic link is followed, as open() would, so the file it points to is replaced."""
-    path = Path(path).resolve()
-    try:
-        mode = path.stat().st_mode & 0o7777
-    except FileNotFoundError:
-        mode = None
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)    # the umask applies, as for open()
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        if mode is not None:
-            os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    """Atomically replace a regular report while preserving existing permissions."""
+    from ..output_files import write_output
+
+    write_output(path, text.encode("utf-8"), preserve_mode=True)
 
 
 def write_reports(doc: dict, out_dir: Path, assessment: dict | None = None) -> dict:
@@ -780,6 +771,11 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
     elif generated := r.get("source_generated"):
         head.append("Original report")
         cells.append(_when(generated))
+    if r.get("retained") or (r.get("tested_build") or {}).get("detected_build"):
+        head.append("Run / build")
+        build = r.get("tested_build") or {}
+        cells.append(("Previous run" if r.get("retained") else "This run") + " · "
+                     + _inline(build.get("detected_build") or build.get("build_match") or "unknown", cell=True))
     if permission := r.get("write_permission"):     # the operator's answer for this finding (VER-052)
         head.append("Writes")
         cells.append(("allowed by the operator" if permission.get("allowed") else
@@ -1033,6 +1029,7 @@ def build_annotations(doc: dict, *, verification_report: str) -> dict:
     for r in doc["results"]:
         fr = r.get("finding_ref", {})
         annotations.append({
+            "tested_build": _tested_build(r, meta), "retained": r.get("retained", False),
             "finding_id": fr.get("id"),
             "match_key": fr.get("match_key"),
             "instance": fr.get("instance"),
@@ -1175,12 +1172,14 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
             "verifier_version": doc["meta"].get("verifier_version"),
             "result_ref": lead.get("result_id"),
             "tested_scope": _tested_scope(lead),
+            "tested_build": _tested_build(lead, doc["meta"]), "retained": lead.get("retained", False),
         }
         if coverage:
             t["dynamic_verification"].update({
                 "coverage": coverage,
                 "variants": [{"variant": row["finding_ref"].get("variant"), "verdict": row["verdict"],
-                              "result_ref": row["result_id"], "tested_scope": _tested_scope(row)}
+                              "result_ref": row["result_id"], "tested_scope": _tested_scope(row),
+                              "tested_build": _tested_build(row, doc["meta"]), "retained": row.get("retained", False)}
                              for row in variants],
             })
         t["dynamic_verification"]["rating"] = rate(t, *_rating_input(rows, coverage))

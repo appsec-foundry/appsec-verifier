@@ -10,7 +10,7 @@ Each exchange is redacted when it is recorded, each mask naming what it hides:
 headers the identity added read `[identity <role>]`, every credential value the
 sessions know its placeholder, such as `[account-1 password]`
 (auth/sessions.py), an Authorization header its scheme and `[credential]`, a
-cookie value that can be a session (`session_like`) `[session cookie]`, another
+unrecognized cookie value `[session cookie]`, another
 header named like a credential `[credential]`, a query parameter named like a
 token `[token]`, and every JWT `[JWT]`. A parameter named like a password keeps
 its value unless the sessions know it: the agent never knows a password. Other cookie values are settings, not
@@ -77,7 +77,6 @@ import html
 import json
 import os
 import re
-import tempfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -86,7 +85,8 @@ from urllib.parse import parse_qsl, unquote, unquote_plus, urlencode, urlsplit, 
 
 import httpx
 
-from ..auth.sessions import session_like
+from ..auth.model_data import credential_text
+from ..auth.sessions import secret_cookie
 from ..planning import evidence_id, evidence_name
 
 # What a mask hides, where the sessions know no placeholder for the value (VER-016).
@@ -200,7 +200,7 @@ class _Redactor:
         if not sep:
             return self.text(pair)
         shown = self.text(value)
-        return f"{name.strip()}={SESSION_COOKIE_MASK if shown == value and session_like(value) else shown}"
+        return f"{name.strip()}={SESSION_COOKIE_MASK if shown == value and secret_cookie(name, value) else shown}"
 
     def url(self, url: str) -> str:
         try:
@@ -232,7 +232,7 @@ def _is_text(content_type: str, raw: bytes) -> bool:
 
 
 def _body(raw: bytes | None, content_type: str, red: _Redactor, omit: str | None = None,
-          size: int | None = None) -> dict:
+          size: int | None = None, *, response=False) -> dict:
     """HAR content of a body: redacted text, cut after redaction; binary bodies only by length and hash.
     `size` is the body's full length when `raw` was already cut."""
     raw = raw or b""
@@ -247,6 +247,8 @@ def _body(raw: bytes | None, content_type: str, red: _Redactor, omit: str | None
         out["_sha256"] = hashlib.sha256(raw).hexdigest()
     else:
         text = red.text(raw.decode("utf-8", "replace"))
+        if response:
+            text = credential_text(text)
         out["text"] = text[:MAX_BODY_CHARS]
         if len(text) > MAX_BODY_CHARS or size > len(raw):
             out["_truncated"] = True
@@ -270,7 +272,7 @@ def entry(raw: dict, *, redact=None, identity: dict | None = None, role: str | N
         posted = _body(raw["body"], req_ct, red)
         request["postData"] = {"mimeType": req_ct, "text": posted.get("text", "")}
     status = raw["status"] if isinstance(raw["status"], int) else 0
-    content = _body(raw["content"], res_ct, red, omit_body, raw.get("content_size"))
+    content = _body(raw["content"], res_ct, red, omit_body, raw.get("content_size"), response=True)
     response = {"status": status, "statusText": _phrase(status), "httpVersion": "HTTP/1.1", "cookies": [],
                 "headers": red.headers(raw["response_headers"]), "content": content,
                 "redirectURL": red.url(location) if location else "", "headersSize": -1,
@@ -405,14 +407,9 @@ def _write_har(ctx, steps: list[dict]) -> list[dict]:
     path = directory / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', evidence_id(ctx.plan))}-poc.har"
     data = json.dumps(har, indent=1, default=str).encode("utf-8")
     digest = hashlib.sha256(data).hexdigest()
-    fd, temporary = tempfile.mkstemp(prefix=".har-", dir=directory)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    from ..output_files import write_output
+
+    write_output(path, data)
     return [{"kind": "har", "path": f"evidence/{path.name}", "redacted": True,
              "sha256": digest, "note": TARGET_DATA_NOTE}]
 
