@@ -758,6 +758,27 @@ def test_a_mount_counts_only_for_the_function_that_holds_the_evidence(tmp_path, 
     assert _resolved(ctx) == expected
 
 
+def test_a_registered_routes_placeholder_is_its_declared_path_input(tmp_path):
+    """T-039 (run 135): a comparison plan for the mounted key route fills its :file placeholder. The registration
+    declares that placeholder as the route's path input, as a route the assessment names allows it; an input the
+    route does not declare stays refused."""
+    from appsec_verifier.agent.derivation import source_registrations
+
+    ctx = _registration_ctx(tmp_path, [])
+    ctx.plan = replace(ctx.plan, cls="access-control", cwe="CWE-200", instance="routes/keyServer.ts:5")
+    (tmp_path / "routes" / "keyServer.ts").write_text(KEY_SERVER)
+    (tmp_path / "server.ts").write_text(
+        "import { serveKeyFiles } from './routes/keyServer'\n" + FILLER
+        + "app.use('/encryptionkeys/:file', serveKeyFiles())\n")
+    ctx.derived_requests = source_registrations(ctx)
+    assert ctx.derived_requests[0]["inputs"] == [{"location": "path", "name": "file"}]
+    controller = Controller(ctx)
+    plan = {"kind": "access-control", "signed_in": "customer-a", "path": "/encryptionkeys/secret.key"}
+    controller.before("plan_test", plan)
+    with pytest.raises(ToolError, match="declared variant inputs"):
+        controller.before("plan_test", {**plan, "path": "/encryptionkeys/secret.key?download=1"})
+
+
 VIEWS = ("def home(request):\n"
          "    return render(request, 'home.html')\n"
          "\n"

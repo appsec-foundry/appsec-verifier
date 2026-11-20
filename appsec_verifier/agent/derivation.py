@@ -341,7 +341,12 @@ def _registered(reg_file, text, start_line, finding_file, finding_text, enclosin
         if own if m["mount"] else any(handler in finding_text for handler in referenced):
             method = "ALL" if m["mount"] else (m["verb"] or "GET").upper()    # path(): a routing function, GET
             literal = m["path"] if m["path"] is not None else m["relative"]
-            routes.append({"method": method, "path": _normalise(literal), "inputs": [], "source_file": reg_file,
+            path = _normalise(literal)
+            # The route literal declares its placeholders, so a request may fill them as a named route allows;
+            # query and body inputs it does not show still need derive_request evidence.
+            names = dict.fromkeys(a or b or c for a, b, c in _PLACEHOLDER_NAME.findall(path))
+            routes.append({"method": method, "path": path,
+                           "inputs": [{"location": "path", "name": n} for n in names], "source_file": reg_file,
                            "source_line": start_line + text[:m.start()].count("\n"), "own": own})
     return routes
 
