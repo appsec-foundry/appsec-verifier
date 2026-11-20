@@ -344,11 +344,24 @@ class Controller:
             args["query"] = sorted(query)
         return token([name, args])
 
+    def _rendered(self, args):
+        """VER-009: a browser_check that renders a recorded response sends nothing, so it is checked as the
+        request that produced that response at its route, which these checks allowed when it was sent; a write's
+        answer can then be rendered although the finding names no GET there. Any other browser_check is checked
+        as the GET it navigates. The tool still requires a kept, complete page of that step (_render_document)."""
+        n, history = args.get("response_step"), getattr(self.ctx, "agent_history", None) or []
+        step = history[n - 1] if type(n) is int and 1 <= n <= len(history) else {}
+        sent, result = step.get("args") or {}, step.get("result") or {}
+        if (step.get("tool") != "http_request" or result.get("error") or not sent.get("path")
+                or urlsplit(self._resolved(sent["path"])).path != urlsplit(self._resolved(args.get("path", "/"))).path):
+            return args
+        return sent
+
     def before(self, name, args, *, experiment=False):
         self._counted = self._preparing = None
         self.check()
         if name in ("http_request", "browser_check", "plan_test"):
-            self._target(name, args)
+            self._target(name, self._rendered(args) if name == "browser_check" else args)
         key = self._key(name, args)
         if experiment:
             # The accepted plan's generated controls keep their own repetition namespace, scoped to that plan's

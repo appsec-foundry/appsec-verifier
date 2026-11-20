@@ -275,6 +275,30 @@ def test_browser_check_refuses_an_unrenderable_recorded_step(responses, path, ms
     assert ctx.browser.calls == []    # nothing is rendered when the recorded step cannot be trusted
 
 
+@pytest.mark.parametrize("check, confirmed", [
+    ({"path": "/msg", "response_step": 1}, True),     # the recorded answer of the write to this route
+    ({"path": "/msg"}, False),                        # a GET navigation the finding does not name
+    ({"path": "/msg", "response_step": 2}, False),    # a step that is not the write to this route
+])
+def test_the_answer_to_a_write_is_rendered_through_the_agent_loop(check, confirmed):
+    """VER-009: a finding that names only POST /msg renders the recorded answer of its write. The controller checks
+    that render as the write it shows, which it allowed when it was sent; a navigation to the route, or a render of
+    another step, is still checked as a GET the finding does not name."""
+    browser = FakeBrowser({"executed": True, "context_verified": True, "evidence": []})
+    page = SimpleNamespace(status_code=200, text="<p>vrfaa note</p>", headers={"content-type": "text/html"})
+    planner = Scripted([
+        {"tool": "http_request", "args": {"method": "POST", "path": "/msg", "form": {"text": "vrfaa note"}}},
+        {"tool": "http_request", "args": {"path": "/s"}},
+        {"tool": "browser_check", "args": check},
+        CONFIRM,
+    ])
+    ctx = _ctx(browser=browser, safe=False)
+    ctx.http = SimpleNamespace(request=lambda *a, **k: page)
+    result = AgentProbe("xss", lambda: planner).run(ctx)
+    assert (result.verdict == "confirmed") is confirmed, result.rationale
+    assert len(browser.calls) == (1 if confirmed else 0)
+
+
 # ── VER-009: confirmed XSS needs an executed marker ───────────────────────────
 
 

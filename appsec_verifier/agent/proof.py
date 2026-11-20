@@ -124,6 +124,9 @@ def _xss_routes(ctx, history: list[dict]) -> list[str]:
     if not variants:
         # Deriving a write for stored XSS must not erase the assessed page used for readback.
         routes += [e.path for e in getattr(ctx.plan, "endpoints", ()) if e.method in ("GET", "PAGE")]
+        # A write's recorded answer is rendered at its own route (VER-009). The controller lets a browser_check
+        # navigate only to a route the finding names for GET, so on a write's route it can only render that answer.
+        routes += [e.path for e in getattr(ctx.plan, "endpoints", ()) if e.method not in ("GET", "PAGE")]
     routes += [r["path"] for r in getattr(ctx, "derived_requests", [])]
     _, plan = latest_plan(history)
     if plan.get("path"):
