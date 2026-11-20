@@ -569,9 +569,8 @@ def why_not_confirmed(r: dict, variant: dict | None = None) -> str | None:
     experiments = [o.removeprefix(_EXPERIMENT_NO_PROOF) for o in observations if o.startswith(_EXPERIMENT_NO_PROOF)]
     missing = [str(m) for m in (r.get("proof") or {}).get("missing") or []]
     if any("access restriction" in m for m in [*missing, *experiments]):
-        return ("Needs an option: access was observed, but no rule says it should be refused; "
-                "--accept-finding-restrictions takes the rule from the finding, access_policies in the scope "
-                "declares it.")
+        return ("Needs a rule: access was observed, but no rule says it should be refused; access_rules or "
+                "access_policies in the scope declare it.")
     if missing:
         return f"No proof: the agent's confirmation failed the proof check: {_plain(missing[0])}."
     lowered = _LOWERED.match(rationale)

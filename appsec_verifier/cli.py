@@ -199,13 +199,10 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(fh)
 
 
-def _validate_scope(scope: dict, *, url_only: bool = False) -> list[str]:
+def _validate_scope(scope: dict) -> list[str]:
     """Validate against schemas/scope.schema.yaml with jsonschema when present,
     else a minimal required-key check so the command still works."""
     schema = _load_yaml(resource_root() / "schemas" / "scope.schema.yaml")
-    if url_only:
-        # VER-001: the already resolved URL-only scope has no owner/window; validate every declaration normally.
-        schema["required"] = [k for k in schema["required"] if k not in ("owner", "window")]
     try:
         from jsonschema.validators import validator_for
 
@@ -714,13 +711,6 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
                 "give --url as http(s)://host[:port], or a scope file with --scope",
             )
 
-    guided = {key: getattr(args, attr, None) for key, attr in (("test_resources", "_guided_resources"),
-                                                                  ("access_rules", "_guided_rules"))}
-    if any(guided.values()):
-        scope = {**scope, **{key: [*scope.get(key, []), *items] for key, items in guided.items() if items}}
-        errors = _validate_scope(scope, url_only=not args.scope)
-        if errors:
-            return _blocked("The run's access declarations cannot be used", errors)
     guard = ScopeGuard(scope)
     win = guard.within_window()
     if not win.allowed:
@@ -924,10 +914,10 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
                 safe,
                 read_only,
                 agent_info,
-                [*notes, *([("Access rules", "from the findings where the scope declares none "
-                                             "(--accept-finding-restrictions)")]
-                           if getattr(args, "accept_finding_restrictions", False)
-                           and any(p.cls == "access-control" for p in sel) else [])],
+                [*notes, *([("Access", "only the restrictions the scope declares (--declared-access-only)"
+                             if getattr(args, "declared_access_only", False) else
+                             "restrictions assumed where the scope declares none")]
+                           if any(p.cls == "access-control" for p in sel) else [])],
                 floor=args.min_severity,
                 guided=invocation is not None,
                 parallel=parallel,
@@ -935,7 +925,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         )
     )
     print("\n".join(_test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing), full=False)))
-    for hint in _access_setup_hints(probed, scope, getattr(args, "accept_finding_restrictions", False)):
+    for hint in _access_setup_hints(probed, scope, not getattr(args, "declared_access_only", False)):
         print(hint)
     if probed and not contact:
         return _blocked(
@@ -1074,7 +1064,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             authorization=authorization,
             safe=safe,
             read_only=read_only,
-            accept_finding_restrictions=getattr(args, "accept_finding_restrictions", False),
+            assume_restrictions=not getattr(args, "declared_access_only", False),
             contacted=contact,
             agent=agent_info,
             browser=browser,
@@ -1308,7 +1298,6 @@ def _preflight_plan(st, doc, plans, scope, identities, target) -> tuple[Check | 
         )
     }
     lines = _test_cases(st, probed, blocked, _run_hints(doc, target, browser_missing))
-    lines.extend(_access_setup_hints(probed, scope))
     if not probed:
         return None, lines
     # `probed` holds one entry per variant; the check counts findings, one tested when any variant can be.
@@ -1739,21 +1728,21 @@ def _wrap_whole(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False)
 
 
-def _access_setup_hints(plans, scope, accepted: bool = False):
-    """Actionable offline preparation for missing access declarations (VER-031); none when the operator took
-    the restrictions from the findings (VER-010). A finding whose requests all have an access rule is declared."""
+def _access_setup_hints(plans, scope, assumed: bool):
+    """Actionable preparation for missing access declarations (VER-031); none when the Verifier assumes the
+    restriction a comparison implies (VER-010). A finding whose requests all have an access rule is declared."""
     from .agent.access_policy import access_rule, rule_requests
 
     declared = {r["finding_id"] for key in ("test_resources", "access_policies") for r in scope.get(key, [])}
     declared |= {p.id for p in plans if (ruled := rule_requests(p, writes=True))
                  and all(access_rule(scope, m, path) for m, path in ruled)}
     missing = sorted({p.id for p in plans if p.cls == "access-control" and p.id not in declared})
-    if not missing or accepted:
+    if not missing or assumed:
         return []
     return ["Access restriction missing for " + ", ".join(printable(p) for p in missing) + ".",
             "  Say who may use each request in the scope: access_rules: [{request: 'GET /route/:id', may: owner}], "
-            "with may one of owner, signed-in, admin or anyone. --accept-finding-restrictions takes the restriction "
-            "from each finding instead. For one exact path, add "
+            "with may one of owner, signed-in, admin or anyone. Without --declared-access-only the Verifier "
+            "assumes the restriction each comparison implies instead. For one exact path, add "
             "access_policies: [{finding_id: ID, path: /protected, allowed_roles: [account-1], "
             "denied_roles: [anonymous], restriction: 'Sign-in is required', source: 'Operator access policy'}] "
             "to the scope; use test_resources with pointer and value for a harmless field or text marker. "
@@ -2416,11 +2405,13 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
         help="no write requests, even with --allow-intrusive",
     )
     mode.add_argument(
-        "--accept-finding-restrictions",
+        "--declared-access-only",
         action="store_true",
-        help="take the access restriction of an access-control finding from the assessment where the scope "
-        "declares none; the report names that source",
+        help="confirm access-control findings only against restrictions the scope declares; by default the "
+        "Verifier assumes the restriction a comparison implies where none is declared, and the report says so",
     )
+    # The assumption is the default; the flag that once asked for it is still accepted and changes nothing.
+    mode.add_argument("--accept-finding-restrictions", action="store_true", help=argparse.SUPPRESS)
     mode.add_argument(
         "--non-interactive",
         "--ci",

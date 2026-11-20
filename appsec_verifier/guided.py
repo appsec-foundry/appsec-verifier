@@ -2,10 +2,11 @@
 
 `appsec-verifier <assessment>` reads the assessment offline, shows what it
 holds, and asks only for what has no usable default: the target URL when there
-is no scope file, an identities file when one is found, who may use each request
-the run tests for access control (VER-010), and whether to overwrite
-a report already in the directory given with --output; without --output each
-run gets a directory of its own (VER-058). The severity floor
+is no scope file, an identities file when one is found, and whether
+to overwrite a report already in the directory given with --output; without
+--output each run gets a directory of its own (VER-058). Who may use a request is
+not asked: where the scope declares nothing, the Verifier assumes the restriction
+each comparison implies (VER-010). The severity floor
 is high and the model profile claude unless options say otherwise; the run
 prints the floor, and offers the next lower severity when nothing of high or
 above can be verified. A profile that is not available stops the run before
@@ -25,10 +26,10 @@ Identities (VER-016, VER-028, VER-031, VER-040, VER-041): with --account or
 identities file names but the environment lacks is asked for hidden. A file the
 run found, rather than one given with --identities, that starts login programs
 needs its own explicit yes, because a file next to a foreign assessment could
-name any program. Without an identities file, when access-control findings are
-selected, the run offers to take each role's session from a request the operator
-copies from the browser ("Copy as cURL"); only its Cookie and Authorization are
-kept. Values entered or pasted stay in this process and are never written.
+name any program. Without an identities file, when access-control findings need
+accounts, the run offers to take each account's session from a request the
+operator copies from the browser ("Copy as cURL"); only its Cookie and Authorization are kept. Values entered or
+pasted stay in this process and are never written.
 
 The dialog contacts nothing, writes no file, and never widens a scope. Text from
 the assessment is untrusted (VER-005) and is shown without control characters.
@@ -38,12 +39,9 @@ its settings from the invocation and blocks on a missing target or profile.
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import shlex
 import sys
-import textwrap
 from collections import ChainMap, Counter
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -56,7 +54,7 @@ from .auth.paste import PasteError, ask_hidden, ask_hidden_block, session_from_c
 from .limits import Limits
 from .preflight import printable as clean
 from .scope import ScopeGuard
-from .term_style import Style, columns
+from .term_style import Style
 
 SEVERITY_FLOORS = ("critical", "high", "medium", "low")
 DEFAULT_FLOOR = "high"
@@ -170,256 +168,22 @@ def run_guided(args, *, interactive: bool, ask=None, out=print, environ=None, as
         if found is None:
             return cli.EXIT_BLOCKED
         scope, guard = found
-        _access_preparation(d, args, scope, plans)
-        chosen = _ask_identities(d, args, guard, environ, assessment, cwd, scope, plans)
+        _ask_mode(d, args, scope)
+        chosen = _ask_identities(d, args, guard, environ, assessment, cwd)
         if chosen is None:
             return cli.EXIT_BLOCKED
-        secrets, pasted = chosen
-        _ask_mode(d, args, scope)
-        _ask_access_rules(d, args, scope, guard, plans, _run_identities(args, pasted))
+        secrets, may_paste = chosen
+        pasted = (_ask_pasted(d, args, guard, scope, plans, secrets) if may_paste else []) or None
         if not _ask_output(d, args):
             return cli.EXIT_BLOCKED
     except Cancelled:
         _err("\ncancelled; nothing was contacted.")
         return cli.EXIT_BLOCKED
     invocation = equivalent_invocation(args)
-    if getattr(args, "_guided_resources", None):
-        invocation += ("\n  It does not include the run-only access declarations: put them in test_resources "
-                       "in a scope file to reproduce this setup non-interactively.")
-    if getattr(args, "_guided_rules", None):
-        invocation += ("\n  It does not include the access rules given here: put them in access_rules in a scope "
-                       "file to reproduce this setup non-interactively.")
     if pasted:
         invocation += ("\n  It does not include the pasted sessions: put them in an identities file "
                        "(method session) and pass it with --identities.")
     return cli.cmd_verify(args, invocation=invocation, default_yes=True, secrets=secrets, pasted=pasted)
-
-
-def _access_preparation(d, args, scope, plans):
-    """Collect optional run-only test resources, never network authority (VER-031/061): a record the operator knows
-    that only certain accounts may see, with a text only it contains. Asked is only what the operator alone knows:
-    which findings, the record's path, the account that may see it and the text. Who must not see it follows from
-    the finding's class and the run's accounts; the restriction is the operator's answer, with the operator as its
-    source. Who may use a request is asked once the identities and the mode are known (_ask_access_rules)."""
-    selected = [p for p in cli._select(args, plans) if p.cls == "access-control"
-                and not any(r["finding_id"] == p.id for key in ("test_resources", "access_policies")
-                            for r in scope.get(key, []))]
-    if not selected or getattr(args, "accept_finding_restrictions", False):
-        return
-    from .agent.access_policy import rule_requests
-
-    st = Style.for_stream(sys.stdout)
-    width = max(min(columns() - 1, 100), 40)
-    heading = "Access control: records you know (optional)"
-    d.out("")
-    d.out(st(heading, "bold"))
-    d.out(st("─" * len(heading), "accent"))
-    d.out(f"{len(selected)} access-control finding{'' if len(selected) == 1 else 's'} can also be tested on a "
-          "record that only certain accounts may see.")
-    requests = {p.id: " ".join(next(iter(rule_requests(p, writes=False)), ())) for p in selected}
-    digits = len(str(len(selected)))
-    for n, plan in enumerate(selected, 1):
-        lead, request = f"  {n:>{digits}}  {clean(plan.id)}  ", clean(requests[plan.id])
-        title, room = clean(_short_title(plan.title)), max(width - len(lead) - len(request) - 2, 20)
-        title = title if len(title) <= room else title[:room - 1] + "…"
-        d.out(f"{lead}{title:<{room}}  {st(request, 'muted')}".rstrip())
-    while True:
-        answer = d.question("Findings you know a record for (numbers, for example 1,4; Enter for none)")
-        picked = re.split(r"[\s,]+", answer.strip()) if answer.strip() else []
-        if all(p.isdigit() and 1 <= int(p) <= len(selected) for p in picked):
-            break
-        d.out(f"  answer numbers from 1 to {len(selected)}, or Enter for none")
-    additions = []
-    identities = _run_identities(args, None)
-    for plan in [selected[i - 1] for i in dict.fromkeys(int(p) for p in picked)]:
-        d.out("")
-        d.out(f"{st(clean(plan.id), 'bold')}  {clean(_short_title(plan.title))}")
-        item = _ask_record(d, args, scope, plan, requests[plan.id], identities)
-        if item:
-            scope["test_resources"] = [*scope.get("test_resources", []), item]
-            additions.append(item)
-    if additions:
-        args._guided_resources = additions
-        d.out("")
-        d.out("These records apply to this run only. To keep them for later runs, add this to a scope file:")
-        d.out("  test_resources:")
-        for item in additions:
-            d.out(f"    - {clean(json.dumps(item))}")
-
-
-def _ask_record(d: Dialog, args, scope: dict, plan, request: str, identities: list[dict]) -> dict | None:
-    """The test resource for one finding, or None when the operator skips it. Asked are the path, the text and,
-    except for missing authentication and exposure, the account that may see the record, since only the operator
-    knows whose it is. Who must not see it is derived: no login for missing authentication and exposure; otherwise
-    the run's other normal accounts, which for a privileged account's record are all of them, or no login when
-    there is none. Without an account the run knows yet, an exposure is proved without a reference account
-    (VER-061) and the other classes name both roles."""
-    from .agent.experiments import EXPOSURE_CWES
-
-    roles = [str(i["role"]) for i in identities if i.get("role")]
-    privileged = {str(i["role"]) for i in identities if i.get("privileged")}
-    normal = [r for r in roles if r not in privileged]
-    exposure = plan.cwe in EXPOSURE_CWES
-    hint = f"{request} with a real id; " if ":" in request else (f"{request}; " if request else "")
-    while True:
-        path = d.question(f"  Path ({clean(hint)}Enter skips)")
-        if not path:
-            return None
-        if roles and exposure:
-            allowed, denied = (normal or roles)[0], ["anonymous"]
-        elif roles:
-            while (allowed := d.question("  Account that may see it", (normal or roles)[0])) not in roles:
-                d.out(f"    choose one of {', '.join(clean(r) for r in roles)}")
-            denied = [r for r in normal if r != allowed] or ["anonymous"]
-        elif exposure:
-            allowed, denied = "signed-in", ["anonymous"]
-        else:
-            allowed = d.question("  Account that may see it (a name of your choice)")
-            denied = [d.question("  Account that must not see it (a name of your choice; anonymous = no login)")]
-        value = d.question("  A text only in this record, nothing secret")
-        if not value:
-            d.out("    skipped: the Verifier recognises the record only by such a text")
-            return None
-        item = {"id": "guided-" + plan.id, "finding_id": plan.id, "path": path, "method": "GET",
-                "allowed_roles": [allowed], "denied_roles": denied,
-                "restriction": f"Only {'signed-in accounts' if exposure else allowed} may see {path}",
-                "source": "operator, guided run", "pointer": "", "value": value,
-                **({"anonymous_only": True} if exposure and not roles else {})}
-        errors = cli._validate_scope({**scope, "test_resources": [*scope.get("test_resources", []), item]},
-                                     url_only=not args.scope)
-        if not errors:
-            others = " and ".join("a request without login" if r == "anonymous" else clean(r) for r in denied)
-            d.out("  The Verifier checks whether it can be seen without login." if item.get("anonymous_only")
-                  else f"  The Verifier checks that {clean(allowed)} sees it and {others} does not.")
-            return item
-        d.out("    " + _record_problem(errors))
-
-
-def _record_problem(errors: list[str]) -> str:
-    """The validation errors of a record in the operator's words."""
-    text = " ".join(errors)
-    if "outside the target scope" in text:
-        return "This path is outside the target; enter another, or Enter to skip."
-    if "/path" in text:
-        return "Enter a path on the target, such as /api/orders/17, or Enter to skip."
-    if "disjoint" in text or "roles" in text:
-        return "Name two different accounts."
-    return clean(errors[0])
-
-
-# ── access rules (VER-010, VER-031) ──────────────────────────────────────────
-
-_RULE_ANSWERS = {"o": "owner", "s": "signed-in", "a": "admin", "p": "anyone",
-                 **{rule: rule for rule in ("owner", "signed-in", "admin", "anyone")}}
-_RULE_LEGEND = (("o", "only the record's owner"), ("s", "any signed-in account"), ("a", "only an admin"),
-                ("p", "anyone, also without login (the finding is then not tested)"), ("?", "don't know (Enter)"))
-_RULE_LABELS = {"owner": "owner only", "signed-in": "signed-in", "admin": "admin only", "anyone": "anyone",
-                None: "don't know"}
-
-
-def _run_identities(args, pasted) -> list[dict]:
-    """The run's identities by role, as verify will have them, for the access rules question; contacts nothing."""
-    from .auth.accounts import PRIVILEGED_ROLE, AccountError, account_identities
-
-    if getattr(args, "account", None) or getattr(args, "admin_account", None):
-        try:
-            identities, _, _ = account_identities(args.account or [], args.admin_account or [], "")
-        except AccountError:
-            return []                    # verify reports it before anything is contacted
-        return [{**i, "privileged": i["role"].startswith(f"{PRIVILEGED_ROLE}-")} for i in identities]
-    if args.identities:
-        try:
-            doc = yaml.safe_load(Path(args.identities).read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
-            return []
-        return [i for i in doc.get("identities", []) if isinstance(i, dict)] if isinstance(doc, dict) else []
-    return pasted or []
-
-
-def _ask_access_rules(d: Dialog, args, scope: dict, guard: ScopeGuard, plans, identities: list[dict]) -> None:
-    """Who may use each request this run's access comparisons read or change and no rule covers (VER-010): asked
-    once identities and mode are known, so only for findings the run can test. The rules apply to this run; the
-    run shows them as a scope excerpt to keep. With --accept-finding-restrictions nothing is asked."""
-    if getattr(args, "accept_finding_restrictions", False):
-        return
-    from .agent.access_policy import access_rule, rule_requests
-    from .agent.experiments import access_methods
-
-    safe = not args.allow_intrusive
-    base = scope["base_url"].rstrip("/")
-    asked: dict[tuple[str, str], list] = {}
-    for plan in cli._select(args, plans):
-        if (plan.cls != "access-control" or plan.status != "dynamic"
-                or any(r["finding_id"] == plan.id for r in scope.get("access_policies", []))
-                or (not args.test_all and cli._blocker(plan, identities=identities, browser=None, listener=None,
-                                                        scope=scope, safe=safe, source=args.source))):
-            continue
-        methods = access_methods(plan.id, plan.cwe, scope, identities, writes=not safe)
-        if "resource" in methods:
-            continue
-        for method, path in rule_requests(plan, writes="owner" in methods):
-            if access_rule(scope, method, path) is None and guard.authorize(base + path, "target").allowed:
-                found = asked.setdefault((method, path), [])
-                if all(p.id != plan.id for p in found):
-                    found.append(plan)
-    if not asked:
-        return
-
-    st = Style.for_stream(sys.stdout)
-    width = max(min(columns() - 1, 100), 40)
-    heading = "Who may use these requests?"
-    d.out("")
-    d.out(st(heading, "bold"))
-    d.out(st("─" * len(heading), "accent"))
-    for line in textwrap.wrap("The test can show who reached a request, but not who should. To confirm an "
-                              "access-control finding, the Verifier needs your rule for its request. Without one, "
-                              "the finding reports the access it observed but cannot be confirmed.", width):
-        d.out(line)
-    d.out("")
-    for key, text in _RULE_LEGEND:
-        d.out(f"  {st(key, 'accent', 'bold')}  {text}")
-    answers = []
-    for n, ((method, path), found) in enumerate(asked.items(), 1):
-        d.out("")
-        d.out(f"{st(f'[{n}/{len(asked)}]', 'muted')} {st(f'{method} {clean(path)}', 'bold')}")
-        for plan in found:
-            title = clean(_short_title(plan.title))
-            room = width - 8 - len(clean(plan.id))
-            d.out(f"      {clean(plan.id)}  {title if len(title) <= room else title[:room - 1] + '…'}")
-        answers.append(((method, path), _ask_rule(d), found))
-
-    d.out("")
-    d.out(st("Access rules for this run", "bold"))
-    column = max(len(f"{m} {clean(p)}") for (m, p), _, _ in answers)
-    for (method, path), may, found in answers:
-        row = f"  {f'{method} {clean(path)}':<{column}}   {_RULE_LABELS[may]:<10}   " \
-              + " ".join(clean(p.id) for p in found)
-        d.out(st(row, "muted") if may is None else row)
-    given = [(f"{m} {p}", may) for (m, p), may, _ in answers if may]
-    if not given:
-        d.out("No rule given: these findings report the access they observe, without confirming it.")
-        return
-    args._guided_rules = [{"request": request, "may": may, "source": "guided run"} for request, may in given]
-    d.out("They apply to this run only. To keep them for later runs, add this to a scope file:")
-    d.out("  access_rules:")
-    for request, may in given:
-        d.out(f"    - {{request: {json.dumps(clean(request))}, may: {may}}}")
-
-
-def _ask_rule(d: Dialog) -> str | None:
-    """One of owner, signed-in, admin, anyone; None for don't know, also on Enter."""
-    while True:
-        answer = d.question("      Who may use it? [o/s/a/p/?]").lower()
-        if answer in ("", "?"):
-            return None
-        if answer in _RULE_ANSWERS:
-            return _RULE_ANSWERS[answer]
-        d.out("      answer o, s, a, p or ?")
-
-
-def _short_title(title: str) -> str:
-    """A finding's title without the file and line some titles end with, such as `— server.ts:388`."""
-    return re.sub(r"\s+[—–-]+\s+\S+:\d+\s*$", "", title)
 
 
 # ── overview and selection (VER-005, VER-006, VER-026) ───────────────────────
@@ -540,10 +304,11 @@ def _ask_scope(d: Dialog, args, assessment: Path, cwd: Path):
 
 # ── identities (VER-010, VER-016, VER-028) ──────────────────────────────────
 
-def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Path, cwd: Path, scope: dict, plans):
-    """(secrets, pasted identities or None) for verify, or None when the run stops. The identities given,
-    or a found identities.yaml unless the operator answers 'none'; without a file the offer to paste
-    sessions. Missing credential values are asked for hidden and kept in `secrets` (VER-016)."""
+def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Path, cwd: Path):
+    """(secrets, whether sessions may be pasted) for verify, or None when the run stops. The identities given,
+    or a found identities.yaml unless the operator answers 'none'; without a file, sessions may be pasted once
+    the test resources name their roles (_ask_pasted). Missing credential values are asked for hidden and kept in
+    `secrets` (VER-016)."""
     secrets: dict = {}
     env = ChainMap(secrets, environ)
 
@@ -551,23 +316,23 @@ def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Pat
         return cli._check_identities(path, guard, env, interactive=True, secrets=secrets, ask_secret=d.secret)
 
     if getattr(args, "account", None) or getattr(args, "admin_account", None):
-        return secrets, None             # accounts on the command line; verify asks their passwords (VER-041)
+        return secrets, False            # accounts on the command line; verify asks their passwords (VER-041)
     if args.identities:
         identities, errors = check(args.identities)
         if errors:
             _err("identities are not usable; nothing was contacted:\n"
                  + "\n".join(f"  - {clean(e)}" for e in errors))
             return None
-        return secrets, None
+        return secrets, False
     dirs = [Path(args.scope).parent] if args.scope else []
     found = _candidates("identities.yaml", *dirs, assessment.parent, cwd)
     if not found:
-        return secrets, _ask_pasted(d, args, guard, scope, plans, secrets) or None
+        return secrets, True
     while True:
         answer = d.question("Identities file (test roles; missing credentials are asked for hidden), "
                             "or 'none'", str(found[0]))
         if answer.lower() == "none":
-            return secrets, None
+            return secrets, False
         identities, errors = check(answer)
         if not errors:
             programs = cli._login_programs(identities)
@@ -576,31 +341,39 @@ def _ask_identities(d: Dialog, args, guard: ScopeGuard, environ, assessment: Pat
                 continue
             args.identities = answer
             d.out(f"  roles: {', '.join(clean(i['role']) for i in identities)}")
-            return secrets, None
+            return secrets, False
         for e in errors:
             d.out(f"  {clean(e)}")
         d.out("  set missing variables and start again, or choose another file or 'none'")
 
 
 def _ask_pasted(d: Dialog, args, guard: ScopeGuard, scope: dict, plans, secrets: dict) -> list[dict]:
-    """Identities with method session from requests the operator copies from the browser, when selected
-    access-control findings have test resources in the scope, so two identities are all they lack (VER-010,
-    VER-031). The roles are those the test resources name."""
-    resources = [r for r in scope.get("test_resources", [])
-                 if any(p.id == r.get("finding_id") and p.status == "dynamic" and p.cls == "access-control"
-                        for p in cli._select(args, plans))]
+    """Identities with method session from requests the operator copies from the browser, when there is no
+    identities file and selected access-control findings need accounts (VER-010, VER-031): the roles their test
+    resources in the scope name or, without those, the accounts the run's comparisons use, one normal account and
+    in intrusive mode a second, offered only when they let a finding be tested."""
+    from .auth.accounts import NORMAL_ROLE
+
+    selected = [p for p in cli._select(args, plans) if p.status == "dynamic" and p.cls == "access-control"]
+    resources = [r for r in scope.get("test_resources", []) if any(p.id == r.get("finding_id") for p in selected)]
     roles = sorted({str(r) for res in resources if not res.get("anonymous_only")
                     for r in [*res.get("allowed_roles", []), *res.get("denied_roles", [])]} - {"anonymous"})
-    if not roles:
-        return []
     need = {r["finding_id"] for r in resources}
-    target = scope["base_url"]
-    d.out(f"{len(need)} access-control finding{'' if len(need) == 1 else 's'} need two signed-in users, and there "
-          "is no identities file. You can take each role's session from your browser: sign in as that user "
-          f"(a private window for the second), copy a request to {clean(target)} in the developer tools with "
-          "'Copy as cURL (bash)' and paste it here. It is read hidden; only its Cookie and Authorization are "
-          "kept, for this run only.")
-    if not d.yes(f"Paste sessions for {', '.join(clean(r) for r in roles)}?"):
+    if not roles:
+        roles = [f"{NORMAL_ROLE}-{n}" for n in range(1, 3 if args.allow_intrusive else 2)]
+        need = {p.id for p in selected if cli._blocker(
+            p, identities=[{"role": r} for r in roles], browser=None, listener=None, scope=scope,
+            safe=not args.allow_intrusive, source=args.source) is None}
+    if not need:
+        return []
+    target, one = scope["base_url"], len(roles) == 1
+    d.out(f"{len(need)} access-control finding{' needs' if len(need) == 1 else 's need'} "
+          f"{'a signed-in user' if one else f'{len(roles)} signed-in users'}, and there is no identities file. "
+          f"You can take {'the' if one else 'each'} session from your browser: sign in"
+          f"{'' if one else ' as each user (a private window for the second)'}, copy a request to {clean(target)} "
+          "in the developer tools with 'Copy as cURL (bash)' and paste it here. It is read hidden; only its Cookie "
+          "and Authorization are kept, for this run only.")
+    if not d.yes(f"Paste {'a session' if one else 'sessions'} for {', '.join(clean(r) for r in roles)}?"):
         return []
     pasted = []
     for role in roles:
@@ -667,7 +440,7 @@ _VALUE_OPTIONS = (("scope", "--scope"), ("target", "--url"), ("identities", "--i
                   ("screenshots", "--screenshots"), ("console_log", "--console-log"))
 _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "--overwrite"),
           ("annotate", "--annotate"), ("allow_intrusive", "--allow-intrusive"),
-          ("read_only", "--read-only"), ("accept_finding_restrictions", "--accept-finding-restrictions"),
+          ("read_only", "--read-only"), ("declared_access_only", "--declared-access-only"),
           ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
           ("show_costs", "--show-costs"), ("strict_severity", "--strict-severity"))
 

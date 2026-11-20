@@ -122,58 +122,52 @@ def test_report_shows_the_independent_restriction_and_its_source():
     assert "<untrusted>" not in text
 
 
-def test_the_findings_restriction_confirms_only_when_the_operator_accepted_it():
-    """VER-010: without a declaration the finding's restriction counts only after the operator's acceptance."""
+def test_without_a_declaration_the_verifier_assumes_the_restriction_its_comparison_implies():
+    """VER-010: where nothing is declared, the restriction the checked comparison implies counts, marked as assumed;
+    a run limited to declared access (assume_restrictions not True) leaves the finding inconclusive."""
     from test_access_without_credentials import PATH, _check, comparison
 
     assert _check(comparison(), scope={}).verdict == "inconclusive"
-    assert _check(comparison(), scope={}, accept="yes").verdict == "inconclusive"  # only an explicit True
-    result = _check(comparison(), scope={}, accept=True)
+    assert _check(comparison(), scope={}, assume="yes").verdict == "inconclusive"  # only an explicit True
+    result = _check(comparison(), scope={}, assume=True)
     assert result.verdict == "confirmed" and result.confidence == "medium", result.rationale
     taken = result.proof["access_restriction"]
-    assert taken["accepted_from_finding"] is True and taken["source"].startswith("finding T-1 of the assessment")
+    assert taken["assumed"] is True and taken["source"].startswith("assumed by the Verifier for finding T-1")
     assert (taken["path"], taken["allowed_roles"], taken["denied_roles"]) == (PATH, ["account-1"], ["anonymous"])
     assert taken["restriction"] == "The request requires a signed-in account."
 
 
-def test_acceptance_replaces_no_comparison_and_no_declaration():
+def test_the_assumption_replaces_no_comparison_and_no_declaration():
     from test_access_without_credentials import PATH, _check, comparison
 
     # The comparison itself still has to hold: a refused anonymous request stays unconfirmed.
-    assert _check(comparison(anonymous_status=403), scope={}, accept=True).verdict != "confirmed"
-    declared = _check(comparison(), scope={"access_policies": [policy(PATH)]}, accept=True)
+    assert _check(comparison(anonymous_status=403), scope={}, assume=True).verdict != "confirmed"
+    declared = _check(comparison(), scope={"access_policies": [policy(PATH)]}, assume=True)
     assert declared.proof["access_restriction"]["source"].startswith("operator:")
-    assert "accepted_from_finding" not in declared.proof["access_restriction"]
+    assert "assumed" not in declared.proof["access_restriction"]
 
 
-def test_acceptance_names_the_restriction_of_the_own_resource_and_privileged_forms():
+def test_the_assumption_names_the_restriction_of_the_own_resource_and_privileged_forms():
     from test_own_access import _check, owned, privileged
 
-    own = _check(owned(), scope={}, accept=True)
+    own = _check(owned(), scope={}, assume=True)
     assert own.verdict == "confirmed", own.rationale
     assert own.proof["access_restriction"]["restriction"].startswith("Only the account that owns the record")
     assert _check(owned(), scope={}).verdict == "inconclusive"
-    function = _check(privileged(), scope={}, accept=True, cwe="CWE-862")
+    function = _check(privileged(), scope={}, assume=True, cwe="CWE-862")
     assert function.verdict == "confirmed", function.rationale
     assert function.proof["access_restriction"]["allowed_roles"] == ["admin-1"]
     assert function.proof["access_restriction"]["denied_roles"] == ["account-1", "account-2"]
 
 
-def test_the_guided_run_no_longer_takes_the_findings_restrictions_on_a_question():
-    """VER-010/031: the guided run asks who may use a request instead (test_guided); the findings' restrictions
-    count only with --accept-finding-restrictions."""
-    from test_guided import SCOPE
+def test_a_technical_objection_to_the_assumed_restriction_leaves_the_finding_unconfirmed():
+    """VER-010/046: technical QA can invalidate a confirmation that rests on an assumed restriction."""
+    from test_access_without_credentials import _check, comparison
 
-    from appsec_verifier.cli import build_guided_parser
-    from appsec_verifier.guided import Dialog, _access_preparation
-    from appsec_verifier.loader import classify, load_verifiable_cwes
-
-    plan = classify({"id": "T-1", "cwe": "CWE-306", "title": "Management exposure",
-                     "severity": "high", "evidence": {"file": "app.py", "line": 1}}, load_verifiable_cwes())
-    args, asked = build_guided_parser().parse_args(["assessment.yaml"]), []
-    _access_preparation(Dialog(lambda prompt: asked.append(prompt) or "", lambda _: None), args, dict(SCOPE), [plan])
-    assert asked == ["Findings you know a record for (numbers, for example 1,4; Enter for none): "]
-    assert args.accept_finding_restrictions is False
+    result = apply_intent_review(_check(comparison(), scope={}, assume=True),
+                                 {"issues": ["the user list is public by design"]})
+    assert result.verdict == "inconclusive" and result.confidence == "low"
+    assert "unresolved technical objection to the intended access restriction" in result.proof["missing"]
 
 
 # ── the operator's access rule for a request ─────────────────────────────────
@@ -191,7 +185,7 @@ def test_access_without_credentials_breaks_every_rule_but_anyone(may, confirmed)
     if confirmed:
         taken = result.proof["access_restriction"]
         assert taken["source"] == f"the operator's access rule for GET {PATH} (scope)"
-        assert "accepted_from_finding" not in taken and taken["denied_roles"] == ["anonymous"]
+        assert "assumed" not in taken and taken["denied_roles"] == ["anonymous"]
     else:
         assert result.proof["observed_access"] and "allows it" in result.rationale
 
@@ -214,11 +208,11 @@ def test_a_normal_accounts_privileged_answer_breaks_only_admin(may, confirmed):
     assert (result.verdict == "confirmed") is confirmed, result.rationale
 
 
-def test_a_rule_decides_before_the_accepted_restriction_and_only_for_its_own_request():
+def test_a_rule_decides_before_the_assumed_restriction_and_only_for_its_own_request():
     from test_access_without_credentials import PATH, _check, comparison
 
     public = {"access_rules": [rule(f"GET {PATH}", "anyone")]}
-    assert _check(comparison(), scope=public, accept=True).verdict == "inconclusive"
+    assert _check(comparison(), scope=public, assume=True).verdict == "inconclusive"
     for other in (f"POST {PATH}", "GET /rest/admin", f"GET {PATH}/more"):
         result = _check(comparison(), scope={"access_rules": [rule(other, "admin")]})
         assert result.verdict == "inconclusive" and "allows it" not in result.rationale
@@ -237,6 +231,19 @@ def test_a_placeholder_in_a_rule_stands_for_one_segment():
     assert access_rule(scope, "GET", "/api/Recycles/:id?x=1") is not None
     for method, path in (("GET", "/api/Recycles"), ("GET", "/api/Recycles/7/items"), ("PUT", "/api/Recycles/7")):
         assert access_rule(scope, method, path) is None
+
+
+def test_a_route_for_every_method_is_read_with_get_so_its_rule_is_the_gets():
+    """A comparison reads a route the attack surface lists for every method (`ALL`, an Express mount) with a GET,
+    so the rule that decides it is the GET's (VER-010); a browser page route is no request of its own."""
+    from appsec_verifier.agent.access_policy import rule_requests
+
+    endpoints = [SimpleNamespace(method=m, path=p) for m, p in (
+        ("ALL", "/encryptionkeys/:file"), ("GET", "/encryptionkeys/:file"), ("PAGE", "/#/administration"),
+        ("ALL", "/api/Users/:id"))]
+    plan = SimpleNamespace(verification_context={}, endpoints=endpoints)
+    expected = [("GET", "/encryptionkeys/:file"), ("GET", "/api/Users/:id")]
+    assert rule_requests(plan, writes=False) == expected and rule_requests(plan, writes=True) == expected
 
 
 def test_scope_access_rules_need_a_method_a_path_and_a_known_rule():

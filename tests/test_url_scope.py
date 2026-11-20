@@ -144,6 +144,20 @@ def test_a_scope_file_that_forbids_writes_still_runs_read_only(tmp_path, monkeyp
         assert rc == cli.EXIT_OK and doc["meta"]["safety"]["read_only"] is True
 
 
+@pytest.mark.parametrize("extra, assumed", [((), True), (("--accept-finding-restrictions",), True),
+                                            (("--declared-access-only",), None)])
+def test_the_run_settings_and_the_report_say_whether_access_restrictions_are_assumed(tmp_path, monkeypatch, capsys,
+                                                                                     extra, assumed):
+    """VER-010/031: the Verifier assumes the restriction a comparison implies unless the run is limited to declared
+    access; the flag that once asked for the assumption is still accepted and changes nothing."""
+    rc, _, _ = _verify(tmp_path, monkeypatch, "--url", URL, *extra)
+    doc, _ = read_report(tmp_path / "out" / "verification.yaml")
+    assert rc == cli.EXIT_OK and doc["meta"]["safety"].get("access_restrictions_assumed") is assumed
+    out = capsys.readouterr().out
+    assert ("Access     : restrictions assumed where the scope declares none" in out) is bool(assumed)
+    assert ("Access     : only the restrictions the scope declares (--declared-access-only)" in out) is not assumed
+
+
 @pytest.mark.parametrize("extra, expected", [
     ((), "a target URL is required"),
     (("--url", "http://admin:pw@localhost:3000"), "leave credentials out of the URL"),

@@ -519,9 +519,8 @@ _HEADER = {"id": "variant-001", "request": {"method": "GET", "path": "/vulnerabi
      _HEADER, "Not possible: the input is the X-Forwarded-For header, and the Verifier sends no custom headers."),
     ({"proof": {"checked": False, "missing": ["observed access has no independently established access "
                                               "restriction"]}},
-     None, "Needs an option: access was observed, but no rule says it should be refused; "
-           "--accept-finding-restrictions takes the rule from the finding, access_policies in the scope "
-           "declares it."),
+     None, "Needs a rule: access was observed, but no rule says it should be refused; access_rules or "
+           "access_policies in the scope declare it."),
     ({"limits_hit": "time", "rationale": "stopped by limit: execution deadline reached"},
      None, "Limit reached: the run's time limit; raise it with --max-duration."),
     ({"verdict": "not-attempted", "rationale": "not tested: the run's time limit was reached by an earlier finding"},

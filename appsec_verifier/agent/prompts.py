@@ -507,8 +507,11 @@ def _access_hint(ctx) -> str:
                "reading or changing the owner's record breaks owner and admin; a normal account getting the "
                "privileged account's identical answer breaks admin. Choose the comparison that fits the rule."
                if ruled else
-               "The operator accepted the assessment's access restrictions for this run, so a checked comparison "
-               "can confirm." if getattr(ctx, "accept_finding_restrictions", False) is True else
+               "Where no rule is declared, the Verifier assumes the restriction the checked comparison implies: "
+               "access without credentials breaks that the request requires a signed-in account, another normal "
+               "account reading or changing the owner's record breaks that only the owner may, a normal account "
+               "getting the privileged account's identical answer breaks that only a privileged account may; so a "
+               "checked comparison can confirm." if getattr(ctx, "assume_restrictions", False) is True else
                "Confirmation additionally requires an "
                "independent operator-declared test resource or access_policies restriction, never a finding claim."))
     if "owner" in methods:

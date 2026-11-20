@@ -54,7 +54,7 @@ def _req(role, body="", status=200, method="GET", path="/api/Feedbacks/7", json=
                           "digest": sha}}
 
 
-def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639", owned=(), accept=False):
+def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639", owned=(), assume=False):
     history = copy.deepcopy(history)
     responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
     declared = {"access_policies": [
@@ -65,7 +65,7 @@ def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-639", 
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe),
                           scope=declared if scope is None else scope,
                           identities=ROLES, marker=MARKER, responses=responses, sessions=None, evidence_dir=None,
-                          owned=set(owned), accept_finding_restrictions=accept)
+                          owned=set(owned), assume_restrictions=assume)
     if cited is None:
         cited = [n for n, h in enumerate(history, 1) if h["tool"] == "http_request"]
     return check_proof(ctx, history, ProbeResult(verdict=verdict, confidence="high", rationale="claim"), cited)

@@ -61,13 +61,13 @@ def comparison(anonymous=SECRET, anonymous_status=200, control="<h1>404</h1>", c
             _read(None, control, control_status, path=CONTROL)]
 
 
-def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-306", accept=False):
+def _check(history, verdict="confirmed", cited=None, scope=None, cwe="CWE-306", assume=False):
     history = copy.deepcopy(history)
     responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe),
                           scope={"access_policies": [policy(PATH)]} if scope is None else scope,
                           identities=[{"role": "account-1"}], marker=MARKER, responses=responses, sessions=None,
-                          evidence_dir=None, accept_finding_restrictions=accept)
+                          evidence_dir=None, assume_restrictions=assume)
     if cited is None:
         cited = [n for n, h in enumerate(history, 1) if h["tool"] == "http_request"]
     return check_proof(ctx, history, ProbeResult(verdict=verdict, confidence="high", rationale="claim"), cited)
@@ -503,7 +503,7 @@ def test_the_comparison_image_says_when_no_rule_rates_the_access_and_shortens_lo
     page = pages[0]
     assert (f"Missing authentication not confirmed, although without a login, GET {PATH} returns the same answer "
             "as for account-1.") in page
-    assert "No access rule is declared or accepted for this finding" in page and "<td>not declared</td>" in page
+    assert "No access rule is declared or assumed for this finding" in page and "<td>not declared</td>" in page
     assert "class='attack access unrated'" in page and "<td>refused</td>" not in page
     assert page.count("<p><b>") == 3 and page.count("<b>✗ ") == 1 and "<p><b>✗ Rule</b>" in page  # rule missing
     assert "Inconclusive: the access is shown, but no rule rates it." in page

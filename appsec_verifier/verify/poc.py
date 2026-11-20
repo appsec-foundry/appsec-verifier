@@ -1972,7 +1972,7 @@ def comparison_summary(ctx, history: list[dict], rows: list[dict], result) -> di
         expected = (f"{str(restriction.get('restriction') or 'Access is restricted').rstrip('.')}. "
                     f"Source: {str(restriction.get('source') or 'not named').rstrip('.')}.")
     else:
-        expected = ("No access rule is declared or accepted for this finding, so the access is shown but not rated "
+        expected = ("No access rule is declared or assumed for this finding, so the access is shown but not rated "
                     "as a violation.")
     got = f"{attack['who']} got the answer"
     if attack["same"] and attack["ref"] is not None:

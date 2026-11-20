@@ -1,9 +1,10 @@
 """Separate observed access from operator-established restrictions (VER-010, VER-046, VER-057).
 
 Policies describe intended access only. They grant no route, identity, write permission or proof.
-Model interpretations never create policy entries; a finding's restriction counts only after the operator
-accepted the assessment's restrictions for the run. An operator's access rule says who may use a request;
-it takes precedence over that acceptance.
+Model interpretations never create policy entries. Where the operator declares nothing for a request, the
+Verifier assumes the restriction the checked comparison implies, unless the run is limited to declared access
+(--declared-access-only); the result marks that restriction as assumed. An operator's access rule says who may use
+a request; it takes precedence over the assumption.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ def restriction(ctx, history, cited):
     return None
 
 
-# The restriction each comparison form of a finding tests, in the words the operator accepts before the run.
+# The restriction the Verifier assumes for each comparison form of a finding where the operator declares none.
 FINDING_RESTRICTIONS = {
     "signed_in": "The request requires a signed-in account.",
     "reference": "Only a privileged account may use the function.",
@@ -78,16 +79,16 @@ def _compared(ctx, plan, form):
 
 
 def finding_restriction(ctx, history):
-    """The finding's restriction for the comparison form that was checked, only when the operator accepted the
-    assessment's restrictions for the run (VER-010). The text comes from the form, never from a model."""
-    if getattr(ctx, "accept_finding_restrictions", False) is not True:
+    """The restriction the Verifier assumes for the comparison form that was checked, unless the run is limited to
+    declared access (VER-010). The text comes from the form, never from a model."""
+    if getattr(ctx, "assume_restrictions", False) is not True:
         return None
     _, plan = latest_plan(history)
     form = next((f for f in FINDING_RESTRICTIONS if plan.get(f)), None)
     if form is None:
         return None
-    return {"source": f"finding {ctx.plan.id} of the assessment, accepted by the operator for this run",
-            "restriction": FINDING_RESTRICTIONS[form], "accepted_from_finding": True, **_compared(ctx, plan, form)}
+    return {"source": f"assumed by the Verifier for finding {ctx.plan.id}; no rule was declared for the request",
+            "restriction": FINDING_RESTRICTIONS[form], "assumed": True, **_compared(ctx, plan, form)}
 
 
 # Who may use a request by the operator's access rule (VER-010), and which rules the access each comparison form
@@ -113,13 +114,14 @@ def access_rule(scope, method: str, path: str):
 
 def rule_requests(plan, *, writes: bool) -> list[tuple[str, str]]:
     """The requests of `plan` an access comparison reads or, with `writes`, changes, whose rule decides it: the GET
-    requests the finding names, and the writes that change a record by its identifier."""
+    requests the finding names, also for a route it names for every method (`ALL`), which a comparison reads with a
+    GET, and the writes that change a record by its identifier."""
     variants = (getattr(plan, "verification_context", None) or {}).get("variants", [])
     named = [(v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants] or [
         (e.method, e.path) for e in getattr(plan, "endpoints", ())]
     requests = []
     for method, path in named:
-        path = urlsplit(path).path
+        method, path = "GET" if method == "ALL" else method, urlsplit(path).path
         if re.fullmatch(r"/[^?#\s]{0,2000}", path) and (method == "GET" or (
                 writes and method in ("PUT", "PATCH") and record_segment(path) is not None)):
             if (method, path) not in requests:
@@ -142,7 +144,7 @@ def operator_restriction(ctx, history):
 
 def require_restriction(ctx, history, cited, result):
     """Retain the checked comparison as an observation when its authorization meaning is unestablished. An
-    operator's access rule for the request decides before the finding's accepted restriction."""
+    operator's access rule for the request decides before the assumed restriction."""
     if result.verdict != "confirmed" or getattr(ctx.plan, "cls", None) != "access-control":
         return result
     rule, policy = None, restriction(ctx, history, cited)
@@ -167,9 +169,8 @@ def require_restriction(ctx, history, cited, result):
     result.observations = [*result.observations, "The recorded comparison established access; whether it violates "
                            "the application's intended access policy remains unproven."]
     result.rationale = "Access observed, authorization violation unproven: say who may use the request in " \
-                       "scope.access_rules or the guided run, accept the assessment's restrictions with " \
-                       "--accept-finding-restrictions, or declare the expected restriction and its source in " \
-                       "scope.access_policies or use an operator-declared test resource."
+                       "scope.access_rules, declare the expected restriction and its source in " \
+                       "scope.access_policies, or use an operator-declared test resource."
     return result
 
 
