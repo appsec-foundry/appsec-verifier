@@ -59,6 +59,22 @@ def test_auth_host_allowed_only_for_auth_purpose():
     assert not g().authorize("https://sso.example.com/token", "target").allowed
 
 
+@pytest.mark.parametrize("entry, url, allowed", [
+    ("[::1]:8080", "http://[::1]:8080/realms/app", True),
+    ("[::1]:8080", "http://[::1]:8081/realms/app", False),
+    ("[::1]:8080", "http://[::2]:8080/realms/app", False),
+    ("[::1]:8080", "http://[0:0:0:0:0:0:0:1]:8080/realms/app", False),   # another spelling is not the entry
+    ("[::1]", "http://[::1]:9000/realms/app", True),
+    ("::1", "http://[::1]:9000/realms/app", True),
+    ("[::1]x", "http://[::1]:8080/realms/app", False),                   # malformed: matches nothing
+    ("localhost:8080", "http://localhost:8080/realms/app", True),
+    ("localhost:8080", "http://localhost:8081/realms/app", False),
+])
+def test_an_auth_host_names_an_ipv6_address_in_brackets(entry, url, allowed):
+    guard = ScopeGuard({"base_url": "http://localhost:3000", "auth_hosts": [entry]})
+    assert guard.authorize(url, "auth").allowed is allowed
+
+
 def test_without_schemes_only_the_scheme_of_the_base_url_is_allowed():
     local = ScopeGuard({"base_url": "http://localhost:3000"})
     assert local.authorize("http://localhost:3000/rest/products", "target").allowed

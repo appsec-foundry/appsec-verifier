@@ -187,6 +187,20 @@ def test_after_the_sign_in_phase_an_interactive_identity_whose_renewal_fails_is_
     assert len(transport.calls) == calls + 1                   # one refresh attempt, then nothing more
 
 
+@pytest.mark.parametrize("lifetime, renewed", [
+    (300, True), ("300", True),                                # some providers send the number as text
+    ("abc", False), ("nan", False), ("inf", False), ("-5", False), (True, False), (10 ** 400, False),
+])
+def test_a_lifetime_sent_as_text_still_sets_the_expiry(lifetime, renewed):
+    clock = Clock()
+    answers = {("POST", TOKEN_URL): Resp(200, {"access_token": "AT", "expires_in": lifetime})}
+    sessions, transport, _ = mgr([PASSWORD], ENV, answers, clock=clock)
+    sessions.headers_for("a")
+    clock.now += 250                                           # within the margin of a 300 s token
+    sessions.headers_for("a")
+    assert len(transport.calls) == (2 if renewed else 1)
+
+
 def test_client_secret_basic_puts_the_secret_in_the_authorization_header_only():
     ident = {"role": "svc", "method": "oidc-client-credentials", "auth": {
         "token_url": TOKEN_URL, "client_id": "my client", "client_secret_env": "CS", "client_auth": "basic",
@@ -247,6 +261,31 @@ def test_a_discovery_document_for_another_issuer_is_refused():
     with pytest.raises(AuthError, match="another issuer"):
         sessions.headers_for("a")
     assert len(transport.calls) == 1
+
+
+def test_endpoints_given_need_no_discovery_document():
+    # A provider in a container names the issuer the containers use, not the address the Verifier reaches.
+    ident = {"role": "svc", "method": "oidc-client-credentials", "auth": {
+        "issuer": ISSUER, "token_url": TOKEN_URL, "client_id": "svc", "client_secret_env": "CS"}}
+    answers = {("GET", DISCOVERY): Resp(200, {"issuer": "http://keycloak:8080/realms/app"}),
+               ("POST", TOKEN_URL): Resp(200, {"access_token": "AT"})}
+    sessions, transport, _ = mgr([ident], {"CS": "client-secret-1"}, answers)
+    assert sessions.headers_for("svc") == {"Authorization": "Bearer AT"}
+    assert [(c[0], c[1]) for c in transport.calls] == [("POST", TOKEN_URL)]
+
+
+def test_only_a_browser_sign_in_needs_the_discovered_authorize_endpoint_in_scope():
+    doc = {"issuer": ISSUER, "token_endpoint": TOKEN_URL, "authorization_endpoint": "https://login.other.example/a"}
+    service = {"role": "svc", "method": "oidc-client-credentials", "auth": {
+        "issuer": ISSUER, "client_id": "svc", "client_secret_env": "CS"}}
+    sessions, _, _ = mgr([service], {"CS": "client-secret-1"}, {("GET", DISCOVERY): Resp(200, doc),
+                                                               ("POST", TOKEN_URL): Resp(200, {"access_token": "AT"})})
+    assert sessions.headers_for("svc") == {"Authorization": "Bearer AT"}       # it never uses the authorize endpoint
+    browser = {"role": "a", "method": "oidc-authorization-code", "auth": {"issuer": ISSUER, "client_id": "cli"}}
+    sessions, transport, receiver, said = _code_flow(lambda q, state: {}, browser, {("GET", DISCOVERY): Resp(200, doc)})
+    with pytest.raises(AuthError, match="authorize endpoint is refused"):
+        sessions.headers_for("a")
+    assert receiver.opened == [] and said == [] and [c[1] for c in transport.calls] == [DISCOVERY]
 
 
 # ── accounts (VER-032) ───────────────────────────────────────────────────────
@@ -348,6 +387,23 @@ def test_a_sign_in_that_needs_a_person_fails_closed_without_one():
     with pytest.raises(AuthError, match="needs a person"):
         sessions.headers_for("a")
     assert transport.calls == []
+
+
+@pytest.mark.parametrize("issued, renewed, used", [
+    ({"access_token": "AT-1", "expires_in": 3600}, False, "Bearer AT-1"),     # only a person could replace it
+    ({"access_token": "AT-1", "expires_in": 3600, "refresh_token": "RT-1"}, True, "Bearer AT-2"),
+])
+def test_after_the_sign_in_phase_a_401_keeps_a_session_only_a_person_could_replace(issued, renewed, used):
+    answers = {("POST", TOKEN_URL): [Resp(200, issued), Resp(200, {"access_token": "AT-2", "expires_in": 3600})]}
+    sessions, transport, receiver, _ = _code_flow(lambda q, state: {"state": state, "code": "CODE-1"}, answers=answers)
+    sessions.headers_for("a")
+    sessions.end_interactive()
+    assert sessions.renew("a") is renewed                      # what the agent tools ask after a 401
+    assert sessions.headers_for("a") == {"Authorization": used}
+    assert sessions.headers_for("a") == {"Authorization": used}             # still available, nothing refused
+    assert len(receiver.opened) == 1
+    assert [c[3]["data"]["grant_type"] for c in transport.calls] == \
+        ["authorization_code", "refresh_token"][:1 + renewed]
 
 
 def _get(port, path):

@@ -31,7 +31,9 @@ not tried again in the run, so a run cannot lock the test account. After a
 401, `renew()` drops the session so the next request logs in again; when the
 request is answered 401 again with the new session, the 401 is the target's
 answer to that request, not an expired session, and the role is not logged in
-again until one of its requests is accepted.
+again until one of its requests is accepted. A sign-in that only a person could
+repeat, and that has no refresh token, keeps its session after a 401 once the
+sign-in phase is over: the 401 is taken as the target's answer.
 
 `redact()` replaces every credential value the run knows (the identities'
 `*_env` values but their user names, which are no secret, every header value
@@ -54,6 +56,7 @@ from __future__ import annotations
 import base64
 import functools
 import json
+import math
 import re
 import threading
 import time
@@ -303,8 +306,11 @@ class SessionManager:
     @_locked
     def renew(self, role: str) -> bool:
         """After a 401 for `role`: drop its session so the next headers_for() logs in again, and return True;
-        False, keeping the session, while a renewal was already answered 401 and nothing accepted since (VER-028)."""
-        if role in self._no_renewal:
+        False, keeping the session, while a renewal was already answered 401 and nothing accepted since, or when
+        only a person could replace it: a sign-in without a refresh token after the sign-in phase (VER-028)."""
+        method = (self._by_role.get(role) or {}).get("method")
+        if role in self._no_renewal or (method in INTERACTIVE_METHODS and self._ui is None
+                                        and role not in self._refresh):
             return False
         self.invalidate(role)
         self._renewed.add(role)
@@ -529,11 +535,12 @@ class SessionManager:
             if self._ui is None:
                 raise AuthError(f"{method} needs a person to sign in, and this run cannot ask one now")
             from . import interactive
-            endpoints = self._endpoints(auth)
             if method == "oidc-authorization-code":
+                endpoints = self._endpoints(auth, ("authorize", "token"))
                 data = interactive.authorization_code(self._http, auth, endpoints, self._client_id(auth),
                                                       self._ui, role=role)
                 return self._grant(auth, data)
+            endpoints = self._endpoints(auth, ("device", "token"))
             resp = interactive.device_code(self._http, auth, endpoints, self._client_fields(auth), self._ui,
                                            role=role, sleep=self._sleep, clock=self._clock,
                                            remember=lambda code: self.remember_secret(code, "device code"))
@@ -664,19 +671,20 @@ class SessionManager:
 
     # ── OAuth / OIDC ─────────────────────────────────────────────────────────
 
-    def _endpoints(self, auth: dict) -> dict:
-        """token, authorization and device endpoints: as given, else from the issuer's discovery document.
-        The GuardedHttpClient refuses a request to one the scope does not allow for authentication; the
-        authorize URL, which only the operator's browser opens, is checked here (VER-028, VER-029)."""
+    def _endpoints(self, auth: dict, need: tuple[str, ...]) -> dict:
+        """token, authorization and device endpoints: as given, else from the issuer's discovery document, which
+        is read only when an endpoint in `need` is not given. The GuardedHttpClient refuses a request to one the
+        scope does not allow for authentication; the authorize URL, which only the operator's browser opens, is
+        checked here when the flow needs it (VER-028, VER-029)."""
         found = {"token": auth.get("token_url"), "authorize": auth.get("authorize_url"),
                  "device": auth.get("device_url")}
         issuer = auth.get("issuer")
-        if issuer and not all(found.values()):
+        if issuer and not all(found[key] for key in need):
             doc = self._discover(issuer)
             for key, field in (("token", "token_endpoint"), ("authorize", "authorization_endpoint"),
                                ("device", "device_authorization_endpoint")):
                 found[key] = found[key] or (doc.get(field) if isinstance(doc.get(field), str) else None)
-        if found["authorize"]:
+        if "authorize" in need and found["authorize"]:
             decision = self._http.authorize(found["authorize"], "auth")
             if not decision.allowed:
                 raise AuthError(f"the authorize endpoint is refused for authentication: {decision.reason}")
@@ -718,7 +726,7 @@ class SessionManager:
     def _grant(self, auth: dict, data: dict) -> Session:
         """One token request to the identity's token endpoint; the session carries the chosen token, its
         expiry and the refresh token, where the response has them."""
-        endpoints = self._endpoints(auth)
+        endpoints = self._endpoints(auth, ("token",))
         if not endpoints["token"]:
             raise AuthError("OIDC flow needs a token_url or an issuer")
         fields, headers = self._client_fields(auth)
@@ -742,9 +750,9 @@ class SessionManager:
             raise AuthError(f"OIDC {grant.rsplit(':', 1)[-1]} grant did not return an {key.replace('_', ' ')} "
                             f"(HTTP {resp.status_code}){_error_code(body)}")
         session = Session({"Authorization": f"Bearer {token}"})
-        lifetime = body.get("expires_in")
-        if isinstance(lifetime, int | float) and not isinstance(lifetime, bool) and lifetime > 0:
-            session.expires_at = self._clock() + float(lifetime)
+        lifetime = _lifetime(body.get("expires_in"))
+        if lifetime is not None:
+            session.expires_at = self._clock() + lifetime
         refresh = body.get("refresh_token")
         session.refresh_token = refresh if isinstance(refresh, str) and refresh else None
         id_claims = jwt_claims(body.get("id_token")) if isinstance(body.get("id_token"), str) else None
@@ -752,6 +760,17 @@ class SessionManager:
             self.remember_secret(body["id_token"], "ID token")
         session.account = _account(id_claims or {})
         return self._with_token_facts(session)
+
+
+def _lifetime(value) -> float | None:
+    """`expires_in` in seconds: a positive finite number, also one sent as text, as some providers do; else None."""
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    try:
+        seconds = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def _account(claims: dict) -> tuple[str, str] | None:

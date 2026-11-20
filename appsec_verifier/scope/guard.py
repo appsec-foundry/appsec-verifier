@@ -69,6 +69,21 @@ def _ip(value: str):
     return ip
 
 
+def _auth_entry(entry) -> tuple[str, str] | None:
+    """(host, port) of an `auth_hosts` entry, port "" for any: `host`, `host:port`, `[IPv6]`, `[IPv6]:port`, or an
+    IPv6 address without brackets and port. None for a malformed entry, which allows nothing."""
+    e = str(entry).strip().lower()
+    if e.startswith("["):
+        host, closed, rest = e[1:].partition("]")
+        if not closed or (rest and not rest.startswith(":")):
+            return None
+        return host, rest[1:]
+    if e.count(":") == 1:
+        host, _, port = e.partition(":")
+        return host, port
+    return e, ""
+
+
 def is_loopback(host: str | None) -> bool:
     """Whether `host` is `localhost` or a loopback address."""
     host = str(host or "").strip("[]").lower().rstrip(".")
@@ -177,12 +192,8 @@ class ScopeGuard:
 
     def _auth_host_matches(self, host: str, port: int | None) -> bool:
         for entry in self.auth_hosts:
-            e = str(entry).strip().lower()
-            if ":" in e:
-                eh, _, ep = e.rpartition(":")
-                if eh == host and (not ep or ep == str(port)):
-                    return True
-            elif e == host:
+            parsed = _auth_entry(entry)
+            if parsed and parsed[0] == host and (not parsed[1] or parsed[1] == str(port)):
                 return True
         return False
 

@@ -351,8 +351,8 @@ def test_unusable_account_options_block_before_anything_is_contacted(tmp_path, m
     assert target.calls == [] and host.prompts == []
 
 
-def test_a_login_url_on_another_host_is_a_login_host_for_this_run_only(tmp_path, monkeypatch, capsys):
-    auth = "https://auth.example.com/api/login"
+@pytest.mark.parametrize("auth", ["https://auth.example.com/api/login", "http://[::1]:8080/api/login"])
+def test_a_login_url_on_another_host_is_a_login_host_for_this_run_only(tmp_path, monkeypatch, capsys, auth):
     sent = []
 
     def target(method, url, headers, **kw):

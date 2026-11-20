@@ -460,7 +460,8 @@ def _prepare_accounts(args, doc: dict, scope: dict, guard: ScopeGuard, target: s
                                      "add its host to auth_hosts in the scope file"]
         parts = urlsplit(login_url)      # without a scope file, --login-url names a login host for this run
         port = parts.port or (443 if parts.scheme == "https" else 80)
-        scope.setdefault("auth_hosts", []).append(f"{parts.hostname}:{port}")
+        host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname     # an IPv6 address
+        scope.setdefault("auth_hosts", []).append(f"{host}:{port}")
         if parts.scheme not in scope.setdefault("schemes", []):
             scope["schemes"].append(parts.scheme)
         guard = ScopeGuard(scope)

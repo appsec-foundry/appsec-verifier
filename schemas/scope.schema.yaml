@@ -176,7 +176,8 @@ properties:
       Additional hosts the Verifier may contact ONLY to authenticate — SSO /
       OIDC identity providers and token endpoints (VER-028). They are permitted
       destinations for the login flow, not part of the target attack surface:
-      findings are never probed here. Each entry is an exact host or host:port.
+      findings are never probed here. Each entry is an exact host or host:port,
+      an IPv6 address in brackets ([::1]:8080).
       Everything not in `hosts`/`ports` or this list is refused (VER-001).
     items: { type: string }
 
