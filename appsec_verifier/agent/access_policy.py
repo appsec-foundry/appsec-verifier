@@ -142,16 +142,25 @@ def operator_restriction(ctx, history):
                   "restriction": ACCESS_RULES[rule["may"]], **_compared(ctx, plan, form)}
 
 
-def require_restriction(ctx, history, cited, result):
-    """Retain the checked comparison as an observation when its authorization meaning is unestablished. An
-    operator's access rule for the request decides before the assumed restriction."""
-    if result.verdict != "confirmed" or getattr(ctx.plan, "cls", None) != "access-control":
-        return result
+def established_restriction(ctx, history, cited):
+    """(rule, restriction): what a checked comparison is judged by (VER-010), for the final check and for the
+    feedback the agent gets after the comparison alike. A declared policy or resource decides first, then the
+    operator's access rule for the request, and only without such a rule the restriction the Verifier assumes. The
+    rule is returned whenever one exists, so a caller can say that it allows the observed access."""
     rule, policy = None, restriction(ctx, history, cited)
     if policy is None:
         rule, policy = operator_restriction(ctx, history)
     if policy is None and rule is None:
         policy = finding_restriction(ctx, history)
+    return rule, policy
+
+
+def require_restriction(ctx, history, cited, result):
+    """Retain the checked comparison as an observation when its authorization meaning is unestablished. An
+    operator's access rule for the request decides before the assumed restriction."""
+    if result.verdict != "confirmed" or getattr(ctx.plan, "cls", None) != "access-control":
+        return result
+    rule, policy = established_restriction(ctx, history, cited)
     if policy is not None:
         result.proof["access_restriction"] = policy
         return result

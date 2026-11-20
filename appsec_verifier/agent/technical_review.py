@@ -75,9 +75,11 @@ and screenshots are reviewed separately; you have not seen image pixels. Do not 
 to improve presentation. Follow-ups retain all history, repetition limits and budgets; at most two rounds
 are shared by all variants, one per variant. Your feedback never grants permission and never confirms a finding.
 """
-QA_INTENT = """The recorded comparison and an operator-established restriction support this proposed
-access-control confirmation. Check whether the observed access actually violates the application's
-intended authorization. A public
+QA_INTENT = """The recorded comparison and an established restriction support this proposed
+access-control confirmation: one the operator declared or, marked assumed, the restriction the comparison implies,
+which the Verifier takes where none was declared (VER-010). An assumed restriction is established; that no rule was
+declared is no objection, and neither is code that lacks the check, since that is what the finding claims. Check
+whether the observed access actually violates the application's intended authorization. A public
 resource, different identity, configuration or resource context can contradict the interpretation. Unresolved
 technical objections leave the result inconclusive; they never remain beside a confirmed verdict. You cannot
 supply a missing restriction yourself. Return clear only when no concrete objection remains. A supported

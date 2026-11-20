@@ -1293,11 +1293,13 @@ def comparison_ready(ctx, history, steps):
     else:
         problem = signed_in_check(ctx, history, steps)
     if problem is None:
-        from .access_policy import restriction
+        from .access_policy import established_restriction
 
-        if restriction(ctx, history, steps) is None:
+        rule, policy = established_restriction(ctx, history, steps)
+        if policy is None:
             return {"proof": "missing", "access_observed": True, "steps": sorted(steps),
-                    "reason": "access observed, but no independent access restriction is established",
+                    "reason": ("access observed, but the operator's access rule allows it" if rule is not None
+                               else "access observed, but no independent access restriction is established"),
                     "next": "submit_verdict inconclusive; report observed access separately from the "
                             "unproven restriction. A model claim cannot supply that restriction"}
         path = latest_plan(history)[1].get("path")

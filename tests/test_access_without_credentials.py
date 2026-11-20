@@ -13,13 +13,13 @@ from urllib.parse import urlsplit
 
 import pytest
 import yaml
-from test_access_policy import policy
+from test_access_policy import policy, rule
 from test_agent_tools import Resp, _ctx
 from test_experiments import STRATEGY
 
 from appsec_verifier.agent import AgentProbe
 from appsec_verifier.agent.controller import Controller
-from appsec_verifier.agent.experiments import access_methods, comparison_path
+from appsec_verifier.agent.experiments import access_methods, comparison_path, comparison_ready
 from appsec_verifier.agent.prompts import _system
 from appsec_verifier.agent.proof import check_proof
 from appsec_verifier.agent.steps import _offered_schema
@@ -121,6 +121,35 @@ def test_the_steps_the_feedback_reported_stand_in_for_a_wrong_citation():
     history = comparison() + [{"tool": "experiment", "args": {}, "result": {"proof": "holds", "steps": [2, 3, 4]}}]
     assert _check(history, cited=[2, 3]).verdict == "confirmed"
     assert _check(comparison(), cited=[2, 3]).verdict == "inconclusive"       # no feedback said it holds
+
+
+def _ready(history, scope, assume):
+    history = copy.deepcopy(history)
+    responses = {n: h.pop("_response") for n, h in enumerate(history, 1) if "_response" in h}
+    ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe="CWE-306"), scope=scope,
+                          identities=[{"role": "account-1"}], marker=MARKER, responses=responses, sessions=None,
+                          evidence_dir=None, assume_restrictions=assume)
+    return comparison_ready(ctx, history, [n for n, h in enumerate(history, 1) if h["tool"] == "http_request"])
+
+
+@pytest.mark.parametrize("scope, assume", [
+    ({}, True),                                                      # the restriction the run assumes
+    ({}, False),                                                     # a run limited to declared access
+    ({"access_policies": [policy(PATH)]}, False),                    # an operator's policy
+    ({"access_rules": [rule(f"GET {PATH}", "signed-in")]}, False),   # an operator's rule the access breaks
+    ({"access_rules": [rule(f"GET {PATH}", "anyone")]}, True),       # an operator's rule that allows it
+])
+def test_the_feedback_after_the_comparison_agrees_with_the_proof_check(scope, assume):
+    """The agent is told the proof holds exactly when the final check confirms, so it is never sent to an
+    inconclusive verdict the check would confirm, nor to a confirmation the check refuses (VER-010)."""
+    feedback = _ready(comparison(), scope, assume)
+    confirmed = _check(comparison(), scope=scope, assume=assume).verdict == "confirmed"
+    assert (feedback["proof"] == "holds") is confirmed, feedback
+
+
+def test_the_feedback_names_an_operator_rule_that_allows_the_access():
+    feedback = _ready(comparison(), {"access_rules": [rule(f"GET {PATH}", "anyone")]}, True)
+    assert feedback["proof"] == "missing" and "allows it" in feedback["reason"], feedback
 
 
 def test_an_operator_resource_takes_precedence():
@@ -486,6 +515,29 @@ def test_interpretation_objections_reach_the_agent_and_unresolved_objections_pre
     assert result.verdict == "inconclusive"
     feedback = [h for h in histories[-1] if h["tool"] == "qa_feedback"]
     assert feedback[0]["result"]["issues"] == [INTENDED]
+
+
+def test_qa_is_told_that_an_assumed_restriction_is_established(tmp_path):
+    """VER-010, VER-046 (T-060, T-069 of run 135): in a run that assumes restrictions, QA judges whether the access
+    contradicts the assumed restriction, not whether the restriction was declared."""
+    from test_technical_review import scripted_factory
+
+    def target(method, url, headers, **kwargs):
+        path = urlsplit(url).path
+        return Resp(200, "secret-key-bytes") if path == "/keys/secret.key" else Resp(404, "<h1>Not found</h1>")
+
+    actions = [{"tool": "plan_test", "args": {**_args(), "path": "/keys/secret.key",
+                                              "hypothesis": "keys are served without login"}},
+               {"verdict": {"verdict": "confirmed", "rationale": "confirmed on the comparison", "proof_steps": []}}]
+    factory, host, _, _ = scripted_factory(actions, [_review()])
+    ctx = _ctx(tmp_path, target, env=ENV, idents=IDENTITIES)
+    ctx.plan = replace(ctx.plan, cwe="CWE-306", endpoints=(Endpoint("GET", KEYS, None),))
+    ctx.marker, ctx.assume_restrictions = MARKER, True
+    result = AgentProbe("access-control", factory).run(ctx)
+    system, payload, _ = host.calls[0]
+    assert payload["proposed"]["proof"]["access_restriction"]["assumed"] is True
+    assert "An assumed restriction is established" in system
+    assert result.verdict == "confirmed", result.rationale
 
 
 def test_the_comparison_image_says_when_no_rule_rates_the_access_and_shortens_long_hex_values(tmp_path):
