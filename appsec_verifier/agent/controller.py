@@ -1,5 +1,5 @@
-"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-014, VER-015, VER-036,
-VER-043, VER-047, VER-052, VER-056, VER-057).
+"""Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-011, VER-014, VER-015,
+VER-036, VER-043, VER-047, VER-052, VER-056, VER-057).
 
 ScopeGuard remains the connection authority. Assessment routes and independently
 checked request derivations narrow that scope; model plans alone add nothing.
@@ -71,7 +71,8 @@ class Controller:
         self.prerequisites = []  # harmless reads the finding's request needs but the assessment never names (VER-047)
         self._counted = None  # the repetition key the last before() call charged
         self._preparing = None  # the preparation route of the action before() last allowed
-        self._experiment_runs = set()  # the accepted plans whose controls have run, bounded per finding (VER-036)
+        self._experiment_runs = set()  # the declarations whose controls have run, bounded per finding (VER-036)
+        self._declaration_token = None  # the agent declaration a Verifier-run template candidate belongs to (VER-011)
         # Non-sink inputs pinned on the first probe of an accepted boolean/timing experiment, so
         # later probes carry the same accompanying fields and only the sink value differs. Reset on
         # every freshly accepted plan.
@@ -374,16 +375,18 @@ class Controller:
             # The accepted plan's generated controls keep their own repetition namespace, scoped to that plan's
             # token, so the agent's earlier diagnostic probes of the same values do not consume the proof's
             # budget, and a revised plan gets a fresh namespace rather than inheriting the aborted one's spent
-            # budget. Sending the same accepted plan's controls again reaches the allowance. Declaring the plan
-            # anew generates fresh control values, so it is a new experiment with a new token; what bounds that
-            # is the cap on distinct experiments per finding below, so revisions cannot send controls without
-            # end (VER-010, VER-036).
+            # budget. Sending the same accepted plan's controls again reaches the allowance. The cap below bounds
+            # the finding's distinct experiments; it counts the agent's own declarations, keyed by the declaration
+            # token, not the up-to-three template candidates the Verifier runs for one of them (VER-011), which
+            # share that declaration's slot, so a declaration's column-count corrections do not each spend an
+            # experiment and revisions still cannot send controls without end (VER-010, VER-036).
             plan_key = token(self.plan)
-            if plan_key not in self._experiment_runs:
+            group = self._declaration_token or plan_key
+            if group not in self._experiment_runs:
                 if len(self._experiment_runs) >= 3:
                     raise LimitExceeded("stagnation",
                                         "the finding's experiment allowance is exhausted (at most three)")
-                self._experiment_runs.add(plan_key)
+                self._experiment_runs.add(group)
             key = token(["experiment-control", plan_key, key])
         is_write = name == "http_request" and args.get("method", "GET").upper() not in SAFE_METHODS
         # A write is capped at a single send so it cannot repeat a state change (VER-014). The one exception is
@@ -406,7 +409,7 @@ class Controller:
         self.failure_reasons[_failure_key(name, "schema", error or "not a valid step")] += 1
         self.last_failure = _clip(f"{name or 'step'} refused: {error or 'not a valid step'}")
 
-    def observe(self, name, args, result):
+    def observe(self, name, args, result, *, candidate=False):
         if self._preparing and type(result.get("status")) is int and self._preparing not in self.deviations:
             self.deviations.append(self._preparing)
         self._preparing = None
@@ -434,6 +437,10 @@ class Controller:
                 self.last_failure = None
                 self.plan = result.get("experiment") or args
                 self._experiment_shape = None   # a fresh plan pins its own shape on the next probe
+                if not candidate:
+                    # A new agent declaration opens an experiment slot; a template candidate the Verifier
+                    # runs for the current declaration (loop.run_read_experiment) stays in its slot (VER-011).
+                    self._declaration_token = token(self.plan)
         else:
             self.failures = 0
             self.failure_reasons.clear()

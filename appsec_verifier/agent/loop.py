@@ -367,7 +367,7 @@ class AgentProbe:
                 if candidate is None:
                     break
                 args, result = candidate
-                controller.observe("plan_test", args, result)
+                controller.observe("plan_test", args, result, candidate=True)   # shares the declaration slot (VER-011)
                 ctx.accepted_plans[len(history) + 1] = result["experiment"]
                 if ctx.sessions is not None:
                     result = ctx.sessions.redact(result)   # VER-016, as for the agent's own plan_test

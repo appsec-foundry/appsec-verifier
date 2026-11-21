@@ -201,6 +201,31 @@ def test_the_per_finding_experiment_count_is_bounded(tmp_path):
         c.before("http_request", req, experiment=True)  # a fourth experiment is refused
 
 
+def test_template_candidates_share_their_declarations_experiment_slot(tmp_path):
+    """VER-011/VER-036: the up-to-three template candidates the Verifier runs for one accepted declaration
+    (loop.run_read_experiment -> next_candidate, observed with candidate=True) are planned repetitions of that
+    experiment, not new ones. They share the declaration's slot, so a declaration's column-count corrections do
+    not each spend the finding's experiment allowance; the cap on distinct agent declarations stays."""
+    c = Controller(context(tmp_path))
+
+    def declare(n, *, candidate=False):
+        plan = {"path": "/search", "method": "GET", "kind": "boolean",
+                "input_location": "params", "input_name": "q",
+                "baseline": f"b{n}", "positive": f"p{n}", "negative": f"ng{n}"}
+        c.observe("plan_test", plan, {"accepted": True, "experiment": plan}, candidate=candidate)
+        c.before("http_request", {"method": "GET", "path": "/search", "params": {"q": f"p{n}"}}, experiment=True)
+
+    declare(6)                    # agent declaration 1
+    declare(8)                    # agent declaration 2: its candidates are [8, 9, 7], the Verifier runs 8 now
+    declare(9, candidate=True)    # Verifier candidate
+    declare(7, candidate=True)    # Verifier candidate — must not open a new slot
+    assert len(c._experiment_runs) == 2
+
+    declare(10)                   # agent declaration 3
+    with pytest.raises(LimitExceeded, match="at most three"):
+        declare(11)               # a fourth agent declaration is still blocked
+
+
 def test_missing_route_never_guessed(tmp_path):
     ctx = context(tmp_path)
     ctx.plan.endpoints = ()
