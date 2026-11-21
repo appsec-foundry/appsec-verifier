@@ -142,6 +142,34 @@ def test_results_list_no_needs_of_a_confirmed_finding_and_count_alike_variants()
     assert sum("needs intrusive mode" in line for line in full) == 4
 
 
+def test_a_confirmed_finding_s_unconfirmed_variant_stands_under_it_and_only_unsupported_findings_are_counted():
+    """Run 136: T-004 variant-001 confirmed, variant-002 inconclusive. The finding has one result line, the other
+    variant's result under it, never a line of its own that reads as the finding's result; the note at the end
+    counts only the unsupported findings, not variants shown elsewhere. --print still lists every row."""
+    def row(fid, variant, verdict, rationale="", status="dynamic", **extra):
+        return {"finding_ref": {"id": fid, "title": fid.lower(), "variant": variant,
+                                "variant_digest": (variant or fid)[-1] * 64},
+                "class": "injection", "verdict": verdict, "rationale": rationale, "eligibility": {"status": status},
+                **extra}
+
+    rows = [row("T-4", "variant-001", "confirmed", "engine error only for the break", confidence="medium"),
+            row("T-4", "variant-002", "inconclusive", "", confidence="low",
+                observations=["Experiment without proof: the controls stopped at step 7, where control 'true #1' got "
+                              "HTTP 500: the template does not form a valid statement there"]),
+            row("T-9", None, "inconclusive", "nothing held", confidence="low"),
+            row("T-50", None, "not-attempted", "no supported proof method for CWE-915", status="unsupported")]
+    lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], {})]
+    marked = [line for line in lines if line.startswith(("✓", "?", "·"))]
+    assert marked == ["✓ T-4 injection confirmed (medium) t-4", "? T-9 injection inconclusive (low) t-9"]
+    at = lines.index("✓ T-4 injection confirmed (medium) t-4")
+    assert lines[at + 2] == ("variant-002: inconclusive (low) · No proof: the test ran, but the controls stopped at "
+                             "step 7, where control 'true #1' got HTTP 500: the template does not form a valid "
+                             "statement there.")
+    assert lines[-1] == "1 unsupported or incomplete finding not listed (--print lists them)"
+    full = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], {}, full=True)]
+    assert sum(line.startswith(("✓", "?", "·")) for line in full) == 4
+
+
 def test_facts_strip_escapes_and_colour_by_role():
     lines = cli._facts(Style(True), [("Target", f"http://a{HOSTILE} (will contact)"), ("Mode", "safe", "ok"),
                                      ("Verdicts", [("1 confirmed", "critical"), (f"0 blocked{HOSTILE}", "muted")])])

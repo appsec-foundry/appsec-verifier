@@ -577,6 +577,27 @@ def test_a_plan_takes_at_most_three_template_candidates(tmp_path):
     assert validator.is_valid({**base, "sql_template": [template, template + " ", template + "  "]})
     assert not validator.is_valid({**base, "sql_template": [template + " " * n for n in range(4)]})
     assert not validator.is_valid({**base, "sql_template": []})
+    # The same bound for a JavaScript predicate and for a returned marker's column counts, its only open part.
+    js = "1 && {{predicate}}"
+    assert validator.is_valid({**base, "js_predicate_template": [js, js + " ", js + "  "]})
+    assert not validator.is_valid({**base, "js_predicate_template": [js + " " * n for n in range(4)]})
+    marker = {"prefix": "'))", "column": 0}
+    assert validator.is_valid({**base, "sql_marker": {**marker, "columns": [9, 8, 10]}})
+    for columns in ([9, 8, 10, 11], [], [9, 9], [0], ["9"]):
+        assert not validator.is_valid({**base, "sql_marker": {**marker, "columns": columns}}), columns
+    assert not validator.is_valid({**base, "sql_marker": [{**marker, "columns": 9}]})   # never a list of markers
+
+
+def test_a_write_plan_runs_only_its_first_candidate(tmp_path):
+    """VER-011: no write is sent for a template the agent has not seen answered; the other candidates go."""
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp(), safe=False, read_only=False)
+    ctx.plan.cls, ctx.plan.cwe = "injection", "CWE-89"
+    tools = AgentTools(ctx)
+    out = tools.plan_test(kind="boolean", hypothesis="the term is concatenated into the query", path="/rest/basket/1",
+                          method="POST", input_location="json", input_name="q",
+                          sql_marker={"prefix": "'", "columns": [3, 2], "column": 0})
+    assert out["accepted"] is True and tools.next_candidate() is None
+    assert "revise the plan to try another" in " ".join(out.get("notes") or [out.get("note", "")])
 
 
 # ── VER-053: the returned-marker and engine-error forms are gated by CWE ───────

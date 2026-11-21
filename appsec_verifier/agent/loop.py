@@ -2,7 +2,8 @@
 VER-043, VER-046, VER-047, VER-052, VER-053, VER-055, VER-057, VER-059).
 
 An accepted read injection plan runs its generated controls at once, trying the plan's next template candidate
-when a control meets a server error; a write plan's controls run only when the agent asks with send_controls. An
+when a control meets a server error or an answer shows an engine error; a write plan's controls run only when the
+agent asks with send_controls. An
 accepted comparison without credentials sends its three reads at once the same way (VER-057).
 Each model call's cost and token counts go on the next action-log record.
 
@@ -37,6 +38,7 @@ from ..limits import LimitExceeded
 from ..verify import poc
 from ..verify.probes import ProbeContext, ProbeResult
 from .controller import Controller
+from .experiments import control_failed
 from .proof import check_proof, retain_login_observations
 from .steps import check_action
 from .tools import AgentTools, ToolError
@@ -47,25 +49,6 @@ _LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "er
                   "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "body_withheld",
                   "plan_step", "observation", "steps", "error_kind", "recovery")
 _PROPOSAL_CAP = 500
-
-
-def _control_failed(tools, result: dict) -> bool:
-    """Whether a generated control's answer stops the experiment (VER-011): a transport error or a server error
-    always; for the response-field form any non-2xx answer, since its proof needs comparable successful
-    responses. An auth-artifact control (VER-049) expects 401 or 403 from its false controls, so only an error
-    or a 5xx stops it. An engine-error sweep (VER-053) sends several metacharacters at once and any status is a
-    valid observation for one of them, so only a transport error stops it; the proof decides on the engine-error
-    class."""
-    status = result.get("status", 0)
-    experiment = getattr(tools, "_experiment", None) or {}
-    if experiment.get("error_probe") or experiment.get("signed_in") or experiment.get("exposure"):
-        # A comparison without credentials (VER-057) expects a refusal or a 404 for some of its requests.
-        return bool(result.get("error"))
-    if result.get("error") or not isinstance(status, int) or status >= 500:
-        return True
-    if experiment.get("auth_artifact"):
-        return False
-    return not 200 <= status < 300
 
 
 def _request_attempts(history: list[dict]) -> int:
@@ -81,9 +64,10 @@ class Planner(Protocol):
 
 MODEL_CALL_FAILED = "Model call failed: "      # an observation the code adds; the report's reason line reads it
 EXPERIMENT_NO_PROOF = "Experiment without proof: "   # likewise, an experiment whose controls gave no proof
+EXPERIMENT_HELD = "Experiment proof held: "   # likewise, controls that gave the proof the agent did not confirm
 # Observations only the code adds, which the reason line reads (verify/report.py, why_not_confirmed); a model's
 # observation that starts like one is dropped, so the model cannot supply the reason (VER-024).
-_CODE_OBSERVATIONS = (MODEL_CALL_FAILED, EXPERIMENT_NO_PROOF, "Runtime prerequisite ")
+_CODE_OBSERVATIONS = (MODEL_CALL_FAILED, EXPERIMENT_NO_PROOF, EXPERIMENT_HELD, "Runtime prerequisite ")
 
 
 def _result_from_verdict(v: dict) -> ProbeResult:
@@ -195,12 +179,17 @@ class AgentProbe:
         for item in getattr(ctx, "prerequisite_checks", []):
             result.observations.append(f"Runtime prerequisite {item['condition']}: {item['status']} "
                                        f"(recorded steps {item['steps']}).")
-        # VER-024: why the controls of an unconfirmed finding's experiments gave no proof, in the check's words.
+        # VER-024: why the controls of an unconfirmed finding's experiments gave no proof, in the check's words, and
+        # which controls did give it when the agent still did not confirm, so the reason is not read as a missing
+        # proof.
         if result.verdict != "confirmed":
-            reasons = [h["result"]["reason"] for h in getattr(ctx, "agent_history", [])
-                       if h.get("tool") == "experiment" and isinstance(h.get("result"), dict)
-                       and h["result"].get("proof") == "missing" and h["result"].get("reason")]
+            experiments = [h["result"] for h in getattr(ctx, "agent_history", [])
+                           if h.get("tool") == "experiment" and isinstance(h.get("result"), dict)]
+            reasons = [e["reason"] for e in experiments if e.get("proof") == "missing" and e.get("reason")]
             result.observations.extend(EXPERIMENT_NO_PROOF + str(reason) for reason in dict.fromkeys(reasons))
+            held = [e["steps"] for e in experiments if e.get("proof") == "holds" and e.get("steps")]
+            if held:
+                result.observations.append(EXPERIMENT_HELD + "steps " + ", ".join(map(str, held[-1])))
         for request in ctx.derived_requests:
             origin = (f"supported by recorded step {request['evidence_step']}" if request.get("evidence_step")
                       else "resolved from the source before the test")
@@ -344,7 +333,7 @@ class AgentProbe:
                 _log(ctx, step_n, tool="http_request", args=request,
                      result={k: result[k] for k in _LOGGED_RESULT if k in result}, **label)
                 sent_steps.append(step_n)
-                if _control_failed(tools, result):
+                if control_failed(getattr(tools, "_experiment", None), result):
                     break
             if write and not any(type(history[n - 1]["result"].get("status")) is int for n in sent_steps):
                 tools.release_controls()
@@ -364,13 +353,16 @@ class AgentProbe:
             return feedback
 
         def run_read_experiment(role):
-            """Run an accepted read plan's controls, and, if a control met a server error, the plan's next
-            template candidate in turn, until the proof holds or the candidates run out (VER-011)."""
+            """Run an accepted read plan's controls, and, if the template did not form a valid statement (a server
+            error, or an engine error in an answer), the plan's next template candidate in turn, until the proof
+            holds or the candidates run out (VER-011). The candidates are at most three, each run once, and not
+            tried when the failure is one they cannot change, so the finding keeps its experiments for a revision."""
             sent_steps, stop = send_experiment_controls(role)
             if stop is not None or not sent_steps:
                 return stop
             feedback = report_experiment(sent_steps)
-            while feedback.get("proof") != "holds" and history[-2]["result"].get("status", 0) >= 500:
+            while (feedback.get("proof") != "holds" and (feedback.get("failed_control") or {}).get("template")
+                   and feedback["failed_control"].get("candidates", True)):
                 candidate = tools.next_candidate()
                 if candidate is None:
                     break
@@ -473,8 +465,8 @@ class AgentProbe:
                     continue
                 if last_rejected is not None and verdict.get("verdict") == "inconclusive":
                     # A corrected conclusion may explain an unavailable prerequisite more accurately than
-                    # the earlier rejected confirmation. Retain the code's failure and classification, but
-                    # replace the rejected model claim and its citations with the corrected conclusion.
+                    # the earlier rejected verdict. Retain the code's failure, classification and the verdict it
+                    # refused, but replace the rejected model claim and its citations with the corrected conclusion.
                     result.proof = last_rejected.proof
                     missing = "; ".join((result.proof or {}).get("missing", ["insufficient proof"]))
                     previous = "Earlier proof attempt was not accepted: " + missing

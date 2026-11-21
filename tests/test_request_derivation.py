@@ -523,7 +523,7 @@ def test_an_exposure_finding_without_a_request_is_not_sent_to_pages_it_may_not_r
     with pytest.raises(ToolError) as refused:
         Controller(ctx).before("http_request", {"path": "/config/config.inc.php.bak"})
     assert "report the missing test resource" in str(refused.value) and "not read yet" not in str(refused.value)
-    with pytest.raises(ToolError, match="only the operator-declared harmless read-only resource"):
+    with pytest.raises(ToolError, match="an exposure finding sends no request of its own"):
         AgentTools(ctx).http_request(path="/dvwa/includes/DBMS/MySQL.php", prerequisite=True)
     from appsec_verifier.agent.derivation import request_hint
     page = ctx.plan

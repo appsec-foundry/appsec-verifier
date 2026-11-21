@@ -312,13 +312,18 @@ class AgentTools:
         if not Draft202012Validator(PLAN_SCHEMA).is_valid(plan):
             raise ToolError("invalid experiment declaration")
         # VER-011: up to three candidate templates; the first is checked and run now, the others only when its
-        # controls meet a server error (next_candidate). A write runs only the first: no write is ever sent for
-        # a template the agent has not looked at in the result of its own controls.
+        # controls show that it did not form a valid statement, a server error or an engine error in an answer
+        # (next_candidate). A returned-marker plan's candidates are its column counts. A write runs only the first:
+        # no write is ever sent for a template the agent has not looked at in the result of its own controls.
         candidates = []
-        for key in ("sql_template", "expression_template"):
+        for key in ("sql_template", "expression_template", "js_predicate_template"):
             if isinstance(plan.get(key), list):
                 candidates += [(key, template) for template in plan[key][1:]]
                 plan = {**plan, key: plan[key][0]}
+        marker = plan.get("sql_marker")
+        if isinstance(marker, dict) and isinstance(marker.get("columns"), list):
+            candidates += [("sql_marker", {**marker, "columns": count}) for count in marker["columns"][1:]]
+            plan = {**plan, "sql_marker": {**marker, "columns": marker["columns"][0]}}
         declared = plan
         # A strategy is optional (VER-043). When one is given, an observed prerequisite needs recorded responses
         # of this finding; one without them counts as assumed, which grants nothing (only a missing one matters,
@@ -1205,9 +1210,11 @@ class AgentTools:
                 and all((r.get(k) or {}) == (v or {}) for k, v in (("params", params), ("json", json), ("form", form)))
                 for r in resources
             ):
-                raise ToolError("exposure checks use only the operator-declared harmless read-only resource; "
-                                "without one, plan_test with signed_in, whose answers the Verifier compares "
-                                "without showing them (VER-057)")
+                raise ToolError("an exposure finding sends no request of its own, a prerequisite read included, "
+                                "except to an operator-declared harmless resource; declare plan_test with signed_in "
+                                "for any path the finding's routes allow, a new plan for each further path: the "
+                                "Verifier sends it as the account and without credentials and compares the answers "
+                                "without showing the account's (VER-057)")
         if m not in ALLOWED_METHODS:
             raise ToolError(f"{m} is never sent; allowed methods are {', '.join(ALLOWED_METHODS)} (VER-014)")
         if m not in SAFE_METHODS and (self.ctx.safe or self.ctx.read_only) and self._ask_writes() is None:

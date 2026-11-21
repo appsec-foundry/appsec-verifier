@@ -28,7 +28,7 @@ from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
 from .derivation import refused_write, request_hint
-from .experiments import brackets, control_values, normal_roles, take_sink, token
+from .experiments import EXPOSURE_CWES, brackets, control_values, normal_roles, take_sink, token
 from .tools import ToolError, _strings
 
 
@@ -195,6 +195,13 @@ class Controller:
                                 f"{refused_write(self.ctx, method, route_path.split('?', 1)[0] or '/')}. "
                                 f"Requests this finding may send: {_route_list(routes)}")
             hint = request_hint(self.ctx, getattr(self.ctx, "agent_history", [])) if not routes else None
+            if (not hint and name == "http_request" and method == "GET" and len(self.prerequisites) < 3
+                    and getattr(self.ctx.plan, "cwe", "") not in EXPOSURE_CWES):
+                # VER-047: the read the agent most often needs and does not think of, the id of a record it owns
+                # for a lookup that must find one; an exposure finding reads nothing of its own (agent/tools.py).
+                hint = ("a harmless GET the finding's request needs, such as the id of a record an identity of the "
+                        "run owns, can be sent as that identity with prerequisite: true (VER-047), at most three "
+                        "per finding")
             raise ToolError("request has no matching route in this finding or its operator-declared resources; "
                             f"allowed: {_route_list(routes)}" + (f"; {hint}" if hint else ""))
         if name != "plan_test" and all(r.get("derived") for r in matching) and not self._created(change, path):

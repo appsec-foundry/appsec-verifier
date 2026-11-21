@@ -1855,20 +1855,29 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
             lines.append(f"    additionally selected: {printable(p.selection_reason)}")
     if not blocked:
         return lines
-    groups: dict[str, list[str]] = {}
+    # A finding the run tests, through another variant, is not counted as not testable: the variants it cannot
+    # test are named with their number next to its id, so the head's count and this one never overlap.
+    tested_ids = {p.id for p in plans if evidence_id(p) not in blocked}
+    variants: dict[str, dict[str, int]] = {}
     access_route = False
     blocked_ids = set()
     for p in plans:
         if evidence_id(p) in blocked:
-            ids = groups.setdefault(blocked[evidence_id(p)][0], [])
-            if printable(p.id) not in ids:          # one entry per finding, not per variant
-                ids.append(printable(p.id))
-            blocked_ids.add(p.id)
+            need = variants.setdefault(blocked[evidence_id(p)][0], {})
+            need[p.id] = need.get(p.id, 0) + 1    # one entry per finding, not per variant
+            if p.id not in tested_ids:
+                blocked_ids.add(p.id)
             access_route |= blocked[evidence_id(p)][0] == "route" and p.cls == "access-control"
+    groups = {key: [printable(fid) + (f" ({_count(n, 'variant')})" if fid in tested_ids else "")
+                    for fid, n in found.items()] for key, found in variants.items()}
+    partly = len({fid for found in variants.values() for fid in found} & tested_ids)
+    whole = _count(len(blocked_ids), "finding")
+    some = f"variants of {_count(partly, 'finding')} it tests"
+    who = (f"{whole}, and {some}," if blocked_ids and partly else whole if blocked_ids else some)
     lines += [
         "",
-        f"{st('Not testable', 'bold')}  {_count(len(blocked_ids), 'finding')} "
-        f"{'needs' if len(blocked_ids) == 1 else 'need'} what this run does not have (--test-all tries anyway)",
+        f"{st('Not testable', 'bold')}  {who} {'needs' if len(blocked_ids) == 1 and not partly else 'need'} "
+        "what this run does not have (--test-all tries anyway)",
     ]
     widths = [len(_NEEDS[key][0]) for key in groups]
     # a row of its own per need without `full`: a longer label moves only its own row, not every row's column
@@ -1985,6 +1994,7 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
     rows = [r for r in doc["results"] if full or (r.get("eligibility") or {}).get("status") == "dynamic"]
     if not rows:
         return []
+    unlisted = len(doc["results"]) - len(rows)      # unsupported or incomplete, not variants shown in another line
     rows.sort(key=lambda r: (_VERDICT_ORDER.index(r["verdict"]),
                              -_SEVERITY_RANK.get(severity.get(r["finding_ref"].get("id"), ""), 0)))
 
@@ -2005,11 +2015,17 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
             return f"needs {_NEEDS[need(r)][0]}"
         return _VERDICT_LABEL[r["verdict"]] + (f" ({printable(r['confidence'])})" if r.get("confidence") else "")
 
+    further: dict[str, list[dict]] = {}
     if not full:
         # A finding one variant confirmed needs nothing more: its untested variants are not listed with what they
-        # would need. Variants alike in finding, result and reason share one line that counts them.
+        # would need, and its other tested variants stand under its line instead of as results of their own, so an
+        # unconfirmed variant is not read as the finding's result. Variants alike in finding, result and reason
+        # share one line that counts them.
         confirmed = {r["finding_ref"].get("id") for r in rows if r["verdict"] == "confirmed"}
-        rows = [r for r in rows if r["verdict"] != "not-attempted" or r["finding_ref"].get("id") not in confirmed]
+        for r in rows:
+            if r["finding_ref"].get("id") in confirmed and r["verdict"] not in ("confirmed", "not-attempted"):
+                further.setdefault(r["finding_ref"].get("id"), []).append(r)
+        rows = [r for r in rows if r["verdict"] == "confirmed" or r["finding_ref"].get("id") not in confirmed]
     alike: dict[tuple, list[dict]] = {}
     for r in rows:
         alike.setdefault((r["finding_ref"].get("id"), r["verdict"], need(r) or r.get("rationale")), []).append(r)
@@ -2038,9 +2054,13 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
         if reason:
             pieces = (textwrap.wrap(reason, max(room - indent, 30)) if full else [_fit(reason, room - indent)])
             lines += [" " * indent + st(piece, "muted") for piece in pieces]
-    hidden = len(doc["results"]) - len(rows)
-    if hidden:
-        lines.append(st(f"  {_count(hidden, 'unsupported or incomplete finding')} not listed (--print lists them)",
+        for other in further.pop(fr.get("id"), []):
+            why = why_not_confirmed(other, variant_of(other, declared.get(fr.get("id"))))
+            said = f"{printable(other['finding_ref'].get('variant') or 'another variant')}: {result(other)}"
+            said = " ".join(f"{said} · {printable(why)}".split()) if why else said
+            lines.append(" " * indent + st(_fit(said, room - indent), "muted"))
+    if unlisted:
+        lines.append(st(f"  {_count(unlisted, 'unsupported or incomplete finding')} not listed (--print lists them)",
                         "muted"))
     return lines
 

@@ -208,6 +208,10 @@ _MAX_STEP_ROWS = 15
 # A verdict the proof check lowered names its reason before the agent's claim (agent/proof.py, _downgrade).
 _MODEL_CALL_FAILED = "Model call failed: "     # agent/loop.py MODEL_CALL_FAILED: the code's own observation (VER-024)
 _EXPERIMENT_NO_PROOF = "Experiment without proof: "   # agent/loop.py EXPERIMENT_NO_PROOF, likewise the code's own
+_EXPERIMENT_HELD = "Experiment proof held: "          # agent/loop.py EXPERIMENT_HELD, likewise the code's own
+# Refusals only agent/proof.py's check of a negative injection verdict gives, for saved results that lack `claimed`.
+_NEGATIVE_REFUSAL = re.compile(r"cite only the experiments' requests|precedes every plan; cite the controls of "
+                               r"declared experiments|has no checked negative form")
 _PREREQUISITE_MISSING = re.compile(r"Runtime prerequisite (.+): not-observed \(recorded steps")   # agent/loop.py
 _LOWERED = re.compile(r"indicative, not (?:proven|executed): (.*?)\. Agent's claim:", re.S)
 # A recorded step (verify/poc.py, _line): tool, method, URL or opened page, identity and answer.
@@ -460,7 +464,8 @@ _REFUSED = (
      "a request that did not match its accepted test plan"),
     (r"a write must carry", "a write without the Verifier's test marker"),
     (r"disabled in safe/read-only mode|need intrusive mode|needs --allow-intrusive", "a write this run does not allow"),
-    (r"exposure checks use only", "an exposure check, which needs a declared test resource"),
+    (r"an exposure finding sends no request of its own|exposure checks use only",   # the latter in saved results
+     "a request of its own for an exposure finding, which only the comparison without credentials may send"),
     (r"no matching route|the finding's declared variant inputs|lack recorded evidence|not the finding's evidence"
      r"|a GET the finding does not name", "a request this finding may not send"),
     (r"no recorded response|context field is unavailable|JSON pointer cannot be read",
@@ -571,18 +576,33 @@ def why_not_confirmed(r: dict, variant: dict | None = None) -> str | None:
     if any("access restriction" in m for m in [*missing, *experiments]):
         return ("Needs a rule: access was observed, but no rule says it should be refused; access_rules or "
                 "access_policies in the scope declare it.")
-    if missing:
+    # A refused negative verdict leaves the finding where its experiments left it: their reason comes first, and
+    # the refusal only when none was recorded. A saved result without `claimed` names it by a refusal only the
+    # negative check gives (agent/proof.py, _injection_negative).
+    claimed = (r.get("proof") or {}).get("claimed")
+    negative = (claimed in ("not-reproducible", "blocked-by-control")
+                or claimed is None and bool(missing) and _NEGATIVE_REFUSAL.search(missing[0]) is not None)
+    if missing and not negative:
         return f"No proof: the agent's confirmation failed the proof check: {_plain(missing[0])}."
-    lowered = _LOWERED.match(rationale)
+    lowered = None if negative else _LOWERED.match(rationale)
     if lowered:
         return f"No proof: {lowered.group(1)}."
     prerequisite = next((m.group(1) for o in observations if (m := _PREREQUISITE_MISSING.match(o))), None)
     if prerequisite:
         return f"Prerequisite not met: the target did not show that {prerequisite.rstrip('.')}."
+    held = next((o.removeprefix(_EXPERIMENT_HELD) for o in observations if o.startswith(_EXPERIMENT_HELD)), None)
+    if held:                                         # the code's proof held; the test agent did not confirm
+        return (f"Not confirmed by the test agent: the controls gave the proof ({held.rstrip('.')}), but the agent "
+                "did not take them as showing the weakness; its assessment says why.")
     if experiments:
         return f"No proof: the test ran, but {_plain(experiments[-1])}."
-    accounts = {s["role"] for s in _steps(r) if s["role"] and s["status"] is not None} - {"anonymous"}
-    if r.get("class") == "access-control" and len(accounts) == 1:
+    if missing:
+        return f"No proof: the agent's negative verdict failed the proof check: {_plain(missing[0])}."
+    answered = [s for s in _steps(r) if s["role"] and s["status"] is not None]
+    accounts = {s["role"] for s in answered} - {"anonymous"}
+    # A comparison without credentials (VER-057) needs one account only; its answers without one are no gap.
+    if (r.get("class") == "access-control" and len(accounts) == 1
+            and not any(s["role"] == "anonymous" for s in answered)):
         return f"No proof: only {next(iter(accounts))} sent requests; the comparison with another account is missing."
     said = _first_sentence(rationale) if rationale else ""
     return (f"Agent's assessment: {said.rstrip('.')}." if said

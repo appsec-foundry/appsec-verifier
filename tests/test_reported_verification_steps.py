@@ -98,7 +98,7 @@ def test_reported_setup_get_and_comparison_cannot_become_a_post_reset_proof(tmp_
                                         "signed_in": "customer-a"})
     # A prerequisite flag passes the route check but not the separate exposure-resource boundary.
     controller.before("http_request", {"path": "/setup.php", "prerequisite": True})
-    with pytest.raises(ToolError, match="operator-declared harmless read-only resource"):
+    with pytest.raises(ToolError, match="an exposure finding sends no request of its own"):
         tools.http_request(path="/setup.php", prerequisite=True)
     assert ctx.budget.requests == 0
 

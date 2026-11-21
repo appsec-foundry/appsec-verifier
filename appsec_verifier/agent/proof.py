@@ -577,7 +577,8 @@ def _downgrade(result: ProbeResult, reason: str, label: str = "indicative, not p
         verdict="inconclusive",
         confidence="low",
         identities_used=result.identities_used,
-        proof={"checked": False, "contract": 3, "missing": [reason]},
+        # The verdict the check refused, so the report does not call a refused negative verdict a confirmation.
+        proof={"checked": False, "contract": 3, "missing": [reason], "claimed": result.verdict},
         observations=result.observations,
         rationale=f"{label}: {reason}. Agent's claim: {result.rationale or ''}".strip(),
     )

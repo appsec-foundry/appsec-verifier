@@ -185,7 +185,8 @@ def test_template_candidates_find_the_working_one_in_one_plan(tmp_path):
 
 
 def test_a_failed_control_is_named_in_the_experiment_feedback(tmp_path):
-    """WP2: the feedback gives the failed control's step, status and an excerpt of its error."""
+    """WP2, T-004: the feedback gives the failed control's step, status and an excerpt of its error, and as its
+    reason the control the experiment stopped at, not how many controls were recorded."""
     sent = []
     ctx = _search_ctx(tmp_path, sent)
     script = Script([_search_plan("zzz' OR {{predicate}} -- ")])
@@ -193,8 +194,186 @@ def test_a_failed_control_is_named_in_the_experiment_feedback(tmp_path):
     feedback = next(h["result"] for h in script.history if h.get("tool") == "experiment")
     assert feedback["proof"] == "missing"
     failed = feedback["failed_control"]
-    assert failed["status"] == 500 and "SQLITE" in failed["excerpt"].upper() or "error" in failed["excerpt"]
-    assert "so far" in feedback["reason"]                       # names how many of each control are recorded
+    assert failed["status"] == 500 and failed["template"] is True and "error" in failed["excerpt"]
+    assert feedback["reason"] == (f"the controls stopped at step {failed['step']}, where control "
+                                  f"'{script.history[failed['step'] - 1]['control']}' got HTTP 500: the template does "
+                                  "not form a valid statement there")
+    assert "so far" not in feedback["reason"] and "correct the template" in feedback["next"]
+
+
+def _page_target(sent, *, error="SQLITE_ERROR: {exc}", redirect=False, frame="", empty=200, failed=200):
+    """The search of `_search_target` as a PHP-style page: an engine error is shown in a 200 answer, `frame` stands
+    on every page, with `redirect` a request without credentials is sent to the login page, and `empty` is the
+    status of an answer without a match, 404 for a lookup that finds no record; `failed` is the status of an
+    error page."""
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE products(id INTEGER, name TEXT)")
+    db.executemany("INSERT INTO products VALUES (?, ?)", [(1, "apple"), (2, "pear")])
+
+    def target(m, u, h, **kw):
+        q = (kw.get("params") or {}).get("q", "")
+        sent.append(q)
+        if redirect and not h.get("Authorization"):
+            resp = Resp(302, "")
+            resp.headers = {"Location": "/login.php"}
+            return resp
+        try:
+            rows = db.execute("SELECT name FROM products WHERE ((name LIKE '%" + q + "%'))").fetchall()
+        except sqlite3.Error as exc:
+            return Resp(failed, f"<html>{frame}<pre>{error.format(exc=exc)}</pre></html>")
+        return Resp(200 if rows else empty,
+                    "<html>" + frame + "<ul>" + "".join(f"<li>{r[0]}</li>" for r in rows) + "</ul></html>")
+
+    return target
+
+
+def _page_ctx(tmp_path, sent, **target):
+    ctx = _ctx(tmp_path, _page_target(sent, **target))
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", instance="routes/search.ts:23",
+                       endpoints=(Endpoint("GET", "/rest/products/search", None),))
+    return ctx
+
+
+def _page_plan(**form):
+    return {"tool": "plan_test", "args": {
+        "kind": "boolean", "hypothesis": "The search term is concatenated into the query",
+        "path": "/rest/products/search", "input_location": "params", "input_name": "q", **form}}
+
+
+_BAD, _GOOD = "zzz' OR {{predicate}} -- ", "zzz%')) OR {{predicate}} -- "
+
+
+def _experiments(history):
+    return [h["result"] for h in history if h.get("tool") == "experiment"]
+
+
+def test_a_marker_plan_tries_its_next_column_count_after_a_server_error(tmp_path):
+    """T-004: a returned-marker plan of the wrong width stops at its first control; the next declared column count
+    runs in the same plan and gives the proof, without another model decision (VER-011, VER-053)."""
+    sent = []
+    ctx = _search_ctx(tmp_path, sent)
+    script = Script([_page_plan(sql_marker={"prefix": "'))", "columns": [2, 1], "column": 0}), _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    first, second = _experiments(script.history)
+    assert first["failed_control"]["status"] == 500 and "HTTP 500" in first["reason"]
+    assert second["proof"] == "holds" and len(sent) == 5           # one stopped control, then four
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+
+
+def test_a_marker_plan_failing_for_another_reason_tries_no_other_count_and_keeps_its_experiments(tmp_path):
+    """Run 138, T-004: the three column counts of a marker plan all failed with the same syntax error, which no
+    count can fix, and used up the finding's three experiments before the agent could correct the declaration. An
+    engine error that is not a column-count error ends the candidates; the corrected plan still runs and confirms."""
+    sent = []
+    ctx = _search_ctx(tmp_path, sent)
+    wrong = _page_plan(sql_marker={"prefix": "'", "columns": [1, 2], "column": 0})
+    right = _page_plan(sql_marker={"prefix": "'))", "columns": 1, "column": 0})
+    script = Script([wrong, right, _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    first, second = _experiments(script.history)
+    assert "not a column-count error" in first["reason"] and "were not tried" in first["reason"]
+    assert first["failed_control"]["candidates"] is False
+    assert len([h for h in script.history if h.get("tool") == "plan_test"]) == 2     # the agent's two, no candidate
+    assert second["proof"] == "holds" and result.verdict == "confirmed"
+
+
+def test_a_generic_error_page_leaves_the_cause_open_and_tries_the_next_count(tmp_path):
+    """A stack that answers a failed statement with a generic 500 page and no engine text (a production Spring or
+    Django default): the cause is unknown, so the next column count is still tried."""
+    sent = []
+    plan = _page_plan(sql_marker={"prefix": "'))", "columns": [2, 1], "column": 0})
+    script = Script([plan, _confirm])
+    ctx = _page_ctx(tmp_path, sent, error="Internal Server Error", failed=500)
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    first, second = _experiments(script.history)
+    assert first["failed_control"]["status"] == 500 and first["failed_control"]["candidates"] is True
+    assert second["proof"] == "holds" and result.verdict == "confirmed"
+
+
+@pytest.mark.parametrize("error", [
+    "SQLITE_ERROR: {exc}",                                                   # an engine error the proof class knows
+    "The used SELECT statements have a different number of columns",         # MySQL's word for a wrong width
+    "ERROR: each UNION query must have the same number of columns",          # PostgreSQL's
+])
+def test_an_engine_error_in_a_200_page_names_the_control_and_tries_the_next_candidate(tmp_path, error):
+    """A stack that shows its engine errors in a 200 page (PHP): the template's failure is named, and the next
+    candidate runs as after a server error (VER-011)."""
+    sent = []
+    plan = _page_plan(sql_marker={"prefix": "'))", "columns": [2, 1], "column": 0})
+    script = Script([plan, _confirm])
+    result = AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent, error=error))
+    first, second = _experiments(script.history)
+    assert "shows an engine error" in first["reason"] and first["failed_control"]["template"] is True
+    assert second["proof"] == "holds"
+    assert result.verdict == "confirmed"
+
+    sent = []
+    script = Script([_page_plan(baseline="zzz", text="apple", sql_template=[_BAD, _GOOD]), _confirm])
+    result = AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent, error=error))
+    assert [e["proof"] for e in _experiments(script.history)] == ["missing", "holds"]
+    assert result.verdict == "confirmed"
+
+
+def test_error_text_on_every_page_is_no_sign_of_a_failed_template(tmp_path):
+    """Refused case: a page frame that always carries engine-error words, the baseline's included, names no
+    failed control and runs no further candidate; the form's own reason stands."""
+    sent = []
+    script = Script([_page_plan(baseline="zzz", text="apple", sql_template=[_BAD, _GOOD])])
+    AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent, frame="<script>// SyntaxError</script>"))
+    (feedback,) = _experiments(script.history)
+    assert "failed_control" not in feedback and "engine error" not in feedback["reason"]
+    assert len([h for h in script.history if h.get("tool") == "plan_test"]) == 1
+
+
+def test_a_redirected_control_is_named_and_runs_no_further_candidate(tmp_path):
+    """DVWA: a control sent to the login page stops the experiment; the feedback says so and which role it needs,
+    and no further template is tried, since the template is not what failed."""
+    sent = []
+    script = Script([_page_plan(baseline="zzz", text="apple", sql_template=[_GOOD, _BAD])])
+    AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent, redirect=True))
+    (feedback,) = _experiments(script.history)
+    assert "was redirected (HTTP 302) and did not reach the handler" in feedback["reason"]
+    assert "so far" not in feedback["reason"] and "role whose session" in feedback["next"]
+    failed = feedback["failed_control"]
+    assert failed["template"] is False and failed["location"] == "/login.php" and len(sent) == 1
+
+
+def test_a_refused_negative_verdict_is_reported_by_the_experiment_s_reason_not_as_a_confirmation(tmp_path):
+    """Run 138, T-034: the controls do not separate, the agent's not-reproducible verdict cites a step that is no
+    request and is refused, then it concludes inconclusive. The result keeps the refused verdict, and the reason
+    the report gives is the experiment's, not a refused confirmation."""
+    from appsec_verifier.verify.report import why_not_confirmed
+
+    sent = []
+    plan = _page_plan(baseline="zzz", text="zzz", sql_template="zzz%')) AND {{predicate}} -- ")
+    negative = {"verdict": {"verdict": "not-reproducible", "rationale": "the controls answer alike",
+                            "proof_steps": [1, 2, 3]}}
+    script = Script([plan, negative, {"verdict": {"verdict": "inconclusive", "rationale": "no record to anchor"}}])
+    result = AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent))
+    assert any(h.get("tool") == "proof_feedback" for h in script.history)
+    assert result.verdict == "inconclusive" and result.proof["claimed"] == "not-reproducible"
+    said = why_not_confirmed({"verdict": result.verdict, "class": "injection", "rationale": result.rationale,
+                              "observations": result.observations, "proof": result.proof})
+    assert said.startswith("No proof: the test ran, but ") and "confirmation" not in said
+
+
+def test_a_false_condition_answered_with_404_is_not_said_to_miss_the_handler(tmp_path):
+    """A lookup that finds no record for the false condition answers 404: the injection may work, so the feedback
+    says that the proof needs successful answers for both conditions, not that the path is wrong; a baseline with
+    no record is the path or baseline that does not reach the handler."""
+    sent = []
+    script = Script([_page_plan(baseline="apple", text="apple", sql_template="apple%')) AND {{predicate}} -- ")])
+    AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent, empty=404))
+    (feedback,) = _experiments(script.history)
+    assert "where control 'false #1' got HTTP 404: the proof compares successful answers" in feedback["reason"]
+    assert "does not reach the handler" not in feedback["reason"]
+    assert feedback["failed_control"]["template"] is False
+
+    sent = []
+    script = Script([_page_plan(baseline="zzz", text="apple", sql_template=_GOOD)])
+    AgentProbe("injection", lambda: script).run(_page_ctx(tmp_path, sent, empty=404))
+    (feedback,) = _experiments(script.history)
+    assert "where control 'baseline #1' got HTTP 404: the path or the baseline" in feedback["reason"]
 
 
 def test_proof_steps_are_chosen_by_code_after_a_holding_experiment(tmp_path):

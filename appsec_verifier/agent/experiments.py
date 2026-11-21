@@ -3,6 +3,7 @@ VER-049, VER-053, VER-055, VER-057, VER-061)."""
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import secrets
@@ -43,10 +44,35 @@ _ENGINE_ERROR = re.compile(
 )
 
 
+def _unescaped(text: str) -> str:
+    """An answer's text with the quotes and backslashes that a JSON string or an HTML page escapes restored, so an
+    engine's message reads as the engine wrote it: `near \\"UNION\\"` in JSON and `near &quot;UNION&quot;` in a page
+    are the same error as `near "UNION"`."""
+    return html.unescape(text).replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
+
+
 def engine_error_signature(text: str) -> bool:
-    """VER-053: whether a response body carries a database, NoSQL or XPath engine error. Only this, not the error
-    text, decides the engine-error proof; the text stays owner-only evidence (agent/tools.py, VER-016)."""
-    return bool(text) and _ENGINE_ERROR.search(text) is not None
+    """VER-053: whether a response body carries a database, NoSQL or XPath engine error, also inside a JSON string
+    or an HTML page. Only this, not the error text, decides the engine-error proof; the text stays owner-only
+    evidence (agent/tools.py, VER-016)."""
+    return bool(text) and _ENGINE_ERROR.search(_unescaped(text)) is not None
+
+
+# VER-011: what else tells that a declared template does not form a valid statement. A UNION of the wrong width is
+# a semantic error that the engine-error class above leaves out, as most engines word it without a syntax token.
+# These phrases only name a failed control in the agent's feedback and choose the next template candidate; they
+# never decide a proof, so the engine-error proof (VER-053) stays as it is.
+_COLUMN_COUNT = re.compile(
+    r"different number of columns|must have the same number of columns|do not have the same number of result "
+    r"columns|must have an equal number of expressions|column count does not match",
+    re.IGNORECASE,
+)
+
+
+def template_error_signature(text: str) -> bool:
+    """Whether an answer shows that the template did not form a valid statement: an engine error (VER-053) or a
+    column-count error. For the feedback and the choice of the next template candidate only (VER-011)."""
+    return engine_error_signature(text) or (bool(text) and _COLUMN_COUNT.search(_unescaped(text)) is not None)
 
 
 def _candidates(template: dict) -> dict:
@@ -92,12 +118,13 @@ PLAN_SCHEMA = {
         # a random path next to the finding's, and compares the answers in code.
         "signed_in": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
-        # One template, or up to three candidates the Verifier tries in turn on a server error (VER-011).
+        # One template, or up to three candidates the Verifier tries in turn when the template does not form a valid
+        # statement: a server error, or an engine error in the answer (VER-011).
         "expression_template": _candidates({"type": "string", "minLength": 5, "maxLength": 3000}),
         "operator_challenge": {"enum": ["nosql"]},
         "predicate_template": {"type": "string", "minLength": 15, "maxLength": 3000},
         # VER-011: a NoSQL input spliced into a server-side JavaScript predicate such as $where (CWE-943).
-        "js_predicate_template": {"type": "string", "minLength": 10, "maxLength": 3000},
+        "js_predicate_template": _candidates({"type": "string", "minLength": 10, "maxLength": 3000}),
         "predicate_attribute": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$"},
         "sql_template": _candidates({"type": "string", "minLength": 15, "maxLength": 3000}),
         # VER-048: a blind-injection out-of-band proof carries the callback URL instead of observing a field.
@@ -106,14 +133,15 @@ PLAN_SCHEMA = {
         "auth_artifact": {"type": "boolean"},
         # VER-053: a Verifier-built UNION that returns a marker constant of the Verifier's own. The prefix only
         # closes the current literal and parentheses (punctuation and whitespace); the Verifier owns the SELECT
-        # list, so no real column or row can be named.
+        # list, so no real column or row can be named. Its candidates are up to three column counts, the one part of
+        # the declaration the agent cannot read off the source (VER-011).
         "sql_marker": {
             "type": "object",
             "additionalProperties": False,
             "required": ["prefix", "columns", "column"],
             "properties": {
                 "prefix": {"type": "string", "maxLength": 16, "pattern": "^[\\s'\")(]*$"},
-                "columns": {"type": "integer", "minimum": 1, "maximum": 20},
+                "columns": _candidates({"type": "integer", "minimum": 1, "maximum": 20}),
                 "column": {"type": "integer", "minimum": 0, "maximum": 19},
                 "comment": {"enum": ["-- ", "-- -", "#"]},
                 "concat": {"enum": ["||", "concat"]},
@@ -879,11 +907,128 @@ NEGATIVE_CONTEXTS = ("A negative verdict needs true and false controls that answ
                      "second and cite both experiments.")
 
 
+def control_failed(plan, result: dict) -> bool:
+    """Whether a generated control's answer stops the experiment (VER-011): a transport error or a server error
+    always; for the response-field form any non-2xx answer, since its proof needs comparable successful
+    responses. An auth-artifact control (VER-049) expects 401 or 403 from its false controls, so only an error
+    or a 5xx stops it. An engine-error sweep (VER-053) sends several metacharacters at once and any status is a
+    valid observation for one of them, so only a transport error stops it; the proof decides on the engine-error
+    class. A comparison without credentials (VER-057) expects a refusal or a 404 for some of its requests."""
+    status = result.get("status", 0)
+    plan = plan or {}
+    if plan.get("error_probe") or plan.get("signed_in") or plan.get("exposure"):
+        return bool(result.get("error"))
+    if result.get("error") or not isinstance(status, int) or status >= 500:
+        return True
+    if plan.get("auth_artifact"):
+        return False
+    return not 200 <= status < 300
+
+
+_TEMPLATE_KEYS = ("sql_template", "sql_marker", "js_predicate_template", "expression_template", "predicate_template")
+
+
+def stopped_control(ctx, plan, history, steps) -> dict | None:
+    """VER-011: the control an experiment stopped at, by the rule that stops it (control_failed), as its step, the
+    kind of answer and the result; for a template form whose controls all answered, the first control whose
+    answer shows that the template did not form a valid statement, unless a baseline's answer shows the same, so
+    such text on every page is no signal. None when neither applies. It names the cause in the feedback and
+    chooses the next template candidate, and decides no proof."""
+    if not steps:
+        return None
+    last = max(steps)
+    result = history[last - 1].get("result") or {}
+    if control_failed(plan, result):
+        status = result.get("status")
+        kind = ("no-answer" if result.get("error") or not isinstance(status, int)
+                else "server-error" if status >= 500 else "redirect" if 300 <= status < 400
+                else "refused" if status in (401, 403) else "not-found" if status in (404, 410) else "client-error")
+        return {"step": last, "kind": kind, "result": result}
+    if plan.get("error_probe") or not any(plan.get(k) for k in _TEMPLATE_KEYS):
+        return None
+
+    def shows_error(n):
+        try:
+            return template_error_signature(body_of(ctx, n))
+        except ObservationError:
+            return False
+
+    baseline = [n for n in steps if str(history[n - 1].get("control") or "").startswith("baseline")]
+    if any(shows_error(n) for n in baseline):
+        return None
+    hit = next((n for n in sorted(steps) if n not in baseline and shows_error(n)), None)
+    return {"step": hit, "kind": "engine-error", "result": history[hit - 1].get("result") or {}} if hit else None
+
+
+# What the feedback says about the control an experiment stopped at: the fact, which the report also shows as the
+# reason (verify/report.py), and apart from it what the agent can do (VER-011, VER-024). A false condition that
+# answers with an error status may be the injection working, as on a lookup by id that finds no record; it is said
+# as an answer the proof cannot compare, not as a wrong path or role.
+_STOPPED = {
+    "server-error": ("the controls stopped at step {n}, where {c} got HTTP {s}: the template does not form a valid "
+                     "statement there", "correct the template with the answer's excerpt in failed_control"),
+    "engine-error": ("the answer of step {n}, to {c}, shows an engine error: the template does not form a valid "
+                     "statement there", "read_response on that step shows the error; correct the template"),
+    "redirect": ("the controls stopped at step {n}, where {c} was redirected (HTTP {s}) and did not reach the "
+                 "handler", "send the plan as the role whose session the request needs"),
+    "refused": ("the controls stopped at step {n}, where {c} was refused (HTTP {s})",
+                "send the plan as a role that may use the request"),
+    "not-found": ("the controls stopped at step {n}, where {c} got HTTP {s}: the path or the baseline does not reach "
+                  "the handler", "check the path and the baseline against the source or recorded answers"),
+    "client-error": ("the controls stopped at step {n}, where {c} got HTTP {s}, which the controls cannot compare",
+                     "check the request against the source or recorded answers"),
+    "false-status": ("the controls stopped at step {n}, where {c} got HTTP {s}: the proof compares successful "
+                     "answers of both conditions, and this false condition answered with an error status",
+                     "declare an observation whose false condition still answers successfully, such as a template "
+                     "that keeps the baseline's request valid"),
+    "no-answer": ("the controls stopped at step {n}, where {c} got no answer", "check the request"),
+    # A returned-marker plan's candidates differ only in the column count; an engine error of another kind is not
+    # one another count can change, so its remaining counts are not tried and the finding keeps its experiments.
+    "not-width": ("the controls stopped at step {n}, where {c} got an engine error that is not a column-count "
+                  "error, so another column count cannot help and the remaining ones were not tried",
+                  "correct the rest of the declaration with the answer's excerpt in failed_control"),
+}
+
+
+def _width_unrelated(ctx, plan, n) -> bool:
+    """Whether a returned-marker control's answer shows an engine error other than a column-count error (VER-011,
+    VER-053): then its other column counts cannot fix it. An answer without engine text, such as a generic error
+    page, leaves the cause open, so the counts are still tried."""
+    if not plan.get("sql_marker"):
+        return False
+    try:
+        body = body_of(ctx, n)
+    except ObservationError:
+        return False
+    return engine_error_signature(body) and _COLUMN_COUNT.search(_unescaped(body)) is None
+
+
+def _stopped_feedback(ctx, plan, stop, history) -> tuple[str, str, dict]:
+    n, result = stop["step"], stop["result"]
+    label = history[n - 1].get("control")
+    kind = stop["kind"]
+    if str(label or "").startswith("false") and kind in ("redirect", "refused", "not-found", "client-error"):
+        kind = "false-status"
+    template = stop["kind"] in ("server-error", "engine-error")
+    if template and _width_unrelated(ctx, plan, n):
+        kind = "not-width"
+    fact, action = _STOPPED[kind]
+    failed = {"step": n, "status": result.get("status"),
+              "excerpt": (result.get("error") or result.get("body_excerpt") or "")[:300],
+              # whether the template failed, and whether the plan's next candidate can address it (agent/loop.py)
+              "template": template, "candidates": kind != "not-width"}
+    if stop["kind"] == "redirect" and result.get("location"):
+        failed["location"] = result["location"]
+    return (fact.format(n=n, c=f"control '{label}'" if label else "a control", s=result.get("status")),
+            action + ", then revise the plan, or submit the verdict the evidence supports", failed)
+
+
 def injection_ready(ctx, history, steps):
     """Whether the controls the Verifier just ran already meet the injection proof (VER-011), reported to the
     agent so its next step is the verdict. Pure: it sets no verdict and writes no evidence; proof.py still
-    re-checks the cited steps before a confirmed verdict stands. When a control met a server error the feedback
-    names it, so the agent can see the template is wrong without reading the step itself."""
+    re-checks the cited steps before a confirmed verdict stands. When the controls stopped at an answer, or a
+    template's answer shows that it did not form a valid statement, the feedback names that step and why, so the
+    agent can act on it without reading the step itself (stopped_control)."""
     plan_step, plan = latest_plan(history)
     if agent_controls(plan):
         # Controls the agent chose itself ran as an experiment: they can carry a negative verdict, never a
@@ -902,17 +1047,16 @@ def injection_ready(ctx, history, steps):
         feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
                     "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"
                     + ("" if plan.get("error_probe") or plan.get("kind") != "boolean" else ". " + NEGATIVE_CONTEXTS)}
-    if revisable_observation(plan):
+    stop = stopped_control(ctx, plan, history, steps)
+    if stop is not None:
+        # The stopped control, not the count of recorded controls, is what the agent and the report need to know;
+        # no other observation can recover the controls that were not sent.
+        feedback["reason"], feedback["next"], feedback["failed_control"] = _stopped_feedback(ctx, plan, stop, history)
+    elif revisable_observation(plan):
         feedback["plan_step"] = plan_step
         feedback["next"] = (f"If only the observation is wrong, call revise_observation with plan_step {plan_step} "
                             "and exactly one of text or pointer; it rechecks all recorded controls without requests. "
                             "Missing or incomplete evidence still needs new tests. Otherwise: " + feedback["next"])
-    failed = next((n for n in reversed(steps) if (history[n - 1].get("result") or {}).get("status", 0) >= 500
-                   or (history[n - 1].get("result") or {}).get("error")), None)
-    if failed is not None:
-        result = history[failed - 1].get("result") or {}
-        excerpt = (result.get("error") or result.get("body_excerpt") or "")[:300]
-        feedback["failed_control"] = {"step": failed, "status": result.get("status"), "excerpt": excerpt}
     return feedback
 
 

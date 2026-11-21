@@ -115,6 +115,30 @@ def test_unmarked_unnamed_get_is_still_refused(tmp_path):
         c.before("http_request", {"method": "GET", "path": "/api/captcha"})
 
 
+def test_a_refused_get_names_the_prerequisite_read_of_an_own_record(tmp_path):
+    """Run 138, T-034: the agent asked for its own order history without the flag and was refused without a word
+    of the read VER-047 allows, so it had no record to anchor the lookup. A refused GET names it while reads are
+    left; a write, a plan, an exposure finding and an exhausted allowance do not."""
+    c = Controller(context(tmp_path))
+    with pytest.raises(ToolError, match=r"id of a record an identity of the run owns.*prerequisite: true"):
+        c.before("http_request", {"method": "GET", "path": "/rest/order-history"})
+    for name, args in (("plan_test", {"path": "/rest/order-history"}),
+                       ("http_request", {"method": "POST", "path": "/rest/order-history"})):
+        with pytest.raises(ToolError) as refused:
+            c.before(name, args)
+        assert "prerequisite: true" not in str(refused.value)
+    for i in range(3):
+        c.before("http_request", {"method": "GET", "path": f"/api/p{i}", "prerequisite": True})
+    with pytest.raises(ToolError) as refused:
+        c.before("http_request", {"method": "GET", "path": "/rest/order-history"})
+    assert "prerequisite: true" not in str(refused.value)
+    exposure = context(tmp_path)
+    exposure.plan = replace(exposure.plan, cwe="CWE-538")
+    with pytest.raises(ToolError) as refused:
+        Controller(exposure).before("http_request", {"method": "GET", "path": "/rest/order-history"})
+    assert "prerequisite: true" not in str(refused.value)
+
+
 def test_prerequisite_read_is_get_only(tmp_path):
     c = Controller(context(tmp_path))
     with pytest.raises(ToolError, match="GET only"):

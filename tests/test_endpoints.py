@@ -573,6 +573,30 @@ def test_the_test_plan_counts_findings_not_their_variants(monkeypatch):
     assert text.count("T-2") == 1
 
 
+def test_not_testable_does_not_count_a_finding_the_run_tests_through_another_variant(monkeypatch):
+    """Run 136: 8 findings tested and 27 not testable of 32, as T-001, T-033 and T-034 ran one variant and could
+    not run the others. Such a finding is named with its blocked variants' number and not counted as not
+    testable, so the two counts add up to the selection."""
+    from dataclasses import replace
+
+    from appsec_verifier.planning import evidence_id
+
+    monkeypatch.setenv("COLUMNS", "200")
+    get = Endpoint("GET", "/x", None)
+    runs = replace(_plan("injection", get), variant_id="a", variant_digest="aa")
+    partly = [replace(_plan("injection", get), variant_id=v, variant_digest=d) for v, d in (("b", "bb"), ("c", "cc"))]
+    whole = replace(_plan("ssrf", get), id="T-2", variant_id="d", variant_digest="dd")
+    blocked = {evidence_id(p): ("intrusive", "safe mode") for p in (*partly, whole)}
+    text = "\n".join(cli._test_cases(cli.Style(False), [runs, *partly, whole], blocked))
+    assert "Test plan     1 of 2 findings will be tested" in text
+    assert ("Not testable  1 finding, and variants of 1 finding it tests, need what this run does not have "
+            "(--test-all tries anyway)") in text
+    assert f"intrusive mode   2  {runs.id} (2 variants), T-2\n" in text
+    only = "\n".join(cli._test_cases(cli.Style(False), [runs, *partly], {evidence_id(p): ("intrusive", "x")
+                                                                          for p in partly}))
+    assert "Not testable  variants of 1 finding it tests need what this run does not have" in only
+
+
 def test_the_settings_count_findings_and_name_the_quick_ones_added():
     """The selection line counts findings, not variants, and says how many quick ones were added below."""
     from dataclasses import replace

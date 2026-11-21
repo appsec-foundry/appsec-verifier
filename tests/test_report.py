@@ -481,6 +481,16 @@ def test_an_unchecked_or_unconfirmed_result_shows_nothing_and_a_one_account_test
         "No proof: only u-a sent requests; the comparison with another account is missing.")
 
 
+def test_a_comparison_without_credentials_is_not_said_to_lack_another_account():
+    """T-039: the comparison of VER-057 needs one account and requests without credentials; its result names the
+    test agent's assessment, not a missing second account."""
+    doc = _steps_doc("x", [(3, "GET https://app.example.com/keys/a.pub as u-a → 200, 9 bytes"),
+                           (4, "GET https://app.example.com/keys/a.pub as anonymous → 200, 9 bytes"),
+                           (5, "GET https://app.example.com/keys/vrf01 as anonymous → 404, 9 bytes")])
+    tested = {**doc, "verdict": "inconclusive", "proof": None, "rationale": "The key is public by design."}
+    assert report_module.why_not_confirmed(tested) == "Agent's assessment: The key is public by design."
+
+
 @pytest.mark.parametrize("rationale, kind, said", [
     ("stopped by limit: request cap reached", "requests",
      "Limit reached: the run's requests to the target; raise them with --max-requests."),
@@ -541,6 +551,36 @@ _HEADER = {"id": "variant-001", "request": {"method": "GET", "path": "/vulnerabi
                        "Experiment without proof: the true and false predicates did not separate the observation "
                        "into two classes"],
       "rationale": "Source confirms first_name is concatenated unescaped. However, no runtime split was observed."},
+     None, "No proof: the test ran, but the true and false conditions got the same answer, so the answer does not "
+           "show the injected condition."),
+    # The control the controls stopped at, not how many were recorded (VER-011); a stop is said as a fact.
+    ({"observations": ["Experiment without proof: the controls stopped at step 2, where control 'true #1' got HTTP "
+                       "500: the template does not form a valid statement there"]},
+     None, "No proof: the test ran, but the controls stopped at step 2, where control 'true #1' got HTTP 500: the "
+           "template does not form a valid statement there."),
+    # T-039: controls that gave the proof the test agent did not confirm are not a missing proof, whatever an
+    # earlier experiment lacked.
+    ({"observations": ["Experiment without proof: the request without credentials got a 404",
+                       "Experiment proof held: steps 3, 4, 5"],
+      "rationale": "The handler served jwt.pub without credentials. But it is a public key, meant to be shared."},
+     None, "Not confirmed by the test agent: the controls gave the proof (steps 3, 4, 5), but the agent did not take "
+           "them as showing the weakness; its assessment says why."),
+    # Run 138, T-034: a refused negative verdict is not a refused confirmation; the experiments' own reason comes
+    # first, and the refusal stands only when no experiment recorded one. A saved result without the refused
+    # verdict reads as before.
+    ({"proof": {"checked": False, "claimed": "not-reproducible",
+                "missing": ["step 1 is not an answered request; cite only the experiments' requests (steps 6-15)"]},
+      "observations": ["Experiment without proof: the selected observation reflects the test input"]},
+     None, "No proof: the test ran, but the selected observation reflects the test input."),
+    ({"proof": {"checked": False, "claimed": "blocked-by-control", "missing": ["no repeatable rejection"]}},
+     None, "No proof: the agent's negative verdict failed the proof check: no repeatable rejection."),
+    ({"proof": {"checked": False, "claimed": "confirmed", "missing": ["no executed browser_check"]},
+      "observations": ["Experiment without proof: the selected observation reflects the test input"]},
+     None, "No proof: the agent's confirmation failed the proof check: no executed browser_check."),
+    ({"proof": {"checked": False, "missing": ["no executed browser_check"]}},
+     None, "No proof: the agent's confirmation failed the proof check: no executed browser_check."),
+    ({"proof": {"checked": False, "missing": ["step 2 precedes every plan; cite the controls of declared experiments"]},
+      "observations": ["Experiment without proof: the true and false predicates did not separate the observation"]},
      None, "No proof: the test ran, but the true and false conditions got the same answer, so the answer does not "
            "show the injected condition."),
     ({"rationale": "probe failed: KeyError"},

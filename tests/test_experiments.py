@@ -510,6 +510,9 @@ def test_a_plan_its_schema_refuses_also_names_a_missing_observation():
     "Twig\\Error\\SyntaxError: Unexpected token \"end of template\"",      # Twig
     "freemarker.core.ParseException: Syntax error in template",          # FreeMarker
     "SyntaxError: Unexpected end of input",                     # an evaluated JavaScript expression
+    '{"error":"near \\"UNION\\": syntax error"}',               # the same SQLite message inside a JSON string
+    "<title>near &quot;UNION&quot;: syntax error</title>",      # and in an HTML page, as Juice Shop shows it
+    '{"error":"Twig\\\\Error\\\\SyntaxError: Unexpected"}',     # an escaped backslash in JSON
 ])
 def test_engine_error_signature_catches_each_engine(body):
     from appsec_verifier.agent.experiments import engine_error_signature
@@ -528,6 +531,8 @@ def test_engine_error_signature_catches_each_engine(body):
     "<p>Handlebars, Mako shark poster, Smarty pants</p>",
     "Damn Vulnerable Web Application (DVWA) is a PHP/MySQL web application.",   # a bare DBMS name in page prose
     "<footer>Powered by MariaDB 10.5 and PostgreSQL</footer>",                 # DBMS names in the page frame
+    '{"error":"near \\"main street\\": no such address"}',     # escaped quotes alone are no engine error
+    "<p>We are &quot;near&quot; you</p>",
 ])
 def test_a_generic_failure_is_not_an_engine_error(body):
     from appsec_verifier.agent.experiments import engine_error_signature

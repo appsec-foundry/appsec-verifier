@@ -227,8 +227,26 @@ def test_an_exposure_finding_offers_no_other_plan_and_no_own_requests(tmp_path):
     reference = {k: v for k, v in _args().items() if k != "signed_in"} | {"reference": "admin-1"}
     with pytest.raises(ToolError, match="proven with signed_in"):
         tools.plan_test(**reference)
-    with pytest.raises(ToolError, match="exposure checks use only the operator-declared .* signed_in"):
+    with pytest.raises(ToolError, match="no request of its own, a prerequisite read included, .* plan_test with "
+                                        "signed_in for any path the finding's routes allow"):
         tools.http_request(role="account-1", path=PATH)
+
+
+def test_an_exposure_finding_compares_any_path_of_its_route_but_reads_none_itself(tmp_path):
+    """T-039: the refusal of an exposure finding's own read, a listing included, does not limit the comparison to
+    one path; another file of the same route is a new plan, and a path outside the route stays refused."""
+    tools = _tools(tmp_path, cwe="CWE-538")
+    tools.ctx.plan = replace(tools.ctx.plan, endpoints=(Endpoint("ALL", "/encryptionkeys/:file", None),))
+    with pytest.raises(ToolError, match="an exposure finding sends no request of its own"):
+        tools.http_request(role="account-1", method="GET", path="/encryptionkeys", prerequisite=True)
+    controller = Controller(tools.ctx)
+    plan = {"kind": "access-control", "hypothesis": "The key file handler serves its files without a login",
+            "method": "GET", "signed_in": "account-1"}
+    for path in ("/encryptionkeys/jwt.pub", "/encryptionkeys/other.txt"):
+        controller.before("plan_test", {**plan, "path": path})              # the loop's check before the tool
+        assert tools.plan_test(**plan, path=path)["accepted"] is True
+    with pytest.raises(ToolError, match="no matching route"):
+        controller.before("plan_test", {**plan, "path": "/support/logs/access.log"})
 
 
 # ── what the Verifier sends and keeps ─────────────────────────────────────────

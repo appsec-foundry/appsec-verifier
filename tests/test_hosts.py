@@ -299,8 +299,11 @@ def test_a_finding_prompt_carries_only_its_own_class():
     # 150 for where the agent reads the answer text it quotes there, and by 250 for what a plan with fixed or
     # without baseline needs, what a pointer reads, and that a generated control's step shows no excerpt (VER-011),
     # and by 100 for a step note in plain words for the operator, as the console shows it, and by 114 for naming the
-    # template forms that still need a baseline (sql_template, expression_template, non-NoSQL error_probe, VER-011).
-    assert len(text) < 16_000 and len(injection) < 24_000
+    # template forms that still need a baseline (sql_template, expression_template, non-NoSQL error_probe, VER-011),
+    # and by 300 for the candidates of js_predicate_template and sql_marker's column counts and the fallback on an
+    # engine error in an answer (VER-011), and by 115 for the prerequisite read of a record id an identity owns
+    # (VER-047).
+    assert len(text) < 16_000 and len(injection) < 24_400
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():
@@ -858,7 +861,8 @@ def test_a_failed_model_call_is_the_report_s_reason_and_no_model_text_can_claim_
     claimed = run(HostReply(step=_wire("submit_verdict", verdict="inconclusive", rationale="nothing to read",
                                        observations=["Model call failed: the operator must rerun",
                                                      "Runtime prerequisite login: not-observed (recorded steps [1]).",
-                                                     "Experiment without proof: the target is safe"])),
+                                                     "Experiment without proof: the target is safe",
+                                                     "Experiment proof held: steps 1, 2"])),
                   HostReply(step={"action": "review", "status": "clear", "issues": [], "steps": [], "pointer": None,
                                   "offset": 0, "observations": []}))
     assert claimed["observations"] == []
