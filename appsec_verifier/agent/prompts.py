@@ -93,8 +93,9 @@ def _tool_defs() -> list[dict]:
         {
             "name": "send_controls",
             "description": "Send the accepted write injection experiment's generated controls, each twice, as its "
-            "own numbered steps, and report whether the proof holds. Intrusive mode only, once per plan; a read "
-            "plan's controls already ran on acceptance. No write is repeated beyond the proof's own controls.",
+            "own numbered steps, as the plan's identity unless role names another, and report whether the proof "
+            "holds. Intrusive mode only, once per plan; a read plan's controls already ran on acceptance. No write "
+            "is repeated beyond the proof's own controls.",
             "input_schema": {"type": "object",
                              "properties": {"role": {"type": ["string", "null"], "maxLength": 80}}},
         },

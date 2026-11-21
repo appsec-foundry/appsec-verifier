@@ -771,7 +771,8 @@ class AgentTools:
         plan's controls run when the
         plan is accepted (`write` False); a write plan's only when the agent asks with send_controls in intrusive
         mode (`write` True), and only once per plan. Each control is sent twice, an auth-artifact control once,
-        because that proof needs no repetition (VER-049)."""
+        because that proof needs no repetition (VER-049). Without a `role` the controls carry the identity the plan
+        names, as on acceptance."""
         plan = getattr(self, "_experiment", {})
         if plan.get("exposure"):
             if write:
@@ -806,6 +807,7 @@ class AgentTools:
             raise ToolError("this plan's controls were already sent; revise the plan for another experiment")
         location = "path_inputs" if plan.get("input_location") == "path" else plan["input_location"]
         fixed = plan.get("fixed") or {}
+        role = role or plan.get("role")
         # Every control carries the same fixed values for the request's other inputs; only the declared input
         # differs (VER-011). The engine-error sweep (VER-053) has a break and a balance per metacharacter instead
         # of the five fixed groups; control_values yields whichever the plan declares.

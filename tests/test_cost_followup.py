@@ -68,8 +68,8 @@ def _login_target(sent):
     return target
 
 
-def _login_ctx(tmp_path, sent, *, safe=False, read_only=False):
-    ctx = _ctx(tmp_path, _login_target(sent), safe=safe, read_only=read_only)
+def _login_ctx(tmp_path, sent, *, safe=False, read_only=False, target=None):
+    ctx = _ctx(tmp_path, target or _login_target(sent), safe=safe, read_only=read_only)
     ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", instance="routes/login.ts:34",
                        endpoints=(Endpoint("POST", "/rest/user/login", None),))
     ctx.marker = (MARK, "bb")
@@ -170,6 +170,24 @@ def test_an_engine_error_confirms_a_login_without_a_declared_protected_resource(
     answers = {h["control"]: h["result"]["status"] for h in script.history if h.get("control")}
     assert answers["break ' #1"] == answers["break ' #2"] == 500
     assert answers["balance ' #1"] == answers["balance ' #2"] == 401
+
+
+@pytest.mark.parametrize("role", ["customer-a", None])
+def test_write_controls_carry_the_identity_of_the_accepted_plan(tmp_path, role):
+    """T-025: send_controls without a role sends the generated controls as the identity the accepted plan names, as
+    a read plan's controls are sent, not without credentials (VER-011). A plan that names none gets none."""
+    sent, seen = [], []
+    login = _login_target(sent)
+
+    def target(m, u, h, **kw):
+        seen.append(h.get("Authorization"))
+        return login(m, u, h, **kw)
+
+    ctx = _without_auth_checks(_login_ctx(tmp_path, sent, target=target))
+    script = Script([_login_field_plan(error_probe=True, **({"role": role} if role else {})),
+                     {"tool": "send_controls", "args": {}}])
+    AgentProbe("injection", lambda: script).run(ctx)
+    assert len(seen) == 12 and set(seen) == {"Bearer A" if role else None}
 
 
 def test_a_response_field_plan_on_a_login_waits_for_the_probe(tmp_path, probe_gate):
