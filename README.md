@@ -8,9 +8,9 @@
 > [!NOTE]
 > **Alpha.** Early version under active development. Feedback from real projects is welcome.
 
-AppSec Verifier tests whether the findings of an [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) assessment hold up in the running application. An AI agent plans a test for each selected finding against a target you are authorised to test, and a finding counts as confirmed only if its proof passes a check in the Verifier's code. The Verifier tests the findings it is given and does not look for new weaknesses, chain exploits or extract data.
+AppSec Verifier checks which findings of an [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) assessment can be reproduced in a running application you are authorised to test. An AI agent tests each finding, and the Verifier confirms it only after checking the proof itself, not on the agent's word. It does not search for new weaknesses and goes no further than the proof.
 
-[![Console output of a run against OWASP Juice Shop: the test agent tests a NoSQL injection finding, the proof check passes and the finding is confirmed](examples/juice-shop/result/console-T-033.png)](examples/juice-shop/result/console.log.md)
+![Console output of a run against OWASP Juice Shop: the test agent tests a SQL injection finding, the proof check passes and the finding is confirmed](examples/juice-shop/result/console-T-004.png)
 
 ## Quick start
 
@@ -52,7 +52,7 @@ To update the Verifier later, run `appsec-verifier update`.
 
 ## What it verifies
 
-The table shows what each class needs for `confirmed`. Reflected text, similar responses or a delay alone never count. If the assessment does not name the exact request, the agent finds it in the source code or in the target's forms and links ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) follows one finding through every step.
+A finding is confirmed only with the proof the table lists for its weakness. Input that merely comes back in the answer, a page that only looks like the expected one, or a slow response does not count on its own. If the assessment does not name the exact request, the agent looks for it in the source code or in the target's forms and links ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) shows the whole process for one finding.
 
 | Weakness | Confirmed when |
 | --- | --- |
