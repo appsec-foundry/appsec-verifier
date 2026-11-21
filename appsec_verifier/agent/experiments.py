@@ -43,6 +43,21 @@ _ENGINE_ERROR = re.compile(
     re.IGNORECASE,
 )
 
+# VER-053: a stack frame raised inside a database, NoSQL or ORM query layer, for a server error (a stack-trace
+# page) that carries no parser message, as some handlers render it. A frame naming a driver's or ORM's query path
+# ties the error to the interpreter; the break/balance asymmetry (_error_probe_check) shows the quote changed the
+# syntax, so this signal confirms only gated by it. Query-path segments, never a bare driver name, so a product
+# name or a data field mentioning a driver is not an engine error.
+_DRIVER_STACK = re.compile(
+    r"sequelize[\\/]lib[\\/]dialects[\\/]\w+[\\/]query"
+    r"|node_modules[\\/](?:mysql2?|pg|sqlite3|better-sqlite3|mariadb|tedious|oracledb|mongodb|mongoose)[\\/]"
+    r"|typeorm[\\/]driver[\\/]|knex[\\/]lib[\\/](?:execution|dialects)"
+    r"|django[\\/]db[\\/]backends[\\/]|psycopg2?[\\/]|org\.hibernate\.|java\.sql\.SQLException|com\.mysql\.cj",
+    re.IGNORECASE,
+)
+# The body must read as a stack trace, so a driver path quoted in ordinary prose is not taken for one.
+_STACK_FRAME = re.compile(r"\bat\s|:\d+:\d+\)|\.js:\d+|line \d+|File \"")
+
 
 def _unescaped(text: str) -> str:
     """An answer's text with the quotes and backslashes that a JSON string or an HTML page escapes restored, so an
@@ -55,7 +70,13 @@ def engine_error_signature(text: str) -> bool:
     """VER-053: whether a response body carries a database, NoSQL or XPath engine error, also inside a JSON string
     or an HTML page. Only this, not the error text, decides the engine-error proof; the text stays owner-only
     evidence (agent/tools.py, VER-016)."""
-    return bool(text) and _ENGINE_ERROR.search(_unescaped(text)) is not None
+    if not text:
+        return False
+    unescaped = _unescaped(text)
+    if _ENGINE_ERROR.search(unescaped) is not None:
+        return True
+    # VER-053: a message-less server error whose stack is raised in the query layer (agent/experiments.py).
+    return _STACK_FRAME.search(unescaped) is not None and _DRIVER_STACK.search(unescaped) is not None
 
 
 # VER-011: what else tells that a declared template does not form a valid statement. A UNION of the wrong width is

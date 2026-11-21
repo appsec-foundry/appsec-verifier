@@ -561,6 +561,50 @@ def test_a_constant_dbms_name_does_not_defeat_the_engine_error_proof():
     assert _error_probe_check(groups, plan) is None
 
 
+@pytest.mark.parametrize("body", [
+    # A message-less server error whose stack is raised in the query layer, as some handlers render it.
+    '<ul id="stacktrace"><li>at Query.run (/app/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)</li></ul>',
+    '<ul id="stacktrace"><li>at Query.handleError (/app/node_modules/pg/lib/query.js:142:17)</li></ul>',
+    'File "/app/venv/lib/python3.11/site-packages/django/db/backends/utils.py", line 89, in execute',
+])
+def test_a_query_layer_stack_without_a_message_is_an_engine_error(body):
+    """VER-053: a stack frame in the database or ORM query layer confirms the engine-error form even when the
+    body carries no parser message (Juice Shop's login renders only the stack)."""
+    from appsec_verifier.agent.experiments import engine_error_signature
+
+    assert engine_error_signature(body) is True
+
+
+@pytest.mark.parametrize("body", [
+    '<ul id="stacktrace"><li>at Object.handler (/app/routes/login.js:10:5)</li></ul>',   # app code, no DB frame
+    "<p>We persist with node_modules/pg here.</p>",                                      # a driver path in prose
+    '{"library":"mongodb","version":"6.0"}',                                             # a driver name as data
+])
+def test_a_server_crash_outside_the_query_layer_is_not_an_engine_error(body):
+    """VER-053: a stack trace without a query-layer frame, or a driver name outside a stack, is not proof."""
+    from appsec_verifier.agent.experiments import engine_error_signature
+
+    assert engine_error_signature(body) is False
+
+
+def test_a_query_layer_stack_confirms_only_with_the_break_balance_asymmetry():
+    """VER-053: the broadened signal still passes through _error_probe_check, so a query-layer 500 on both the
+    break and its balanced counterpart (a crash the quote did not cause) does not confirm."""
+    from appsec_verifier.agent.experiments import _error_probe_check, engine_error_signature
+
+    stack = '<li>at Query.run (/app/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)</li>'
+    ok = "Invalid email or password."
+
+    def rec(body):
+        return {"engine_error": engine_error_signature(body)}
+
+    plan = {"error_set": [{"name": "'", "break": "x'", "balance": "x''"}]}
+    asym = {"break:'": [(2, rec(stack)), (4, rec(stack))], "balance:'": [(3, rec(ok)), (5, rec(ok))]}
+    both = {"break:'": [(2, rec(stack)), (4, rec(stack))], "balance:'": [(3, rec(stack)), (5, rec(stack))]}
+    assert _error_probe_check(asym, plan) is None                 # break-only stack confirms
+    assert _error_probe_check(both, plan) is not None             # a crash on both does not
+
+
 def test_marker_controls_builds_only_null_and_a_concatenated_marker():
     """VER-053: the Verifier owns the SELECT list, so no FROM or real column can be injected, and each marker is a
     concatenation the database computes (an echo cannot reproduce the joined value)."""

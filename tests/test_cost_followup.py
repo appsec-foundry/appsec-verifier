@@ -214,6 +214,40 @@ def test_a_refused_login_bypass_names_the_probe(tmp_path):
     assert sent == [] and "auth_checks" in errors[0] and "control-character probe has not run" in errors[0]
 
 
+def _stack_trace_login_target(sent):
+    """A login that renders a message-less server error on a broken quote (a stack trace into the SQLite query
+    layer, as Juice Shop's login does) and the ordinary 401 otherwise."""
+    stack = ('<html><head><title>Error</title></head><body><ul id="stacktrace">'
+             '<li>    at Query.run (/app/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)</li>'
+             '<li>    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)</li>'
+             '</ul></body></html>')
+
+    def target(m, u, h, **kw):
+        email = str((kw.get("json") or {}).get("email", ""))
+        sent.append(email)
+        if email.count("'") % 2 == 1:                 # an unbalanced quote breaks the SQL
+            return Resp(500, stack)
+        return Resp(401, "Invalid email or password.")
+
+    return target
+
+
+def test_a_login_engine_error_confirms_from_a_message_less_stack_without_a_scope_file(tmp_path):
+    """T-011, VER-053: Juice Shop's login returns only a stack trace into the query layer, no parser message. The
+    control-character probe confirms it without an operator-declared auth_checks resource."""
+    sent = []
+    ctx = _without_auth_checks(_ctx(tmp_path, _stack_trace_login_target(sent), safe=False, read_only=False))
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", instance="routes/login.ts:34",
+                       endpoints=(Endpoint("POST", "/rest/user/login", None),))
+    ctx.marker = (MARK, "bb")
+    script = Script([_login_field_plan(error_probe=True), {"tool": "send_controls", "args": {}}, _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    answers = {h["control"]: h["result"]["status"] for h in script.history if h.get("control")}
+    assert answers["break ' #1"] == answers["break ' #2"] == 500      # the broken quote
+    assert answers["balance ' #1"] == answers["balance ' #2"] == 401   # its balanced counterpart
+
+
 def _search_target(sent):
     """A product search whose term sits inside two parentheses: only a template that closes both works."""
     db = sqlite3.connect(":memory:")
