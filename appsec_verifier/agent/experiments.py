@@ -1,5 +1,5 @@
 """Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
-VER-049, VER-053, VER-055, VER-057, VER-061)."""
+VER-049, VER-053, VER-054, VER-055, VER-057, VER-061)."""
 
 from __future__ import annotations
 
@@ -259,9 +259,36 @@ def fixed_forms(cwe, location) -> list[str]:
     can confirm (VER-011, VER-053). Command injection probes carry nothing else, so none."""
     if cwe == "CWE-78":
         return []
-    forms = ["error_probe"] if cwe in ENGINE_ERROR_CWES and (cwe != "CWE-943" or location == "json") else []
+    forms = ["error_probe"] if error_probe_applies(cwe, location) else []
     return forms + [form for form in (confirming_form(cwe, location) or "").split(" or ")
                     if form and generates_controls({"kind": "boolean", form: True})]
+
+
+def error_probe_applies(cwe, location) -> bool:
+    """Whether the engine-error probe (VER-053) reaches an injection of this CWE through this input; NoSQL only
+    through a JSON input, as AgentTools.plan_test accepts it."""
+    return cwe in ENGINE_ERROR_CWES and (cwe != "CWE-943" or location == "json")
+
+
+PROBE_FIRST = ("the control-character probe has not run on this input yet: declare error_probe true on the same "
+               "input first; it needs no observation, and any answer status counts (VER-054)")
+
+
+def probe_first(cwe, plan, accepted) -> str | None:
+    """VER-054: for a class the engine-error form covers, the control-character probe comes first. For a boolean plan
+    of another form on an input no accepted probe has covered, the reminder to run it; None otherwise. A reminder,
+    never a gate: the plan stays accepted (VER-043)."""
+    if plan.get("kind") != "boolean" or plan.get("error_probe"):
+        return None
+    if not error_probe_applies(cwe, plan.get("input_location")):
+        return None
+
+    def target(p):
+        return p.get("path"), str(p.get("method") or "GET").upper(), p.get("input_location"), p.get("input_name")
+
+    if any(p.get("error_probe") and target(p) == target(plan) for p in (accepted or {}).values()):
+        return None
+    return PROBE_FIRST
 
 
 # Missing authentication and exposure: proven with an operator-declared resource, or the comparison without
@@ -973,6 +1000,12 @@ _STOPPED = {
                  "handler", "send the plan as the role whose session the request needs"),
     "refused": ("the controls stopped at step {n}, where {c} was refused (HTTP {s})",
                 "send the plan as a role that may use the request"),
+    # A refused baseline is the request's answer to its unmodified input: a session the plan lacks, or a refusal by
+    # design, as a sign-in gives for unknown credentials, which no role changes (VER-011, VER-054).
+    "baseline-refused": ("the controls stopped at step {n}, where {c} was refused (HTTP {s})",
+                         "if the request needs a session, send the plan as a role that may use it; if it refuses its "
+                         "unmodified input by design, as a sign-in does for unknown credentials, the response-field "
+                         "form has no successful answer to compare"),
     "not-found": ("the controls stopped at step {n}, where {c} got HTTP {s}: the path or the baseline does not reach "
                   "the handler", "check the path and the baseline against the source or recorded answers"),
     "client-error": ("the controls stopped at step {n}, where {c} got HTTP {s}, which the controls cannot compare",
@@ -1009,10 +1042,15 @@ def _stopped_feedback(ctx, plan, stop, history) -> tuple[str, str, dict]:
     kind = stop["kind"]
     if str(label or "").startswith("false") and kind in ("redirect", "refused", "not-found", "client-error"):
         kind = "false-status"
+    if str(label or "").startswith("baseline") and kind == "refused":
+        kind = "baseline-refused"
     template = stop["kind"] in ("server-error", "engine-error")
     if template and _width_unrelated(ctx, plan, n):
         kind = "not-width"
     fact, action = _STOPPED[kind]
+    if kind == "baseline-refused" and (
+            reminder := probe_first(getattr(ctx.plan, "cwe", ""), plan, getattr(ctx, "accepted_plans", None))):
+        action = f"{reminder}; {action}"
     failed = {"step": n, "status": result.get("status"),
               "excerpt": (result.get("error") or result.get("body_excerpt") or "")[:300],
               # whether the template failed, and whether the plan's next candidate can address it (agent/loop.py)

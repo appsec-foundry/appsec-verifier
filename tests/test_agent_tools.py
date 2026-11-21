@@ -636,6 +636,22 @@ def test_returned_marker_and_engine_error_forms_are_gated_by_cwe(tmp_path):
             AgentTools(ctx_for(refused)).plan_test(**err)
 
 
+@pytest.mark.parametrize("cwe, form, reminded", [
+    ("CWE-89", {"sql_template": "1' AND {{predicate}} -- "}, True),
+    ("CWE-943", {"js_predicate_template": "1 && {{predicate}}"}, False),   # a query parameter has no NoSQL probe
+])
+def test_the_probe_reminder_follows_the_class_and_input(tmp_path, cwe, form, reminded):
+    """VER-054: a plan of another form is accepted, with a reminder of the probe only where the engine-error form
+    reaches its input."""
+    ctx = _ctx(tmp_path, lambda *a, **k: Resp())
+    ctx.plan.cls, ctx.plan.cwe = "injection", cwe
+    declaration = {"kind": "boolean", "hypothesis": "the id is spliced into the query", "path": "/items",
+                   "input_location": "params", "input_name": "id", "baseline": "1", "pointer": "/data", **form}
+    out = AgentTools(ctx).plan_test(**declaration)
+    assert out["accepted"] is True
+    assert ("control-character probe has not run" in out.get("note", "")) is reminded
+
+
 @pytest.mark.parametrize("cwe, extra, reason", [
     ("CWE-89", {}, "need a boolean experiment for CWE-943"),
     ("CWE-943", {"operator_challenge": "nosql", "input_location": "json"}, "no other control form in the same plan"),

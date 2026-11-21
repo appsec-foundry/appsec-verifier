@@ -139,6 +139,81 @@ def test_send_controls_needs_an_accepted_plan_and_runs_once_per_plan(tmp_path):
     assert errors and "already sent" in errors[-1]
 
 
+# ── VER-054: a login answers its unmodified input with 401, so the probe comes first ───────
+
+
+def _without_auth_checks(ctx):
+    """A run without a scope file declares no protected resource for a login bypass (VER-049)."""
+    ctx.scope = {k: v for k, v in ctx.scope.items() if k != "auth_checks"}
+    return ctx
+
+
+def _login_field_plan(**extra):
+    return {"tool": "plan_test", "args": {
+        "kind": "boolean", "hypothesis": "The email is concatenated into the login query",
+        "path": "/rest/user/login", "method": "POST", "input_location": "json", "input_name": "email",
+        "baseline": EMAIL, **extra}}
+
+
+def _stops(history):
+    return [h["result"] for h in history if (h.get("result") or {}).get("proof") == "missing"]
+
+
+def test_an_engine_error_confirms_a_login_without_a_declared_protected_resource(tmp_path):
+    """VER-053: the break raises an engine error and its balanced counterpart gets the login's 401, which does not
+    stop the probe, so a login is confirmed without a scope file."""
+    sent = []
+    ctx = _without_auth_checks(_login_ctx(tmp_path, sent))
+    script = Script([_login_field_plan(error_probe=True), {"tool": "send_controls", "args": {}}, _confirm])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    assert result.verdict == "confirmed" and result.proof["checked"] is True
+    answers = {h["control"]: h["result"]["status"] for h in script.history if h.get("control")}
+    assert answers["break ' #1"] == answers["break ' #2"] == 500
+    assert answers["balance ' #1"] == answers["balance ' #2"] == 401
+
+
+def test_a_refused_login_baseline_points_to_the_probe_not_only_to_another_role(tmp_path):
+    """T-011: a response-field plan on a login is accepted with a reminder of the probe, never refused for it, and
+    when its baseline gets the login's 401 the feedback names the probe and the refusal by design."""
+    sent = []
+    ctx = _without_auth_checks(_login_ctx(tmp_path, sent))
+    script = Script([_login_field_plan(pointer="/authentication/token", sql_template="x' OR {{predicate}} -- "),
+                     {"tool": "send_controls", "args": {}}])
+    result = AgentProbe("injection", lambda: script).run(ctx)
+    accepted = next(h["result"] for h in script.history if h.get("tool") == "plan_test")
+    assert accepted["accepted"] is True and "control-character probe has not run" in accepted["note"]
+    assert sent and result.verdict != "confirmed"              # the reminder blocked nothing
+    stop = _stops(script.history)[-1]
+    assert "was refused (HTTP 401)" in stop["reason"]
+    assert stop["next"].startswith("the control-character probe has not run") and "by design" in stop["next"]
+
+
+def test_no_probe_reminder_once_the_probe_ran_on_that_input(tmp_path):
+    """Refused case: after the probe on the same input, a further plan gets no reminder, and its refused baseline
+    keeps only the session and by-design advice."""
+    sent = []
+    ctx = _without_auth_checks(_login_ctx(tmp_path, sent))
+    script = Script([_login_field_plan(error_probe=True), {"tool": "send_controls", "args": {}},
+                     _login_field_plan(pointer="/authentication/token", sql_template="x' OR {{predicate}} -- "),
+                     {"tool": "send_controls", "args": {}}])
+    AgentProbe("injection", lambda: script).run(ctx)
+    accepted = [h["result"] for h in script.history if h.get("tool") == "plan_test"]
+    assert len(accepted) == 2 and "control-character probe" not in accepted[1].get("note", "")
+    stop = _stops(script.history)[-1]
+    assert "error_probe" not in stop["next"] and stop["next"].startswith("if the request needs a session")
+
+
+def test_a_refused_login_bypass_names_the_probe(tmp_path):
+    """Refused case: without a declared protected resource the login-bypass plan is refused, sends nothing, and
+    names the probe that needs none while it has not run."""
+    sent = []
+    ctx = _without_auth_checks(_login_ctx(tmp_path, sent))
+    script = Script([_login_plan()])
+    AgentProbe("injection", lambda: script).run(ctx)
+    errors = [h["result"]["error"] for h in script.history if h.get("tool") == "plan_test"]
+    assert sent == [] and "auth_checks" in errors[0] and "control-character probe has not run" in errors[0]
+
+
 def _search_target(sent):
     """A product search whose term sits inside two parentheses: only a template that closes both works."""
     db = sqlite3.connect(":memory:")

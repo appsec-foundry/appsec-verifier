@@ -92,6 +92,7 @@ from .experiments import (
     observation_problem,
     pointer_value,
     privileged_roles,
+    probe_first,
     token,
 )
 from .source_reader import SourceAccessError
@@ -521,7 +522,11 @@ class AgentTools:
             from .auth_followup import declaration
 
             if declaration(self.ctx, plan["path"]) is None or self.ctx.sessions is None:
-                raise ToolError("login-bypass proof needs an operator-declared auth_checks protected resource")
+                # VER-054: without a declared resource, the probe that needs none is named while it has not run.
+                reminder = probe_first(getattr(self.ctx.plan, "cwe", ""), plan,
+                                       getattr(self.ctx, "accepted_plans", None))
+                raise ToolError("login-bypass proof needs an operator-declared auth_checks protected resource"
+                                + (f"; {reminder}" if reminder else ""))
         if plan.get("auth_artifact") and not (plan.get("sql_template") or plan.get("operator_challenge")):
             # VER-049: generated SQL/NoSQL controls obtain artifacts; a declared protected read tests their use.
             raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
@@ -730,6 +735,8 @@ class AgentTools:
         if needs_writes:
             notes.append("the operator allowed write requests for this finding (VER-052); every write carries the "
                          "finding's marker and creates, never changes what may belong to someone else (VER-014)")
+        if reminder := probe_first(getattr(self.ctx.plan, "cwe", ""), plan, getattr(self.ctx, "accepted_plans", None)):
+            notes.append(reminder)          # VER-054: a reminder, never a gate
         return {
             "accepted": True,
             **({"login_observations": login_observations} if login_observations is not None else {}),
