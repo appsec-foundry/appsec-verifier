@@ -50,7 +50,7 @@ def test_static_only_reported_with_reason():
 
 def test_summary_tally_and_safety_block():
     doc = _run([_plan("T-1", "xss"), _plan("T-2", "access-control", cwe="CWE-639")])
-    assert doc["meta"]["summary"] == {"confirmed": 0, "not_reproducible": 0, "blocked": 0,
+    assert doc["meta"]["summary"] == {"confirmed": 0, "shown_without_exploit": 0, "not_reproducible": 0, "blocked": 0,
                                       "inconclusive": 0, "not_attempted": 2, "total": 2}
     assert doc["meta"]["safety"] == {"mode": "safe", "read_only": True,
                                      "destructive_actions": "forbidden", "state_changes_cleaned": None}

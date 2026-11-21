@@ -46,7 +46,8 @@ from ..loader import FindingPlan
 from .probes import ProbeContext, ProbeRegistry, ProbeResult
 from .report import RUN_LIMITS as _RUN_LIMITS  # once reached, they stay reached for the run
 
-_VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
+_VERDICTS = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control", "inconclusive",
+             "not-attempted")
 _PACKAGE = Path(__file__).resolve().parents[1]
 
 
@@ -571,9 +572,11 @@ def run_verification(
     if sessions is not None:
         results = sessions.redact(results)  # VER-016: model text never carries a credential into the report
 
-    tally = {"confirmed": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0, "not_attempted": 0}
+    tally = {"confirmed": 0, "shown_without_exploit": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0,
+             "not_attempted": 0}
     _key = {
         "confirmed": "confirmed",
+        "shown-without-exploit": "shown_without_exploit",
         "not-reproducible": "not_reproducible",
         "blocked-by-control": "blocked",
         "inconclusive": "inconclusive",

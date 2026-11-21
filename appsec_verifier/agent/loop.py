@@ -43,11 +43,12 @@ from .proof import check_proof, retain_login_observations
 from .steps import check_action
 from .tools import AgentTools, ToolError
 
-_VERDICTS = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
+_VERDICTS = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control", "inconclusive",
+             "not-attempted")
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
 _LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "error", "path", "start_line",
-                  "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "body_withheld",
-                  "plan_step", "observation", "steps", "error_kind", "recovery")
+                  "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "name_error",
+                  "body_withheld", "plan_step", "observation", "steps", "error_kind", "recovery")
 _PROPOSAL_CAP = 500
 
 

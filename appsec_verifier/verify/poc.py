@@ -1,4 +1,4 @@
-"""The proof of concept of every tested finding (VER-034, VER-035, VER-016, VER-022, VER-059).
+"""The proof of concept of every tested finding (VER-034, VER-035, VER-016, VER-022, VER-059, VER-066).
 
 Every request an agent step sends to the target is recorded with the answer to
 it, by the code from what was sent and received: by `http_request`, and by
@@ -576,6 +576,17 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
                     roles[n] = ("attack", f"syntax break {entry['name']!r}")
                 elif token(sent) == token(entry["balance"]):
                     roles[n] = ("control", f"balanced {entry['name']!r}")
+    elif cls == "injection" and plan.get("name_set") and plan.get("input_name"):
+        # VER-066: the name test's requests are a fresh unknown name and a name the language knows, per pair.
+        for n, _ in shown:
+            sent = _sink(plan, args[n])
+            if sent is _MISSING:
+                continue
+            for entry in plan["name_set"]:
+                if token(sent) == token(entry["unknown"]):
+                    roles[n] = ("attack", "unknown name")
+                elif token(sent) == token(entry["known"]):
+                    roles[n] = ("control", f"known name {entry['name']!r}")
     elif cls == "injection" and plan.get("kind") in ("boolean", "timing") and plan.get("input_name"):
         for n, _ in shown:
             sent = _sink(plan, args[n])
@@ -720,7 +731,8 @@ def compared_with(n: int, e: dict, shown: list[tuple[int, dict]], roles, opposit
 _OPPOSITE = {"true condition": "false condition", "true condition, second form": "false condition, second form"}
 _GROUP_OF = {label: group for group, (_, label) in _EXPERIMENT_ROLES.items()}
 # Forms whose proof reads each step's own observation or computed value, not a split between true and false.
-_OWN_OBSERVATION_FORMS = ("expression_template", "sql_marker", "auth_artifact", "error_probe", "error_set")
+_OWN_OBSERVATION_FORMS = ("expression_template", "sql_marker", "auth_artifact", "error_probe", "error_set",
+                          "name_template", "name_set")
 
 
 def opposites(history: list[dict]) -> dict[str, str]:
@@ -1233,6 +1245,8 @@ _OBSERVATIONS = {
     "auth_artifact": (("injection",), "authenticated artifact in the answer", "authenticated artifact",
                       "no authenticated artifact"),
     "engine_error": (("injection",), "engine error", "engine error", "no engine error"),
+    # VER-066: a server error, or a refusal naming the error for the fresh name (experiments.name_failed)
+    "name_error": (("injection",), "evaluation error", "evaluation failed", "evaluated without error"),
     "marker_returned": (("injection",), "its generated marker returned", "its marker returned",
                         "its marker absent"),
     "text_present": (("injection",), "the selected text in the answer", "text present", "text absent"),
@@ -1246,14 +1260,15 @@ def _proof_observation(ctx, history: list[dict], n: int, e: dict) -> tuple[str, 
     the answer shows it or None), or None where the proof compares answers instead. The returned-marker form
     (VER-053) reads the step's own generated marker from its recorded answer, the others what the code recorded
     in the step's result; the engine error and the marker are located for a frame."""
-    from ..agent.experiments import latest_plan, token
+    from ..agent.experiments import latest_plan, name_failed, token
 
     cls = getattr(ctx.plan, "cls", None)
     step = history[n - 1] if 1 <= n <= len(history) else {}
     res = step.get("result") or {}
     key = next((k for k, row in _OBSERVATIONS.items() if k in res and cls in row[0]), None)
     if key is not None:
-        yes = res[key].get("matched") is True if key == "auth_access" else res[key] is True
+        yes = (res[key].get("matched") is True if key == "auth_access" else name_failed(res) if key == "name_error"
+               else res[key] is True)
         return key, yes, _engine_error(e) if key == "engine_error" and yes else None
     _, plan = latest_plan(history)
     if cls == "injection" and plan.get("kind") == "boolean" and not plan.get("pointer"):
@@ -1502,7 +1517,7 @@ header.head{white-space:normal;padding:12px 16px 14px}header.head .id{font-size:
 header.head .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
 header.head p{margin:6px 0 0}header.head small{display:block;margin-top:6px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
-text-transform:uppercase;vertical-align:2px}.verdict.confirmed{background:#b00020}
+text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
 .verdict.inconclusive{background:#b26a00}
 .what{margin:10px 14px 0;font-size:15px}
 .pair{display:flex;gap:14px;margin:10px 14px 0}.pair section{flex:1;min-width:0;margin:0}
@@ -1535,6 +1550,7 @@ section.attack{border:2px solid #b00020}section.effect{border:2px solid #e65100}
 
 _VERDICT_SENTENCE = {
     "confirmed": "The proof check accepted it.",
+    "shown-without-exploit": "The proof check accepted it as shown without an exploit; no exploit ran.",
     "inconclusive": "This does not complete the required proof.",
     "blocked-by-control": "The operation was refused, with matched control evidence.",
     "not-reproducible": "Not reproduced in these attempts, which does not prove absence.",
@@ -1620,6 +1636,8 @@ def verdict_sentence(ctx, verdict: str, result=None) -> str:
     the weakness and the reason the report gives (VER-024), else what the verdict means."""
     if verdict == "confirmed":
         return f"{weakness(ctx)}. {_VERDICT_SENTENCE['confirmed']}"
+    if verdict == "shown-without-exploit":       # VER-066
+        return f"{weakness(ctx)} shown without an exploit. {_VERDICT_SENTENCE[verdict]}"
     reason = None
     if result is not None and verdict == "inconclusive":
         from .report import why_not_confirmed
@@ -1676,7 +1694,7 @@ def why_summary(ctx, history: list[dict], shown: list[tuple[int, dict]], result)
         summary = comparison_summary(ctx, history, rows, result)
         return {k: summary[k] for k in ("lead", "checks", "closing")} if summary["checks"] else None
     said = proof_shown(proof, cls)
-    if result.verdict != "confirmed" or proof.get("checked") is not True or said is None:
+    if result.verdict not in ("confirmed", "shown-without-exploit") or proof.get("checked") is not True or said is None:
         return None
     form = next(k for k, v in PROOF_FORMS.items() if v is said)
     roles = step_roles(ctx, history, shown)
@@ -1871,7 +1889,7 @@ _COMPARISON_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 sys
 header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #b00020}
 header .id{font-size:14px;color:#bbb}header .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
-text-transform:uppercase;vertical-align:2px}.verdict.confirmed{background:#b00020}
+text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
 .verdict.inconclusive{background:#b26a00}
 .why{margin:0 16px 12px;padding:8px 12px;background:#111;color:#fff;border-radius:4px;font-size:15px}
 .why b{color:#ffeb3b;margin-right:6px}.why p{margin:0}.why p+p{margin-top:4px}

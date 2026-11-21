@@ -1,5 +1,5 @@
 """Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
-VER-049, VER-053, VER-054, VER-055, VER-057, VER-061)."""
+VER-049, VER-053, VER-054, VER-055, VER-057, VER-061, VER-066)."""
 
 from __future__ import annotations
 
@@ -96,6 +96,24 @@ def template_error_signature(text: str) -> bool:
     return engine_error_signature(text) or (bool(text) and _COLUMN_COUNT.search(_unescaped(text)) is not None)
 
 
+# VER-066: an evaluator's own words for a name it does not know, in JavaScript, Python, Ruby and PHP. Together with
+# the fresh name the control sent, such text ties the failure to the evaluation of that name.
+_NAME_ERROR = re.compile(
+    r"is not defined|ReferenceError|NameError|undefined local variable or method|uninitialized constant|"
+    r"undefined constant",
+    re.IGNORECASE,
+)
+
+
+def name_error_signature(text: str, names) -> bool:
+    """VER-066: whether an answer shows the evaluator's error for one of the fresh unknown `names` the name test
+    sent, also inside a JSON string or an HTML page. Only this class reaches the model; the text stays owner-only."""
+    if not text:
+        return False
+    unescaped = _unescaped(text)
+    return _NAME_ERROR.search(unescaped) is not None and any(name in unescaped for name in names)
+
+
 def _candidates(template: dict) -> dict:
     return {"anyOf": [template, {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": True,
                                  "items": template}]}
@@ -171,6 +189,9 @@ PLAN_SCHEMA = {
         # VER-053: the engine-error form; the Verifier sends a syntax-breaking and a balanced control and observes
         # whether a backend engine error results. True when present.
         "error_probe": {"const": True},
+        # VER-066: the name test of code evaluation, one {{name}} placeholder where a name of the evaluated language
+        # fits; the Verifier fills in fresh unknown names and names the language always knows.
+        "name_template": {"type": "string", "minLength": 8, "maxLength": 3000},
         # VER-011: values for the request's other inputs, such as the password next to a login's user name, that
         # every generated control carries unchanged. An empty object gives none, like an absent one.
         "fixed": {
@@ -188,7 +209,7 @@ PLAN_SCHEMA = {
         {
             "if": {"properties": {"kind": {"const": "boolean"}},
                    "not": {"anyOf": [{"required": ["oob_template"]}, {"required": ["sql_marker"]},
-                                     {"required": ["error_probe"]}]}},
+                                     {"required": ["error_probe"]}, {"required": ["name_template"]}]}},
             # The observation, a pointer or a text (VER-055), is checked in AgentTools.plan_test.
             "then": {"required": ["input_location", "input_name", "baseline"]},
         },
@@ -200,6 +221,7 @@ PLAN_SCHEMA = {
         # form needs no baseline (the generated UNION replaces the input value).
         {"if": {"required": ["sql_marker"]}, "then": {"required": ["input_location", "input_name"]}},
         {"if": {"required": ["error_probe"]}, "then": {"required": ["input_location", "input_name"]}},
+        {"if": {"required": ["name_template"]}, "then": {"required": ["input_location", "input_name"]}},
         {
             "if": {"properties": {"kind": {"const": "timing"}}},
             "then": {"required": ["input_location", "input_name", "baseline", "positive"]},
@@ -227,14 +249,15 @@ OBSERVATION_SCHEMA = {
 def revisable_observation(plan) -> bool:
     """VER-055: only response-field/text experiments, never withheld or mechanism-owned observations."""
     return plan.get("kind") == "boolean" and not any(
-        plan.get(k) for k in ("auth_artifact", "error_probe", "sql_marker", "oob_template"))
+        plan.get(k) for k in ("auth_artifact", "error_probe", "name_template", "sql_marker", "oob_template"))
 
 
 def observation_problem(plan) -> str | None:
     """What a boolean plan's observation lacks (VER-011, VER-055): one observation, a JSON field or a text of a page
     answer. Arithmetic may read its results from the answer itself, a login bypass observes its artifact's field, and
-    the engine-error, returned-marker and out-of-band forms observe in code."""
-    if plan.get("kind") != "boolean" or any(plan.get(k) for k in ("oob_template", "sql_marker", "error_probe")):
+    the engine-error, name, returned-marker and out-of-band forms observe in code."""
+    if plan.get("kind") != "boolean" or any(plan.get(k) for k in ("oob_template", "sql_marker", "error_probe",
+                                                                     "name_template")):
         return None
     if plan.get("pointer") and plan.get("text"):
         return "observe either a JSON field (pointer) or a text of the answer (text), not both"
@@ -250,7 +273,8 @@ def generates_controls(plan) -> bool:
     """Whether the Verifier generates this accepted plan's controls itself (VER-011, VER-053)."""
     return plan.get("kind") == "boolean" and bool(
         plan.get("sql_template") or plan.get("expression_template") or plan.get("operator_challenge")
-        or plan.get("js_predicate_template") or plan.get("sql_marker") or plan.get("error_probe"))
+        or plan.get("js_predicate_template") or plan.get("sql_marker") or plan.get("error_probe")
+        or plan.get("name_template"))
 
 
 def agent_controls(plan) -> bool:
@@ -258,7 +282,8 @@ def agent_controls(plan) -> bool:
     result but never a confirmation (VER-011)."""
     return plan.get("kind") in ("boolean", "timing") and not any(
         plan.get(k) for k in ("sql_template", "expression_template", "operator_challenge", "predicate_template",
-                              "js_predicate_template", "oob_template", "sql_marker", "error_probe"))
+                              "js_predicate_template", "oob_template", "sql_marker", "error_probe",
+                              "name_template"))
 
 
 def confirming_form(cwe, location) -> str | None:
@@ -414,11 +439,53 @@ ENGINE_ERROR_CWES = ("CWE-89", "CWE-643", "CWE-943", *_TEMPLATE_CWES)
 
 _GROUP_NAMES = ("baseline", "positive", "negative", "positive_other", "negative_other")
 
+# VER-066: per evaluated language, a value and a built-in its evaluator knows without any setup. In parentheses, as
+# every control of the name test is, so an input that is only looked up as a name (x in globalThis) misses them as it
+# misses a fresh name, and only evaluation tells them apart. NaN and Infinity are no such names: notevil knows neither.
+_KNOWN_NAMES = {"javascript": ("undefined", "Number"), "python": ("None", "int"), "ruby": ("nil", "Integer"),
+                "php": ("null", "PHP_INT_SIZE")}
+_LANGUAGES = {".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
+              ".ts": "javascript", ".mts": "javascript", ".cts": "javascript", ".tsx": "javascript",
+              ".py": "python", ".rb": "ruby", ".php": "php"}
+
+
+def finding_language(instance) -> str | None:
+    """VER-066: the language a code-evaluation finding's source file is written in, from its `path:line` instance,
+    or None. The name test assumes the code evaluates its own language; where it does not, the known names fail too
+    and the test shows nothing."""
+    path = re.sub(r":\d+(?:-\d+)?$", "", str(instance or "")).replace("\\", "/").rsplit("/", 1)[-1]
+    return _LANGUAGES.get(path[path.rfind("."):].lower()) if "." in path else None
+
+
+def name_controls(plan, language):
+    """VER-066: the name test's controls, each the agent's template with one name in parentheses: a fresh name no
+    code can know, which an evaluator answers with an error, and a name the language always knows, which it does
+    not; one pair per known name. Data that is not evaluated treats all of them alike."""
+    template = plan.get("name_template", "")
+    if template.count("{{name}}") != 1:
+        raise ValueError("the name test needs exactly one {{name}} placeholder")
+    known = _KNOWN_NAMES.get(language)
+    if known is None:
+        raise ValueError("the name test covers JavaScript and TypeScript, Python, Ruby and PHP")
+    entries = []
+    for name in known:
+        fresh = "vrf" + secrets.token_hex(5)
+        entries.append({"name": name, "fresh": fresh, "unknown": template.replace("{{name}}", f"({fresh})"),
+                        "known": template.replace("{{name}}", f"({name})")})
+    return {**plan, "name_set": entries}
+
 
 def control_values(plan) -> dict:
     """The control name -> sink value map the proof buckets cited requests by (VER-011). The response-field,
     marker, arithmetic and auth forms use the five fixed groups; the engine-error form (VER-053) uses one
-    break and one balance per metacharacter of its generated set, so it is not bounded to five."""
+    break and one balance per metacharacter of its generated set, so it is not bounded to five; the name test
+    (VER-066) one unknown and one known name per known name of the language."""
+    if plan.get("name_set"):
+        values = {}
+        for n, entry in enumerate(plan["name_set"], 1):
+            values[f"unknown:{n}"] = entry["unknown"]
+            values[f"known:{entry['name']}"] = entry["known"]
+        return values
     error_set = plan.get("error_set")
     if error_set:
         values = {}
@@ -795,6 +862,39 @@ def _error_probe_check(groups, plan) -> str | None:
             "message is not proof")
 
 
+def name_failed(result: dict) -> bool:
+    """VER-066: whether a name-test control's answer is the evaluation error the test looks for: a server error, or
+    a refusal whose answer names the error for the fresh name, as a handler that catches it may answer. A refusal
+    without that text may be an ordinary input check."""
+    status = result.get("status")
+    if not isinstance(status, int):
+        return False
+    return status >= 500 or (400 <= status < 500 and result.get("name_error") is True)
+
+
+def _name_check(groups, plan) -> str | None:
+    """VER-066: the name test shows evaluation when every fresh unknown name fails (name_failed) and every name the
+    language knows is answered without an error, each at least twice. All pairs must hold: an input looked up rather
+    than evaluated would let one known name through and fail the other."""
+    for n, entry in enumerate(plan.get("name_set", []), 1):
+        unknown, known = groups.get(f"unknown:{n}", []), groups.get(f"known:{entry['name']}", [])
+        if len(unknown) < 2 or len(known) < 2:
+            return "send every name control twice; cite all controls of the name test"
+        if not all(name_failed(r) for _, r in unknown):
+            return ("an unknown name did not raise an evaluation error; the input may not be evaluated as code, or its "
+                    "errors are answered like ordinary ones")
+        if any(name_failed(r) or not (isinstance(r.get("status"), int) and r["status"] < 400) for _, r in known):
+            return (f"the known name {entry['name']} failed as well, so the failure of the unknown name does not "
+                    "show that the input is evaluated")
+    return None
+
+
+def name_test_confidence(results) -> str:
+    """VER-066: medium when every unknown-name answer names the evaluator's error for its fresh name, low when only
+    the status tells it (VER-013)."""
+    return "medium" if results and all(r.get("name_error") is True for r in results) else "low"
+
+
 def injection_check(ctx, history, cited):
     plan, groups, error = experiment_groups(history, cited, getattr(ctx, "accepted_plans", None))
     if error:
@@ -806,6 +906,8 @@ def injection_check(ctx, history, cited):
         # rules. At least one metacharacter of the generated set must raise a backend engine error (classified in
         # code) on every one of its break requests that its balanced counterpart raises on none, each repeated.
         return _error_probe_check(groups, plan)
+    if plan.get("name_set"):
+        return _name_check(groups, plan)
     short = [f"{name} {len(group)} of 2" for name, group in groups.items() if len(group) < 2]
     if short:
         return ("repeat every declared control at least twice using distinct requests; so far " + ", ".join(short))
@@ -968,7 +1070,8 @@ def control_failed(plan, result: dict) -> bool:
     class. A comparison without credentials (VER-057) expects a refusal or a 404 for some of its requests."""
     status = result.get("status", 0)
     plan = plan or {}
-    if plan.get("error_probe") or plan.get("signed_in") or plan.get("exposure"):
+    # The name test (VER-066) expects its unknown names to fail, likewise.
+    if plan.get("error_probe") or plan.get("name_template") or plan.get("signed_in") or plan.get("exposure"):
         return bool(result.get("error"))
     if result.get("error") or not isinstance(status, int) or status >= 500:
         return True
@@ -1101,12 +1204,18 @@ def injection_ready(ctx, history, steps):
                     + "otherwise submit the verdict these steps support, citing them. " + NEGATIVE_CONTEXTS}
     else:
         problem = injection_proof(ctx, history, steps)
+        if problem is None and plan.get("name_template"):
+            # VER-066: the name test shows the weakness without an exploit; it never confirms.
+            return {"proof": "holds", "level": "shown-without-exploit", "steps": sorted(steps),
+                    "next": "submit_verdict shown-without-exploit and cite these steps in proof_steps; a confirmation "
+                            "still needs a form that returns a computed result or reaches the listener"}
         if problem is None:
             return {"proof": "holds", "steps": sorted(steps),
                     "next": "submit_verdict confirmed and cite these steps in proof_steps"}
         feedback = {"proof": "missing", "reason": problem, "steps": sorted(steps),
                     "next": "revise the plan with a corrected template, or submit the verdict the evidence supports"
-                    + ("" if plan.get("error_probe") or plan.get("kind") != "boolean" else ". " + NEGATIVE_CONTEXTS)}
+                    + ("" if plan.get("error_probe") or plan.get("name_template") or plan.get("kind") != "boolean"
+                       else ". " + NEGATIVE_CONTEXTS)}
     stop = stopped_control(ctx, plan, history, steps)
     if stop is not None:
         # The stopped control, not the count of recorded controls, is what the agent and the report need to know;

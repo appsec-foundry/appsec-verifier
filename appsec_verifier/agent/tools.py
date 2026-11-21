@@ -1,5 +1,5 @@
 """The exact, narrow tool surface the verification agent is confined to
-(VER-017, VER-049, VER-061, VER-062). The agent never gets a shell or raw network: it can issue an HTTP
+(VER-017, VER-049, VER-061, VER-062, VER-066). The agent never gets a shell or raw network: it can issue an HTTP
 request to the target as one of the configured identities (scope-guarded),
 read the evidenced source (repository-confined), and, for XSS findings, load a
 page in the proof browser whose requests go through the same guard (VER-009,
@@ -52,7 +52,8 @@ marker. Every http_request reports `elapsed_ms`, the time httpx measured for
 the exchange, for a timing proof of injection (VER-011). For an engine-error
 injection experiment, http_request reports only the `engine_error` class and
 withholds the response body from the model, the recorded body and the hash; the
-error text stays in the owner-only proof of concept (VER-053, VER-016).
+error text stays in the owner-only proof of concept (VER-053, VER-016). The name
+test of code evaluation does the same with its `name_error` class (VER-066).
 """
 
 from __future__ import annotations
@@ -86,8 +87,10 @@ from .experiments import (
     comparison_path,
     control_values,
     engine_error_signature,
+    finding_language,
     fixed_forms,
     generates_controls,
+    name_error_signature,
     normal_roles,
     observation_problem,
     pointer_value,
@@ -110,6 +113,8 @@ _RENDER_SECURITY_HEADERS = ("content-security-policy", "content-security-policy-
 _AUTH_ARTIFACT_NOTICE = "[auth-artifact probe: body withheld; the token value never reaches the model or logs]"
 _ERROR_NOTICE = ("[engine-error probe: body withheld; the error text is kept only in the owner-only proof of "
                  "concept (VER-053)]")
+_NAME_NOTICE = ("[name test: body withheld; the error text is kept only in the owner-only proof of concept "
+                "(VER-066)]")
 # VER-057: a comparison's answers are compared in code by their digest; but for the answer without credentials to
 # the finding's path, which is shown like any other, their content is not kept anywhere.
 _COMPARISON_NOTICE = "[comparison without credentials: body withheld; compared in code only (VER-057)]"
@@ -397,13 +402,14 @@ class AgentTools:
             js_controls,
             ldap_controls,
             marker_controls,
+            name_controls,
             operator_controls,
             sql_controls,
         )
 
         if any(
             plan.get(k) for k in ("expression_template", "sql_template", "predicate_template", "operator_challenge",
-                                  "js_predicate_template", "sql_marker", "error_probe")
+                                  "js_predicate_template", "sql_marker", "error_probe", "name_template")
         ):
             # VER-011: an operator-declared injection_inputs entry pins the input for this finding; without one,
             # the agent chooses it from an assessed or independently derived request.
@@ -501,6 +507,23 @@ class AgentTools:
                 plan = error_controls(plan, cwe, marker="".join(self.ctx.marker or ()))
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
+        if plan.get("name_template"):
+            # VER-066: the name test of code evaluation, alone in its plan; it shows the weakness without an exploit.
+            others = [k for k in ("sql_template", "expression_template", "predicate_template", "operator_challenge",
+                                  "js_predicate_template", "sql_marker", "error_probe", "oob_template", "auth_artifact")
+                      if plan.get(k)]
+            if (plan["kind"] != "boolean" or getattr(self.ctx.plan, "cwe", "") not in ("CWE-94", "CWE-95")
+                    or others):
+                raise ToolError("the name test applies to a boolean code-evaluation experiment (CWE-94, CWE-95) "
+                                "with no other control form in the same plan")
+            language = finding_language(getattr(self.ctx.plan, "instance", None))
+            if language is None:
+                raise ToolError("the name test needs the finding's language from its source file: JavaScript or "
+                                "TypeScript, Python, Ruby or PHP")
+            try:
+                plan = name_controls(plan, language)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
         if plan.get("oob_template"):
             # VER-048: an out-of-band proof is the standard-run form only for blind code-evaluation and template
             # injection, where no response-side proof exists. SQL, NoSQL and XPath keep their cheaper response-side
@@ -531,9 +554,10 @@ class AgentTools:
             # VER-049: generated SQL/NoSQL controls obtain artifacts; a declared protected read tests their use.
             raise ToolError("an auth-artifact proof needs a boolean SQL or NoSQL challenge "
                             "(sql_template for CWE-89 or operator_challenge for CWE-943)")
-        if plan.get("error_set"):
-            # VER-053: the engine-error sweep's controls are its break/balance set, not the five fixed groups.
-            values = [v for e in plan["error_set"] for v in (e["break"], e["balance"])]
+        if plan.get("error_set") or plan.get("name_set"):
+            # VER-053, VER-066: the engine-error sweep's and the name test's controls are their own sets, not the
+            # five fixed groups.
+            values = list(control_values(plan).values())
             if len({token(v) for v in values}) != len(values):
                 raise ToolError("control values must be distinct")
         else:
@@ -838,7 +862,10 @@ class AgentTools:
             return ["as the account", "without credentials", "random path"]
         positive = "delayed" if plan.get("kind") == "timing" else "true"
         words = {"baseline": "baseline", "positive": positive, "negative": "false",
-                 "positive_other": f"{positive}, second pair", "negative_other": "false, second pair"}
+                 "positive_other": f"{positive}, second pair", "negative_other": "false, second pair",
+                 # VER-066: the name test's unknown and known names
+                 **{k: (f"unknown name {k[8:]}" if k.startswith("unknown:") else f"known name {k[6:]}")
+                    for k in control_values(plan) if plan.get("name_set")}}
         names = [words.get(name, name.replace(":", " ", 1)) for name in control_values(plan)]
         rounds = 1 if plan.get("auth_artifact") else 2
         return [name if rounds == 1 else f"{name} #{n}" for n in range(1, rounds + 1) for name in names]
@@ -1333,6 +1360,9 @@ class AgentTools:
         # text, is the signal the proof uses.
         error_probe = self.ctx.plan.cls == "injection" and experiment.get("error_probe")
         engine_error = engine_error_signature(text) if error_probe else None
+        # VER-066: the name test classifies the evaluator's error for its fresh names the same way.
+        name_test = self.ctx.plan.cls == "injection" and bool(experiment.get("name_set"))
+        name_error = name_error_signature(text, [e["fresh"] for e in experiment["name_set"]]) if name_test else None
         auth_artifact_probe = self.ctx.plan.cls == "injection" and experiment.get("auth_artifact")
         auth_present = _auth_artifact_present(text, experiment.get("pointer")) if auth_artifact_probe else None
         auth_access = None
@@ -1349,6 +1379,8 @@ class AgentTools:
             # owner-only proof of concept (captured by _record above), never in the recorded body, the excerpt,
             # the hash or read_response.
             text = redacted = _ERROR_NOTICE
+        if name_test:
+            text = redacted = _NAME_NOTICE      # VER-066/VER-016: as for the engine-error probe
         compared = text
         if comparison and not exposed:
             # VER-057: only the digest and the size of the answer are kept; the body stands down everywhere it could
@@ -1379,7 +1411,7 @@ class AgentTools:
             self._last_response["exposure_match"] = matches(compared, resource, sent_inputs)
         self._response_chars += min(len(redacted), cap)
         status = getattr(resp, "status_code", None)
-        withheld = bool(error_probe or auth_artifact_probe or (comparison and not exposed))
+        withheld = bool(error_probe or name_test or auth_artifact_probe or (comparison and not exposed))
         if not withheld and self._last_response is not None:
             # VER-009: keep what the proof browser needs to render this recorded response faithfully — its own
             # content type and the security headers that still govern execution (a content security policy). The
@@ -1416,6 +1448,8 @@ class AgentTools:
             out["auth_artifact"] = bool(auth_present)   # the code's observation; the token value is withheld
         if error_probe:
             out["engine_error"] = bool(engine_error)    # the code's observation; the error text is withheld
+        if name_test:
+            out["name_error"] = bool(name_error)        # likewise (VER-066)
         plan = getattr(self, "_experiment", None) or {}
         if plan.get("change") and role == plan.get("owner") and isinstance(status, int) and 200 <= status < 300:
             # A change may name only a record the owner's write created (its answer's id) and the owner's read

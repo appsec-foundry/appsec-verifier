@@ -1,5 +1,5 @@
 """The action schemas and prompts every model host shares (VER-011, VER-017, VER-019, VER-043, VER-046, VER-047,
-VER-050, VER-055, VER-056, VER-057, VER-059).
+VER-050, VER-055, VER-056, VER-057, VER-059, VER-066).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, find_source, search_source, browser_check,
@@ -28,7 +28,8 @@ from .proof import redirect_host
 
 _RESULT_CAP = 4000  # bound tool-result text fed back to the model (tokens/cost)
 
-_VERDICT_ENUM = ["confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted"]
+_VERDICT_ENUM = ["confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control", "inconclusive",
+                 "not-attempted"]
 
 
 def _tool_defs() -> list[dict]:
@@ -393,6 +394,12 @@ def _class_rules(ctx) -> str:
                 "ones suppress it. Such an input has no engine-error probe. A query parameter may instead take "
                 "operator_challenge=nosql: the controls travel in bracket notation (q[$in][]=…), which Express 4 "
                 "and PHP turn into an object. ")
+        if getattr(ctx.plan, "cwe", None) in ("CWE-94", "CWE-95"):
+            # VER-066: the name test, offered only where it applies.
+            return _injection_rules() + (
+                "Code evaluated without returning its result can take name_template with one {{name}} placeholder "
+                "where a name fits, e.g. 1+{{name}}: the Verifier sends unknown and known names; if only the "
+                "unknown ones fail, submit_verdict shown-without-exploit. It never confirms. ")
         return _injection_rules()
     if cls == "access-control":
         return ("Declaring a plan cannot grant a new route, except the GET of a write proof's change, for the "
@@ -445,7 +452,7 @@ def _injection_rules() -> str:
         "for harmless arithmetic evaluation in the evidenced syntax. Fresh products and sums must be returned "
         "as the selected JSON value or, without pointer, in the answer; reflection never suffices. Never use file, "
         "network or process side effects. "
-        "For NoSQL use operator_challenge=nosql with a JSON input; the tool generates equality and membership "
+        "For NoSQL use operator_challenge=nosql with a JSON input; the tool generates membership "
         "controls. For LDAP use predicate_template with {{predicate}} and an evidenced predicate_attribute; "
         "the tool generates complementary filter predicates. An operator-declared literal-input contract in "
         "scope.injection_inputs takes precedence; otherwise choose an evidenced input and explain why it is "

@@ -64,7 +64,7 @@ $defs:
     additionalProperties: false
     properties:
       verdict:
-        enum: [confirmed, not-reproducible, blocked-by-control, inconclusive, not-attempted]
+        enum: [confirmed, shown-without-exploit, not-reproducible, blocked-by-control, inconclusive, not-attempted]
       confidence: { enum: [high, medium, low, null] }
       retained: { type: boolean }
       tested_build: { type: object }

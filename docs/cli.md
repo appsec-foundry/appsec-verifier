@@ -114,7 +114,7 @@ For CI and scripts, `--non-interactive` (or `--ci`) turns all questions off, as 
 
 Without `--output`, every run writes to a new directory that only you can read, on Linux `~/.local/share/appsec-verifier/runs/<project>/<start time>/`, on macOS under `~/Library/Application Support` and on Windows under `%LOCALAPPDATA%`. [`runs`](#runs) lists and removes these directories. `--output DIR` writes into a directory you choose. If it already holds a report, the run stops unless you add `--overwrite` or `--resume`.
 
-`--resume` continues an interrupted or limited run. Findings that were confirmed, not reproducible or blocked by a control keep their verdict, and the others are tested again. Without `--output` it continues the newest run for the same assessment and target.
+`--resume` continues an interrupted or limited run. Findings that were confirmed, shown without exploit, not reproducible or blocked by a control keep their verdict, and the others are tested again. Without `--output` it continues the newest run for the same assessment and target.
 
 Ctrl-C stops a run. The finding under test ends `inconclusive`, and the report is still written.
 
@@ -125,12 +125,13 @@ Each tested finding gets one verdict. A negative verdict applies only to the req
 | Verdict | Meaning |
 | --- | --- |
 | `confirmed` | The weakness was reproduced, and the Verifier's code checked the proof. |
+| `shown-without-exploit` | The target showed the weakness without an exploit, and the Verifier's code checked that proof. It is not a confirmation and does not change the rating. |
 | `not-reproducible` | Tested, but the weakness did not show. |
 | `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
 | `inconclusive` | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
 | `not-attempted` | Not tested: the finding cannot be tested against a running application, the run lacked something it needs, or a limit or Ctrl-C ended the run first. |
 
-What counts as proof depends on the weakness. An XSS counts only when a marker script actually runs in the proof browser. An access-control finding needs a comparison in which another account, or a request without login, gets what it must not. An injection needs answers that follow true and false conditions the Verifier generates, or a database error that only the broken input causes. The README's table [What it verifies](../README.md#what-it-verifies) lists every class, and the [specification](specification.md#proof-per-class-ver-009-to-ver-013) has the exact rules.
+What counts as proof depends on the weakness. An XSS counts only when a marker script actually runs in the proof browser. An access-control finding needs a comparison in which another account, or a request without login, gets what it must not. An injection needs answers that follow true and false conditions the Verifier generates, or a database error that only the broken input causes. Code that is evaluated but returns no result can be shown without exploit: names no code can know make it fail, names the language always knows do not. The README's table [What it verifies](../README.md#what-it-verifies) lists every class, and the [specification](specification.md#proof-per-class-ver-009-to-ver-013) has the exact rules.
 
 For access control the Verifier assumes the usual restrictions unless you declare others: a request without login must not get an account's data, one account must not read or change a record another account created, and a normal account must not get an admin's answer. The report says when a restriction was assumed. If some data is public on purpose, say so in the scope file's [`access_rules`](#scope-file), or run with `--declared-access-only` to rely on declared rules alone.
 

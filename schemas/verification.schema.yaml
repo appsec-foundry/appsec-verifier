@@ -127,6 +127,7 @@ properties:
         properties:
           total:            { type: integer, minimum: 0 }
           confirmed:        { type: integer, minimum: 0 }
+          shown_without_exploit: { type: integer, minimum: 0 }
           not_reproducible: { type: integer, minimum: 0 }
           blocked:          { type: integer, minimum: 0 }
           inconclusive:     { type: integer, minimum: 0 }
@@ -235,6 +236,7 @@ properties:
           description: Observed outcome against the live target (VER-013).
           enum:
             - confirmed          # weakness reproduced with the required evidence
+            - shown-without-exploit # weakness shown by an indirect proof, without an exploit (VER-066)
             - not-reproducible   # probe did not reproduce it
             - blocked-by-control # a runtime control prevented it
             - inconclusive       # evidence insufficient either way

@@ -1967,14 +1967,15 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
     return [*([] if guided else _title(st, "verify")), *_facts(st, rows)]
 
 
-# Seen from the finding: green when the run confirmed it, red when it could not reproduce it or a control
-# blocked it (a likely false positive), yellow when the run could not decide.
-_VERDICT_MARK = {"confirmed": ("✓", "ok"), "not-reproducible": ("✗", "critical"),
-                 "blocked-by-control": ("⊘", "critical"), "inconclusive": ("?", "warn"),
-                 "not-attempted": ("·", "muted")}
+# Seen from the finding: green when the run confirmed it, in bold, or showed it without exploit (VER-066), red when
+# it could not reproduce it or a control blocked it (a likely false positive), yellow when the run could not decide.
+_VERDICT_MARK = {"confirmed": ("✓", "ok", "bold"), "shown-without-exploit": ("◐", "ok"),
+                 "not-reproducible": ("✗", "critical"), "blocked-by-control": ("⊘", "critical"),
+                 "inconclusive": ("?", "warn"), "not-attempted": ("·", "muted")}
 
 
-_VERDICT_ORDER = ("confirmed", "not-reproducible", "blocked-by-control", "inconclusive", "not-attempted")
+_VERDICT_ORDER = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control", "inconclusive",
+                  "not-attempted")
 
 
 def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full: bool = False) -> list[str]:
@@ -2038,12 +2039,12 @@ def _results(st: Style, doc, plans, blocked: dict[str, tuple[str, str]], *, full
     lines = ["", st("Results", "bold")]
     for r in rows:
         fr = r["finding_ref"]
-        mark, role = _VERDICT_MARK[r["verdict"]]
+        mark, *roles = _VERDICT_MARK[r["verdict"]]
         cells = (f"{printable(fr.get('id')):<{id_width}}  {severity.get(fr.get('id'), ''):<8}  "
                  f"{printable(r.get('class') or '-'):<14}  ")
         title = printable(fr.get("title") or fr.get("cwe") or "")
         used = 4 + len(cells) + result_width + 2
-        lines.append(f"  {st(mark, role)} {cells}{st(f'{result(r):<{result_width}}', role)}  "
+        lines.append(f"  {st(mark, *roles)} {cells}{st(f'{result(r):<{result_width}}', *roles)}  "
                      + _fit(title, room - used))
         # Under a finding the run could not test, how to provide what it needs, e.g. "run with --allow-intrusive";
         # under an inconclusive or untested one why, as the report says it (VER-024); otherwise the rationale.
@@ -2091,7 +2092,9 @@ def _run_usage(budget: RunBudget, seconds: float, agent_info: dict, show_costs: 
 def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list[str]:
     s = doc["meta"]["summary"]
     code_only = sum(1 for r in doc["results"] if (r.get("eligibility") or {}).get("status") != "dynamic")
-    verdicts = ((s["confirmed"], "confirmed", "ok"), (s["not_reproducible"], "not reproducible", "critical"),
+    verdicts = ((s["confirmed"], "confirmed", "ok"),
+                (s.get("shown_without_exploit", 0), "shown without exploit", "ok"),
+                (s["not_reproducible"], "not reproducible", "critical"),
                 (s["blocked"], "blocked by control", "critical"), (s["inconclusive"], "inconclusive", "warn"),
                 (s["not_attempted"] - code_only, "not tested", "muted"),
                 (code_only, "unsupported or incomplete", "muted"))

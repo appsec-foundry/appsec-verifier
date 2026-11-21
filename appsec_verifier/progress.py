@@ -1,5 +1,5 @@
 """The progress of a `verify` run on the console, in the look of AppSec Analyzer (VER-005, VER-013, VER-015,
-VER-016, VER-017, VER-024, VER-026, VER-039, VER-042, VER-065).
+VER-016, VER-017, VER-024, VER-026, VER-039, VER-042, VER-065, VER-066).
 
 Each event is one entry in a fixed grid, ``TIME  FINDING  EVENT  PROGRESS  ELAPSED  LEFT  DETAIL``.
 FINDING is the finding under test with its position among the findings that get a probe. EVENT is
@@ -85,9 +85,13 @@ from .verify.report import _ORDER, _VERDICT_LABEL, _first_sentence, _overall, wh
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
 # Seen from the finding: green confirmed, red not reproduced or blocked (a likely false positive), yellow undecided.
-_VERDICT_ROLES = {"confirmed": "ok", "not-reproducible": "critical", "blocked-by-control": "critical",
+# A finding shown without exploit (VER-066) in the colour of a confirmed one, set apart by its mark and, unlike every
+# other verdict, not in bold, so a confirmed finding stands out more.
+_VERDICT_ROLES = {"confirmed": "ok", "shown-without-exploit": "ok", "not-reproducible": "critical",
+                  "blocked-by-control": "critical",
                   "inconclusive": "warn", "not-attempted": "muted"}
-_VERDICT_MARKS = {"confirmed": "✔", "not-reproducible": "✘", "blocked-by-control": "✘", "inconclusive": "?"}
+_VERDICT_MARKS = {"confirmed": "✔", "shown-without-exploit": "◐", "not-reproducible": "✘", "blocked-by-control": "✘",
+                  "inconclusive": "?"}
 _EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
 _SEVERITIES = ("critical", "high", "medium", "low")
 _FURTHER = "Further variants of confirmed findings"     # the group after the categories (VER-026)
@@ -212,6 +216,8 @@ _EXPERIMENT_FORMS = (
      "does the request without credentials get the account's answer, unlike a random path?"),
     ("error_probe", "engine-error test of {input}",
      "does a syntax-breaking character raise an engine error that its balanced counterpart does not?"),
+    ("name_template", "name test of {input}",
+     "does an unknown name raise an evaluation error that names the language knows do not?"),
     ("auth_artifact", "login bypass test of {input}",
      "does the true condition get a login artifact that opens the protected resource, and the false one not?"),
     ("sql_marker", "marker test of {input}",
@@ -696,6 +702,10 @@ class RunProgress:
     def _experiment_result(self, head: str, record: dict) -> None:
         """Whether the controls just sent give the proof, as the Verifier's check told the agent (VER-011)."""
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        if result.get("proof") == "holds" and result.get("level") == "shown-without-exploit":
+            self._record("proof", _line(head, [("◐ the controls show the weakness without an exploit", "ok")]),
+                         role="ok")
+            return
         if result.get("proof") == "holds":
             self._record("proof", _line(head, [("✓ the controls give the proof", "ok", "bold")]), role="ok")
             return
@@ -777,7 +787,8 @@ class RunProgress:
         role = _VERDICT_ROLES.get(verdict)
         label += f" ({_clip(result.confidence, 10)})" if result.confidence else ""
         mark = _VERDICT_MARKS.get(verdict)
-        parts = [(f"{mark} {label}" if mark else label, *([role] if role else []), "bold")]
+        parts = [(f"{mark} {label}" if mark else label, *([role] if role else []),
+                  *([] if verdict == "shown-without-exploit" else ["bold"]))]
         with self._lock:
             # An evidence review of the finding has its own row with its time (evidence_review).
             parts.append(duration(max(0.0, self._clock() - self._finding_at - self._review_time)))

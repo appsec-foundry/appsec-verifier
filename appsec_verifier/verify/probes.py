@@ -22,7 +22,8 @@ from ..loader import FindingPlan
 
 @dataclass
 class ProbeResult:
-    verdict: str  # confirmed | not-reproducible | blocked-by-control | inconclusive | not-attempted
+    # confirmed | shown-without-exploit (VER-066) | not-reproducible | blocked-by-control | inconclusive | not-attempted
+    verdict: str
     confidence: str | None = None      # high | medium | low
     rationale: str | None = None
     proof: dict | None = None
@@ -55,6 +56,9 @@ PROOF_FORMS = {
     "engine-error": ("engine error only for the syntax break",
                      "A syntax break in the declared input raised a backend engine error that its balanced "
                      "counterpart did not"),
+    "name-error": ("evaluation error only for the unknown names",
+                   "Fresh unknown names in the declared input raised an evaluation error that names the language "
+                   "knows did not"),
     "returned-marker": ("the Verifier's marker returned for one control only",
                         "The answer returned the Verifier's marker for one control and not for its complement"),
     "computed-expression": ("fresh computed results returned",
@@ -101,6 +105,9 @@ PROOF_RULES = {
                  "answer; here the answer followed whether the condition held. A slower answer alone never counts.",
     "engine-error": "Only the syntax break raised a backend engine error, its balanced counterpart did not, so "
                     "the backend parses the input as code.",
+    "name-error": "Only the fresh names, which no code can know, raised an error; names the language always knows "
+                  "did not, and an input that is only looked up treats all of them alike. So the backend evaluates "
+                  "the input as code. No exploit ran, so this shows the weakness without confirming it.",
     "returned-marker": "The answer returned the marker the Verifier generated for one control and not for its "
                        "complement, so the injected statement ran.",
     "computed-expression": "Each answer holds the result of an expression the Verifier generated at random for it, "
@@ -135,6 +142,7 @@ BECAUSE = {
     "cookie-attribute": "the target set the session cookie without it in repeated responses",
     "predicate": "a condition added to {input} changes what {query} returns",
     "engine-error": "only a syntax break in {input} makes the backend fail with an engine error",
+    "name-error": "only names no code can know make the backend fail when sent in {input}",
     "returned-marker": "a statement added to {input} returned the Verifier's marker",
     "computed-expression": "the answer holds the result of an expression sent in {input}",
     "out-of-band": "a statement added to {input} made the target call the Verifier's listener",

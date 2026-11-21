@@ -1,5 +1,5 @@
 """The evidence the code requires before a finding counts as confirmed
-(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055, VER-057).
+(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055, VER-057, VER-066).
 
 The model's verdict alone never confirms a finding. A confirmed verdict cites
 its proof in `proof_steps`: step numbers of the loop's history, counted from 1
@@ -41,7 +41,13 @@ contexts on one input (VER-013):
   UNION whose own marker constant returns through the query channel, and a
   syntax-breaking versus balanced pair whose break alone raises a backend
   engine error (its class, not the error text, decides). All are checked in
-  experiments.injection_check.
+  experiments.injection_check. A code-evaluation finding may instead be shown
+  without exploit (VER-066) by the name test: every fresh unknown name raises
+  an evaluation error that the names the language knows do not. The form that
+  holds decides the verdict, whatever the agent claimed: the name test gives
+  shown-without-exploit, at medium confidence when the answers name the error
+  for the fresh name and low otherwise, never confirmed; every other form
+  confirms. No other class has such an indirect proof.
 - open-redirect (VER-012): a cited http_request answered 301, 302, 303, 307 or
   308 whose `location` leads to the finding's redirect host,
   `<marker>.invalid`. The marker is random per finding, so only a target that
@@ -89,6 +95,7 @@ from .experiments import (
     experiment_groups,
     injection_proof,
     latest_plan,
+    name_test_confidence,
     observe,
     plan_view,
     sent_texts,
@@ -179,12 +186,15 @@ def proof_ready(ctx, history: list[dict]):
 
 def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeResult:
     """`result` if it is not confirmed or its proof holds, else an inconclusive result with the reason."""
-    if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
+    if result.verdict not in ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control"):
         return result
     if getattr(ctx.plan, "cls", None) == "injection":
         cited = complete_experiment_citations(history, cited if cited is not None else [])
-    if result.verdict != "confirmed":
+    if result.verdict in ("not-reproducible", "blocked-by-control"):
         return _negative(ctx, plan_view(history, cited), result, cited)
+    if result.verdict == "shown-without-exploit" and getattr(ctx.plan, "cls", None) != "injection":
+        return _downgrade(result, "no indirect proof exists for this class; only code evaluation has one, the name "
+                          "test (VER-066)")
     # The plan guides the agent; an assumption it still lists as missing blocks nothing once the class's proof
     # below holds, and steps sent before the latest plan count when they meet it (VER-043). Cited steps are
     # checked against the plan that governed them, not one accepted after them (plan_view).
@@ -257,6 +267,9 @@ def check_proof(ctx, history: list[dict], result: ProbeResult, cited) -> ProbeRe
         if problem is not None:
             return _downgrade(result, problem)
         result.evidence = _write_record(ctx, "exchanges", exchanges)
+        # VER-066: the form that holds decides the level. The name test shows the weakness without an exploit and
+        # never confirms; every other form confirms.
+        result.verdict = "shown-without-exploit" if latest_plan(view)[1].get("name_set") else "confirmed"
         return _checked(result, view, effective, ctx)
     check, minimum = {
         "access-control": (None, 2),
@@ -303,16 +316,16 @@ def retain_login_observations(ctx, history, result):
 def proof_form(cls, plan) -> str | None:
     """The proof form a confirmation of class `cls` rests on under `plan`, a key of PROOF_FORMS (verify/probes.py),
     so the console and report say what this form showed rather than what the class usually shows."""
-    forms = {"injection": (("oob_template", "out-of-band"), ("auth_artifact", "auth-resource"),
-                           ("error_set", "engine-error"), ("markers", "returned-marker"),
-                           ("expression_template", "computed-expression")),
+    forms = {"injection": (("name_set", "name-error"), ("oob_template", "out-of-band"),
+                           ("auth_artifact", "auth-resource"), ("error_set", "engine-error"),
+                           ("markers", "returned-marker"), ("expression_template", "computed-expression")),
              "access-control": (("signed_in", "comparison-without-credentials"), ("change", "record-change"),
                                 ("owner", "record-marker"), ("reference", "privileged-comparison"))}
     return next((form for key, form in forms.get(cls, ()) if plan.get(key)), DEFAULT_FORMS.get(cls or ""))
 
 
 def _checked(result, history, cited, ctx=None):
-    if result.verdict not in ("confirmed", "not-reproducible", "blocked-by-control"):
+    if result.verdict not in ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control"):
         return result
     _, plan = latest_plan(history)
     own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")
@@ -321,6 +334,10 @@ def _checked(result, history, cited, ctx=None):
         "high" if result.verdict == "confirmed" and plan.get("kind") not in ("boolean", "timing") and not own
         else "medium"
     )
+    if result.verdict == "shown-without-exploit":
+        result.confidence = name_test_confidence(
+            [history[n - 1].get("result") or {} for n in cited or []
+             if str(history[n - 1].get("control") or "").startswith("unknown name")])
     events = {k: v for k, v in (result.proof or {}).items() if k in ("executed", "callback_hit")}
     scope = "cited requests only"
     if plan.get("change"):
@@ -485,6 +502,10 @@ def _injection_negative(ctx, history, result, cited):
             # not a checked negative, so a negative verdict rests on boolean experiments instead.
             return _downgrade(result, "the engine-error probe has no checked negative form; cite boolean "
                               "experiments for a negative verdict")
+        if plan.get("name_set"):
+            # VER-066: an evaluator that answers every name alike may still evaluate; no negative form either.
+            return _downgrade(result, "the name test has no checked negative form; cite boolean experiments for a "
+                              "negative verdict")
         if not error and plan.get("kind") != "boolean":
             return _downgrade(result, f"the experiment of step {start} has no true and false controls; a negative "
                               "verdict cites boolean experiments")

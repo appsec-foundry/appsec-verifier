@@ -33,6 +33,8 @@ def rate(threat: dict, verdict: str | None, checked: bool) -> dict:
     def unchanged(reason: str) -> dict:
         return {"analyzer": analyzer, "after_verification": dict(analyzer), "changed": False, "reason": reason}
 
+    if verdict == "shown-without-exploit":
+        return unchanged("shown without exploit; only a confirmation changes the rating")
     if verdict not in ("confirmed", "blocked-by-control"):
         return unchanged(f"the verdict {verdict or 'none'} does not change the rating")
     if not checked:

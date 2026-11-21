@@ -1,7 +1,8 @@
 """Serialize a verification run: the standalone report (verification.yaml +
 verification.md, VER-020), the AppSec Analyzer re-ingest export (VER-021), and
 an additive annotation of a copy of the assessment (VER-027) with the rating
-after verification (VER-039, verify/rating.py). The Analyzer's Markdown report
+after verification (VER-039, verify/rating.py). A finding shown without exploit (VER-066) has the colour of a
+confirmed one and is counted apart, only a confirmed one in bold. The Analyzer's Markdown report
 with the results is verify/annotated_report.py (VER-038).
 
 verification.md opens with a summary (VER-020, VER-039): the tested findings by
@@ -46,6 +47,7 @@ from .probes import proof_shown
 
 _VERDICT_LABEL = {
     "confirmed": "confirmed",
+    "shown-without-exploit": "shown without exploit",
     "not-reproducible": "not reproducible",
     "blocked-by-control": "blocked by control",
     "inconclusive": "inconclusive",
@@ -54,7 +56,7 @@ _VERDICT_LABEL = {
 
 
 # Verdicts a resumed run keeps; a finding with any other result is tested again.
-VERIFIED = ("confirmed", "not-reproducible", "blocked-by-control")
+VERIFIED = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control")
 # Run-wide limits: a finding stopped by one, or not tested because of one, was cut off with the run.
 RUN_LIMITS = ("requests", "cost", "time", "calls", "window")
 
@@ -123,9 +125,11 @@ def merge_reports(existing: dict, new: dict) -> dict:
         r = dict(by_id[key])
         r["result_id"] = f"VF-{i:03d}"
         merged.append(r)
-    tally = {"confirmed": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0, "not_attempted": 0}
-    _key = {"confirmed": "confirmed", "not-reproducible": "not_reproducible", "blocked-by-control": "blocked",
-            "inconclusive": "inconclusive", "not-attempted": "not_attempted"}
+    tally = {"confirmed": 0, "shown_without_exploit": 0, "not_reproducible": 0, "blocked": 0, "inconclusive": 0,
+             "not_attempted": 0}
+    _key = {"confirmed": "confirmed", "shown-without-exploit": "shown_without_exploit",
+            "not-reproducible": "not_reproducible", "blocked-by-control": "blocked", "inconclusive": "inconclusive",
+            "not-attempted": "not_attempted"}
     for r in merged:
         tally[_key[r["verdict"]]] += 1
     tally["total"] = len(merged)
@@ -195,15 +199,18 @@ def _analyzer_report(doc: dict, out_dir: Path) -> str | None:
     return quote(Path(relative).as_posix())
 
 
-_ORDER = ("confirmed", "blocked-by-control", "not-reproducible", "inconclusive", "not-attempted")
+_ORDER = ("confirmed", "shown-without-exploit", "blocked-by-control", "not-reproducible", "inconclusive",
+          "not-attempted")
 _LABEL = {**_VERDICT_LABEL, "not-attempted": "not tested"}
 # Colours as AppSec Analyzer's report shows them: its severity badges (scripts/renderers/compact_tables.py,
 # BADGES), and for the result of a test a square, so that a result never reads as a severity.
 _SEVERITY_BADGE = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢", "informational": "⚪", "info": "⚪"}
-_RESULT_BADGE = {"confirmed": "🟥", "blocked-by-control": "🟩", "not-reproducible": "🟩", "inconclusive": "🟨",
-                 "not-attempted": "⬜"}
-_LEGEND = ("🟥 confirmed · 🟩 not reproducible or blocked by control · 🟨 inconclusive · ⬜ not tested. Severity as "
-           "in the assessment: 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low.")
+# A finding shown without exploit takes the colour of a confirmed one, the label alone tells them apart, and only a
+# confirmed one is set in bold (VER-066).
+_RESULT_BADGE = {"confirmed": "🟥", "shown-without-exploit": "🟥", "blocked-by-control": "🟩", "not-reproducible": "🟩",
+                 "inconclusive": "🟨", "not-attempted": "⬜"}
+_LEGEND = ("🟥 confirmed or shown without exploit · 🟩 not reproducible or blocked by control · 🟨 inconclusive · "
+           "⬜ not tested. Severity as in the assessment: 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low.")
 _CLASS = {"xss": "XSS", "ssrf": "SSRF", "access-control": "access control", "open-redirect": "open redirect",
           "path-traversal": "path traversal"}
 _MAX_STEP_ROWS = 15
@@ -288,12 +295,12 @@ def _anchor(finding_id) -> str:
 
 
 def _overall(rows: list[dict]) -> str:
-    """One verdict for a finding's results: theirs when they agree, confirmed when a variant was, else
-    inconclusive."""
+    """One verdict for a finding's results: theirs when they agree, confirmed when a variant was, else shown without
+    exploit when a variant was (VER-066), else inconclusive."""
     verdicts = {r["verdict"] for r in rows}
     if len(verdicts) == 1:
         return verdicts.pop()
-    return "confirmed" if "confirmed" in verdicts else "inconclusive"
+    return next((v for v in ("confirmed", "shown-without-exploit") if v in verdicts), "inconclusive")
 
 
 def _rank(rows: list[dict]) -> int:
@@ -371,10 +378,11 @@ def _refs(*steps) -> str:
 
 
 def _shown(r: dict, *, detail: bool = True) -> str | None:
-    """What a confirmed result showed, in one sentence built from the proof the code checked and its cited
-    steps, never from the model's words. With `detail` the request and step numbers follow in brackets."""
+    """What a confirmed result, or one shown without exploit (VER-066), showed, in one sentence built from the
+    proof the code checked and its cited steps, never from the model's words. With `detail` the request and step
+    numbers follow in brackets."""
     proof = r.get("proof") or {}
-    if r["verdict"] != "confirmed" or not proof.get("checked"):
+    if r["verdict"] not in ("confirmed", "shown-without-exploit") or not proof.get("checked"):
         return None
     cited = [s for s in _steps(r) if s["decisive"] and s["role"]]
 

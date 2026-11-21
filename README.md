@@ -59,7 +59,7 @@ A finding is confirmed only with the proof the table lists for its weakness. Inp
 | Cross-site scripting | a marker script runs in the proof browser |
 | Access control: IDOR, missing authorisation or authentication, exposed data or files | another account, or a request without login, gets access that a declared or assumed rule forbids |
 | SQL, NoSQL and LDAP injection | true and false conditions from the Verifier change the response, an injected marker comes back (SQL), or broken syntax causes a database error (SQL, NoSQL) |
-| Command, code, template and XPath injection | the target returns the result of a calculation from the Verifier, broken syntax causes an engine error (not for commands), or the target calls the listener (code, template) |
+| Command, code, template and XPath injection | the target returns the result of a calculation from the Verifier, broken syntax causes an engine error (not for commands), or the target calls the listener (code, template); evaluated code that returns nothing is shown without exploit when names no code can know fail and names the language knows do not |
 | Path traversal | the target returns the scope's marker file, or a file from an uploaded ZIP can be read outside its unpack directory |
 | Open redirect | the target redirects to a random `.invalid` host |
 | SSRF | the target calls the listener |
@@ -82,6 +82,7 @@ Each finding gets one of these verdicts. A negative verdict applies only to the 
 | Verdict | Meaning |
 | --- | --- |
 | `confirmed` | The weakness was reproduced and the proof checked. |
+| `shown-without-exploit` | The target showed the weakness without an exploit, for example evaluated code whose result never returns. The proof was checked; it is not a confirmation and leaves the rating as it was. |
 | `not-reproducible` | Tested, but the weakness did not show. |
 | `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
 | `inconclusive` | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
