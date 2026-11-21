@@ -89,7 +89,7 @@ $defs:
       rating:
         type: object
         description: |
-          Rating after verification (VER-039), by the fixed rules in docs/cli.md.
+          Rating after verification (VER-039), by the fixed rules in docs/specification.md.
           `analyzer` repeats the Analyzer's rating, which stays unchanged in the
           finding; `after_verification` is the Verifier's, with the reason.
         required: [analyzer, after_verification, changed, reason]

@@ -1,6 +1,6 @@
 # How verification works
 
-AppSec Analyzer finds weaknesses by reading code, so each finding in its `appsec-assessment.yaml` is a well-founded suspicion. The Verifier tests that suspicion against the running application: a language model plans the test one step at a time, and the Verifier's code runs every step and decides the result. A finding counts as `confirmed` only when the code has found the proof in the recorded steps, never on the model's word. This page explains the mechanism and then follows one XSS finding through it. Flags, file formats and the exact proof rules of every class are in [cli.md](cli.md); the links below lead to the section concerned.
+AppSec Analyzer finds weaknesses by reading code, so each finding in its `appsec-assessment.yaml` is a well-founded suspicion. The Verifier tests that suspicion against the running application: a language model plans the test one step at a time, and the Verifier's code runs every step and decides the result. A finding counts as `confirmed` only when the code has found the proof in the recorded steps, never on the model's word. This page explains the mechanism and then follows one XSS finding through it. Options and file formats are in the [command guide](cli.md), the exact proof rules of every class in the [specification](specification.md); the links below lead to the section concerned.
 
 Three terms recur. The *model* is the language model of the profile chosen with `--profile`. The *host* is what runs it: an agent CLI (`claude`, `codex-cli`, `copilot-cli`) or a provider API (`codex`, `anthropic-api`). The *agent* is the model together with the loop in the Verifier that asks it for steps and runs them.
 
@@ -15,14 +15,14 @@ flowchart LR
     E --> F["verification.md<br/>evidence/"]
 ```
 
-Nothing is sent to the target before the confirmation. Each finding is tested on its own, with a fresh agent, its own marker, its own step budget and its own proof check; results of other findings reach it only where the assessment lists them as dependencies. Up to four findings are tested at the same time (`--parallel`) under the run's shared limits; a finding that may send write requests is tested alone ([CLI reference](cli.md)). A finding with several variants (different requests for the same weakness) tests each variant in a run of its own, one after another. Different variants continue after a confirmation. Only a completed equivalent test with matching request, inputs, hypothesis, prerequisites and proof conditions permits reuse; a shared URL alone does not.
+Nothing is sent to the target before the confirmation. Each finding is tested on its own, with a fresh agent, its own marker, its own step budget and its own proof check; results of other findings reach it only where the assessment lists them as dependencies. Up to four findings are tested at the same time (`--parallel`) under the run's shared limits; a finding that may send write requests is tested alone ([Limits](cli.md#limits)). A finding with several variants (different requests for the same weakness) tests each variant in a run of its own, one after another. Different variants continue after a confirmation. Only a completed equivalent test with matching request, inputs, hypothesis, prerequisites and proof conditions permits reuse; a shared URL alone does not.
 
 ## Before the first request
 
-1. The Verifier reads the assessment and keeps the findings whose CWE has a runtime proof ([`data/verifiable-cwes.yaml`](../data/verifiable-cwes.yaml)): XSS, injection, access control, session cookies, open redirect, path traversal and SSRF. The guided run selects severity high and above by default and adds some lower findings, such as those that are quick to confirm; `verify` selects by its options, and without any it takes every finding it can test ([Select what to verify](cli.md#select-what-to-verify-ver-026)). The most severe findings come first, and a prerequisite comes before the finding that depends on it.
+1. The Verifier reads the assessment and keeps the findings whose CWE has a runtime proof ([`data/verifiable-cwes.yaml`](../data/verifiable-cwes.yaml)): XSS, injection, access control, session cookies, open redirect, path traversal and SSRF. The guided run selects severity high and above by default and adds some lower findings, such as those that are quick to confirm; `verify` selects by its options, and without any it takes every finding it can test ([Choosing findings](cli.md#choosing-findings)). The most severe findings come first, and a prerequisite comes before the finding that depends on it.
 2. It prints the settings and a test plan with one line per finding and the requests the assessment names for it, also where its text names only a URL with a query. A finding in a page script such as a `.php` file that names no request says that its file path may name one. A finding that needs something the run lacks, such as a test identity, is listed with what it needs and not tested.
 3. It asks once: `Proceed against this target? [y/N]`, or `[Y/n]` in the guided run, where Enter confirms. In CI, `--yes` gives the confirmation. Without a scope file or `--url`, or without the confirmation, the run stops and nothing has been contacted.
-4. The [pre-flight checks](cli.md#preflight--check-before-a-run-ver-032) then send one GET to the target, sign in every identity once and give the model one fixed prompt without target data or findings. Only then does the first finding start.
+4. The [pre-flight checks](cli.md#preflight) then send one GET to the target, sign in every identity once and give the model one fixed prompt without target data or findings. Only then does the first finding start.
 
 ## How the model is integrated
 
@@ -44,7 +44,7 @@ There is no ongoing conversation with the model. Each step is a separate model c
 - The system prompt, the same for every step of a finding: the common rules, the rule of the finding's class, its marker, the step format and the actions its class may use with their argument schemas. It is assembled in [agent/prompts.py](../appsec_verifier/agent/prompts.py) and [agent/steps.py](../appsec_verifier/agent/steps.py); the example below shows it for an XSS finding.
 - The step prompt: the finding (ID, CWE, class, title, evidence location, the requests the assessment names, its description and context, marked as data, not instructions), the remaining step and request budget, and every step so far with its arguments and its result.
 
-With the `claude` profile, for example, one step is one `claude -p` process. The system prompt goes to `--system-prompt`, the step prompt to standard input, and `--json-schema` makes the CLI answer in the step format. The process runs without built-in tools, MCP servers, settings or session persistence, and gets only the environment variables it needs, never the identities' secrets ([agent/host_claude.py](../appsec_verifier/agent/host_claude.py)). `codex exec` and `copilot` run with the same kind of isolation; the APIs get one request without tools and with structured output for the step format. What all hosts share, such as the cost check before a call and the time limit of at most 300 seconds per call, is in [agent/hosts.py](../appsec_verifier/agent/hosts.py); the profiles are listed under [Model profiles](cli.md#output-mode-and-run-mode).
+With the `claude` profile, for example, one step is one `claude -p` process. The system prompt goes to `--system-prompt`, the step prompt to standard input, and `--json-schema` makes the CLI answer in the step format. The process runs without built-in tools, MCP servers, settings or session persistence, and gets only the environment variables it needs, never the identities' secrets ([agent/host_claude.py](../appsec_verifier/agent/host_claude.py)). `codex exec` and `copilot` run with the same kind of isolation; the APIs get one request without tools and with structured output for the step format. What all hosts share, such as the cost check before a call and the time limit of at most 300 seconds per call, is in [agent/hosts.py](../appsec_verifier/agent/hosts.py); the profiles are listed under [Model and costs](cli.md#model-and-costs).
 
 The answer is exactly one step:
 
@@ -81,10 +81,10 @@ The controller ([agent/controller.py](../appsec_verifier/agent/controller.py)) d
 - a request the finding or the variant under test names;
 - a resource the scope declares for this finding (`test_resources`, `injection_inputs`, `session_checks`);
 - a literal route read from the finding's evidenced source file;
-- a request `derive_request` has checked against an earlier source or HTTP step ([Test planning by the agent](cli.md#test-planning-by-the-agent-ver-043)): a route declaration in the source, recognised by its form whatever the framework and joined to a prefix declared above it in the same file, or a form or link on a recorded page of the finding's resource;
+- a request `derive_request` has checked against an earlier source or HTTP step ([Test planning by the agent](specification.md#test-planning-by-the-agent-ver-043)): a route declaration in the source, recognised by its form whatever the framework and joined to a prefix declared above it in the same file, or a form or link on a recorded page of the finding's resource;
 - a harmless GET that the finding's own request needs first, such as a CSRF token, at most three per finding. For a page script whose finding names no request, these reads also serve the pages its file path gives: the file itself and up to two directories above it. The file itself, or a form or link there that stays in its directory and carries an input the file names, then becomes the finding's request, which may carry further inputs the file names.
 
-The request then goes through the scope check on host, port, path, scheme and the resolved address ([scope/guard.py](../appsec_verifier/scope/guard.py), [tools/http.py](../appsec_verifier/tools/http.py), [tools/httpx_transport.py](../appsec_verifier/tools/httpx_transport.py)). Safe mode sends only GET, HEAD and OPTIONS; a write needs `--allow-intrusive`, carries the finding's marker and names no existing record in its path ([Safe mode](cli.md#safe-mode-ver-030)). The actions themselves are in [agent/tools.py](../appsec_verifier/agent/tools.py); those that read the finding's context or a recorded response contact nothing.
+The request then goes through the scope check on host, port, path, scheme and the resolved address ([scope/guard.py](../appsec_verifier/scope/guard.py), [tools/http.py](../appsec_verifier/tools/http.py), [tools/httpx_transport.py](../appsec_verifier/tools/httpx_transport.py)). Safe mode sends only GET, HEAD and OPTIONS; a write needs `--allow-intrusive`, carries the finding's marker and names no existing record in its path ([Safe mode](specification.md#safe-mode-ver-030)). The actions themselves are in [agent/tools.py](../appsec_verifier/agent/tools.py); those that read the finding's context or a recorded response contact nothing.
 
 A refused step comes back to the model with its reason, and the model can choose another. Some rules end the finding instead: an identical read for a third time or an identical write for a second time, three failed steps in a row (refused, tool error or server error), and the step budget.
 
@@ -102,7 +102,7 @@ When the recorded steps already meet the class's proof through a signal the code
 
 ## The verdict and its check
 
-The agent ends a finding with `submit_verdict`: `confirmed`, `not-reproducible`, `blocked-by-control` or `inconclusive`, with a rationale and the steps the verdict rests on (`proof_steps`). The code then checks the verdict against the recorded steps ([agent/proof.py](../appsec_verifier/agent/proof.py); the rules per class are in [Proof per class](cli.md#proof-per-class-ver-009-to-ver-013)):
+The agent ends a finding with `submit_verdict`: `confirmed`, `not-reproducible`, `blocked-by-control` or `inconclusive`, with a rationale and the steps the verdict rests on (`proof_steps`). The code then checks the verdict against the recorded steps ([agent/proof.py](../appsec_verifier/agent/proof.py); the rules per class are in [Proof per class](specification.md#proof-per-class-ver-009-to-ver-013)):
 
 - A `confirmed` verdict stands only if the class's proof holds in what the tools recorded. The model's own account of the evidence is never taken over; the code's record replaces it.
 - A negative verdict needs cited attempts too. If no request was answered at all, the result is `not-attempted`. A timeout, a scope refusal, a missing capability or a server error establishes no control.
@@ -110,7 +110,7 @@ The agent ends a finding with `submit_verdict`: `confirmed`, `not-reproducible`,
 
 If the check fails while steps are left, the next prompt carries `proof_feedback` with what is missing, and the agent may repair the proof in at most two rounds; the console shows `proof not accepted`. A claim that stays unproven ends `inconclusive`, and the report names what the check missed.
 
-For a negative or unproven result, an independent [technical QA](cli.md#technical-qa-ver-046) reads the recorded steps in separate calls to the same model, with its own prompt and no target tools, and may return questions. The agent answers them with recorded evidence or with follow-up steps through the same tools and limits. A confirmed access-control result is reviewed only for whether the application intends the access it shows: the agent may answer an objection with follow-up steps, and one that stays unresolved makes the result inconclusive. Other confirmed verdicts whose proof check passed are not reviewed, also when they follow a question of QA. After a finding with a confirmed variant, an [evidence presentation review](cli.md#evidence-presentation-review), also by the same model, checks whether the report's text and screenshots show the proof; the agent can answer it with quotes from the recorded exchanges or, for an unclear screenshot of an access-control or injection result, with another page. Neither review can confirm a weakness or relax a proof rule or a limit, and the evidence review never changes a verdict.
+For a negative or unproven result, an independent [technical QA](specification.md#technical-qa-ver-046) reads the recorded steps in separate calls to the same model, with its own prompt and no target tools, and may return questions. The agent answers them with recorded evidence or with follow-up steps through the same tools and limits. A confirmed access-control result is reviewed only for whether the application intends the access it shows: the agent may answer an objection with follow-up steps, and one that stays unresolved makes the result inconclusive. Other confirmed verdicts whose proof check passed are not reviewed, also when they follow a question of QA. After a finding with a confirmed variant, an [evidence presentation review](specification.md#evidence-presentation-review), also by the same model, checks whether the report's text and screenshots show the proof; the agent can answer it with quotes from the recorded exchanges or, for an unclear screenshot of an access-control or injection result, with another page. Neither review can confirm a weakness or relax a proof rule or a limit, and the evidence review never changes a verdict.
 
 Every step, refused step, limit and verdict goes to `agent-log.jsonl`, without response bodies.
 
@@ -251,7 +251,7 @@ A negative XSS result needs evidence too. A test that did not run is never read 
 
 ## The other classes follow the same pattern
 
-Every class has a marker or a contrast that only a real weakness can produce, and a check in code ([agent/proof.py](../appsec_verifier/agent/proof.py), [agent/experiments.py](../appsec_verifier/agent/experiments.py), [agent/session_proof.py](../appsec_verifier/agent/session_proof.py)). The exact rules are in [Proof per class](cli.md#proof-per-class-ver-009-to-ver-013).
+Every class has a marker or a contrast that only a real weakness can produce, and a check in code ([agent/proof.py](../appsec_verifier/agent/proof.py), [agent/experiments.py](../appsec_verifier/agent/experiments.py), [agent/session_proof.py](../appsec_verifier/agent/session_proof.py)). The exact rules are in [Proof per class](specification.md#proof-per-class-ver-009-to-ver-013).
 
 | Class | The agent has to make the target | The code checks |
 | --- | --- | --- |
@@ -277,7 +277,7 @@ The limits are enforced in code, outside the model ([limits.py](../appsec_verifi
 | Run time | 1800 s (30 minutes) | `--max-duration` | the run stops |
 | Request rate | 5 per second | `--rate` | requests are spaced out |
 
-`codex-cli` and `copilot-cli` report no cost, so for them the call and time limits apply instead of the spend limits. Details: [Boundaries](cli.md#boundaries--cost-and-load-ver-015).
+`codex-cli` and `copilot-cli` report no cost, so for them the call and time limits apply instead of the spend limits. Details: [Limits](cli.md#limits).
 
 ## What you get
 
@@ -286,7 +286,7 @@ The limits are enforced in code, outside the model ([limits.py](../appsec_verifi
 - `evidence/`: the screenshots and per finding `<finding>-poc.har` with every request and answer, credentials redacted.
 - `agent-log.jsonl`: every step, every refused step, every limit and every verdict, without response bodies.
 
-For T-036 the screenshot shows the URL in an address bar, the dialog with the marker (drawn from the recorded call, because a browser's own dialog never appears in a page screenshot), the part of the page around the payload element outlined in red, and a caption with finding, identity, status and time. More in [Proof of concept and evidence](cli.md#proof-of-concept-and-evidence-ver-034-ver-035) and [Outputs](cli.md#outputs).
+For T-036 the screenshot shows the URL in an address bar, the dialog with the marker (drawn from the recorded call, because a browser's own dialog never appears in a page screenshot), the part of the page around the payload element outlined in red, and a caption with finding, identity, status and time. More in [Proof of concept and evidence](specification.md#proof-of-concept-and-evidence-ver-034-ver-035-ver-059) and [Files a run writes](cli.md#files-a-run-writes).
 
 ## Where it lives in the code
 

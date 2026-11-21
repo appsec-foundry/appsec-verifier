@@ -1,6 +1,6 @@
 """AppSec Verifier: tests the findings of an AppSec Analyzer security assessment
 against the running application and reports per finding whether the weakness
-reproduces (requirements.md, docs/cli.md).
+reproduces (requirements.md, docs/specification.md).
 """
 
 from __future__ import annotations

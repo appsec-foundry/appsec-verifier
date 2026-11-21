@@ -52,7 +52,7 @@ To update the Verifier later, run `appsec-verifier update`.
 
 ## What it verifies
 
-A finding is confirmed only with the proof the table lists for its weakness. Input that merely comes back in the answer, a page that only looks like the expected one, or a slow response does not count on its own. If the assessment does not name the exact request, the agent looks for it in the source code or in the target's forms and links ([test planning](docs/cli.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) shows the whole process for one finding.
+A finding is confirmed only with the proof the table lists for its weakness. Input that merely comes back in the answer, a page that only looks like the expected one, or a slow response does not count on its own. If the assessment does not name the exact request, the agent looks for it in the source code or in the target's forms and links ([test planning](docs/specification.md#test-planning-by-the-agent-ver-043)). [How verification works](docs/how-verification-works.md) shows the whole process for one finding.
 
 | Weakness | Confirmed when |
 | --- | --- |
@@ -65,7 +65,7 @@ A finding is confirmed only with the proof the table lists for its weakness. Inp
 | SSRF | the target calls the listener |
 | Session cookie without Secure, HttpOnly or SameSite | the attribute is missing in repeated responses; SameSite counts only as Lax or Strict |
 
-The target must be able to reach the listener, which starts by itself for a `localhost` target; the marker file is set in the scope file. `preflight` shows what a run still lacks. Exact rules: [Proof per class](docs/cli.md#proof-per-class-ver-009-to-ver-013); CWEs per class: [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
+The target must be able to reach the listener, which starts by itself for a `localhost` target; the marker file is set in the scope file. `preflight` shows what a run still lacks. Exact rules: [Proof per class](docs/specification.md#proof-per-class-ver-009-to-ver-013); CWEs per class: [`data/verifiable-cwes.yaml`](data/verifiable-cwes.yaml).
 
 Evidence images show the recorded requests and responses and mark what the proof rests on. In this SQL injection in Juice Shop, a single quote in the search parameter `q` causes a database error and two quotes do not:
 
@@ -91,7 +91,7 @@ Each finding gets one of these verdicts. A negative verdict applies only to the 
 
 `verify` sends attack requests to a running system. These rules are enforced in the Verifier's code, not by the model:
 
-- Requests go only to the scope, during its test period, never to cloud metadata addresses, and only after you confirm the test plan. Requests, rate, model calls, cost and run time are limited for the whole run ([defaults](data/limits.yaml)), also while it tests up to four findings at the same time ([`--parallel`](docs/cli.md)).
+- Requests go only to the scope, during its test period, never to cloud metadata addresses, and only after you confirm the test plan. Requests, rate, model calls, cost and run time are limited for the whole run ([defaults](data/limits.yaml)), also while it tests up to four findings at the same time ([`--parallel`](docs/cli.md#limits)).
 - Only GET, HEAD and OPTIONS, unless you allow writes with `--allow-intrusive` or your yes; never DELETE. Created records stay on the target, so allow writes only on an instance you can reset.
 - The Verifier uses test credentials for sign-in and target requests and masks them in model prompts, logs and reports. It also masks recognizable secrets in source files and target responses before sending excerpts to a model.
 - The agent has no shell and writes no files. It sees the target's responses and, with `--source`, its source code, so target data reaches the model.
@@ -110,7 +110,7 @@ owner: {name: Your Name}
 
 For an HTML login form or a JSON login that returns a token, `--account` is enough, as in the quick start; the Verifier finds the login in the assessment or on the target, unless `--login-url` names it. Other logins, such as bearer tokens, basic authentication, OIDC, headers copied from the browser or a login program, go into an `identities.yaml`, which names environment variables instead of holding the passwords.
 
-Details: [scope file](docs/cli.md#scope-file--scopeyaml-authorisation-ver-001), [identities file](docs/cli.md#identities-file--identitiesyaml-sessions-ver-016028040), [accounts on the command line](docs/cli.md#test-accounts-on-the-command-line-ver-041). Examples: [`juice-shop/`](examples/juice-shop/) (local target, form login), [`sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, SSO sign-in in the browser), [`login-program/`](examples/login-program/) (form with a CSRF token).
+Details: [scope file](docs/cli.md#scope-file), [identities file](docs/cli.md#identities-file), [accounts on the command line](docs/cli.md#test-accounts-on-the-command-line). Examples: [`juice-shop/`](examples/juice-shop/) (local target, form login), [`sso-proxy/`](examples/sso-proxy/) (target behind a company proxy, SSO sign-in in the browser), [`login-program/`](examples/login-program/) (form with a CSRF token).
 
 ## Model profiles
 
@@ -124,7 +124,7 @@ Choose the model with `--profile`, as in AppSec Analyzer.
 | `codex` | OpenAI API with `OPENAI_API_KEY` | cost, calls, time |
 | `anthropic-api` | Anthropic API with `ANTHROPIC_API_KEY`, no CLI needed | cost, calls, time |
 
-The CLIs run without tools, MCP servers, settings or session history; using a subscription is subject to the provider's terms. With API billing the console shows the model costs, with a Claude subscription `--show-costs` shows them at API prices ([costs](docs/cli.md#output-mode-and-run-mode)).
+The CLIs run without tools, MCP servers, settings or session history; using a subscription is subject to the provider's terms. With API billing the console shows the model costs, with a Claude subscription `--show-costs` shows them at API prices ([costs](docs/cli.md#model-and-costs)).
 
 ## Commands
 
@@ -138,7 +138,7 @@ The CLIs run without tools, MCP servers, settings or session history; using a su
 | `runs` | Lists earlier runs written without `--output` and removes the ones you name or older ones after you confirm. |
 | `update` | Updates a pipx installation after you confirm. |
 
-Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. Severity filters apply exactly, including to quick findings ([details](docs/cli.md#select-what-to-verify-ver-026)). All options are in [`docs/cli.md`](docs/cli.md) and in `appsec-verifier <command> --help`.
+Select findings with `--category` (for example `xss`, `idor`, `sqli`), `--severity`, `--min-severity` or `--only <id>`. Severity filters apply exactly, including to quick findings ([details](docs/cli.md#choosing-findings)). The [command guide](docs/cli.md) explains the options, and `appsec-verifier <command> --help` lists all of them.
 
 ### Run without questions (CI)
 
@@ -153,7 +153,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 ## Output
 
-`verify` writes to `--output` or, without it, to a new private directory for each run, e.g. `~/.local/share/appsec-verifier/runs/<project>/<start time>/` on Linux ([details](docs/cli.md#outputs)):
+`verify` writes to `--output` or, without it, to a new private directory for each run, e.g. `~/.local/share/appsec-verifier/runs/<project>/<start time>/` on Linux ([details](docs/cli.md#files-a-run-writes)):
 
 - `verification.md`: the report. Technical QA cites the recorded steps behind its observations and open questions. For each finding the report gives the verdict, the confidence, the evidence and a proof of concept: the requests the verdict rests on as raw HTTP and, for UI findings, a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
@@ -176,7 +176,7 @@ pipx inject appsec-verifier 'anthropic>=0.87,<1'
 
 The proof browser uses the installed Google Chrome and starts it without network access, which needs Linux with `unshare` (util-linux) and unprivileged user namespaces. Elsewhere XSS findings cannot be confirmed. For the CLI profiles, install the CLI and log in (`claude`, `codex login`, `copilot login`).
 
-`pipx install` and `appsec-verifier update` take the newest dependency versions allowed ([details](docs/cli.md#update--update-the-installed-verifier-ver-033)). To install from a checkout with every package pinned and hash-checked in [`requirements.lock`](requirements.lock), including the proof browser and the `anthropic` SDK:
+`pipx install` and `appsec-verifier update` take the newest dependency versions allowed ([details](docs/cli.md#update)). To install from a checkout with every package pinned and hash-checked in [`requirements.lock`](requirements.lock), including the proof browser and the `anthropic` SDK:
 
 ```sh
 python3 -m venv .venv

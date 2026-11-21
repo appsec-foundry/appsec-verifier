@@ -2,7 +2,7 @@
 
 AppSec Verifier is a Python CLI that tests the findings of an AppSec Analyzer `appsec-assessment.yaml` against a running application and reports per finding whether the weakness reproduces. It is an active security test tool, so its safety controls are part of the product, not optional hardening.
 
-User-facing overview: `README.md`. Command reference: `docs/cli.md`. Requirements and their VER-IDs: `requirements.md`. Internal analyses and handoffs: `docs/internal/analysis/<topic>-<YYYY-MM-DD>.md` (not packaged).
+User-facing overview: `README.md`. User guide to commands and files: `docs/cli.md`. Detailed behaviour for maintainers and agents: `docs/specification.md`. Requirements and their VER-IDs: `requirements.md`. Internal analyses and handoffs: `docs/internal/analysis/<topic>-<YYYY-MM-DD>.md` (not packaged).
 
 ## Setup and checks
 
@@ -19,7 +19,7 @@ Do not run `verify`, `preflight` or the guided run against a real target, or wit
 
 ## Requirements and features
 
-Read `requirements.md` before changing observable behaviour. Keep VER-IDs stable when moving or rewording entries, and never reuse a removed ID. Keep entries short, refer to other VER-IDs instead of repeating them, and put details in `docs/cli.md`.
+Read `requirements.md` before changing observable behaviour. Keep VER-IDs stable when moving or rewording entries, and never reuse a removed ID. Keep entries short, refer to other VER-IDs instead of repeating them, and put details in `docs/specification.md`.
 
 A new or extended feature starts with an agreed requirement, before any code. A feature is a new user outcome or a change to what a VER entry promises, such as a new command, probe class or report content, or changed target contact, model use, data sent to models, or credential use. A fix that restores what an entry already says, clearer help or messages, refactoring, tests and documentation need no new requirement. If it is unclear whether a change is a feature, ask.
 
@@ -114,13 +114,13 @@ Changes to these controls need tests that cover the refused case (out of scope, 
 - Runtime files are found with `version_info.resource_root()`. A new runtime directory must be added to `RUNTIME_DIRS` in `setup.py`, `_RUNTIME_DIRS` in `version_info.py`, and `MANIFEST.in`.
 - The version is defined once: `ENGINE_VERSION` in `version_info.py`.
 - Before removing code that looks unused, check lazy imports (`anthropic`, `playwright`), the host registry (`agent/registry.py`) and profiles, tests, packaging and documented interfaces. An import search alone does not prove it is dead.
-- If you change behaviour or flags, update `README.md` and `docs/cli.md` in the same change. Mark flags that are documented but not implemented as such.
+- If you change behaviour or flags, update `docs/specification.md` in the same change, and `README.md` and `docs/cli.md` where users do or see something different. Mark flags that are documented but not implemented as such.
 
 ## Writing documentation
 
 Applies to `README.md`, `docs/`, changelog and release notes, help texts and messages users read.
 
-- `README.md` is the overview: what the Verifier does, quick start, what it verifies, safety, model profiles, commands, output, install, limitations. Flags, proof rules, file formats, limits and edge cases go into `docs/cli.md`, by command or file, and the README links there. A change adds to the README at most a table row or a sentence in the section it concerns, never a paragraph appended at the end. Where both files describe the same rule, the README only summarises it and must not contradict `docs/cli.md` or the code.
+- `README.md` is the overview: what the Verifier does, quick start, what it verifies, safety, model profiles, commands, output, install, limitations. `docs/cli.md` is the user guide: what each command does, the flags and files a user needs, with examples, and what the results mean; for exact rules it links to the specification. Exact flags, proof rules, file formats, limits and edge cases go into `docs/specification.md`, by command or file. A change adds to the README at most a table row or a sentence in the section it concerns, never a paragraph appended at the end, and to `docs/cli.md` only what a user needs to act. Where several files describe the same rule, the README and `docs/cli.md` only summarise it and must not contradict `docs/specification.md` or the code.
 - Work a change into the existing text: rewrite the sentence or section it changes and remove what it makes wrong, instead of adding a paragraph next to it. Before adding a sentence, search the file for where it already says that.
 - Write for the user: what changes for them, what they have to do, what they will see. Leave out internals (class, function and module names, refactorings, how a bug was found, implementation allowances) unless the user needs them to act. No words that age, such as "new", "now" or "currently".
 - Plain, factual sentences. No promotional or inflated words ("powerful", "seamless", "robust", "comprehensive", "significantly"), no filler ("It's worth noting", "Note that", "In summary"), no closing summary section.

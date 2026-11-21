@@ -6,8 +6,8 @@ otherwise it reports every selected finding not-attempted. Before the first
 finding it runs the pre-flight checks of VER-032, one fixed model test included;
 `preflight` runs them alone, shows the test plan, and verifies nothing (preflight.py). Called with an
 assessment and no command, it starts the guided run of guided.py (VER-031),
-which asks only for the `verify` settings without a default and then runs `verify`. See docs/cli.md
-for the full design.
+which asks only for the `verify` settings without a default and then runs `verify`. See
+docs/specification.md for the full design.
 """
 
 from __future__ import annotations
@@ -1563,8 +1563,8 @@ _NEEDS = {
     "route": ("request information", "--source, if the finding's file declares its route",
               ["the assessment names no request for the finding, neither as METHOD /path in its scenario or attack "
                "steps nor as an attack_surface entry whose handler is at its location; with --source, a route "
-               "declared in the finding's file up to 40 lines before its location can supply one (docs/cli.md, "
-               "Continuous control)"]),
+               "declared in the finding's file up to 40 lines before its location can supply one "
+               "(docs/specification.md, Continuous control)"]),
     "rule": ("access restriction", "your access rule lets anyone use its requests",
              ["your access rule says that anyone may use the finding's requests, so no access breaks it; if the "
               "request should be protected, change its entry in access_rules (docs/cli.md, Scope file)"]),
