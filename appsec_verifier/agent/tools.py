@@ -700,6 +700,10 @@ class AgentTools:
                     raise ToolError("anonymous-only proof needs a declared exposure restriction and GET resource")
                 plan = {**plan, "exposure": True,
                         "control_path": comparison_path(plan["path"], "vrf" + secrets.token_hex(8))}
+        # VER-054: on an input the engine-error form covers, the probe is the first experiment; nothing was sent or
+        # asked of the operator for the refused plan.
+        if gate := probe_first(getattr(self.ctx.plan, "cwe", ""), plan, getattr(self.ctx, "accepted_plans", None)):
+            raise ToolError(gate)
         if needs_writes and not self._may_write(needs_writes, plan.get("owner") or plan.get("role") or ""):
             next_step = refused_write(self.ctx, plan.get("method", "GET"), urlsplit(plan.get("path") or "/").path)
             raise ToolError("this plan needs write requests, which safe mode does not send, and the operator did not "
@@ -735,8 +739,6 @@ class AgentTools:
         if needs_writes:
             notes.append("the operator allowed write requests for this finding (VER-052); every write carries the "
                          "finding's marker and creates, never changes what may belong to someone else (VER-014)")
-        if reminder := probe_first(getattr(self.ctx.plan, "cwe", ""), plan, getattr(self.ctx, "accepted_plans", None)):
-            notes.append(reminder)          # VER-054: a reminder, never a gate
         return {
             "accepted": True,
             **({"login_observations": login_observations} if login_observations is not None else {}),

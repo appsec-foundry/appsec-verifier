@@ -636,20 +636,26 @@ def test_returned_marker_and_engine_error_forms_are_gated_by_cwe(tmp_path):
             AgentTools(ctx_for(refused)).plan_test(**err)
 
 
-@pytest.mark.parametrize("cwe, form, reminded", [
+@pytest.mark.parametrize("cwe, form, gated", [
     ("CWE-89", {"sql_template": "1' AND {{predicate}} -- "}, True),
     ("CWE-943", {"js_predicate_template": "1 && {{predicate}}"}, False),   # a query parameter has no NoSQL probe
 ])
-def test_the_probe_reminder_follows_the_class_and_input(tmp_path, cwe, form, reminded):
-    """VER-054: a plan of another form is accepted, with a reminder of the probe only where the engine-error form
-    reaches its input."""
-    ctx = _ctx(tmp_path, lambda *a, **k: Resp())
+def test_another_form_waits_for_the_probe_where_it_reaches_the_input(tmp_path, probe_gate, cwe, form, gated):
+    """VER-054: where the engine-error form reaches the input, a plan of another form is refused and sends nothing
+    until the probe was accepted there; elsewhere, and after the probe, it is accepted."""
+    sent = []
+    ctx = _ctx(tmp_path, lambda *a, **k: sent.append(a) or Resp())
     ctx.plan.cls, ctx.plan.cwe = "injection", cwe
     declaration = {"kind": "boolean", "hypothesis": "the id is spliced into the query", "path": "/items",
                    "input_location": "params", "input_name": "id", "baseline": "1", "pointer": "/data", **form}
-    out = AgentTools(ctx).plan_test(**declaration)
-    assert out["accepted"] is True
-    assert ("control-character probe has not run" in out.get("note", "")) is reminded
+    tools = AgentTools(ctx)
+    if gated:
+        with pytest.raises(ToolError, match="control-character probe has not run"):
+            tools.plan_test(**declaration)
+        assert sent == [] and getattr(tools, "_experiment", None) is None
+        probe = {k: v for k, v in declaration.items() if k not in form and k != "pointer"}
+        ctx.accepted_plans = {1: tools.plan_test(**probe, error_probe=True)["experiment"]}
+    assert tools.plan_test(**declaration)["accepted"] is True
 
 
 @pytest.mark.parametrize("cwe, extra, reason", [

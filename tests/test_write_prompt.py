@@ -188,6 +188,17 @@ def test_a_plan_that_needs_writes_is_accepted_only_after_the_operator_allows_the
     assert not tools.ctx.safe
 
 
+def test_a_write_plan_that_waits_for_the_probe_asks_the_operator_nothing(tmp_path, probe_gate):
+    """VER-054: a plan of another form is refused for the probe before the question, so the operator is asked only
+    for a plan that can run."""
+    tools = AgentTools(_ctx(tmp_path, lambda *a, **k: Resp()))
+    tools.ctx.plan.cls, tools.ctx.plan.cwe = "injection", "CWE-89"
+    asked = _asking(tools, True)
+    with pytest.raises(ToolError, match="control-character probe has not run"):
+        tools.plan_test(**_WRITE_PLAN)
+    assert asked == [] and tools.ctx.safe and getattr(tools, "_experiment", None) is None
+
+
 def test_a_write_the_variant_declares_is_refused_without_asking(tmp_path):
     """The write a variant lists was known before the run: --allow-intrusive decides it, not a question mid-run.
     Here a read that triggers what a write stored, as for stored code evaluation."""

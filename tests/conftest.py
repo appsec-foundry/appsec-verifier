@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from appsec_verifier import cli
+from appsec_verifier.agent import tools as agent_tools
 
 
 @pytest.fixture(autouse=True)
@@ -54,3 +55,19 @@ def _passing_model_test(monkeypatch):
 
     monkeypatch.setattr(cli, "_model_test",
                         lambda factory, budget, **_: Check("Model test", "ok", "fake model answered"))
+
+
+REAL_PROBE_FIRST = agent_tools.probe_first
+
+
+@pytest.fixture(autouse=True)
+def _probe_already_ran(monkeypatch):
+    """The control-character probe is the first injection experiment on an input (VER-054). Most tests exercise
+    another form, so they start as if the probe had run there; the tests of that order ask for probe_gate."""
+    monkeypatch.setattr(agent_tools, "probe_first", lambda cwe, plan, accepted: None)
+
+
+@pytest.fixture
+def probe_gate(monkeypatch):
+    """The order of VER-054 as a run has it: another form waits for the probe."""
+    monkeypatch.setattr(agent_tools, "probe_first", REAL_PROBE_FIRST)

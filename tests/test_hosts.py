@@ -302,8 +302,8 @@ def test_a_finding_prompt_carries_only_its_own_class():
     # template forms that still need a baseline (sql_template, expression_template, non-NoSQL error_probe, VER-011),
     # and by 300 for the candidates of js_predicate_template and sql_marker's column counts and the fallback on an
     # engine error in an answer (VER-011), and by 115 for the prerequisite read of a record id an identity owns
-    # (VER-047).
-    assert len(text) < 16_000 and len(injection) < 24_400
+    # (VER-047), and by 50 for the refusal of another form before the control-character probe (VER-054).
+    assert len(text) < 16_000 and len(injection) < 24_450
 
 
 def test_read_source_is_offered_only_with_a_source_checkout():

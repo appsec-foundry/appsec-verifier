@@ -292,13 +292,14 @@ def error_probe_applies(cwe, location) -> bool:
 
 
 PROBE_FIRST = ("the control-character probe has not run on this input yet: declare error_probe true on the same "
-               "input first; it needs no observation, and any answer status counts (VER-054)")
+               "input first; it needs no observation, and any answer status counts. Another form is accepted on this "
+               "input once the probe has run (VER-054)")
 
 
 def probe_first(cwe, plan, accepted) -> str | None:
-    """VER-054: for a class the engine-error form covers, the control-character probe comes first. For a boolean plan
-    of another form on an input no accepted probe has covered, the reminder to run it; None otherwise. A reminder,
-    never a gate: the plan stays accepted (VER-043)."""
+    """VER-054: for a class the engine-error form covers, the control-character probe is the first experiment on an
+    input. For a boolean plan of another form on an input no accepted probe has covered, the refusal that names the
+    probe; None otherwise, so every form is open once the probe has run there."""
     if plan.get("kind") != "boolean" or plan.get("error_probe"):
         return None
     if not error_probe_applies(cwe, plan.get("input_location")):
@@ -1069,9 +1070,6 @@ def _stopped_feedback(ctx, plan, stop, history) -> tuple[str, str, dict]:
     if template and _width_unrelated(ctx, plan, n):
         kind = "not-width"
     fact, action = _STOPPED[kind]
-    if kind == "baseline-refused" and (
-            reminder := probe_first(getattr(ctx.plan, "cwe", ""), plan, getattr(ctx, "accepted_plans", None))):
-        action = f"{reminder}; {action}"
     failed = {"step": n, "status": result.get("status"),
               "excerpt": (result.get("error") or result.get("body_excerpt") or "")[:300],
               # whether the template failed, and whether the plan's next candidate can address it (agent/loop.py)
