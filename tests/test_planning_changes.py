@@ -132,19 +132,21 @@ def test_variants_keep_independent_coverage():
     }
     variants = expand_variants([p])
 
-    def report(v):
+    def report(v, verdict="confirmed"):
         return {
             "meta": {},
             "results": [
                 {
                     "finding_ref": {"id": p.id, "variant_digest": v.variant_digest},
-                    "verdict": "confirmed",
+                    "verdict": verdict,
                     "proof": {"checked": True, "contract": 3},
                 }
             ],
         }
 
-    assert [x.variant_id for x in remaining_variants([p], report(variants[0]))] == ["b"]
+    # A checked negative on one variant covers only that variant; a confirmed one ends the finding (VER-026).
+    assert [x.variant_id for x in remaining_variants([p], report(variants[0], "not-reproducible"))] == ["b"]
+    assert remaining_variants([p], report(variants[0])) == []
     assert len(merge_reports(report(variants[0]), report(variants[1]))["results"]) == 2
     old = report(variants[0])
     old["results"][0]["proof"]["contract"] = 2

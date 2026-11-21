@@ -9,9 +9,9 @@ limit that stopped the finding. A blank line sets each finding apart.
 The findings of a category (VER-026) stand between lines outside the grid, unlike AppSec Analyzer's phases,
 whose bounds are grid entries, since FINDING here holds findings: before them an underlined heading,
 ``SQL injection: testing 2 findings`` with the name in bold, after them its name with the count of each result in
-that result's colour and the time the category took. The remaining variants of confirmed findings follow under a
-heading of their own, ``Confirmed findings: testing 5 further variants``, and without a closing line, since each of
-their findings already has its result.
+that result's colour and the time the category took. The remaining variants of confirmed findings, which are not
+tested, follow under a heading of their own, ``Confirmed findings: 5 further variants not tested``, and without a
+closing line, since each of their findings already has its result.
 The ``start`` entry gives the finding's title, then its severity and the requests the assessment names. Under a
 category's heading it leaves out the class, and the title when it only repeats the category's name; under the
 further variants the class follows the severity. The ``agent`` entry after it says that the test agent started:
@@ -862,8 +862,8 @@ class RunProgress:
 
     def _open_group(self, kind: str, finding: str) -> None:
         """The heading before a category's findings, ``SQL injection: testing 2 findings``, worded like its closing
-        line, or before the further variants of confirmed findings, ``Confirmed findings: testing 5 further
-        variants`` (VER-026); underlined as long as it is, so it stands out from the findings' bold titles."""
+        line, or before the further variants of confirmed findings, ``Confirmed findings: 5 further variants not
+        tested`` (VER-026); underlined as long as it is, so it stands out from the findings' bold titles."""
         if kind == _FURTHER:
             size, name, noun = self.runs - self.runs_started, "Confirmed findings", "further variant"
         else:
@@ -872,7 +872,9 @@ class RunProgress:
             size, name, noun = max(next(later, len(self._order) - start), 1), category_name(kind), "finding"
         self._group, self._group_size, self._group_ids, self._group_runs = kind, size, [], 0
         self._group_verdicts, self._group_at = {}, self._clock()
-        rest = f": testing {size} {noun}{'' if size == 1 else 's'}"
+        plural = "" if size == 1 else "s"
+        # VER-026: a confirmed finding's further variants are recorded as not tested; no agent runs for them.
+        rest = f": {size} {noun}{plural} not tested" if kind == _FURTHER else f": testing {size} {noun}{plural}"
         self._write("")
         self._write(self.st(name, "bold") + rest)
         self._write(self.st("─" * min(len(name + rest), self.MAX_COLUMNS - 1), "accent"))

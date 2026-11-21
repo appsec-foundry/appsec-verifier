@@ -319,8 +319,9 @@ def run_verification(
     order: dict[int, tuple] = {}            # a started entry's place in the test order
     entry_results: dict[int, dict] = {}
     groups = {}
-    deferred: set[str] = set()  # VER-026: findings whose remaining variants wait behind the other findings
+    deferred: set[str] = set()  # VER-026: confirmed findings, whose remaining variants wait behind the others
     confirmed_ids: set[str] = set()  # Findings eligible for evidence review.
+    confirmed_by: dict[str, str] = {}  # VER-026: the variant that confirmed each finding
     tested_signatures: dict[str, set] = {}  # VER-039: a request already tested is not tested again
     # stopped: the run-wide limit that stopped an earlier finding. writer: the entry that may send write requests,
     # tested alone; waiting: entries under test that wait to become it (VER-065). failed: an error that ends the run.
@@ -389,6 +390,7 @@ def run_verification(
             finding_exhausted = True
         with lock:
             repeated = shown and _variant_signature(plan) in tested_signatures.get(plan.id, set())
+            confirmed_via = confirmed_by.get(plan.id) if shown else None
             interrupted, stopped = state["interrupted"], state["stopped"]
         if key in skipped:
             res = ProbeResult(verdict="not-attempted", rationale=f"not tested: {skipped[key]}")
@@ -397,6 +399,12 @@ def run_verification(
                 verdict="not-attempted",
                 rationale="not tested: another variant of this finding already completed an equivalent test",
             )
+            if progress is not None:
+                progress.finding(plan, agent=False)
+        elif confirmed_via:
+            # VER-026: one confirmed variant establishes the weakness; another vector to it changes no verdict.
+            res = ProbeResult(verdict="not-attempted",
+                              rationale=f"not tested: the finding was already confirmed through {confirmed_via}")
             if progress is not None:
                 progress.finding(plan, agent=False)
         elif shown and interrupted:
@@ -440,8 +448,9 @@ def run_verification(
                     state["stopped"] = res.limits_hit
                 if res.verdict == "confirmed":
                     confirmed_ids.add(plan.id)
-                    # VER-026: the finding is confirmed, so its remaining variants wait until every other selected
-                    # finding has been tested, then run in the planned order.
+                    confirmed_by.setdefault(plan.id, plan.variant_id or evidence_id(plan))
+                    # VER-026: the finding is confirmed, so its remaining variants are not tested: they wait until
+                    # every other selected finding has been tested and are then recorded as not tested.
                     deferred.add(plan.id)
                 signature = _variant_signature(plan)
                 if shown and signature is not None and (res.proof or {}).get("checked") is True:

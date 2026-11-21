@@ -1138,9 +1138,9 @@ def test_under_a_category_heading_the_start_entry_leaves_out_what_the_heading_sa
 
 
 def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_own():
-    """VER-026: a confirmed finding's remaining variants run after every other finding; they come back under
-    `Confirmed findings: testing N further variants` with no closing line, the class after the severity since no
-    category heading names it, and the category they left closes before them."""
+    """VER-026: a confirmed finding's remaining variants come after every other finding, not tested; they come back
+    under `Confirmed findings: N further variants not tested` with no closing line, the class after the severity since
+    no category heading names it, and the category they left closes before them."""
     out = io.StringIO()
     progress = RunProgress(out, clock=Clock(), env={})
     first, later = _category_plan("T-1", "xss", variant="v1"), _category_plan("T-1", "xss", variant="v2")
@@ -1152,7 +1152,7 @@ def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_o
     progress.close()
     rows = _unruled(_rows(out))
     closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 0s")
-    assert rows[closing + 1:closing + 3] == ["", "Confirmed findings: testing 1 further variant"]
+    assert rows[closing + 1:closing + 3] == ["", "Confirmed findings: 1 further variant not tested"]
     start = rows[closing + 3]
     assert " 1/2 T-1  start " in start and "Basket of another user readable · high · xss" in start
     assert [row for row in rows if row.startswith("Confirmed findings")] == [rows[closing + 2]]
@@ -1190,25 +1190,61 @@ def test_the_status_line_names_the_category_and_the_findings_place_in_it(monkeyp
     progress.close()
 
 
-def test_a_confirmed_findings_other_variants_are_deferred_behind_the_rest(tmp_path):
-    """VER-026: once a variant confirms, the finding's remaining variants wait until every other selected finding
-    has been tested, then run in the planned order. Here T-1/v1 confirms, so T-1/v2 runs after T-2 and T-3."""
-    from dataclasses import replace
+def _variant_run(plans, verdicts, recorder=None):
+    """Runs `plans` with a probe that answers each variant (or finding) from `verdicts`; returns what the probe
+    ran and the run's results."""
+    ran = []
 
     class Probe:
         cls = "access-control"
 
         def run(self, ctx):
-            if ctx.plan.variant_id == "v1":
-                return ProbeResult(verdict="confirmed", proof={"checked": True, "variant": "v1", "steps": [1]})
-            return ProbeResult(verdict="inconclusive", rationale="r")
+            ran.append((ctx.plan.id, ctx.plan.variant_id))
+            verdict = verdicts.get(ctx.plan.variant_id or ctx.plan.id, "inconclusive")
+            proof = {"checked": True, "variant": ctx.plan.variant_id, "steps": [1]} if verdict == "confirmed" else {}
+            return ProbeResult(verdict=verdict, proof=proof, rationale="r")
+
+    scope = {"base_url": "https://app.example.com", "hosts": ["app.example.com"]}
+    doc = run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=plans, limits=Limits(),
+                           identities=[], registry=ProbeRegistry({"access-control": Probe()}), verifier_version="t",
+                           target_base=scope["base_url"], authorization={}, progress=recorder)
+    return ran, doc["results"]
+
+
+def test_a_confirmed_findings_other_variants_are_not_tested(tmp_path):
+    """VER-026: once a variant confirms, the finding's remaining variants are not tested. They wait until every
+    other selected finding has been tested and are recorded as not tested, naming the variant that confirmed it;
+    no agent runs for them. Here T-1/v1 confirms, so T-1/v2 comes after T-2 and T-3 without a test."""
+    from dataclasses import replace
 
     t1 = [replace(_plan("T-1"), variant_id=v, variant_digest=v * 8) for v in ("v1", "v2")]
-    plans = [t1[0], t1[1], _plan("T-2"), _plan("T-3")]
     recorder = Recorder()
-    scope = {"base_url": "https://app.example.com", "hosts": ["app.example.com"]}
-    run_verification(assessment_path="a.yaml", scope=scope, scope_path="s.yaml", plans=plans, limits=Limits(),
-                     identities=[], registry=ProbeRegistry({"access-control": Probe()}), verifier_version="t",
-                     target_base=scope["base_url"], authorization={}, progress=recorder)
+    ran, results = _variant_run([t1[0], t1[1], _plan("T-2"), _plan("T-3")], {"v1": "confirmed"}, recorder)
     order = [event[1] for event in recorder.events if event[0] == "finished"]
-    assert order == ["T-1", "T-2", "T-3", "T-1"]      # v2 deferred to the end, after the other findings
+    assert order == ["T-1", "T-2", "T-3", "T-1"]      # v2 held back to the end, after the other findings
+    assert ("T-1", "v2") not in ran                    # no agent for it
+    assert ("finding", "T-1", "no agent") in recorder.events
+    v2 = next(r for r in results if r["finding_ref"].get("variant") == "v2")
+    assert v2["verdict"] == "not-attempted"
+    assert v2["rationale"] == "not tested: the finding was already confirmed through v1"
+
+
+def test_an_unconfirmed_findings_variants_are_all_tested(tmp_path):
+    """Refused case: without a confirmed variant every variant of the finding is still tested (VER-026)."""
+    from dataclasses import replace
+
+    t1 = [replace(_plan("T-1"), variant_id=v, variant_digest=v * 8) for v in ("v1", "v2")]
+    ran, results = _variant_run(t1, {"v1": "inconclusive", "v2": "confirmed"})
+    assert ran == [("T-1", "v1"), ("T-1", "v2")]
+    assert [r["verdict"] for r in results] == ["inconclusive", "confirmed"]
+
+
+def test_a_finding_that_depends_on_a_confirmed_one_is_still_tested(tmp_path):
+    """VER-026: the held-back, untested variants of a confirmed prerequisite do not block the finding that
+    depends on it."""
+    from dataclasses import replace
+
+    t1 = [replace(_plan("T-1"), variant_id=v, variant_digest=v * 8) for v in ("v1", "v2")]
+    dependant = replace(_plan("T-2"), context={"dependencies": ["T-1"]})
+    ran, _ = _variant_run([t1[0], t1[1], dependant], {"v1": "confirmed"})
+    assert ran == [("T-1", "v1"), ("T-2", None)]

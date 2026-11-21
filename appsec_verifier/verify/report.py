@@ -78,16 +78,18 @@ def verified_findings(existing: dict) -> set[str]:
 
 
 def remaining_variants(plans, existing):
-    """Old aggregate results never invent coverage for a named variant."""
+    """Old aggregate results never invent coverage for a named variant. A finding one variant confirmed is done:
+    its other variants are not taken up again (VER-026)."""
     from ..planning import expand_variants
 
-    completed = {(r["finding_ref"]["id"], r["finding_ref"].get("variant_digest"))
-                 for r in existing.get("results", []) if r.get("verdict") in VERIFIED
-                 and (r.get("proof") or {}).get("checked") is True
-                 and (r.get("proof") or {}).get("contract") == 3
-                 and (r.get("class") != "access-control" or r.get("verdict") != "confirmed"
-                      or (r.get("proof") or {}).get("access_restriction"))}
-    return [p for p in expand_variants(plans) if (p.id, p.variant_digest) not in completed]
+    checked = [r for r in existing.get("results", []) if r.get("verdict") in VERIFIED
+               and (r.get("proof") or {}).get("checked") is True
+               and (r.get("proof") or {}).get("contract") == 3
+               and (r.get("class") != "access-control" or r.get("verdict") != "confirmed"
+                    or (r.get("proof") or {}).get("access_restriction"))]
+    completed = {(r["finding_ref"]["id"], r["finding_ref"].get("variant_digest")) for r in checked}
+    confirmed = {r["finding_ref"]["id"] for r in checked if r.get("verdict") == "confirmed"}
+    return [p for p in expand_variants(plans) if (p.id, p.variant_digest) not in completed and p.id not in confirmed]
 
 
 def _tested_build(row, meta):

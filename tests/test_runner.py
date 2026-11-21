@@ -89,8 +89,9 @@ def test_registered_probe_runs_and_sees_safe_flag():
     assert seen == {"safe": True, "read_only": True}
 
 
-def test_confirmed_variant_does_not_retire_unproven_equivalent_variants():
-    """VER-039: a confirmed finding does not imply coverage of its other variants."""
+def test_a_confirmed_variant_ends_the_findings_other_variants():
+    """VER-026, VER-039: one confirmed variant establishes the weakness, so the finding's other variants are not
+    tested; they stay visible as not tested, naming the variant that confirmed it."""
     seen = []
 
     class OnceXss:
@@ -108,9 +109,10 @@ def test_confirmed_variant_does_not_retire_unproven_equivalent_variants():
     v2 = FindingPlan(id="T-1", cwe="CWE-79", severity="High", title="t", match_key="f.ts|CWE-79",
                      instance="f.ts:10", status="dynamic", cls="xss", reason="r", variant_id="variant-002")
     doc = _run([v1, v2], registry=reg)
-    assert seen == ["variant-001", "variant-002"]
+    assert seen == ["variant-001"]
     assert doc["results"][0]["verdict"] == "confirmed"
-    assert doc["results"][1]["verdict"] == "confirmed"
+    assert doc["results"][1]["verdict"] == "not-attempted"
+    assert doc["results"][1]["rationale"] == "not tested: the finding was already confirmed through variant-001"
 
 
 def test_a_shared_request_without_equivalent_proof_context_is_retested():
@@ -189,6 +191,7 @@ def test_a_variant_with_another_input_on_the_same_route_is_still_tested():
 
 
 def test_only_completed_equivalent_variants_are_reused():
+    """VER-039: a checked negative result ends only the tests of fully equivalent variants; the others still run."""
     from dataclasses import replace
 
     from appsec_verifier.planning import expand_variants
@@ -200,7 +203,7 @@ def test_only_completed_equivalent_variants_are_reused():
 
         def run(self, ctx):
             seen.append(ctx.plan.variant_id)
-            return ProbeResult(verdict="confirmed", proof={"checked": True, "executed": True})
+            return ProbeResult(verdict="not-reproducible", proof={"checked": True})
 
     variant = {"id": "first", "request": {"method": "GET", "path": "/search",
                "inputs": [{"location": "query", "name": "q"}]}, "hypothesis": "q reaches the script sink",
