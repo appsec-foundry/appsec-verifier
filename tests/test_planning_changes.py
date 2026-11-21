@@ -610,9 +610,9 @@ def test_expression_proof_without_a_scope_contract_accepts_the_agents_input(tmp_
 
 @pytest.mark.parametrize("parses_brackets", [False, True])
 def test_query_operators_travel_in_bracket_notation(tmp_path, parses_brackets):
-    """VER-011: a NoSQL query parameter gets the operator controls as q[$eq]=… and q[$in][]=…. A target that builds
-    an object from them, as Express 4 and PHP do, confirms; one that reads q literally answers them like a
-    missing value, and nothing is confirmed."""
+    """VER-011: a NoSQL query parameter gets the operator controls as q[$in][]=…, alone and with q[$nin][]=…. A
+    target that builds an object from them, as Express 4 and PHP do, confirms; one that reads q literally answers
+    them like a missing value, and nothing is confirmed."""
     sent = []
 
     def target(m, u, h, **kwargs):
@@ -621,7 +621,7 @@ def test_query_operators_travel_in_bracket_notation(tmp_path, parses_brackets):
         if "q" in params:
             found = params["q"] == "apple"
         else:
-            found = parses_brackets and "apple" in (params.get("q[$eq]"), params.get("q[$in][]"))
+            found = parses_brackets and params.get("q[$in][]") == "apple" and params.get("q[$nin][]") != "apple"
         return Resp(200, json.dumps({"result": [7] if found else []}))
 
     ctx = _ctx(tmp_path, target)
@@ -638,8 +638,9 @@ def test_query_operators_travel_in_bracket_notation(tmp_path, parses_brackets):
 
     result = AgentProbe("injection", Planner).run(ctx)
     assert result.verdict == ("confirmed" if parses_brackets else "inconclusive")
-    assert {"q[$eq]": "apple"} in sent and {"q[$in][]": "apple"} in sent and {"q": "apple"} in sent
-    assert all(len(p) == 1 for p in sent)                    # only the declared input, nothing else varies
+    assert {"q[$in][]": "apple"} in sent and {"q": "apple"} in sent
+    assert any(set(p) == {"q[$in][]", "q[$nin][]"} for p in sent)
+    assert all(k == "q" or k.startswith("q[") for p in sent for k in p)     # only the declared input varies
 
 
 def test_bracket_notation_round_trips_to_the_operator_object():
@@ -697,6 +698,56 @@ def test_literal_inputs_vs_query_operators(tmp_path, mechanism, vulnerable):
 
     result = AgentProbe("injection", Planner).run(ctx)
     assert result.verdict == ("confirmed" if vulnerable else "inconclusive")
+
+
+def test_operator_controls_reach_a_store_without_eq(tmp_path):
+    """T-035: a document store without $eq, such as NeDB or an older minimongo, answers it with a server error,
+    which stops the controls (VER-011). The operators the Verifier generates are ones such stores implement, so the
+    experiment decides."""
+    def target(m, u, h, **kwargs):
+        value = kwargs["json"]["q"]
+        if isinstance(value, dict):
+            unknown = sorted(set(value) - {"$in", "$nin"})
+            if unknown:
+                return Resp(500, json.dumps({"error": f"Unrecognized operator: {unknown[0]}"}))
+            found = all(("apple" in arg) == (op == "$in") for op, arg in value.items())
+        else:
+            found = value == "apple"
+        return Resp(200, json.dumps({"result": [7] if found else []}))
+
+    ctx = _ctx(tmp_path, target)
+    ctx.scope = {**ctx.scope, "injection_inputs": [{"finding_id": "T-1", "path": "/search", "input_location": "json",
+                                                    "input_name": "q", "semantics": "literal"}]}
+    ctx.plan = replace(ctx.plan, cwe="CWE-943", cls="injection")
+    declaration = plan(baseline="apple", input_location="json")["args"] | {"operator_challenge": "nosql"}
+    confirmed = {"verdict": "confirmed", "rationale": "operator controls", "proof_steps": list(range(2, 12))}
+    actions = [{"tool": "plan_test", "args": declaration}, {"verdict": confirmed}]
+
+    class Planner:
+        def next_step(self, context, history):
+            return actions.pop(0) if actions else {"verdict": {"verdict": "inconclusive", "rationale": "stopped"}}
+
+    assert AgentProbe("injection", Planner).run(ctx).verdict == "confirmed"
+
+
+def test_operator_controls_select_no_record_the_literal_does_not():
+    """The true operator controls select exactly the records the literal baseline selects, also in an array field,
+    and the false ones none, so a control sent on a write changes no other record (VER-011, VER-014)."""
+    from appsec_verifier.agent.experiments import operator_controls
+
+    def selects(field, control):     # as MongoDB does: an array field matches when one of its elements does
+        values = field if isinstance(field, list) else [field]
+        if not isinstance(control, dict):
+            return control in values
+        return all(any(v in arg for v in values) == (op == "$in") for op, arg in control.items())
+
+    controls = operator_controls({"baseline": "apple", "input_location": "json"})
+    groups = ("positive", "negative", "positive_other", "negative_other")
+    assert {op for g in groups for op in controls[g]} <= {"$in", "$nin"}
+    for record in ("apple", "pear", ["apple", "kiwi"], ["a", "z"], 7, None):
+        literal = selects(record, "apple")
+        assert selects(record, controls["positive"]) == selects(record, controls["positive_other"]) == literal
+        assert not selects(record, controls["negative"]) and not selects(record, controls["negative_other"])
 
 
 def test_command_controls_reject_side_effects(tmp_path):

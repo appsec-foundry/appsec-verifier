@@ -418,7 +418,7 @@ class AgentTools:
             ):
                 raise ToolError("the plan's input does not match a declared injection_inputs entry for this finding")
         if plan.get("operator_challenge"):
-            # VER-011: a JSON field, or a query parameter the controls reach in bracket notation (q[$eq]=…).
+            # VER-011: a JSON field, or a query parameter the controls reach in bracket notation (q[$in][]=…).
             if (self.ctx.plan.cwe != "CWE-943" or plan.get("input_location") not in ("json", "params")
                     or plan["kind"] != "boolean"):
                 raise ToolError("NoSQL operator challenges need a JSON field or query parameter in a boolean "

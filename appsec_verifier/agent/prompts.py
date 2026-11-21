@@ -391,7 +391,7 @@ def _class_rules(ctx) -> str:
                 "placeholder, such as 1 && {{predicate}} or abc' && {{predicate}} && 'x'=='x, never ||. The tool "
                 "generates fresh complementary predicates; the true ones must repeat the baseline's answer, the false "
                 "ones suppress it. Such an input has no engine-error probe. A query parameter may instead take "
-                "operator_challenge=nosql: the controls travel in bracket notation (q[$eq]=…), which Express 4 "
+                "operator_challenge=nosql: the controls travel in bracket notation (q[$in][]=…), which Express 4 "
                 "and PHP turn into an object. ")
         return _injection_rules()
     if cls == "access-control":

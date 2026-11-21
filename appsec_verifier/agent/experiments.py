@@ -447,18 +447,21 @@ def error_controls(plan, cwe, marker=""):
 
 
 def operator_controls(plan):
-    """VER-011: fresh equality and membership operators against the literal baseline lookup. In a query parameter
-    they travel in bracket notation (bracket_params), whose values arrive as text, so they are text there too."""
+    """VER-011: fresh membership operators against the literal baseline lookup, $in alone and with $nin. Document
+    stores without $eq, such as NeDB or an older minimongo, implement both, and unlike a range they select no record
+    the literal does not, also in an array field, so a control sent on a write changes no other record. In a query
+    parameter they travel in bracket notation (bracket_params), whose values arrive as text, so they are text there
+    too."""
     baseline = plan["baseline"]
     if plan.get("input_location") in ("params", "query"):
         baseline = str(baseline)
     absent = "vrf" + secrets.token_hex(16)
     return {
         **plan,
-        "positive": {"$eq": baseline},
-        "negative": {"$eq": absent},
-        "positive_other": {"$in": [baseline]},
-        "negative_other": {"$in": [absent]},
+        "positive": {"$in": [baseline]},
+        "negative": {"$in": [absent]},
+        "positive_other": {"$in": [baseline], "$nin": [absent]},
+        "negative_other": {"$in": [absent], "$nin": [baseline]},
     }
 
 
