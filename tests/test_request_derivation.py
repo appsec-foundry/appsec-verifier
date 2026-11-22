@@ -214,6 +214,17 @@ def test_unrelated_source_does_not_authorize_requests_even_with_matching_text(tm
         derive(ctx)
 
 
+@pytest.mark.parametrize("tool", ["search_source", "find_source"])
+def test_a_source_search_supplies_no_request_and_the_refusal_names_the_read_that_does(tmp_path, tool):
+    ctx = context(tmp_path)
+    ctx.agent_history = [{"tool": tool, "args": {"text": "/go/next"}, "result": {"matches": [
+        {"path": "routes/basket.ts", "line": 1, "text": "app.get('/go/next', req => req.query.q)"}]}}]
+    with pytest.raises(ToolError, match="read the declaring file with read_source and cite that step"):
+        derive(ctx)
+    source(ctx, "app.get('/go/next', req => req.query.q)")
+    assert derive(ctx)["accepted"]
+
+
 def test_local_import_supplies_a_related_route_but_not_an_unrelated_one(tmp_path):
     ctx = context(tmp_path)
     source(ctx, "import './redirect'")

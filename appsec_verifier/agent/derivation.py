@@ -699,7 +699,9 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         parser.feed(response.get("body", "") if successful else "")     # forms and links: a successful page only
         candidates = parser.routes
     else:
-        raise ValueError("only recorded source declarations and application links or forms supply requests")
+        raise ValueError("only recorded source declarations and application links or forms supply requests"
+                         + ("; a source search is not evidence: read the declaring file with read_source and cite "
+                            "that step" if h.get("tool") in ("search_source", "find_source") else ""))
     roots = original_routes(ctx)
     # Bootstrap only at the evidenced source location when the assessment has no route.
     if not roots and source:
