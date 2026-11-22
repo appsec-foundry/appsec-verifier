@@ -340,6 +340,47 @@ def test_steps_are_added_only_to_a_first_plan_whose_proof_would_not_fit(tmp_path
         assert all("max_steps" not in r for r in agent.results[1:])
 
 
+def test_a_result_not_verified_says_where_it_was_flagged_what_the_test_showed_and_what_it_left_out(tmp_path):
+    """Run 162 (VER-013): a blocked card read showed the agent's words under the verdict, which read as if the weakness
+    were refuted. Not verified now says, from the finding and the recorded steps, where the assessment flagged it,
+    what the test showed, the requests the result rests on and what it did not test."""
+    from appsec_verifier.progress import RunProgress
+    from appsec_verifier.verify.report import not_verified, to_markdown
+
+    ctx = card_context(tmp_path, "refused")
+    result = run(ctx, "blocked-by-control", CARD_STEPS)
+    assert result.verdict == "blocked-by-control", result.rationale
+    row = {"verdict": result.verdict, "confidence": result.confidence, "proof": result.proof, "poc": result.poc,
+           "class": "access-control", "result_id": "VF-1", "rationale": "the agent's own words",
+           "observations": result.observations,
+           "finding_ref": {"id": "T-1", "title": "Read another user's card", "instance": ctx.plan.instance,
+                           "cwe": ctx.plan.cwe}}
+    said = not_verified(row)
+    assert said["flagged"] == f"{ctx.plan.instance}, CWE-639"
+    assert said["showed"].startswith("Insecure direct object reference blocked: account-2 was refused the record")
+    assert said["tested"] == ["GET /api/cards", "GET /api/cards/5", "GET /api/cards/6"]
+    assert said["untested"] == "other requests of this finding; no write request was sent"
+    entry = to_markdown({"meta": {}, "results": [row]}).split("#### ", 1)[1]
+    assert entry.index("**Why it was flagged:**") < entry.index("**What the test showed:** Insecure direct object "
+                                                                  "reference blocked") < entry.index("**Tested:**")
+    assert "**Not tested:** other requests of this finding; no write request was sent. Not verified means" in entry
+    out = io.StringIO()
+    progress = RunProgress(out, env={})
+    progress.begin([ctx.plan])
+    progress.finding(ctx.plan)
+    progress.finished(ctx.plan, result)
+    done = " ".join(out.getvalue().split())
+    assert "Flagged at" in done and "Not tested: other requests of this finding" in done
+    assert "the agent's own words" not in done
+    # Refused cases: a verified or undecided result gets none of it, and a sent write is not denied.
+    assert not_verified({**row, "verdict": "confirmed"}) is None
+    assert not_verified({**row, "verdict": "inconclusive"}) is None
+    assert not_verified({**row, "proof": {**row["proof"], "checked": False}}) is None
+    written = copy.deepcopy(row)
+    written["poc"]["steps"][0]["line"] = written["poc"]["steps"][0]["line"].replace("GET", "POST", 1)
+    assert not_verified(written)["untested"] == "other requests of this finding"
+
+
 def test_a_negative_verdict_citing_a_source_read_names_the_requests_to_cite(tmp_path):
     steps = [CARD_STEPS[0], {"tool": "read_source", "args": {"path": "routes/basket.ts"}}, *CARD_STEPS[1:]]
     result = run(card_context(tmp_path, "refused"), "blocked-by-control", steps)      # cites steps 2-8

@@ -82,7 +82,15 @@ from .planning import category, category_name
 from .preflight import printable
 from .term_style import Style, columns
 from .verify.probes import proof_shown
-from .verify.report import _ORDER, _VERDICT_LABEL, VERIFIED_VERDICTS, _first_sentence, _overall, why_not_confirmed
+from .verify.report import (
+    _ORDER,
+    _VERDICT_LABEL,
+    VERIFIED_VERDICTS,
+    _first_sentence,
+    _overall,
+    not_verified_text,
+    why_not_confirmed,
+)
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
@@ -818,6 +826,11 @@ class RunProgress:
             why = _clip(self._text(why), 320) if why else (
                 _clip(_first_sentence(self._text(result.rationale)), 160)
                 if result.rationale and not self._noted and not self._explained else "")
+            negative = not_verified_text({"verdict": result.verdict, "proof": result.proof, "poc": result.poc,
+                                          "finding_ref": {"instance": getattr(plan, "instance", None),
+                                                          "cwe": getattr(plan, "cwe", None)}})
+            if negative:        # VER-013: from the finding and the recorded steps, not the agent's words
+                why = _clip(self._text(negative), 400)
             self.runs_done += 1
             self._group_verdicts.setdefault(plan.id, []).append(verdict)
             self._group_end = self._clock()

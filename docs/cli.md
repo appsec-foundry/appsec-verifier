@@ -120,7 +120,7 @@ Ctrl-C stops a run. The finding under test ends `inconclusive`, and the report i
 
 ## What the results mean
 
-Each tested finding gets one verdict. The console and the report show it by whether the weakness is verified, in red, undecided, in yellow, or not verified, in grey, and the run explains these colours before the first finding. A negative verdict applies only to the requests that were tested: not verified does not mean the weakness is absent.
+Each tested finding gets one verdict. The console and the report show it by whether the weakness is verified, in red, undecided, in yellow, or not verified, in grey, and the run explains these colours before the first finding. A negative verdict applies only to the requests that were tested: not verified does not mean the weakness is absent. For such a result the console and the report say where the assessment flagged the weakness, what the test showed, which requests it rests on and what it did not test.
 
 | Verdict | Shown as | Meaning |
 | --- | --- | --- |

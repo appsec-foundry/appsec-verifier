@@ -1715,7 +1715,13 @@ def why_summary(ctx, history: list[dict], shown: list[tuple[int, dict]], result)
     rows = comparison_rows(ctx, history, shown) if cls == "access-control" else None
     if rows is not None:
         summary = comparison_summary(ctx, history, rows, result)
-        return {k: summary[k] for k in ("lead", "checks", "closing")} if summary["checks"] else None
+        if summary["checks"]:
+            return {k: summary[k] for k in ("lead", "checks", "closing")}
+        # VER-013: a checked negative verdict keeps what its comparison showed, for the report and the console; its
+        # images keep their own head.
+        if result.verdict in ("blocked-by-control", "not-reproducible") and proof.get("checked") is True:
+            return {"lead": summary["lead"], "checks": [], "closing": ""}
+        return None
     said = proof_shown(proof, cls)
     if result.verdict not in ("confirmed", "shown-without-exploit") or proof.get("checked") is not True or said is None:
         return None
@@ -2263,6 +2269,7 @@ def _attach(ctx, history: list[dict], steps: list[dict], result, cited, highligh
     why = why_summary(ctx, history, shown_entries, result) if shown_entries else None
     if why:             # why the result has its verdict, for the report as for the images
         why = result.poc["why"] = ctx.sessions.redact(why) if ctx.sessions is not None else why
+        why = why if why["checks"] else None       # a lead alone heads no image: the images say it themselves
     # An injection experiment's proof image comes before any other: the comparison its proof rests on.
     placed = step_roles(ctx, history, shown_entries)
     overview = cls == "injection" and sum(bool(placed.get(n, ("",))[0]) for n, _ in shown_entries) >= 2

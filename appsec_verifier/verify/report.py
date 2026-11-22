@@ -382,6 +382,37 @@ def _refs(*steps) -> str:
         numbers[0] if len(numbers) == 1 else ", ".join(numbers[:-1]) + " and " + numbers[-1])
 
 
+_WRITES = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def not_verified(r: dict) -> dict | None:
+    """For a checked negative verdict (VER-013): where the assessment flagged the weakness, what the test showed, the
+    requests the result rests on and what the test left out, from the finding and the recorded steps, never from the
+    model's words. None for any other result: not verified says only that these requests did not show it."""
+    if r.get("verdict") not in ("blocked-by-control", "not-reproducible") or (r.get("proof") or {}).get("checked") \
+            is not True:
+        return None
+    fr, steps = r.get("finding_ref") or {}, _steps(r)
+    tested = list(dict.fromkeys(f"{s['method']} {s['path']}" for s in steps if s["decisive"] and s["method"]))
+    untested = "other requests of this finding" + ("" if any(s["method"] in _WRITES for s in steps)
+                                                   else "; no write request was sent")
+    return {"flagged": ", ".join(str(v) for v in (fr.get("instance"), fr.get("cwe")) if v) or None,
+            "showed": ((r.get("poc") or {}).get("why") or {}).get("lead"), "tested": tested, "untested": untested}
+
+
+def not_verified_text(r: dict) -> str | None:
+    """`not_verified` in one paragraph, for the console's done line and its results."""
+    said = not_verified(r)
+    if said is None:
+        return None
+    tested = said["tested"][:4]
+    return " ".join(filter(None, (
+        f"Flagged at {said['flagged']}." if said["flagged"] else "",
+        _sentence(said["showed"]) if said["showed"] else "",
+        "Tested: " + ", ".join(tested) + (", …" if len(said["tested"]) > 4 else "") + "." if tested else "",
+        f"Not tested: {said['untested']}.")))
+
+
 def _shown(r: dict, *, detail: bool = True) -> str | None:
     """What a confirmed result, or one shown without exploit (VER-066), showed, in one sentence built from the
     proof the code checked and its cited steps, never from the model's words. With `detail` the request and step
@@ -763,6 +794,8 @@ def _summary(tested, untested, threats: dict, ratings: dict, kinds: dict) -> lis
             result = f"{_RESULT_BADGE.get(verdict, '')} " + (f"**{label}**" if verdict == "confirmed" else label)
             link = f"[{_inline(fid, cell=True)}](#{anchor})" if anchor else _inline(fid, cell=True)
             what = next((s for s in (_shown(r, detail=False) for r in rows) if s), None)
+            if what is None:            # a checked negative verdict: what its test showed (VER-013)
+                what = next((s["showed"] for s in map(not_verified, rows) if s and s["showed"]), None)
             if what is None:
                 why = next((w for w in (why_not_confirmed(r, _declared_variant(r, threats)) for r in rows) if w), "")
                 what = why[:1].upper() + why[1:] + ("." if why and not why.endswith(".") else "")
@@ -831,6 +864,9 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
            "",
            "| " + " | ".join(head) + " |", "|" + " --- |" * len(head), "| " + " | ".join(cells) + " |"]
     comparison = (r.get("poc") or {}).get("why") or {}
+    negative = not_verified(r)
+    if negative and negative["flagged"]:     # VER-013: where the assessment saw it, before what the test showed
+        out += ["", f"**Why it was flagged:** the assessment's finding at {_code(negative['flagged'])}."]
     if comparison.get("checks"):       # why the verdict follows, as in the images (poc.why_summary)
         out += ["", f"**What the test showed:** {_sentence(comparison['lead'])}", "",
                 *(f"- {'✓' if c['ok'] else '✗'} **{_inline(c['name'], 60)}:** {_sentence(c['text'])}"
@@ -838,6 +874,13 @@ def _entry(r: dict, rating: dict | None, *, first: bool, details: bool, analyzer
                 "", _sentence(comparison["closing"])]
     elif shown := _shown(r):
         out += ["", f"**What the test showed:** {shown}"]
+    elif negative and negative["showed"]:
+        out += ["", f"**What the test showed:** {_sentence(negative['showed'])}"]
+    if negative:                        # VER-013: what the result rests on and what it does not cover
+        if negative["tested"]:
+            out += ["", "**Tested:** " + ", ".join(_code(t) for t in negative["tested"]) + "."]
+        out += ["", f"**Not tested:** {negative['untested']}. Not verified means these requests did not show the "
+                    "weakness, not that it is absent."]
     if why := why_not_confirmed(r, variant):
         out += ["", f"**Why not confirmed:** {_sentence(why)}"]
     notes = []
