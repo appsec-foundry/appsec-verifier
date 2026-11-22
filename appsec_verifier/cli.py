@@ -886,6 +886,21 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
     contact = any(evidence_id(p) not in skipped for p in probed)
     parallel = max(1, min(parallel, len({p.id for p in probed if evidence_id(p) not in skipped})))  # those to test
 
+    # VER-068: the newest checked confirmation of each finding variant to test, from earlier runs against this target.
+    earlier, earlier_note = None, "not used (--no-earlier-hints)"
+    if not getattr(args, "no_earlier_hints", False):
+        from .run_dirs import project_name
+        from .verify.earlier import earlier_confirmations, plan_key
+
+        wanted = {k for p in probed if evidence_id(p) not in skipped and (k := plan_key(p))}
+        try:
+            earlier = earlier_confirmations(data_base() / project_name(doc), target, wanted=wanted,
+                                            first=existing_path if existing is not None else None) if wanted else {}
+        except OSError:
+            earlier = {}
+        hinted = {p.id for p in probed if evidence_id(p) not in skipped and plan_key(p) in earlier}
+        earlier_note = f"an earlier confirmation to start from for {_count(len(hinted), 'finding')}" if hinted else None
+
     summary = _assessment_summary(doc)
     st = Style.for_stream(sys.stdout)
     out = Path(args.output)
@@ -897,6 +912,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
         ("Browser", browser_note),
         ("Callback", listener_note),
         ("Marker file", _marker_note(scope, sel)),
+        ("Earlier runs", earlier_note),
         ("Report", report_note),
     )
     if not args.test_all:  # what is missing is said once, in the test plan
@@ -1077,6 +1093,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             ask_writes=write_prompt,
             failures=debug_file,
             parallel=parallel,
+            earlier_hints=earlier,
         )
     finally:
         if progress is not None:
@@ -2386,6 +2403,12 @@ def _add_run_options(vf: argparse.ArgumentParser, *, guided: bool) -> None:
     )
     _add_account_options(src)
     src.add_argument("--source", metavar="DIR", help="checkout of the application's source code, read by the agent")
+    src.add_argument(
+        "--no-earlier-hints",
+        action="store_true",
+        help="do not give the agent the requests with which an earlier run of this project confirmed a finding "
+        "against this target, e.g. to compare Verifier versions",
+    )
 
     sel = vf.add_argument_group(
         "findings to test",

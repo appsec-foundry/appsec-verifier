@@ -62,6 +62,9 @@ VERIFIED_VERDICTS = ("confirmed", "shown-without-exploit")
 VERIFIED = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control")
 # Run-wide limits: a finding stopped by one, or not tested because of one, was cut off with the run.
 RUN_LIMITS = ("requests", "cost", "time", "calls", "window")
+# Reports read back are plain data; libyaml's safe loader reads them about nine times faster where it is built in,
+# which matters when a run reads earlier runs' reports (VER-068).
+_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 def resume_problems(existing: dict, assessment_sha256: str | None, target: str) -> list[str]:
@@ -82,16 +85,22 @@ def verified_findings(existing: dict) -> set[str]:
             and (r.get("proof") or {}).get("checked") is True and (r.get("proof") or {}).get("contract") == 2}
 
 
+def checked_verdict(r: dict) -> bool:
+    """A definite verdict whose proof the code checked under the current contract (3); an access-control
+    confirmation also needs its recorded independent restriction. --resume keeps such a result (VER-037), and a
+    confirmation of this kind is the only one a later run starts from (VER-068)."""
+    proof = r.get("proof") or {}
+    return (r.get("verdict") in VERIFIED and proof.get("checked") is True and proof.get("contract") == 3
+            and (r.get("class") != "access-control" or r.get("verdict") != "confirmed"
+                 or bool(proof.get("access_restriction"))))
+
+
 def remaining_variants(plans, existing):
     """Old aggregate results never invent coverage for a named variant. A finding one variant confirmed is done:
     its other variants are not taken up again (VER-026)."""
     from ..planning import expand_variants
 
-    checked = [r for r in existing.get("results", []) if r.get("verdict") in VERIFIED
-               and (r.get("proof") or {}).get("checked") is True
-               and (r.get("proof") or {}).get("contract") == 3
-               and (r.get("class") != "access-control" or r.get("verdict") != "confirmed"
-                    or (r.get("proof") or {}).get("access_restriction"))]
+    checked = [r for r in existing.get("results", []) if checked_verdict(r)]
     completed = {(r["finding_ref"]["id"], r["finding_ref"].get("variant_digest")) for r in checked}
     confirmed = {r["finding_ref"]["id"] for r in checked if r.get("verdict") == "confirmed"}
     return [p for p in expand_variants(plans) if (p.id, p.variant_digest) not in completed and p.id not in confirmed]
@@ -154,7 +163,7 @@ def read_report(path: Path) -> tuple[dict | None, list[str]]:
 
     try:
         with open(path, encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh)
+            doc = yaml.load(fh, Loader=_SAFE_LOADER)
     except (OSError, yaml.YAMLError) as exc:
         return None, [f"cannot read it: {type(exc).__name__}"]
     if not isinstance(doc, dict):
@@ -968,6 +977,10 @@ def _details(r: dict) -> list[str]:
     """The appendix part of a tested finding (VER-020): the test plan, the test agent's own explanation and
     observations, technical QA (VER-046) and evidence review (VER-042). Model text stays in code fences."""
     out = []
+    if earlier := r.get("earlier_confirmation"):        # VER-068
+        tested = f", tested {_inline(earlier['tested'], 40)}" if earlier.get("tested") else ""
+        out += ["", f"**Started from an earlier confirmation:** run {_inline(earlier.get('run'), 60)}{tested}. Its "
+                "requests were a starting point for the test agent, not evidence."]
     if r.get("planning"):
         plan = yaml.safe_dump(r["planning"], sort_keys=False, allow_unicode=True, width=110).rstrip()
         out += ["", "**Test plan** (assumptions are not proof)", "", _fenced(plan, "yaml")]

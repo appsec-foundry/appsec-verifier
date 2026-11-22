@@ -442,7 +442,8 @@ _FLAGS = (("print_results", "--print"), ("resume", "--resume"), ("overwrite", "-
           ("annotate", "--annotate"), ("allow_intrusive", "--allow-intrusive"),
           ("read_only", "--read-only"), ("declared_access_only", "--declared-access-only"),
           ("dry_run", "--dry-run"), ("headful", "--headful"), ("test_all", "--test-all"),
-          ("show_costs", "--show-costs"), ("strict_severity", "--strict-severity"))
+          ("show_costs", "--show-costs"), ("strict_severity", "--strict-severity"),
+          ("no_earlier_hints", "--no-earlier-hints"))
 
 
 def equivalent_invocation(args) -> str:

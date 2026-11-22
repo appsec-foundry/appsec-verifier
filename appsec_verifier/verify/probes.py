@@ -234,6 +234,8 @@ class ProbeContext:
     created: set = field(default_factory=set)  # identifiers the owner's creating answers returned (VER-010)
     owned: set = field(default_factory=set)    # of those, the ones the owner's read showed with its marker
     prior_results: list[dict] = field(default_factory=list)
+    # VER-068: how an earlier run confirmed this finding variant (verify/earlier.py), a hint for the agent, never proof
+    earlier_confirmation: dict | None = None
     evidence_test_planner: object | None = None
     evidence_reviewer_factory: object | None = None
     evidence_panels: list[dict] = field(default_factory=list)

@@ -116,6 +116,8 @@ Without `--output`, every run writes to a new directory that only you can read, 
 
 `--resume` continues an interrupted or limited run. Findings that were confirmed, shown without exploit, not reproducible or blocked by a control keep their verdict, and the others are tested again. Without `--output` it continues the newest run for the same assessment and target.
 
+A finding that an earlier run of the same project confirmed against the same target starts from the requests of that confirmation, which the test agent gets as a hint. The proof is checked again as in any run, and the report names the earlier run. `--no-earlier-hints` turns this off, for example to compare Verifier versions. See the [specification](specification.md#earlier-confirmations-ver-068) for which runs count.
+
 Ctrl-C stops a run. The finding under test ends `inconclusive`, and the report is still written.
 
 ## What the results mean

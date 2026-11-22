@@ -153,6 +153,11 @@ properties:
               requests for when asked; they were tested in intrusive mode.
           destructive_actions:  { const: forbidden }
           state_changes_cleaned: { type: [boolean, "null"] }
+      earlier_hints:
+        type: boolean
+        description: >-
+          VER-068: whether the test agent could start from earlier runs' confirmations;
+          false when the operator turned them off with --no-earlier-hints.
 
   results:
     type: array
@@ -455,6 +460,18 @@ properties:
           properties:
             started:  { type: [string, "null"] }
             finished: { type: [string, "null"] }
+
+        earlier_confirmation:
+          type: object
+          description: >-
+            VER-068: the earlier run whose checked confirmation of this finding variant the
+            test agent received as a starting point. A hint, never proof: the verdict rests
+            on this run's own steps.
+          required: [run]
+          additionalProperties: false
+          properties:
+            run:    { type: string, description: Name of the earlier run's directory. }
+            tested: { type: [string, "null"], description: When that run tested the finding (UTC). }
 
         retained: { type: boolean }
         tested_build:

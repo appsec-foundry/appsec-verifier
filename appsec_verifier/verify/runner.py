@@ -1,6 +1,6 @@
 """Orchestrate a verification run over already-selected findings (VER-008,
-VER-020, VER-037, VER-046, VER-051, VER-065). Pure, injectable logic: the probe registry, HTTP client, budget, and
-clock are all passed in, so the whole flow is tested offline. An optional
+VER-020, VER-037, VER-046, VER-051, VER-065, VER-068). Pure, injectable logic: the probe registry, HTTP client,
+budget, and clock are all passed in, so the whole flow is tested offline. An optional
 `progress` (progress.RunProgress) shows each finding with a probe, its
 steps, its proof and, once its last variant is done, a changed rating
 (VER-039) on the console. Returns the
@@ -182,6 +182,7 @@ def run_verification(
     ask_writes=None,
     failures=None,
     parallel: int = 1,
+    earlier_hints: dict | None = None,
 ) -> dict:
     """`skipped` maps a finding id to why this run cannot confirm it; such a
     finding is not tested and reports that reason (not-attempted).
@@ -191,10 +192,13 @@ def run_verification(
     `ask_writes` (write_prompt.WritePrompt), in an interactive run that may ask, decides write requests safe
     mode does not send (VER-052): the test agent of a finding can ask while it tests. A finding the operator
     allows writes for runs in intrusive mode.
-    `parallel` is how many findings are tested at the same time (VER-065); 1 tests them one after another."""
+    `parallel` is how many findings are tested at the same time (VER-065); 1 tests them one after another.
+    `earlier_hints` maps a finding variant (earlier.plan_key) to the hint of an earlier run's confirmation its test
+    agent starts from (VER-068); None when the operator turned them off, which the report's meta records."""
     now = now or datetime.now(timezone.utc)
     from ..auth.model_data import model_data
     from ..planning import evidence_id
+    from .earlier import plan_key, provenance
 
     skipped = skipped or {}
     budget = budget or RunBudget(limits)
@@ -281,6 +285,7 @@ def run_verification(
                  "proof_checked": bool((r.get("proof") or {}).get("checked")) if r else False}
                 for m, r in variants for p in (entries[m][0],)
             ][:32],
+            earlier_confirmation=(earlier_hints or {}).get(plan_key(plan)),
             prior_results=[
                 {
                     "finding": r["finding_ref"]["id"],
@@ -464,6 +469,8 @@ def run_verification(
             if res.verdict != "not-attempted":
                 entry_results[n]["timing"] = {"started": started, "finished": _iso(datetime.now(timezone.utc))}
             ctx = contexts.get(key)
+            if ctx is not None and res.verdict != "not-attempted" and ctx.earlier_confirmation:
+                entry_results[n]["earlier_confirmation"] = provenance(ctx.earlier_confirmation)    # VER-068
             if ctx is not None and res.verdict != "not-attempted":
                 groups.setdefault(plan.id, []).append((n, plan, ctx, res))
             # A finding is reviewed and rated once, after its last variant; deferral (above) keeps a confirmed
@@ -491,9 +498,12 @@ def run_verification(
                     state["stopped"] = review_stop
                 for idx, reviewed_plan, _, reviewed_result in group:
                     timing = entry_results[idx].get("timing")
+                    hint = entry_results[idx].get("earlier_confirmation")
                     entry_results[idx] = _result_entry(0, reviewed_plan, reviewed_result)
                     if timing is not None:
                         entry_results[idx]["timing"] = timing
+                    if hint is not None:
+                        entry_results[idx]["earlier_confirmation"] = hint
                     contexts.pop(evidence_id(reviewed_plan), None)
         if shown and progress is not None and not state["interrupted"]:
             rating = None
@@ -646,6 +656,7 @@ def run_verification(
         },
         "contacted_target": bool(contacted),
         "interrupted": interrupted,
+        "earlier_hints": earlier_hints is not None,    # VER-068: False when the operator turned them off
     }
     for row in results:
         row["tested_build"] = {k: meta["target"][k] for k in ("detected_build", "build_match")}

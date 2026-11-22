@@ -1,5 +1,5 @@
 """The action schemas and prompts every model host shares (VER-011, VER-017, VER-019, VER-043, VER-046, VER-047,
-VER-050, VER-055, VER-056, VER-057, VER-059, VER-066, VER-067).
+VER-050, VER-055, VER-056, VER-057, VER-059, VER-066, VER-067, VER-068).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, find_source, search_source, browser_check,
@@ -10,7 +10,9 @@ the finding's own class only, without the finding's marker, so it is the same
 for every finding of a class; `_seed()` describes the task and the run mode and
 carries the requests and the description the assessment gives for the finding,
 marked as data, and the marker with the proof instruction that names it. No
-credential and no target content is part of them.
+credential and no target content is part of them, except, in the seed of a
+finding an earlier run against the same target confirmed, the redacted requests
+of that confirmation, also marked as data (VER-068).
 """
 
 from __future__ import annotations
@@ -765,6 +767,10 @@ def _seed(ctx) -> str:
         "dependencies": context.get("dependencies", []),
         "unknowns": getattr(p, "verification_context", {}).get("unknowns", []),
     }
+    if hint := getattr(ctx, "earlier_confirmation", None):     # VER-068: only where an earlier run confirmed it
+        from ..verify.earlier import for_prompt
+
+        extra["earlier_confirmation"] = for_prompt(hint)
     from ..auth.model_data import model_data
 
     extra = model_data(extra, getattr(ctx, "sessions", None))

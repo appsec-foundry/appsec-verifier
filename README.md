@@ -107,7 +107,7 @@ Each finding gets one of these verdicts, shown by whether the weakness is verifi
 - Requests go only to the scope, during its test period, never to cloud metadata addresses, and only after you confirm the test plan. Requests, rate, model calls, cost and run time are limited for the whole run ([defaults](data/limits.yaml)), also while it tests up to four findings at the same time ([`--parallel`](docs/cli.md#limits)).
 - Only GET, HEAD and OPTIONS, unless you allow writes with `--allow-intrusive` or your yes; never DELETE. Created records stay on the target, so allow writes only on an instance you can reset.
 - The Verifier uses test credentials for sign-in and target requests and masks them in model prompts, logs and reports. It also masks recognizable secrets in source files and target responses before sending excerpts to a model.
-- The agent has no shell and writes no files. It sees the target's responses and, with `--source`, its source code, so target data reaches the model.
+- The agent has no shell and writes no files. It sees the target's responses, the requests with which an earlier run confirmed a finding against the same target (off with `--no-earlier-hints`) and, with `--source`, its source code, so target data reaches the model.
 
 ## Scope and test accounts
 
