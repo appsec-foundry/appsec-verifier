@@ -117,6 +117,19 @@ def test_the_proof_line_names_the_form_and_a_qa_objection_has_its_own_line():
     assert "✓ proof checked: same answer without credentials, unlike a random path · steps 4, 5, 6" in text
 
 
+def test_a_stopped_technical_qa_says_why():
+    """Runs 154, 156 and 159 showed "Technical QA: stopped" without the reason: a model call that failed."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.step({"step": None, "tool": "technical_review", "note": "Technical QA: stopped",
+                   "result": {"status": "stopped", "issues": [],
+                              "reason": "Technical QA stopped: Claude CLI call failed: model_refused (exit 1)."}})
+    progress.close()
+    assert "Technical QA stopped: Claude CLI call failed: model_refused (exit 1)." in " ".join(out.getvalue().split())
+
+
 def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_the_finding(monkeypatch):
     from appsec_verifier.endpoints import Endpoint
 

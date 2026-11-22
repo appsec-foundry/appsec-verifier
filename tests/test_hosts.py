@@ -552,6 +552,21 @@ def test_a_failed_claude_call_names_the_cli_error_kind(subtype, error):
     assert host.call("s", "p", 10, _ctx().budget).error == error
 
 
+@pytest.mark.parametrize("stop, error", [("refusal", "model_refused (exit 1)"),
+                                         ("max_tokens", "output_truncated (exit 1)")])
+def test_a_claude_call_the_model_stopped_is_named_and_not_tried_again(stop, error):
+    """Runs 154, 156 and 159: Sonnet 5.5's safeguards stopped a step after its structured answer; Claude CLI 2.1.330
+    dropped the answer and reported `is_error` with `stop_reason: refusal` and exit 1, which read as host_error and
+    was tried again. A stop the model gives instead of an answer is named as with anthropic-api and, as no passing
+    failure (VER-015), not repeated."""
+    failed = _lines(CLAUDE_INIT, _claude_result(None, cost=0.0037, is_error=True, stop_reason=stop,
+                                                result="API Error: the safeguards flagged this session"))
+    host, run = _claude([(1, failed, ""), _lines(CLAUDE_INIT, _claude_result(_wire("http_request", path="/x")))])
+    ctx = _ctx()
+    HostPlanner(host).next_step(ctx, [])
+    assert len(run.calls) == 1 and ctx.model_call_failed == f"Claude CLI call failed: {error}"
+
+
 def test_claude_resolve_uses_login_or_key():
     run = FakeRun([(0, "2.1.319 (Claude Code)\n", ""), (0, json.dumps({"loggedIn": True}), "")])
     host = ClaudeHost.resolve(model=None, environ={"PATH": "/usr/bin"}, which=lambda _: "/usr/bin/claude", run=run)
@@ -870,6 +885,10 @@ def test_a_failed_model_call_is_the_report_s_reason_and_no_model_text_can_claim_
                                   "offset": 0, "observations": []}))
     assert claimed["observations"] == []
     assert why_not_confirmed(claimed) == "Agent's assessment: nothing to read."
+    # A refusal is no passing failure: the reason line says the model refused and that another model may answer.
+    refused = run(HostReply(error="model_refused (exit 1)"))
+    assert why_not_confirmed(refused) == ("Model refused to answer: Test host call failed: model_refused (exit 1). "
+                                          "Another model (--model) or a new run may get further.")
 
 
 def _openai_cache_reply(details, *, tokens=1000, status="completed"):
@@ -989,6 +1008,7 @@ def _primed(limits, cost=0.5):
 
 
 def _calls_together(host, ctx, n):
+    """n calls at the same time, each of another finding, as the runner's n workers test them (VER-065)."""
     from concurrent.futures import ThreadPoolExecutor
 
     from appsec_verifier.limits import worker_thread
@@ -1002,8 +1022,12 @@ def _calls_together(host, ctx, n):
             except LimitExceeded as exc:
                 return exc
 
-    with ThreadPoolExecutor(max_workers=n) as pool:
-        return list(pool.map(one, range(n)))
+    ctx.budget.add_testers(n)
+    try:
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            return list(pool.map(one, range(n)))
+    finally:
+        ctx.budget.add_testers(-n)
 
 
 def test_calls_a_host_stops_at_their_share_run_at_the_same_time():
@@ -1048,6 +1072,21 @@ def test_calls_at_the_same_time_never_spend_past_the_ceiling():
     assert any(isinstance(r, LimitExceeded) and r.kind == "cost" for r in results)
 
 
+def test_a_call_while_no_other_finding_is_under_test_may_use_the_whole_rest():
+    """Runs 154, 156 and 159 (VER-065): one finding under test after cheap first calls; its technical QA, $0.039, was
+    given five times the dearest call, $0.03, and the Claude CLI stopped it, although no other call could start
+    beside it. A call takes a share only while another finding can be tested beside it."""
+    ctx = _ctx(Limits(cost_limit_usd=30))
+    for usd in (0.0004, 0.003, 0.0069):      # the login-field proposal, the model test and the first step
+        ctx.budget.note_cost(usd)
+    alone = _CappedHost(cost=0.039)
+    _calls_together(alone, ctx, 1)
+    assert alone.allowances == [pytest.approx(30 - 0.0103)]
+    together = _CappedHost(cost=0.01, barrier=threading.Barrier(2, timeout=5))
+    _calls_together(together, ctx, 2)
+    assert together.peak == 2 and together.allowances == [pytest.approx(5 * 0.039)] * 2
+
+
 def test_calls_run_at_the_same_time_again_after_one_had_the_whole_rest():
     """A call that ran alone with the whole rest gives its hold back, so later calls run together again."""
     ctx = _primed(Limits(cost_limit_usd=30))
@@ -1057,12 +1096,14 @@ def test_calls_run_at_the_same_time_again_after_one_had_the_whole_rest():
     assert host.peak == 3 and host.allowances == [2.5] * 3
 
 
-@pytest.mark.parametrize(("primed", "ceiling", "allowed"), [(True, 30.0, "2.50"), (True, 5.0, "3.50"),
-                                                             (False, 30.0, "30.00")])
-def test_claude_cli_is_given_its_share_or_the_whole_rest(primed, ceiling, allowed):
+@pytest.mark.parametrize(("primed", "ceiling", "findings", "allowed"), [
+    (True, 30.0, 2, "2.50"), (True, 5.0, 2, "3.50"), (False, 30.0, 2, "30.00"), (True, 30.0, 1, "28.50")])
+def test_claude_cli_is_given_its_share_or_the_whole_rest(primed, ceiling, findings, allowed):
     host, run = _claude([_lines(CLAUDE_INIT, _claude_result(_wire("http_request", path="/x")))])
     limits = Limits(cost_limit_usd=ceiling)
-    HostPlanner(host).next_step(_primed(limits) if primed else _ctx(limits), [])
+    ctx = _primed(limits) if primed else _ctx(limits)
+    ctx.budget.add_testers(findings)
+    HostPlanner(host).next_step(ctx, [])
     argv = run.calls[0]["argv"]
     assert argv[argv.index("--max-budget-usd") + 1] == allowed
 

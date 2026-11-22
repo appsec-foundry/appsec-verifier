@@ -138,7 +138,7 @@ class APITimeoutError(Exception):
         (StatusError(429), "rate_limit (HTTP 429)"),
         (StatusError(529), "server_error (HTTP 529)"),
         (APITimeoutError("slow"), "timeout"),
-        (_msg(_wire("http_request", path="/x"), stop="refusal"), "refused"),
+        (_msg(_wire("http_request", path="/x"), stop="refusal"), "model_refused"),
         (_msg(_wire("http_request", path="/x"), stop="max_tokens"), "output_truncated"),
         (
             _msg(blocks=[SimpleNamespace(type="text", text="{}"), SimpleNamespace(type="text", text="{}")]),

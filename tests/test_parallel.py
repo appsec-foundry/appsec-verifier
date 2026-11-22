@@ -158,6 +158,60 @@ def test_findings_tested_together_call_the_model_at_the_same_time():
     assert not barrier.broken and seen == [1.25] * 3 and budget.cost == pytest.approx(1.5)
 
 
+def test_a_finding_tested_alone_may_use_the_whole_rest_of_the_cost_limit():
+    """Runs 154, 156 and 159 (VER-065, VER-015): one finding under test after the run's cheap first calls; its
+    technical QA got five times the dearest call so far, and the Claude CLI stopped it, although no other call could
+    run beside it. A call takes a share only while another finding can be tested beside it."""
+    from appsec_verifier.agent import HostPlanner, HostReply
+
+    seen = []
+
+    class Host:
+        profile, broken, caps_call_cost = "claude", None, True
+
+        def call(self, system, payload, timeout, budget, **kwargs):
+            seen.append(budget.call_allowance())
+            return HostReply(step={"action": "submit_verdict", "args_json": "{}", "note": "n"}, usd=0.039)
+
+    budget = RunBudget(Limits(cost_limit_usd=30, rate_rps=0))
+    for usd in (0.0004, 0.003, 0.0069):     # the login-field proposal, the model test and the first step
+        budget.note_cost(usd)
+    probe = Probe(work=lambda ctx: HostPlanner(Host()).next_step(ctx, []), pause=0)
+    _run([_plan("T-1")], probe, 4, budget=budget, limits=budget.limits)
+    assert seen == [pytest.approx(30 - 0.0103)]
+
+
+def test_the_last_finding_under_test_may_use_the_whole_rest_of_the_cost_limit():
+    """Once the other workers have no finding left to test, no call can start beside the last one (VER-065)."""
+    from appsec_verifier.agent import HostPlanner, HostReply
+
+    seen, first, started, both = [], {}, threading.Event(), threading.Event()
+
+    class Host:
+        profile, broken, caps_call_cost = "claude", None, True
+
+        def call(self, system, payload, timeout, budget, **kwargs):
+            seen.append(budget.call_allowance())
+            return HostReply(step={"action": "submit_verdict", "args_json": "{}", "note": "n"}, usd=0.039)
+
+    def work(ctx):
+        if ctx.plan.id == "T-1":                    # under test beside T-2, then done; its worker has nothing left
+            first["thread"] = threading.current_thread()
+            started.set()
+            assert both.wait(5)
+            return
+        assert started.wait(5)
+        both.set()
+        first["thread"].join(5)
+        HostPlanner(Host()).next_step(ctx, [])
+
+    budget = RunBudget(Limits(cost_limit_usd=30, rate_rps=0))
+    for usd in (0.0004, 0.003, 0.0069):
+        budget.note_cost(usd)
+    _run([_plan("T-1"), _plan("T-2")], Probe(work=work, pause=0), 2, budget=budget, limits=budget.limits)
+    assert seen == [pytest.approx(30 - 0.0103)]
+
+
 def test_an_intrusive_run_tests_one_finding_at_a_time():
     probe = Probe()
     _run([_plan(f"T-{n}") for n in range(1, 5)], probe, 4, safe=False, read_only=False)

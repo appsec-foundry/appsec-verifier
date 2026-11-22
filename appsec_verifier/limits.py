@@ -22,10 +22,11 @@ ceiling are serialised, the finding a model call is charged to is kept per
 thread, and `cancel` ends the run's remaining requests and model calls. A
 paid model call holds a share of the cost ceiling until its cost is counted
 (`model_slot`): on a host that stops a call at its allowance, once the
-run's first calls have shown what a call costs, a share of CALL_SHARE_FACTOR
-times the dearest call so far, so such calls run at the same time while the
-unreserved rest covers two shares; otherwise, and near the ceiling, the whole
-rest, one call at a time. A
+run's first calls have shown what a call costs and while another finding can
+be tested beside it (`add_testers`), a share of CALL_SHARE_FACTOR times the
+dearest call so far, so such calls run at the same time while the unreserved
+rest covers two shares; otherwise, and near the ceiling, the whole rest, one
+call at a time. A
 deadline can interrupt only the main thread; a worker thread the runner marks
 (`worker_thread`) checks it when the bounded work returns, and that work must
 carry the timeout itself (the model call, the request to the target).
@@ -202,6 +203,7 @@ class RunBudget:
         self._reserved = 0.0
         self._in_flight = 0
         self._alone = False         # a call holds the whole rest
+        self._testers = 0           # the runner's workers that can still test a finding (`add_testers`)
         self._paid_calls = 0        # model calls that reported a cost, and the dearest of them
         self._dearest_call = 0.0
         self._pace_lock = threading.Lock()  # one request rate for the run (VER-065)
@@ -267,9 +269,11 @@ class RunBudget:
     def model_slot(self, profile, *, capped: bool = False):
         """Hold a paid model call's share of the cost ceiling until its cost is counted (VER-015, VER-065). On a host
         that stops a call at the allowance it is given (`capped`), once CALLS_BEFORE_SHARING calls reported their
-        cost, a call takes CALL_SHARE_FACTOR times the dearest of them while the unreserved rest covers two such
-        shares, so its calls run at the same time; otherwise, and near the ceiling, a call waits until no other runs
-        and may use all of the rest (`call_allowance`). The subscription CLIs report no spend and take no share."""
+        cost and while another finding can be tested beside it, a call takes CALL_SHARE_FACTOR times the dearest of
+        them while the unreserved rest covers two such shares, so its calls run at the same time; otherwise, and near
+        the ceiling, a call waits until no other runs and may use all of the rest (`call_allowance`). A run that
+        tests one finding at a time takes no share: no call can start beside it, so a share would only cut it
+        short. The subscription CLIs report no spend and take no share."""
         if profile in ("codex-cli", "copilot-cli"):
             yield
             return
@@ -278,8 +282,8 @@ class RunBudget:
                 remaining = self.remaining_cost()
                 free = (math.inf if remaining is None else remaining) - self._reserved
                 portion = CALL_SHARE_FACTOR * self._dearest_call
-                if (capped and not self._alone and self._paid_calls >= CALLS_BEFORE_SHARING and portion > 0
-                        and free >= 2 * portion):
+                if (capped and not self._alone and self._testers > 1 and self._paid_calls >= CALLS_BEFORE_SHARING
+                        and portion > 0 and free >= 2 * portion):
                     allowance = portion
                     break
                 if self._in_flight == 0:
@@ -305,6 +309,13 @@ class RunBudget:
                 if allowance is None:
                     self._alone = False
                 self._paid_call.notify_all()
+
+    def add_testers(self, n: int) -> None:
+        """The runner's workers that can still test a finding change by `n` (VER-065). A model call takes a share of
+        the ceiling only while more than one can, since only then can another call start beside it."""
+        with self._paid_call:
+            self._testers += n
+            self._paid_call.notify_all()
 
     def call_allowance(self) -> float | None:
         """USD this thread's model call may spend: its share while others run beside it, else what is left under

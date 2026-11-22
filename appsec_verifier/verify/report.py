@@ -580,7 +580,10 @@ def why_not_confirmed(r: dict, variant: dict | None = None) -> str | None:
     observations = [str(o) for o in r.get("observations") or []]
     failed = next((o for o in observations if o.startswith(_MODEL_CALL_FAILED)), None)
     if failed:                                       # VER-024: a failed model call, not a test without proof
-        return f"Model call failed: {failed.removeprefix(_MODEL_CALL_FAILED).rstrip('.')}. A new run may get further."
+        failed = failed.removeprefix(_MODEL_CALL_FAILED).rstrip(".")
+        if re.search(r"call failed: model_refused\b", failed):    # agent/hosts.py STOP_FAILURES
+            return f"Model refused to answer: {failed}. Another model (--model) or a new run may get further."
+        return f"Model call failed: {failed}. A new run may get further."
     experiments = [o.removeprefix(_EXPERIMENT_NO_PROOF) for o in observations if o.startswith(_EXPERIMENT_NO_PROOF)]
     missing = [str(m) for m in (r.get("proof") or {}).get("missing") or []]
     if any("access restriction" in m for m in [*missing, *experiments]):

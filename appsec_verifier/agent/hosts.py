@@ -44,6 +44,11 @@ _PASSING = ("host_error", "server_error", "timeout", "connection_failed", "no an
 
 def _passing(error: str) -> bool:
     return error.startswith(_PASSING)
+
+
+# A stop the model reports instead of an answer, named alike on every host that reports one; neither is a failure
+# that may pass, so the call is not repeated (VER-015).
+STOP_FAILURES = {"refusal": "model_refused", "max_tokens": "output_truncated"}
 MAX_OUTPUT_BYTES = 1_048_576
 MAX_FAILED_CALLS = 3
 # Network settings a host may need to reach its provider. Everything else a host

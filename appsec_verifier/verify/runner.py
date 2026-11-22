@@ -551,9 +551,12 @@ def run_verification(
                     work()
                 except BaseException:  # noqa: BLE001 - kept in state["failed"]; the main thread raises it
                     pass
+                finally:
+                    budget.add_testers(-1)      # no finding left for it: one fewer can call the model beside others
 
         threads = [threading.Thread(target=worker, name=f"appsec-verifier-finding-{k + 1}", daemon=True)
                    for k in range(parallel)]
+        budget.add_testers(parallel)    # VER-065: a model call takes a share only while another finding can run
         for thread in threads:
             thread.start()
         while any(thread.is_alive() for thread in threads):

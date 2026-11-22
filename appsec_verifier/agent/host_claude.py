@@ -9,8 +9,10 @@ Every call checks the session's init event: any tool besides StructuredOutput,
 an MCP server, or a permission denial counts as a confinement breach. The cost
 the CLI reports is charged in USD; with a subscription login it is the
 API-equivalent value, not a charge, and the console shows it only with
---show-costs. As in AppSec Analyzer, the CLI bills the API when
-ANTHROPIC_API_KEY is set or its login reports an API key or a cloud provider.
+--show-costs. A stop the model reports instead of an answer, such as a
+refusal, is named as with anthropic-api and not repeated (VER-015). As in
+AppSec Analyzer, the CLI bills the API when ANTHROPIC_API_KEY is set or its
+login reports an API key or a cloud provider.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import subprocess
 import tempfile
 
 from .hosts import (
+    STOP_FAILURES,
     HostReply,
     HostUnavailable,
     call_process,
@@ -131,6 +134,11 @@ class ClaudeHost:
         if breach:
             return HostReply(usd=usd, breach=breach, usage=usage)
         if code != 0 or final is None or final.get("is_error"):
+            stop = (final or {}).get("stop_reason")
+            if isinstance(stop, str) and stop in STOP_FAILURES:
+                # The model's own stop, as anthropic-api names it: on a refusal after its structured answer the CLI
+                # drops the answer and reports subtype success with is_error (Claude CLI 2.1.330).
+                return HostReply(usd=usd, error=f"{STOP_FAILURES[stop]} (exit {code})", usage=usage)
             subtype = (final or {}).get("subtype")
             detail = " ".join(str(x) for x in (subtype, (final or {}).get("result"), err) if x)
             # The CLI's own error kind (e.g. error_max_turns) says why; a fixed token, never provider prose.

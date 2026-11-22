@@ -74,7 +74,7 @@ The run tests the `quick` findings first, then the others, most severe first. A 
 
 ### Model and costs
 
-`--profile` chooses the model that plans the tests: `claude` (the default), `codex-cli`, `copilot-cli`, `codex` or `anthropic-api`. The [README](../README.md#model-profiles) lists what each one needs. `--model` chooses another model of the same profile. If a profile cannot be used, for example because its CLI is not logged in, the run stops before it contacts anything.
+`--profile` chooses the model that plans the tests: `claude` (the default), `codex-cli`, `copilot-cli`, `codex` or `anthropic-api`. The [README](../README.md#model-profiles) lists what each one needs. `--model` chooses another model of the same profile. If a profile cannot be used, for example because its CLI is not logged in, the run stops before it contacts anything. If the model refuses to answer, the console and the report say so and the finding ends `inconclusive`; another model or a new run may get further.
 
 With API billing the console shows what the run has cost so far. With a Claude subscription `--show-costs` shows what the calls would cost at API prices. `codex-cli` and `copilot-cli` report no costs.
 

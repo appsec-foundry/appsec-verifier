@@ -617,8 +617,10 @@ class RunProgress:
                 result = record.get("result") if isinstance(record.get("result"), dict) else {}
                 issues = [i for i in result.get("issues") or [] if isinstance(i, dict)]
                 detail = _clip(str(issues[0].get("detail") or ""), 240) if issues else ""
-                self._record("qa", _line(f"Technical QA: {_clip(str(result.get('status') or ''), 40)}", detail,
-                                         cost))
+                head = f"Technical QA: {_clip(str(result.get('status') or ''), 40)}"
+                if result.get("status") == "stopped" and result.get("reason"):
+                    head = _clip(self._text(str(result["reason"])), 240)     # why, e.g. a failed model call
+                self._record("qa", _line(head, detail, cost))
             elif action:
                 # The request tested against the target in its own colour, on its own row under the note when
                 # there is one.

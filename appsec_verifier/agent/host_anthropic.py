@@ -21,7 +21,7 @@ from __future__ import annotations
 import yaml
 
 from ..version_info import resource_root
-from .hosts import HostReply, HostUnavailable, check_model_name, png_base64, usage_counts
+from .hosts import STOP_FAILURES, HostReply, HostUnavailable, check_model_name, png_base64, usage_counts
 from .steps import STEP_SCHEMA, strict_json
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -141,7 +141,7 @@ class AnthropicHost:
             return HostReply(error="invalid_response")
         usage = usage_counts(resp.usage)
         if resp.stop_reason != "end_turn":
-            reason = {"refusal": "refused", "max_tokens": "output_truncated"}.get(resp.stop_reason, "invalid_response")
+            reason = STOP_FAILURES.get(resp.stop_reason, "invalid_response")
             return HostReply(usd=usd, error=reason, usage=usage)
         try:
             blocks = list(resp.content)
