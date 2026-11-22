@@ -82,6 +82,8 @@ PROOF_FORMS = {
                       "Another account read the record the owner created, with its marker"),
     "record-change": ("another account changed the owner's record",
                       "Another account changed the record the owner created"),
+    "named-record": ("another account got the owner's record that names the owner",
+                     "Another account got the owner's identical answer for a record that names the owner's user name"),
     "privileged-comparison": ("normal account got the privileged answer",
                               "A normal account got the same answer as the privileged account"),
     "comparison-without-credentials": ("same answer without credentials, unlike a random path",
@@ -126,6 +128,9 @@ PROOF_RULES = {
                          "the finding describes.",
     "record-marker": "Another account read the record with the marker that only the owner's request had written.",
     "record-change": "The owner's read showed the second marker, which only the other account's write carried.",
+    "named-record": "Another account got the owner's identical answer for a record that names the owner's user name "
+                    "and not its own, while its own record names its own user name and a request without login did "
+                    "not get the record.",
     "privileged-comparison": "A normal account got the identical answer of the privileged account, while a request "
                              "without login was refused.",
     "comparison-without-credentials": "A request without credentials got the identical answer of the signed-in "
@@ -153,6 +158,7 @@ BECAUSE = {
     "identity-contrast": "the identities' answers show the access the finding describes",
     "record-marker": "another account read the record the owner created",
     "record-change": "another account changed the record the owner created",
+    "named-record": "another account read a record that names the owner",
     "privileged-comparison": "a normal account got the privileged account's answer",
     "comparison-without-credentials": "a request without credentials got the signed-in account's answer",
 }

@@ -1098,9 +1098,10 @@ class ParallelProgress:
     under test has a row above the status line. While a question waits for the operator, every entry is kept.
     """
 
-    def __init__(self, progress: RunProgress, parallel: int = 2):
+    def __init__(self, progress: RunProgress, parallel: int = 2, *, writes: bool = False):
         self._inner = progress
         self._parallel = parallel
+        self._writes = writes       # the run may send writes from its start, so it tests one finding at a time
         self._lock = progress._lock
         self._local = threading.local()
         self._open: list[dict] = []     # the units that have not ended or wait to be shown, in start order
@@ -1114,7 +1115,7 @@ class ParallelProgress:
     def begin(self, plans: list) -> None:
         inner = self._inner
         inner.begin(plans)
-        if inner.total:     # why a finding's TIME and ELAPSED start before the end of the finding above it
+        if inner.total and not self._writes:    # why a finding's TIME and ELAPSED start before the one above ends
             inner._write(inner.st(f"Up to {self._parallel} findings are tested at the same time. The entries of "
                                   "each finding stand together, with the times they happened.", "muted"))
 

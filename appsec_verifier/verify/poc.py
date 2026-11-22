@@ -1,4 +1,4 @@
-"""The proof of concept of every tested finding (VER-034, VER-035, VER-016, VER-022, VER-059, VER-066).
+"""The proof of concept of every tested finding (VER-034, VER-035, VER-016, VER-022, VER-059, VER-066, VER-067).
 
 Every request an agent step sends to the target is recorded with the answer to
 it, by the code from what was sent and received: by `http_request`, and by
@@ -620,6 +620,18 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
                     roles[n] = ("normal", "signed-in account")
                 elif role[n] is None:
                     roles[n] = ("attack", "without login")
+        elif plan.get("existing"):          # VER-067: a record the owner already has
+            owner = plan["existing"]
+            owner_paths = {args[n].get("path") for n, _ in shown if role[n] == owner}
+            for n, _ in shown:
+                if role[n] == owner:
+                    roles[n] = ("normal", "owner reads its record")
+                elif role[n] is None:
+                    roles[n] = ("control", "without login")
+                elif args[n].get("path") in owner_paths:
+                    roles[n] = ("attack", "another account reads the owner's record")
+                else:
+                    roles[n] = ("control", "another account reads its own record")
         elif plan.get("owner") or plan.get("reference"):
             owner = plan.get("owner") or plan.get("reference")
             normal = set(normal_roles(getattr(ctx, "identities", None))) - {owner}

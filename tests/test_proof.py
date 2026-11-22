@@ -577,7 +577,7 @@ def test_every_proof_form_the_check_records_is_described_and_every_description_i
                            {"markers": {"positive": "a"}}, {"expression_template": "x"},
                            {"name_set": [{"name": "undefined"}]}],
              "access-control": [{"signed_in": "a"}, {"change": {"method": "PUT"}, "owner": "a"}, {"owner": "a"},
-                                {"reference": "b"}]}
+                                {"existing": "a"}, {"reference": "b"}]}
     forms = {proof_form(cls, plan) for cls, listed in plans.items() for plan in listed}
     forms |= {proof_form(cls, {}) for cls in DEFAULT_FORMS}
     forms |= {"archive-marker", "selected-access", "declared-exposure", "auth-artifact"}  # checked or legacy forms

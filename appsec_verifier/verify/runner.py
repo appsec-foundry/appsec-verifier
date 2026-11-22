@@ -222,7 +222,7 @@ def run_verification(
         if progress is not None:
             from ..progress import ParallelProgress
 
-            progress = ParallelProgress(progress, parallel)
+            progress = ParallelProgress(progress, parallel, writes=not (safe or read_only))
     contexts = {}
     technical_review_budgets = {}
 

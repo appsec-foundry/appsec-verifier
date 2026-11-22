@@ -1622,17 +1622,19 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
             for r in scope.get("test_resources", [])):
         return "identity", "no test identity; the proof compares two identities"
     if plan.cls == "access-control":
-        # VER-010: the operator's test resource first; else one a normal account creates, a privileged reference,
-        # or the comparison without credentials (VER-057)
+        # VER-010: the operator's test resource first; else one a normal account creates, a record it already has
+        # (VER-067), a privileged reference, or the comparison without credentials (VER-057)
         methods = access_methods(plan.id, plan.cwe, scope, identities, writes=not safe)
         if not methods and access_methods(plan.id, plan.cwe, scope, identities, writes=True):
-            return "intrusive", "safe mode; without a declared test resource the Verifier creates one, which writes"
+            return "intrusive", ("safe mode; without a declared test resource or two accounts that sign in with a "
+                                 "user name the Verifier creates one, which writes")
         if not methods and plan.cwe in RECORD_CWES:
-            return "resource", ("no declared test resource, and not two normal accounts with --allow-intrusive; a "
-                                "privileged account does not prove another account's record")
+            return "resource", ("no declared test resource, and not two normal accounts with --allow-intrusive or "
+                                "signed in with a user name; a privileged account does not prove another account's "
+                                "record")
         if not methods:
             return "resource", ("no declared test resource, and neither two normal accounts with --allow-intrusive "
-                                "nor a privileged account")
+                                "or signed in with a user name nor a privileged account")
         # VER-010: no access breaks the operator's rule that anyone may use every request a comparison would use.
         ruled = rule_requests(plan, writes="owner" in methods)
         if ruled and "resource" not in methods and not any(
@@ -1663,7 +1665,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
         creates = any(record_segment(p) is None for p in writes)
         changes = any(record_segment(p) is not None for p in writes)
         if named and not source and "resource" not in methods and not (
-                (("reference" in methods or "signed_in" in methods) and reads)
+                (("reference" in methods or "signed_in" in methods or "existing" in methods) and reads)
                 or ("owner" in methods and creates and (reads or changes))):
             if "owner" in methods and not creates:
                 return "access", "no write request that creates a record, one without an identifier in its path"

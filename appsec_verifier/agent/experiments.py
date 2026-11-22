@@ -1,5 +1,5 @@
 """Declared experiments and observations over recorded answers (VER-008, VER-010, VER-011, VER-013, VER-041,
-VER-049, VER-053, VER-054, VER-055, VER-057, VER-061, VER-066)."""
+VER-049, VER-053, VER-054, VER-055, VER-057, VER-061, VER-066, VER-067)."""
 
 from __future__ import annotations
 
@@ -156,6 +156,8 @@ PLAN_SCHEMA = {
         # VER-057: the account whose answer a request without credentials must receive; the Verifier sends both and
         # a random path next to the finding's, and compares the answers in code.
         "signed_in": {"type": "string", "minLength": 1, "maxLength": 80},
+        # VER-067: the normal account whose existing record, which names its user name, the other account reads.
+        "existing": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
         # One template, or up to three candidates the Verifier tries in turn when the template does not form a valid
         # statement: a server error, or an engine error in the answer (VER-011).
@@ -229,7 +231,7 @@ PLAN_SCHEMA = {
         {
             "if": {"properties": {"kind": {"const": "access-control"}}},
             "then": {"oneOf": [{"required": ["resource"]}, {"required": ["owner"]}, {"required": ["reference"]},
-                               {"required": ["signed_in"]}]},
+                               {"required": ["signed_in"]}, {"required": ["existing"]}]},
         },
         {"if": {"required": ["change"]}, "then": {"required": ["owner"]}},
     ],
@@ -355,13 +357,20 @@ def privileged_roles(identities) -> list[str]:
     return [i["role"] for i in identities or [] if i.get("role") and i.get("privileged")]
 
 
+def named_roles(identities) -> list[str]:
+    """The normal accounts that sign in with a user name (`username_env`), which a record can name (VER-067)."""
+    return [i["role"] for i in identities or [] if i.get("role") and not i.get("privileged")
+            and (i.get("auth") or {}).get("username_env")]
+
+
 def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[str]:
     """How this run can prove an access-control finding (VER-010): `resource`, the operator's test resource,
     which takes precedence; else `owner`, a resource a normal account creates (two normal accounts and writes),
-    and, except for an IDOR, `reference`, a comparison with a privileged account for a privileged function
-    (VER-041), and `signed_in`, a request without credentials that gets an account's answer (VER-057); missing
-    authentication and exposure only the last. The test plan, plan_test, the prompt and technical QA all read
-    this, so a finding no method fits is not tested (VER-008)."""
+    `existing`, a record a normal account already has that names its user name (two normal accounts that sign in
+    with a user name, VER-067), and, except for an IDOR, `reference`, a comparison with a privileged account for a
+    privileged function (VER-041), and `signed_in`, a request without credentials that gets an account's answer
+    (VER-057); missing authentication and exposure only the last. The test plan, plan_test, the prompt and
+    technical QA all read this, so a finding no method fits is not tested (VER-008)."""
     if any(r["finding_id"] == finding_id for r in (scope or {}).get("test_resources", [])):
         return ["resource"]
     signed_in = bool(normal_roles(identities) or privileged_roles(identities)) and cwe not in RECORD_CWES
@@ -369,8 +378,8 @@ def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[
         return ["signed_in"] if signed_in else []
     normal = normal_roles(identities)
     reference = bool(normal and privileged_roles(identities)) and cwe not in RECORD_CWES
-    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("reference", reference),
-                            ("signed_in", signed_in)) if ok]
+    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("existing", len(named_roles(identities)) >= 2),
+                            ("reference", reference), ("signed_in", signed_in)) if ok]
 
 
 def comparison_path(path: str, segment: str) -> str:
@@ -1419,6 +1428,86 @@ def owned_check(ctx, history, cited, *, negative=False, blocked=False):
     return "the resource lacks a valid contrast between its owner and an independent other normal account"
 
 
+def _names(text: str, name: str) -> bool:
+    """Whether `text` names the account `name`: its user name, in any case, not as part of a longer word."""
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text or "", re.IGNORECASE) is not None
+
+
+def existing_check(ctx, history, cited, *, negative=False, blocked=False):
+    """A record the owner already has, which names its account (VER-067): the owner's read of it names the owner's
+    user name and no other normal account's, a read without a role does not get it, and another normal account's
+    read gets the owner's identical answer (the recorded digest, taken before redaction), while that account's read
+    of its own record names its user name and not the owner's. Negatively, the other account's read of the owner's
+    record is refused (blocked-by-control) or answered completely without it (not-reproducible). Only GETs of the
+    planned route count; a record that names neither account or both proves nothing."""
+    _, plan = latest_plan(history)
+    owner = plan["existing"]
+    sessions = getattr(ctx, "sessions", None)
+    names = {role: (sessions.user_name(role) if sessions is not None else None) or ""
+             for role in normal_roles(getattr(ctx, "identities", None))}
+    if len(names.get(owner, "")) < 3:
+        return f"{owner} signs in without a user name of at least three characters that a record could name"
+    accounts = {role: name for role, name in names.items()
+                if role == owner or (len(name) >= 3 and name.lower() != names[owner].lower())}
+    if len(accounts) < 2:
+        return "no other normal account signs in with a user name of its own"
+    reads = []
+    for n in cited if isinstance(cited, list) else []:
+        h = history[n - 1] if type(n) is int and 1 <= n <= len(history) else {}
+        args, res = h.get("args") or {}, h.get("result") or {}
+        if h.get("tool") != "http_request" or type(res.get("status")) is not int:
+            return f"proof needs answered target requests; step {n} is none"
+        if (args.get("method") or "GET").upper() != "GET" or not route_matches(plan["path"], args.get("path", "")):
+            return f"every cited request must be a GET of the planned path {plan['path']}; step {n} is not"
+        response = getattr(ctx, "responses", {}).get(n)
+        if not response:
+            return "the resource observation is missing"
+        reads.append((args.get("role") or None, args.get("path"), res["status"], response))
+
+    def answered(status):
+        return 200 <= status < 300
+
+    def names_only(response, role):
+        """The complete answer names `role`'s account and no other normal account of the run."""
+        body = response.get("body", "")
+        return bool(response.get("complete")) and _names(body, accounts[role]) and not any(
+            _names(body, name) for other, name in accounts.items() if other != role)
+
+    owned = {}
+    for role, path, status, response in reads:
+        if role == owner and answered(status) and response.get("digest") and names_only(response, owner):
+            owned.setdefault(path, response)
+    if not owned:
+        return (f"cite {owner}'s answered read of its own record, one whose complete answer names its user name and "
+                "no other account's")
+    problem = "cite a read of the owner's record without a role"
+    for path, mine in owned.items():
+        anonymous = [(status, r) for role, p, status, r in reads if role is None and p == path]
+        if not anonymous:
+            continue
+        if any(answered(s) and (r.get("digest") == mine["digest"] or _names(r.get("body", ""), accounts[owner]))
+               for s, r in anonymous):
+            return "the owner's record is visible without a login, so it is public"
+        theirs = [(role, s, r) for role, p, s, r in reads
+                  if role in accounts and role != owner and p == path and r.get("identity") != mine.get("identity")]
+        present = [role for role, s, r in theirs
+                   if answered(s) and (r.get("digest") == mine["digest"] or _names(r.get("body", ""), accounts[owner]))]
+        if negative:
+            if present:
+                return "the owner's record is present for the other account"
+            if any(s in (403, 404) if blocked else answered(s) and r.get("complete") for _, s, r in theirs):
+                return None
+            problem = ("cite the other account's read of the owner's record answered 403 or 404" if blocked else
+                       "cite the other account's complete answered read of the owner's record without that record")
+            continue
+        for role in dict.fromkeys(role for role, s, r in theirs if answered(s) and r.get("digest") == mine["digest"]):
+            if any(r_ == role and p != path and answered(s) and names_only(r, role) for r_, p, s, r in reads):
+                return None
+        problem = ("another normal account must get the owner's identical answer for its record, and that "
+                   "account's read of its own record must name its user name and not the owner's")
+    return problem
+
+
 def changed_check(ctx, history, cited, *, negative=False, blocked=False):
     """A write on a resource the owner created (VER-010, VER-014): the owner writes the marker and reads it back,
     another normal account writes the second marker to that record by the identifier its creation returned and
@@ -1638,10 +1727,11 @@ def access_check(ctx, history, cited, *, negative=False, blocked=False):
         if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
             return "the operator-declared test resource takes precedence"
         return signed_in_check(ctx, history, cited, negative=negative, blocked=blocked)
-    if plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")):
+    if plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference") or plan.get("existing")):
         if any(r["finding_id"] == ctx.plan.id for r in (getattr(ctx, "scope", None) or {}).get("test_resources", [])):
             return "the operator-declared test resource takes precedence"
-        check = changed_check if plan.get("change") else owned_check if plan.get("owner") else privileged_check
+        check = (changed_check if plan.get("change") else owned_check if plan.get("owner")
+                 else existing_check if plan.get("existing") else privileged_check)
         return check(ctx, history, cited, negative=negative, blocked=blocked)
     matched, resource, error = access_observations(ctx, history, cited)
     if error:

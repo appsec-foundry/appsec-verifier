@@ -1,6 +1,6 @@
 """The exact, narrow tool surface the verification agent is confined to
-(VER-017, VER-049, VER-061, VER-062, VER-066). The agent never gets a shell or raw network: it can issue an HTTP
-request to the target as one of the configured identities (scope-guarded),
+(VER-017, VER-049, VER-061, VER-062, VER-066, VER-067). The agent never gets a shell or raw network: it can issue
+an HTTP request to the target as one of the configured identities (scope-guarded),
 read the evidenced source (repository-confined), and, for XSS findings, load a
 page in the proof browser whose requests go through the same guard (VER-009,
 VER-018). Request derivation checks recorded evidence without contacting the
@@ -674,6 +674,13 @@ class AgentTools:
                     while second == marker:
                         second = self.ctx.marker[0] + secrets.token_hex(4)
                     plan = {**plan, "second_marker": second}
+            elif plan.get("existing"):
+                # VER-067: a record the account already has, which names its user name; the plan only reads.
+                if "existing" not in methods:
+                    raise ToolError("comparing a record an account already has needs two normal accounts that sign "
+                                    "in with a user name (VER-067)")
+                if plan["existing"] not in normal_roles(self.ctx.identities):
+                    raise ToolError("existing must be a normal account; a privileged account only reads (VER-041)")
             elif plan.get("signed_in"):
                 # VER-057: the Verifier sends the comparison itself once the plan is accepted.
                 if "signed_in" not in methods:
@@ -696,8 +703,8 @@ class AgentTools:
                                     "without credentials (VER-057), or a configured test_resource")
                 if "reference" not in methods and getattr(self.ctx.plan, "cwe", None) in RECORD_CWES:
                     raise ToolError("an IDOR concerns another account's record, which a privileged comparison cannot "
-                                    "show; it needs a test_resource or two normal accounts with --allow-intrusive "
-                                    "(VER-010)")
+                                    "show; it needs a test_resource, two normal accounts with --allow-intrusive "
+                                    "(VER-010), or two that sign in with a user name (existing, VER-067)")
                 if "reference" not in methods:
                     raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
                 if plan["reference"] not in privileged_roles(self.ctx.identities):

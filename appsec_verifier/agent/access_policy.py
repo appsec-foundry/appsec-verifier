@@ -1,4 +1,4 @@
-"""Separate observed access from operator-established restrictions (VER-010, VER-046, VER-057).
+"""Separate observed access from operator-established restrictions (VER-010, VER-046, VER-057, VER-067).
 
 Policies describe intended access only. They grant no route, identity, write permission or proof.
 Model interpretations never create policy entries. Where the operator declares nothing for a request, the
@@ -29,7 +29,7 @@ def restriction(ctx, history, cited):
                 "allowed_roles": resource["allowed_roles"], "denied_roles": resource["denied_roles"],
                 "path": resource["path"], "method": resource.get("method", "GET")}
     operation = plan.get("change") or plan
-    allowed_role = plan.get("signed_in") or plan.get("reference") or plan.get("owner")
+    allowed_role = plan.get("signed_in") or plan.get("reference") or plan.get("owner") or plan.get("existing")
     tested_denied = ({"anonymous"} if plan.get("signed_in") else
                      set(normal_roles(getattr(ctx, "identities", []))) - {allowed_role})
     for policy in scope.get("access_policies", []):
@@ -65,6 +65,7 @@ FINDING_RESTRICTIONS = {
     "signed_in": "The request requires a signed-in account.",
     "reference": "Only a privileged account may use the function.",
     "owner": "Only the account that owns the record may read or change it.",
+    "existing": "Only the account that owns the record may read or change it.",
 }
 
 
@@ -100,7 +101,8 @@ ACCESS_RULES = {
     "admin": "Only an admin may use the request.",
     "anyone": "Anyone may use the request, also without signing in.",
 }
-BROKEN_BY = {"signed_in": {"owner", "signed-in", "admin"}, "owner": {"owner", "admin"}, "reference": {"admin"}}
+BROKEN_BY = {"signed_in": {"owner", "signed-in", "admin"}, "owner": {"owner", "admin"}, "existing": {"owner", "admin"},
+             "reference": {"admin"}}
 
 
 def access_rule(scope, method: str, path: str):

@@ -92,11 +92,12 @@ def _offered_schema(tool: dict, ctx=None) -> dict:
         if cwe != "CWE-943":
             hidden.add("js_predicate_template")
         if cls != "access-control":
-            hidden.add("signed_in")      # the comparison without credentials (VER-057) is access control's alone
+            # The comparison without credentials (VER-057) and the existing record (VER-067) are access control's.
+            hidden.update(("signed_in", "existing"))
         if cls == "injection":
             # Keep the correction action within the prompt's existing size bound. A finding needs only its
             # own injection forms; accepting legacy declarations still goes through the global validators.
-            hidden.update(("resource", "owner", "change", "reference"))
+            hidden.update(("resource", "owner", "change", "reference", "existing"))
             if cwe != "CWE-90":
                 hidden.update(("predicate_template", "predicate_attribute"))
             if cwe != "CWE-943":

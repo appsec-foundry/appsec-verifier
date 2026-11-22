@@ -1,5 +1,5 @@
 """The evidence the code requires before a finding counts as confirmed
-(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055, VER-057, VER-066).
+(VER-009 to VER-013, VER-022, VER-043, VER-053, VER-055, VER-057, VER-066, VER-067).
 
 The model's verdict alone never confirms a finding. A confirmed verdict cites
 its proof in `proof_steps`: step numbers of the loop's history, counted from 1
@@ -320,7 +320,8 @@ def proof_form(cls, plan) -> str | None:
                            ("auth_artifact", "auth-resource"), ("error_set", "engine-error"),
                            ("markers", "returned-marker"), ("expression_template", "computed-expression")),
              "access-control": (("signed_in", "comparison-without-credentials"), ("change", "record-change"),
-                                ("owner", "record-marker"), ("reference", "privileged-comparison"))}
+                                ("owner", "record-marker"), ("existing", "named-record"),
+                                ("reference", "privileged-comparison"))}
     return next((form for key, form in forms.get(cls, ()) if plan.get(key)), DEFAULT_FORMS.get(cls or ""))
 
 
@@ -328,7 +329,7 @@ def _checked(result, history, cited, ctx=None):
     if result.verdict not in ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control"):
         return result
     _, plan = latest_plan(history)
-    own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference")
+    own = plan.get("kind") == "access-control" and (plan.get("owner") or plan.get("reference") or plan.get("existing")
                                                     or plan.get("signed_in") or plan.get("exposure"))
     result.confidence = (
         "high" if result.verdict == "confirmed" and plan.get("kind") not in ("boolean", "timing") and not own
@@ -349,6 +350,9 @@ def _checked(result, history, cited, ctx=None):
         scope = (f"cited requests only, on a resource {plan['owner']} created; the record with the marker stays "
                  "on the target")
         events["marker"] = "".join(getattr(ctx, "marker", None) or ())
+    elif plan.get("existing"):
+        scope = (f"cited requests only, on a record {plan['existing']} already had, which names its user name; "
+                 "nothing was created")
     elif plan.get("reference") or plan.get("signed_in"):
         scope = "cited requests only; the access comparison and its expected restriction are recorded separately"
     if ctx is not None and getattr(ctx.plan, "cls", None) == "access-control":
@@ -449,7 +453,7 @@ def _negative(ctx, history, result, cited):
                                   "its plan")
     # An own-resource proof also cites the owner's write, and its plan path may hold a placeholder: access_check
     # matches those paths itself.
-    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference")
+    own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference") or plan.get("existing")
                                                or plan.get("signed_in") or plan.get("exposure"))
     if any(
         h.get("tool") != "http_request"

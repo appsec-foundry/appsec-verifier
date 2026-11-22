@@ -48,7 +48,8 @@ values, such as `security=low`, are settings, not secrets.
 
 `accounts()` names the account a role's token belongs to (`iss` and `sub` of
 an unverified JWT), so the pre-flight check can refuse two roles that are the
-same account (VER-010, VER-032).
+same account (VER-010, VER-032). `user_name()` gives the user name a role signs
+in with, which the existing-record proof looks for in a record (VER-067).
 """
 
 from __future__ import annotations
@@ -289,6 +290,12 @@ class SessionManager:
     def accounts(self) -> dict[str, tuple[str, str]]:
         """Role -> (iss, sub) for every role whose token names its account."""
         return dict(self._accounts)
+
+    @_locked
+    def user_name(self, role: str) -> str | None:
+        """The user name `role` signs in with (`username_env`), which is no secret, or None (VER-067)."""
+        auth = (self._by_role.get(role) or {}).get("auth") or {}
+        return self._env.get(auth.get("username_env") or "") or None
 
     @_locked
     def invalidate(self, role: str) -> None:

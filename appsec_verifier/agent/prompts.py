@@ -1,5 +1,5 @@
 """The action schemas and prompts every model host shares (VER-011, VER-017, VER-019, VER-043, VER-046, VER-047,
-VER-050, VER-055, VER-056, VER-057, VER-059, VER-066).
+VER-050, VER-055, VER-056, VER-057, VER-059, VER-066, VER-067).
 
 `_tool_defs()` lists the only actions a planner may propose — the confined
 tools (http_request, read_source, find_source, search_source, browser_check,
@@ -16,9 +16,10 @@ credential and no target content is part of them.
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 
 from ..auth.accounts import FIELDS_ACTION, FIELDS_SCHEMA
-from ..verification_context import missing_capabilities, proof_limitations
+from ..verification_context import missing_capabilities, proof_limitations, record_segment
 from ..verify.presentation import PRESENTATION_HELP
 from .access_policy import ACCESS_RULES, access_rule, rule_requests
 from .derivation import page_candidates, page_source
@@ -493,9 +494,22 @@ def _injection_rules() -> str:
     )
 
 
+def _creates(ctx) -> bool:
+    """Whether a request the finding names, its evidenced preparation or a route the source registers for it before
+    the first model call can create a record: a write without an identifier in its path (VER-010). Requests the
+    agent derives later do not count, so the system prompt stays the same for the whole finding."""
+    plan = ctx.plan
+    variants = (getattr(plan, "verification_context", None) or {}).get("variants", [])
+    named = [(v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants]
+    named += [(e.method, e.path) for e in (*getattr(plan, "endpoints", ()), *getattr(plan, "preparation", ()))]
+    named += [(r.get("method", "GET"), r.get("path", "")) for r in getattr(ctx, "derived_requests", None) or []
+              if r.get("evidence_step") is None]
+    return any(m in ("POST", "PUT", "PATCH", "ALL") and record_segment(urlsplit(p).path) is None for m, p in named)
+
+
 def _access_hint(ctx) -> str:
-    """The access-control proofs this run allows (VER-010, VER-057); the marker itself comes with an accepted owner
-    plan."""
+    """The access-control proofs this run allows (VER-010, VER-057, VER-067); the marker itself comes with an accepted
+    owner plan."""
     plan = ctx.plan
     methods = access_methods(getattr(plan, "id", None), getattr(plan, "cwe", None), getattr(ctx, "scope", None),
                              getattr(ctx, "identities", None),
@@ -547,6 +561,27 @@ def _access_hint(ctx) -> str:
             "owner again. Confirmed needs that read to show second_marker; 403 or 404 for the change with the "
             "marker still shown gives blocked-by-control. Cite the creation, the owner's reads and the change."
         )
+    if "existing" in methods:
+        hint += (
+            "\nExisting-record proof (VER-067), without writes: call plan_test with kind access-control, existing set "
+            "to one normal account and path the GET that reads a record by its identifier (a placeholder such as :id "
+            "may stand for it). Read a record that belongs to that account as that account, without a role, and as "
+            "another normal account, all with the same path; then, as that other account, read its own record with "
+            "the same GET. Confirmed needs the owner's answer to name the owner's user name and no other account's, "
+            "the read without a role not to get that answer, the other account to get the owner's identical answer, "
+            "and the other account's own record to name its own user name and not the owner's; the Verifier "
+            "compares the user names itself. 403 or 404 for the other account's read of the owner's record gives "
+            "blocked-by-control, a complete different answer not-reproducible. A record that names every account, "
+            "such as a list of users, proves nothing. Cite the reads."
+        )
+    if "owner" in methods and not _creates(ctx):
+        # Run 144: without a creating request the agent spent its steps searching the source for one.
+        hint += ("\nNo request of this finding, no evidenced preparation and no route the source registers for it "
+                 "creates a record, so the own-resource proof needs a creating request you derive from recorded "
+                 "evidence (derive_request). "
+                 + ("The existing-record proof needs none; prefer it to searching for a creation route."
+                    if "existing" in methods else
+                    "If a short look at the source evidences none, report that missing prerequisite."))
     if "reference" in methods:
         hint += (
             "\nPrivileged-function proof: call plan_test with kind access-control, reference set to a privileged "
@@ -561,10 +596,10 @@ def _access_hint(ctx) -> str:
             "A tool result then reports proof_unavailable with the next step; follow it rather than repeating the "
             "plan."
         )
-        if "owner" not in methods:
+        if "owner" not in methods and "existing" not in methods:
             hint += ("\nA finding about another account's record, not a privileged function, cannot be confirmed in "
-                     "this run: it needs a configured test_resource or two normal accounts with --allow-intrusive. "
-                     "Report that missing prerequisite instead of trying other plans.")
+                     "this run: it needs a configured test_resource or two normal accounts, with --allow-intrusive or "
+                     "signed in with a user name. Report that missing prerequisite instead of trying other plans.")
     if "signed_in" in methods:
         hint += (
             "\nComparison without credentials, for a finding whose function a request without credentials reaches: "
@@ -578,13 +613,19 @@ def _access_hint(ctx) -> str:
             "requests or names the signed-in user is never identical. An independent operator-declared restriction "
             "is required for confirmation. The comparison supports no negative verdict."
         )
-        if "owner" not in methods and "reference" not in methods and getattr(plan, "cwe", None) not in EXPOSURE_CWES:
+        if (not {"owner", "existing", "reference"} & set(methods)
+                and getattr(plan, "cwe", None) not in EXPOSURE_CWES):
             hint += ("\nA finding about another account's record or a privileged function needs a configured "
-                     "test_resource, two normal accounts with --allow-intrusive, or a privileged and a normal account; "
-                     "if a request without credentials is refused, report that missing prerequisite.")
+                     "test_resource, two normal accounts with --allow-intrusive or signed in with a user name, or a "
+                     "privileged and a normal account; if a request without credentials is refused, report that "
+                     "missing prerequisite.")
         if getattr(plan, "cwe", None) in EXPOSURE_CWES:
             hint += ("\nFor this finding's CWE your own requests reach only a configured test_resource; use the "
                      "comparison.")
+    if "existing" in methods:
+        return hint + ("\nThe existing-record proof needs the identifiers of both accounts' records: find them with "
+                       "the finding's GET or a prerequisite read (prerequisite: true, VER-047), such as a whoami "
+                       "route. The other proofs need no user id or record id beforehand.")
     return hint + ("\nNone of these proofs needs an account's user id or record id beforehand; reads that only "
                    "look one up, such as a whoami route, are not part of the finding.")
 

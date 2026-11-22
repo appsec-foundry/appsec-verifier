@@ -51,7 +51,7 @@ After you confirm, the Verifier checks that the target answers, that every test 
 
 Many findings need signed-in accounts, and an access-control finding usually needs two. Use accounts made for the test, because the Verifier acts with their rights.
 
-- `--account USER` names an account by its user name. Repeat it for a second account. See [Test accounts on the command line](#test-accounts-on-the-command-line).
+- `--account USER` names an account by its user name. Repeat it for a second account. Where a record names its account's user name, such as a user profile, two such accounts let the Verifier show that one reads the other's record without `--allow-intrusive`. See [Test accounts on the command line](#test-accounts-on-the-command-line).
 - `--admin-account USER` names a privileged account. It only reads, also with `--allow-intrusive`.
 - `--identities FILE` takes the accounts from an [identities file](#identities-file), which covers every other kind of login.
 
@@ -133,7 +133,7 @@ Each tested finding gets one verdict. A negative verdict applies only to the req
 
 What counts as proof depends on the weakness. An XSS counts only when a marker script actually runs in the proof browser. An access-control finding needs a comparison in which another account, or a request without login, gets what it must not. An injection needs answers that follow true and false conditions the Verifier generates, or a database error that only the broken input causes. Code that is evaluated but returns no result can be shown without exploit: names no code can know make it fail, names the language always knows do not. The README's table [What it verifies](../README.md#what-it-verifies) lists every class, and the [specification](specification.md#proof-per-class-ver-009-to-ver-013) has the exact rules.
 
-For access control the Verifier assumes the usual restrictions unless you declare others: a request without login must not get an account's data, one account must not read or change a record another account created, and a normal account must not get an admin's answer. The report says when a restriction was assumed. If some data is public on purpose, say so in the scope file's [`access_rules`](#scope-file), or run with `--declared-access-only` to rely on declared rules alone.
+For access control the Verifier assumes the usual restrictions unless you declare others: a request without login must not get an account's data, one account must not read or change a record another account created or one that names that account, and a normal account must not get an admin's answer. The report says when a restriction was assumed. If some data is public on purpose, say so in the scope file's [`access_rules`](#scope-file), or run with `--declared-access-only` to rely on declared rules alone.
 
 The report shows a rating after verification next to the Analyzer's. A confirmed finding whose likelihood was below High gets likelihood High and a severity one level higher, and a finding blocked by a control is one level lower in both. Otherwise the rating stays as it was.
 
