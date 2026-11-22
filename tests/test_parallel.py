@@ -135,6 +135,27 @@ def test_the_request_limit_holds_across_the_findings_tested_together():
     assert any(r["verdict"] == "not-attempted" for r in stopped)
 
 
+def test_findings_tested_together_call_the_model_at_the_same_time():
+    """VER-065 on the claude profile, whose CLI stops a call at its allowance: the findings do not take turns at the
+    model, and the run's cost stays one total."""
+    from appsec_verifier.agent import HostPlanner, HostReply
+
+    barrier, seen = threading.Barrier(3, timeout=5), []
+
+    class Host:
+        profile, broken, caps_call_cost = "claude", None, True
+
+        def call(self, system, payload, timeout, budget, **kwargs):
+            seen.append(budget.call_allowance())
+            barrier.wait()          # breaks unless the three findings call the model at the same time
+            return HostReply(step={"action": "submit_verdict", "args_json": "{}", "note": "n"}, usd=0.25)
+
+    budget = RunBudget(Limits(cost_limit_usd=30, rate_rps=0))
+    probe = Probe(work=lambda ctx: HostPlanner(Host()).next_step(ctx, []), pause=0)
+    _run([_plan(f"T-{n}") for n in range(1, 4)], probe, 3, budget=budget, limits=budget.limits)
+    assert not barrier.broken and seen == [2.0] * 3 and budget.cost == pytest.approx(0.75)
+
+
 def test_an_intrusive_run_tests_one_finding_at_a_time():
     probe = Probe()
     _run([_plan(f"T-{n}") for n in range(1, 5)], probe, 4, safe=False, read_only=False)

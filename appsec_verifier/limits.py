@@ -20,6 +20,11 @@ A run that tests several findings at the same time (VER-065) shares one
 `RunBudget`: its counters, the request rate and the question for a higher
 ceiling are serialised, the finding a model call is charged to is kept per
 thread, and `cancel` ends the run's remaining requests and model calls. A
+paid model call holds a share of the cost ceiling until its cost is counted
+(`model_slot`): on a host that stops a call at its allowance a share of
+CALL_RESERVE_USD, so such calls run at the same time while the unreserved
+rest covers two shares; otherwise, and near the ceiling, the whole rest, one
+call at a time. A
 deadline can interrupt only the main thread; a worker thread the runner marks
 (`worker_thread`) checks it when the bounded work returns, and that work must
 carry the timeout itself (the model call, the request to the target).
@@ -63,6 +68,9 @@ MAX_PARALLEL = 8        # findings a run may test at the same time (VER-065)
 # Verifier does not know.
 DEFAULT_PARALLEL = 4
 SUBSCRIPTION_PARALLEL = 2
+# What a model call may spend while others run beside it, on a host that stops a call at its allowance; no call of
+# the recorded runs spent more than USD 0.60.
+CALL_RESERVE_USD = 2.0
 _worker = threading.local()
 
 
@@ -187,7 +195,10 @@ class RunBudget:
         self._next_request_at: float | None = None
         self._cost_unknown = False
         self.lock = threading.RLock()      # counters and the ceiling question, for findings tested together
-        self._paid_call = threading.Lock()
+        self._paid_call = threading.Condition(threading.Lock())    # paid model calls and the shares they hold
+        self._reserved = 0.0
+        self._in_flight = 0
+        self._alone = False         # a call holds the whole rest
         self._pace_lock = threading.Lock()  # one request rate for the run (VER-065)
         self._local = threading.local()     # the finding this thread's model calls are charged to
         self.cancelled = False
@@ -248,23 +259,51 @@ class RunBudget:
             self.calls += 1
 
     @contextmanager
-    def model_slot(self, profile):
+    def model_slot(self, profile, *, capped: bool = False):
+        """Hold a paid model call's share of the cost ceiling until its cost is counted (VER-015, VER-065). A host
+        that stops a call at the allowance it is given (`capped`) takes CALL_RESERVE_USD while the unreserved
+        rest covers two such shares, so its calls run at the same time; otherwise, and near the ceiling, a call
+        waits until no other runs and may use all of the rest (`call_allowance`). The subscription CLIs report no
+        spend and take no share."""
         if profile in ("codex-cli", "copilot-cli"):
             yield
             return
-        if not self._paid_call.acquire(blocking=False):
+        with self._paid_call:
             while True:
+                remaining = self.remaining_cost()
+                free = (math.inf if remaining is None else remaining) - self._reserved
+                if capped and not self._alone and free >= 2 * CALL_RESERVE_USD:
+                    allowance = CALL_RESERVE_USD
+                    break
+                if self._in_flight == 0:
+                    allowance = None
+                    break
                 self.check_time()
                 left = deadline_left()
                 if left is not None and left <= 0:
                     raise LimitExceeded("time", "model call wait reached its deadline")
-                wait = min(t for t in (0.25, self.remaining_time(), left) if t is not None)
-                if self._paid_call.acquire(timeout=wait):
-                    break
+                self._paid_call.wait(min(t for t in (0.25, self.remaining_time(), left) if t is not None))
+            share = allowance or 0.0
+            self._alone = allowance is None
+            self._reserved += share
+            self._in_flight += 1
+        self._local.allowance = allowance
         try:
             yield
         finally:
-            self._paid_call.release()
+            self._local.allowance = None
+            with self._paid_call:
+                self._reserved -= share
+                self._in_flight -= 1
+                if allowance is None:
+                    self._alone = False
+                self._paid_call.notify_all()
+
+    def call_allowance(self) -> float | None:
+        """USD this thread's model call may spend: its share while others run beside it, else what is left under
+        the cost ceiling (None when it is unbounded)."""
+        allowance = getattr(self._local, "allowance", None)
+        return allowance if allowance is not None else self.remaining_cost()
 
     def remaining_cost(self) -> float | None:
         """USD left under the cost ceiling, or None when it is unbounded."""

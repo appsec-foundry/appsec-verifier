@@ -85,6 +85,7 @@ class ClaudeHost:
         return cls(binary, version, model=model, auth=auth, environ=environ, run=run, api_billing=api_billing)
 
     supports_images = True   # through --input-format stream-json, for an evidence review (VER-042)
+    caps_call_cost = True    # --max-budget-usd stops a call at the allowance it is given (VER-015, VER-065)
 
     def command(self, system: str, max_usd: float | None, *, schema=None, images=False) -> list[str]:
         return [
@@ -113,7 +114,7 @@ class ClaudeHost:
                                                "data": png_base64(image)}} for image in images),
                 {"type": "text", "text": prompt}]}}) + "\n"
         with tempfile.TemporaryDirectory(prefix="appsec-verifier-claude-") as cwd:
-            result = call_process(self, self.command(system, budget.remaining_cost(), schema=schema,
+            result = call_process(self, self.command(system, budget.call_allowance(), schema=schema,
                                                      images=bool(images)),
                                   input=prompt, cwd=cwd, timeout=timeout)
         if isinstance(result, HostReply):

@@ -275,9 +275,10 @@ class HostPlanner:
 
     def _call(self, ctx, system: str, payload: str, *, schema=None, review=False, images=()):
         sessions = getattr(ctx, "sessions", None)
-        # Subscription hosts report no spend. A metered host may use the remaining ceiling,
-        # so keep that allowance exclusive until the call's usage has been accounted for.
-        with ctx.budget.model_slot(getattr(self._host, "profile", None)):
+        # Subscription hosts report no spend. A metered call holds its share of the ceiling until its usage has
+        # been accounted for; a host that stops a call at a smaller allowance can run calls side by side.
+        with ctx.budget.model_slot(getattr(self._host, "profile", None),
+                                   capped=getattr(self._host, "caps_call_cost", False)):
             system = model_data(system, sessions)
             payload = model_data(payload, sessions)
             return self._billed_call(ctx, system, payload, schema=schema, review=review, images=images)
