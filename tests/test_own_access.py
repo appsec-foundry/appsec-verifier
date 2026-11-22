@@ -701,6 +701,25 @@ def test_the_record_a_path_names(template, path, expected):
 
 # ── whether the run tests the finding, and what the model is told ─────────────
 
+def test_proof_feedback_names_every_request_of_each_access_proof():
+    """VER-043: each self-made access proof cites several requests; the feedback names all of them, for every form."""
+    from appsec_verifier.agent.experiments import access_proof_reads
+
+    base = {"kind": "access-control", "path": "/api/Items/:id"}
+    owner = access_proof_reads({**base, "owner": "account-1"})
+    assert all(p in owner for p in ("account-1's write that creates the record with the marker", "its read of the "
+                                    "record", "the same read without a role", "another normal account's read of it"))
+    change = access_proof_reads({**base, "owner": "account-1", "change": {"method": "PUT", "path": "/api/Items/:id"}})
+    assert "change of that record with second_marker" in change and "the owner's next read" in change
+    existing = access_proof_reads({**base, "existing": "account-1"})
+    assert "account-1's and the other account's GET of /api/Items" in existing
+    assert "GET of" not in access_proof_reads({**base, "path": "/api/profile", "existing": "account-1"})
+    reference = access_proof_reads({**base, "reference": "admin-1"})
+    assert reference.startswith("admin-1's read, the same read without a role")
+    for plan in ({**base, "signed_in": "account-1"}, {**base, "exposure": "x"}, {"kind": "boolean", "path": "/x"}):
+        assert access_proof_reads(plan) is None
+
+
 def test_the_test_plan_follows_the_accounts_and_the_mode():
     normal, admin = [{"role": "account-1"}, {"role": "account-2"}], [{"role": "admin-1", "privileged": True}]
     plan = _plan("access-control")

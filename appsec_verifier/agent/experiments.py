@@ -1808,6 +1808,30 @@ def comparison_ready(ctx, history, steps):
                     "comparison supports no negative verdict"}
 
 
+def access_proof_reads(plan) -> str | None:
+    """Every request a self-made access-control proof under `plan` cites, for a confirmation and a negative verdict
+    alike (VER-010, VER-043, VER-067), so one round of proof feedback names all of them; None where the Verifier sends
+    the comparison itself or the operator declared the resource."""
+    if plan.get("kind") != "access-control" or plan.get("signed_in") or plan.get("exposure"):
+        return None
+    if plan.get("change"):
+        return (f"{plan['owner']}'s write that creates the record with the marker, its read that shows the marker, "
+                "another normal account's change of that record with second_marker, and the owner's next read")
+    if plan.get("owner"):
+        return (f"{plan['owner']}'s write that creates the record with the marker, its read of the record, the same "
+                "read without a role, and another normal account's read of it")
+    if plan.get("existing"):
+        owner, collection = plan["existing"], existing_collection(plan.get("path", ""))
+        lists = (f"{owner}'s and the other account's GET of {collection}, where the list shows whose record it is; "
+                 if collection else "")
+        return (f"{lists}{owner}'s read of its record, the same read without a role, another normal account's read "
+                "of it, and that account's read of its own record")
+    if plan.get("reference"):
+        return (f"{plan['reference']}'s read, the same read without a role, and a normal account's read, all with "
+                "the same inputs")
+    return None
+
+
 def access_check(ctx, history, cited, *, negative=False, blocked=False):
     _, plan = latest_plan(history)
     if plan.get("exposure"):

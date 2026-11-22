@@ -461,6 +461,14 @@ class AgentProbe:
                         "missing": result.proof["missing"],
                         "remaining_steps": self._max_steps - decision,
                     }
+                    # VER-043: an access-control proof cites several requests; name all of them at once, since
+                    # a check names only its first failing condition and the repairs are few.
+                    from .experiments import access_proof_reads
+                    from .experiments import latest_plan as governing_plan
+
+                    if self.cls == "access-control" and (needs := access_proof_reads(governing_plan(history)[1])):
+                        feedback["needs"] = (f"the proof, confirmed or negative, cites {needs}; each an answered "
+                                             "request sent after the plan")
                     _log(ctx, step, tool="proof_feedback", result=feedback)
                     history.append({"tool": "proof_feedback", "args": {}, "result": feedback})
                     continue

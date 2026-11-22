@@ -451,18 +451,19 @@ def _negative(ctx, history, result, cited):
         # The plan that governs the citations is the last one before the last cited step (plan_view).
         return _downgrade(result, f"step {early[0]} precedes the plan in step {start} that governs the cited "
                                   "steps; cite a reference plus a fresh test attempt of one experiment, sent after "
-                                  "its plan")
+                                  f"its plan: {_answered_steps(history, after_plan=True)}")
     # An own-resource proof also cites the owner's write, and its plan path may hold a placeholder: access_check
     # matches those paths itself.
     own = ctx.plan.cls == "access-control" and (plan.get("owner") or plan.get("reference") or plan.get("existing")
                                                or plan.get("signed_in") or plan.get("exposure"))
-    if any(
+    stray = next((n for n, h in zip(cited, selected, strict=False) if (
         h.get("tool") != "http_request"
         or (not own and not planned_route(plan.get("path") or "", h.get("args", {}).get("path") or ""))
-        or type(h.get("result", {}).get("status")) is not int
-        for h in selected
-    ):
-        return _downgrade(result, "negative proof must contain answered requests to the planned target")
+        or type(h.get("result", {}).get("status")) is not int)), None)
+    if stray is not None:
+        # VER-043: name the step and what to cite instead, as the injection check does.
+        return _downgrade(result, f"negative proof must contain answered requests to the planned target; step {stray} "
+                                  f"is not one: cite only {_answered_steps(history, after_plan=True)}")
     if ctx.plan.cls == "access-control":
         problem = access_check(ctx, history, cited, negative=True, blocked=result.verdict == "blocked-by-control")
         if problem:

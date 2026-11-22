@@ -225,6 +225,49 @@ def test_a_card_refused_to_the_other_account_is_blocked_by_control(tmp_path, kin
     assert result.verdict == verdict, result.rationale
 
 
+def test_one_round_of_proof_feedback_names_every_request_the_proof_cites(tmp_path):
+    """Run 153: a negative verdict that cites a source read sent before the plan and lacks three reads. A check names
+    only its first failing condition and a variant gets two repairs, so the feedback also names every request the
+    proof cites, and the refusal the requests that can be cited."""
+    source = {"tool": "read_source", "args": {"path": "routes/basket.ts"}}
+    first = [source, CARD_STEPS[0], LISTS[0], CARD_READS[2], LISTS[1]]       # steps 1-5
+    rest = [CARD_READS[0], CARD_READS[1], CARD_READS[3]]                      # owner's card, without login, own card
+    feedback = []
+
+    class Planner:
+        queue = [*first, {"verdict": {"verdict": "blocked-by-control", "rationale": "card refused",
+                                      "proof_steps": [1, 3, 4, 5]}}]
+        final = None
+
+        def next_step(self, ctx, history):
+            if history and history[-1].get("tool") == "proof_feedback":
+                feedback.append(history[-1]["result"])
+                n = len(history)
+                self.final = {"verdict": {"verdict": "blocked-by-control", "rationale": "card refused",
+                                          "proof_steps": [3, 4, 5, n + 1, n + 2, n + 3]}}
+                self.queue = [*rest, self.final]
+            if not self.queue:
+                return copy.deepcopy(self.final)                     # the presentation round repeats the verdict
+            return copy.deepcopy(self.queue.pop(0))
+
+    result = AgentProbe("access-control", Planner, max_steps=12).run(card_context(tmp_path, "refused"))
+    assert (result.verdict, result.proof["form"]) == ("blocked-by-control", "listed-record"), result.rationale
+    assert len(feedback) == 1
+    assert "step 1 precedes the plan in step 2" in feedback[0]["missing"][0]
+    assert feedback[0]["missing"][0].endswith("sent after its plan: steps 3-5")
+    needs = feedback[0]["needs"]
+    assert "account-1's and the other account's GET of /api/cards" in needs
+    assert all(part in needs for part in ("account-1's read of its record", "the same read without a role",
+                                          "another normal account's read of it", "its own record"))
+
+
+def test_a_negative_verdict_citing_a_source_read_names_the_requests_to_cite(tmp_path):
+    steps = [CARD_STEPS[0], {"tool": "read_source", "args": {"path": "routes/basket.ts"}}, *CARD_STEPS[1:]]
+    result = run(card_context(tmp_path, "refused"), "blocked-by-control", steps)      # cites steps 2-8
+    assert result.verdict == "inconclusive"
+    assert "step 2 is not one: cite only steps 3-8" in result.rationale
+
+
 def test_the_plan_allows_a_get_of_the_collection_and_nothing_else_there(tmp_path):
     assert existing_collection("/api/cards/:id") == "/api/cards"
     assert existing_collection("/api/orders/{id}/owned") == "/api/orders"
