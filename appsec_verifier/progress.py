@@ -24,10 +24,12 @@ error and how long the model took to propose the step. An action's internal name
 Verifier sends for an accepted experiment (VER-011, VER-049, VER-053, VER-057) form a block: an entry with what the
 experiment tests and the question its controls answer, then one entry per control with what it is (``normal``,
 ``true``, ``false``, ``break`` …), the value it sends and the result; a second round that repeats the first one's
-answers is one entry, and a ``proof`` entry says whether the controls give the proof. A ``proof`` entry also says
-when the proof check sent a claimed confirmation back to the agent and why. When the agent finishes, an ``agent``
-entry says so, then a ``proof`` entry says whether the proof was checked (VER-009 to VER-013) or why
-there is none. The evidence reviewer of VER-042 gets ``agent`` entries for its start and end as well.
+answers is one entry, and a ``check`` entry says whether the controls confirm the weakness. A ``check`` entry
+also says when the proof check sent a claimed verdict back to the agent and why. When the agent finishes, an
+``agent`` entry says so, then a ``result`` entry says what the checked proof established, verified or not
+verified, in the verdict's colour, or why the finding is undecided (VER-009 to VER-013). No entry is green: a
+result's colour says what it asks of the reader (VER-013). The evidence reviewer of VER-042 gets ``agent``
+entries for its start and end as well.
 The ``done`` entry gives the verdict, marked and highlighted, and for an inconclusive or untested finding
 why, led by the kind of reason as the report gives it, otherwise the first sentence of the agent's
 rationale; once a finding's last variant is done, a ``rating`` entry follows when the rating after
@@ -94,7 +96,7 @@ _NEGATIVE_SHOWN = {"blocked-by-control": "the application refused the attack",
                    "not-reproducible": "the attack showed no effect"}
 _VERDICT_MARKS = {"confirmed": "!", "shown-without-exploit": "◐", "not-reproducible": "○", "blocked-by-control": "⊘",
                   "inconclusive": "?"}
-_EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
+_EVENT_ROLES = {"start": "accent", "agent": "agent", "rating": "accent", "↻": "warn", "⚠": "warn"}
 _SEVERITIES = ("critical", "high", "medium", "low")
 _FURTHER = "Further variants of confirmed findings"     # the group after the categories (VER-026)
 _NBSP = "\xa0"       # keeps the run's spend and the model time whole across a wrap, as in AppSec Analyzer
@@ -310,11 +312,11 @@ def _proof_words(result: dict) -> list:
     """What a tool result shows that a proof needs, highlighted."""
     parts = []
     if "executed" in result:
-        parts.append(("script executed", "ok", "bold") if result["executed"] else "no script executed")
+        parts.append(("script executed", "critical", "bold") if result["executed"] else "no script executed")
     if result.get("marker_read"):
-        parts.append(("marker file read", "ok", "bold"))
+        parts.append(("marker file read", "critical", "bold"))
     if result.get("callback_hit"):
-        parts.append(("callback hit", "ok", "bold"))
+        parts.append(("callback hit", "critical", "bold"))
     return parts
 
 
@@ -603,7 +605,7 @@ class RunProgress:
                 result = record.get("result") if isinstance(record.get("result"), dict) else {}
                 missing = result.get("missing") if isinstance(result.get("missing"), list) else []
                 reason = _clip(missing[0], 200) if missing else "the class's proof is missing"
-                self._record("proof", _line(head, [("✗ proof not accepted", "warn", "bold"), (f": {reason}", "warn")],
+                self._record("check", _line(head, [("✗ verdict not accepted", "warn", "bold"), (f": {reason}", "warn")],
                                             "back to the agent", cost), role="warn")
             elif record.get("stopped"):
                 # A test agent that made no progress was stopped; it did not reach a budget (limits.py).
@@ -706,22 +708,23 @@ class RunProgress:
             self._control_row(row)
 
     def _experiment_result(self, head: str, record: dict) -> None:
-        """Whether the controls just sent give the proof, as the Verifier's check told the agent (VER-011)."""
+        """Whether the controls just sent confirm the weakness, as the Verifier's check told the agent (VER-011)."""
         result = record.get("result") if isinstance(record.get("result"), dict) else {}
         if result.get("proof") == "holds" and result.get("level") == "shown-without-exploit":
-            self._record("proof", _line(head, [("◐ the controls show the weakness without an exploit", "ok")]),
-                         role="ok")
+            self._record("check", _line(head, [("◐ the controls show the weakness without an exploit", "critical")]),
+                         role="critical")
             return
         if result.get("proof") == "holds":
-            self._record("proof", _line(head, [("✓ the controls give the proof", "ok", "bold")]), role="ok")
+            self._record("check", _line(head, [("✓ the controls confirm the weakness", "critical", "bold")]),
+                         role="critical")
             return
         if result.get("proof") == "negative-only":
             text = [("the controls can support a negative verdict only", "warn", "bold"),
                     (": the agent chose their values", "warn")]
         else:
             reason = _clip(str(result.get("reason") or "the class's proof is missing"), 200)
-            text = [("✗ the controls give no proof", "warn", "bold"), (f": {reason}", "warn")]
-        self._record("proof", _line(head, text), role="warn")
+            text = [("✗ the controls do not confirm it", "warn", "bold"), (f": {reason}", "warn")]
+        self._record("check", _line(head, text), role="warn")
 
     def evidence_review(self, finding: str, stage: str, round_: int, detail: str) -> None:
         """Presentation work has its own rows; it never counts as a target test step (VER-042)."""
@@ -773,8 +776,9 @@ class RunProgress:
                 where = f"step{'s' if len(cited) > 1 else ''} {', '.join(map(str, cited))}" if cited else ""
                 shown = negative or (proof_shown(proof, plan.cls) or (None,))[0]
                 role = _VERDICT_ROLES[result.verdict]
-                self._record("proof", _line([("✓ proof checked", role, "bold"),
-                                             *([(f": {shown}", role)] if shown else [])], where), role=role)
+                said = "✓ verified" if result.verdict == "confirmed" else "✓ not verified"
+                self._record("result", _line([(said, role, "bold"), *([(f": {shown}", role)] if shown else [])],
+                                             where), role=role)
                 return
             missing = proof.get("missing") if proof.get("checked") is False else None
             if isinstance(missing, list) and missing:
@@ -786,7 +790,8 @@ class RunProgress:
             else:
                 why = result.rationale or "no verdict"
             why = _clip(self._text(why), 200)
-            self._record("proof", [("✗ no proof", "warn", "bold"), (f": {why}", "warn")], role="warn")
+            said = "✗ undecided" if result.verdict == "inconclusive" else "✗ no checked proof"
+            self._record("result", [(said, "warn", "bold"), (f": {why}", "warn")], role="warn")
             self._explained = True
 
     def finished(self, plan, result, rating: dict | None = None) -> None:
@@ -820,12 +825,10 @@ class RunProgress:
             self._record("done", _line(*parts), *([_line(why)] if why else []), role=role)
             if rating and rating.get("changed"):
                 self._rating(rating)
-            # A screenshot shows proof only where the Verifier checked the verdict's proof (proof.py).
-            event = "proof" if isinstance(result.proof, dict) and result.proof.get("checked") is True else "img"
             for entry in result.evidence or []:
                 if isinstance(entry, dict) and entry.get("kind") == "screenshot" and entry.get("path"):
                     path = os.path.join(self._out_dir, entry["path"]) if self._out_dir else entry["path"]
-                    self._record(event, _line(f"screenshot {printable(path)}"))
+                    self._record("img", _line(f"screenshot {printable(path)}"))
 
     @contextmanager
     def paused(self):

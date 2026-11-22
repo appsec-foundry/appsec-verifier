@@ -148,7 +148,9 @@ While it runs, `verify` prints one line per event, in the columns time, finding,
 | `·` | one step: what the agent does and, below it, the request or source file and the result |
 | `↻` | a step the Verifier refused |
 | `⚠` | a limit or repeated failed actions stopped the finding |
-| `proof` | the result of the proof check |
+| `check` | whether an experiment's controls confirm the weakness, or why the Verifier sent a verdict back to the agent |
+| `result` | what the test established: verified, not verified or undecided, in the colour of the result |
+| `img` | a screenshot the run saved |
 | `rating` | the rating after verification differs from the Analyzer's |
 | `done` | the verdict, the time the finding took and, for a confirmed finding, a short explanation |
 

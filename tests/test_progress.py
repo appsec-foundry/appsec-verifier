@@ -90,8 +90,8 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert agent.split()[3] == "agent" and agent.endswith("▶ test agent started · Sonnet 5.5 · no identities")
     assert step.endswith("step 1 · Sending a request to the target · GET /rest/basket/2 as alice → 200 · 512 B")
     assert finished.split()[3] == "agent" and finished.endswith("■ test agent finished · 2 steps · 1m00s")
-    assert proof.split()[3] == "proof"
-    assert proof.endswith("✓ proof checked: access differs between identities · steps 1, 2")
+    assert proof.split()[3] == "result"
+    assert proof.endswith("✓ verified: access differs between identities · steps 1, 2")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
     assert done.endswith("! verified (high) · 1m00s · a read b")
     assert "\x1b" not in out.getvalue()
@@ -114,7 +114,7 @@ def test_the_proof_line_names_the_form_and_a_qa_objection_has_its_own_line():
     text = "\n".join(_rows(out))
     assert "step None" not in text
     assert "Technical QA: needs-attention · jwt.pub is a public key." in text
-    assert "✓ proof checked: same answer without credentials, unlike a random path · steps 4, 5, 6" in text
+    assert "✓ verified: same answer without credentials, unlike a random path · steps 4, 5, 6" in text
 
 
 @pytest.mark.parametrize("verdict, shown", [("blocked-by-control", "the application refused the attack"),
@@ -132,8 +132,8 @@ def test_a_checked_negative_verdict_says_its_proof_was_checked_in_grey(monkeypat
                                                                                          "steps": [2, 3]})
     progress.agent_finished(_plan(), result)
     proof = _rows(out)[-1]
-    assert SGR.sub("", proof).endswith(f"✓ proof checked: {shown} · steps 2, 3") and "no proof" not in proof
-    assert st("✓ proof checked", "muted", "bold") in proof and st("proof  ", "muted") in proof
+    assert SGR.sub("", proof).endswith(f"✓ not verified: {shown} · steps 2, 3") and "undecided" not in proof
+    assert st("✓ not verified", "muted", "bold") in proof and st("result ", "muted") in proof
 
 
 def test_a_plan_that_raises_the_step_bound_says_so():
@@ -287,7 +287,7 @@ def test_each_screenshot_of_a_finding_is_named_with_its_path_under_the_done_line
     progress.finished(_plan(), ProbeResult(verdict="confirmed", evidence=evidence, proof={"checked": True}))
     rows = _rows(out)[-3:]
     assert rows[0].split()[3] == "done"
-    assert [r.split()[3] for r in rows[1:]] == ["proof", "proof"]
+    assert [r.split()[3] for r in rows[1:]] == ["img", "img"]          # no green "proof" under the result (VER-013)
     assert rows[1].endswith("screenshot verification/evidence/T-1-xss-1.png")
     assert rows[2].endswith("screenshot verification/evidence/T-1-exchange-1.png")
 
@@ -322,7 +322,7 @@ def test_refused_steps_and_limits_need_attention_and_the_done_line_names_the_lim
     assert rows[1].split()[3] == "⚠"
     assert rows[1].endswith("step 2 · GET /a · stopped by limit: request cap 1 exceeded")
     assert rows[2].endswith("■ test agent finished · 2 steps · 0s")
-    assert rows[3].split()[3] == "proof" and rows[3].endswith("✗ no proof: stopped by the requests limit")
+    assert rows[3].split()[3] == "result" and rows[3].endswith("✗ undecided: stopped by the requests limit")
     assert rows[4].endswith("? undecided · 0s · Limit reached: the run's requests to the target; raise them with "
                             "--max-requests.")
 
@@ -341,7 +341,7 @@ def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_fa
     progress.finished(_plan(), result)
     rows = [" ".join(row.split()) for row in _unruled(_rows(out))[6:]]
     assert rows[0].endswith("step 8 · stopped: " + reason) and "by limit" not in rows[0]
-    assert rows[2].endswith("✗ no proof: the test agent made no progress and was stopped")
+    assert rows[2].endswith("✗ undecided: the test agent made no progress and was stopped")
     assert rows[3].endswith("? undecided · 0s · Agent stuck: the Verifier refused its steps repeatedly, the last a "
                             "test plan the Verifier refused. A new run may get further.")
 
@@ -378,9 +378,9 @@ def test_without_a_checked_proof_the_proof_entry_says_why_and_the_done_line_says
     progress.finding(_plan())
     progress.agent_finished(_plan(), result)
     proof = _rows(out)[-1]
-    assert SGR.sub("", proof).split()[3] == "proof" and SGR.sub("", proof).endswith(f"✗ no proof: {why}")
-    assert st("✗ no proof", "warn", "bold") in proof and st(f": {why}", "warn") in proof
-    assert st("proof  ", "warn") in proof                     # the event in the warning colour, not green
+    assert SGR.sub("", proof).split()[3] == "result" and SGR.sub("", proof).endswith(f"✗ undecided: {why}")
+    assert st("✗ undecided", "warn", "bold") in proof and st(f": {why}", "warn") in proof
+    assert st("result ", "warn") in proof                     # the event in the warning colour, not green
     progress.finished(_plan(), result)
     rows = [SGR.sub("", row) for row in _rows(out)]
     at = max(n for n, row in enumerate(rows) if row.split()[3:4] == ["done"])
@@ -405,8 +405,8 @@ def test_a_checked_proof_stands_out_with_what_it_showed(monkeypatch, cls, shown)
     result = ProbeResult(verdict="confirmed", confidence="high", rationale="why", proof={"checked": True, "steps": [4]})
     progress.agent_finished(plan, result)
     proof = _rows(out)[-1]
-    assert SGR.sub("", proof).endswith(f"✓ proof checked: {shown} · step 4")
-    assert st("✓ proof checked", "critical", "bold") in proof and st("proof  ", "critical") in proof   # VER-013
+    assert SGR.sub("", proof).endswith(f"✓ verified: {shown} · step 4")
+    assert st("✓ verified", "critical", "bold") in proof and st("result ", "critical") in proof   # VER-013
     progress.finished(plan, result)
     assert st("! verified (high)", "critical", "bold") in _rows(out)[-2] and _rows(out)[-1].strip() == "why"
 
@@ -426,10 +426,10 @@ def test_a_proof_the_check_sent_back_to_the_agent_says_why(monkeypatch):
                    "result": {"status": "insufficient", "remaining_steps": 4,
                               "missing": [f"step 1 precedes the plan in step 2 and must be repeated s3cret{HOSTILE}"]}})
     row = _rows(out)[-1]
-    assert SGR.sub("", row).split()[3] == "proof"
-    assert SGR.sub("", row).endswith("step 3 · ✗ proof not accepted: step 1 precedes the plan in step 2 and must be "
+    assert SGR.sub("", row).split()[3] == "check"
+    assert SGR.sub("", row).endswith("step 3 · ✗ verdict not accepted: step 1 precedes the plan in step 2 and must be "
                                      "repeated [redacted]]0;pwned[2J · back to the agent · run $0.13")
-    assert st("✗ proof not accepted", "warn", "bold") in row and "s3cret" not in row
+    assert st("✗ verdict not accepted", "warn", "bold") in row and "s3cret" not in row
     assert "\x1b" not in SGR.sub("", row) and "\x07" not in row
 
 
@@ -441,14 +441,15 @@ def test_a_result_a_proof_needs_is_highlighted_in_its_step(monkeypatch):
     progress.begin([_plan(cls="xss")])
     progress.finding(_plan(cls="xss"))
     progress.step({"step": 1, "tool": "browser_check", "args": {"path": "/#/search?q=x"}, "result": {"executed": True}})
-    assert st("script executed", "ok", "bold") in _rows(out)[-2]      # on the step's first row, after what it does
+    assert st("script executed", "critical", "bold") in _rows(out)[-2]   # on the step's first row, after what it does
     progress.step({"step": 2, "tool": "http_request", "args": {"path": "/f"},
                    "result": {"status": 200, "marker_read": True, "callback_hit": True}})
-    assert st("marker file read", "ok", "bold") in _rows(out)[-2] and st("callback hit", "ok", "bold") in _rows(out)[-2]
+    assert (st("marker file read", "critical", "bold") in _rows(out)[-2]
+            and st("callback hit", "critical", "bold") in _rows(out)[-2])
     progress.step({"step": 3, "tool": "browser_check", "args": {"path": "/#/search?q=y"},
                    "result": {"executed": False}})
     assert SGR.sub("", _rows(out)[-2]).endswith("step 3 · Opening the page in the proof browser → no script executed")
-    assert st("no script executed", "ok", "bold") not in _rows(out)[-2]
+    assert st("no script executed", "critical", "bold") not in _rows(out)[-2]
     assert _rows(out)[-1].strip() == st("browser /#/search?q=y", "muted")       # the technical row, grey
 
 
@@ -502,7 +503,7 @@ def test_an_experiments_controls_stand_as_a_block_that_says_what_is_tested(monke
     assert "step 6 · true · admin' AND (1=1) -- - → 200 · 4463 B" in shown
     assert "step 9 · false · admin' AND (2<>2) -- - → 200 · 4399 B" in shown
     assert "steps 10–14 · round 2: same answers as round 1" in shown
-    assert "step 15 · ✓ the controls give the proof" in shown
+    assert "step 15 · ✓ the controls confirm the weakness" in shown
     assert "step 10 ·" not in shown and "#1" not in shown and "/brute/?" not in shown
     assert "experiment" not in shown
 
@@ -517,7 +518,7 @@ def test_a_second_round_with_other_answers_shows_each_of_its_controls(monkeypatc
     assert "round 2" not in shown
     assert "step 10 · normal · admin → 200 · 4399 B" in shown
     assert "step 11 · true · admin' AND (1=1) -- - → 200 · 4399 B" in shown
-    assert "step 12 · ✗ the controls give no proof: the selected observation is unstable" in shown
+    assert "step 12 · ✗ the controls do not confirm it: the selected observation is unstable" in shown
 
 
 def test_a_block_cut_short_by_a_limit_shows_its_held_controls_before_the_stop(monkeypatch):
@@ -549,7 +550,7 @@ def test_the_comparison_names_who_reads_which_path(monkeypatch):
     assert "step 2 · signed in as account-1 · /api/v1/user/ → 200" in shown
     assert "step 3 · without credentials · /api/v1/user/ → 200" in shown
     assert "step 4 · random path · /api/v1/vrf39/ → 404" in shown
-    assert "✗ the controls give no proof: access observed" in shown
+    assert "✗ the controls do not confirm it: access observed" in shown
 
 
 def test_the_engine_error_sweep_names_breaks_and_their_balanced_counterparts(monkeypatch):
@@ -830,7 +831,7 @@ def test_text_from_the_assessment_model_and_target_carries_no_escape_sequence_or
                    "result": {"error": f"refused s3cret {HOSTILE}"}})
     result = ProbeResult(verdict="inconclusive", confidence=HOSTILE, rationale=f"s3cret{HOSTILE}")
     progress.agent_finished(_plan(), result)
-    assert SGR.sub("", _rows(out)[-1]).endswith("✗ no proof: [redacted]]0;pwned[2J")
+    assert SGR.sub("", _rows(out)[-1]).endswith("✗ undecided: [redacted]]0;pwned[2J")
     progress.finished(_plan(), result)
     text = out.getvalue()
     assert "s3cret" not in text and "[redacted]" in text
@@ -1058,7 +1059,7 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     rows, out = _verify_run(tmp_path, monkeypatch, capsys, info, usd=0.25)
     assert any(row.startswith("TIME") and "FINDING" in row for row in rows)
     assert any(row.endswith("▶ test agent started · m via Fake API · ≤12 steps · no identities") for row in rows)
-    assert any(row.endswith("✗ no proof: rejection alone is insufficient") for row in rows)
+    assert any(row.endswith("✗ undecided: rejection alone is insufficient") for row in rows)
     assert any("step 1 · Sending a request to the target · GET /rest/basket/2 → 403" in row for row in rows)
     done = next(row for row in rows if row.split()[3:4] == ["done"])
     assert done.split()[3:5] == ["done", "100%"] and "undecided" in done
