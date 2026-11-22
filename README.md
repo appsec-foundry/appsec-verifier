@@ -8,9 +8,12 @@
 > [!NOTE]
 > **Alpha.** Early version under active development. Feedback from real projects is welcome.
 
-AppSec Verifier checks which findings of an [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) assessment can be reproduced in a running application you are authorised to test. An AI agent tests each finding, and the Verifier confirms it only after checking the proof itself, not on the agent's word. It does not search for new weaknesses and goes no further than the proof.
+AppSec Verifier checks which findings of an [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) assessment can be reproduced in a running application you are authorised to test. For each finding, a language model, the test agent, plans the requests, and the Verifier sends them within your scope and limits. It confirms a finding only when its own checks find the proof the weakness requires; the agent's verdict alone does not count. The Verifier does not look for new weaknesses and stops once it has the proof.
 
-![Console output of a run against OWASP Juice Shop: the test agent tests a SQL injection finding, the proof check passes and the finding is confirmed](examples/juice-shop/result/console-T-004.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console-sqli-dark.png">
+  <img src="docs/images/console-sqli.png" alt="Console output of a run against OWASP Juice Shop: the test agent works through a SQL injection finding, the proof check passes and the finding is confirmed" width="100%">
+</picture>
 
 ## Quick start
 
@@ -59,7 +62,7 @@ A finding is confirmed only with the proof the table lists for its weakness. Inp
 | Cross-site scripting | a marker script runs in the proof browser |
 | Access control: IDOR, missing authorisation or authentication, exposed data or files | another account, or a request without login, gets access that a declared or assumed rule forbids |
 | SQL, NoSQL and LDAP injection | true and false conditions from the Verifier change the response, an injected marker comes back (SQL), or broken syntax causes a database error (SQL, NoSQL) |
-| Command, code, template and XPath injection | the target returns the result of a calculation from the Verifier, broken syntax causes an engine error (not for commands), or the target calls the listener (code, template); evaluated code that returns nothing is shown without exploit when names no code can know fail and names the language knows do not |
+| Command, code, template and XPath injection | the target returns the result of a calculation from the Verifier, broken syntax causes an engine error (not for commands), or the target calls the Verifier's callback listener (code, template); code that is evaluated but returns nothing counts as shown without exploit when unknown names fail and built-in names do not |
 | Path traversal | the target returns the scope's marker file, or a file from an uploaded ZIP can be read outside its unpack directory |
 | Open redirect | the target redirects to a random `.invalid` host |
 | SSRF | the target calls the listener |
@@ -69,13 +72,22 @@ The target must be able to reach the listener, which starts by itself for a `loc
 
 Evidence images show the recorded requests and responses and mark what the proof rests on. In this SQL injection in Juice Shop, a single quote in the search parameter `q` causes a database error and two quotes do not:
 
-![Evidence image of a SQL injection in OWASP Juice Shop: q=apple' gets status 500 with an SQLITE_ERROR, q=apple'' gets 200 with an empty result](examples/juice-shop/result/evidence/T-004-930a49d43872218b-sql-injection-in-product-search-http-1.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/evidence-sqli-dark.png">
+  <img src="docs/images/evidence-sqli.png" alt="Evidence image of a SQL injection in OWASP Juice Shop: q=apple' gets status 500 with an SQLITE_ERROR, q=apple'' gets 200 with an empty result" width="100%">
+</picture>
 
 For a reflected XSS in DVWA, the proof browser's screenshot shows the dialog the injected script opened, drawn in because screenshots do not show browser dialogs. The evidence image below it shows the request with the script in `name` and the response that contains it unescaped.
 
-![Screenshot of a reflected XSS in DVWA: the dialog shows the marker the injected script assembled at runtime, and the element holding the payload is framed](examples/dvwa/result/evidence/T-001-d55fa17ca0781db4-reflected-xss-from-unescaped-output.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/screenshot-xss-dark.png">
+  <img src="docs/images/screenshot-xss.png" alt="Screenshot of a reflected XSS in DVWA: the dialog shows the marker the injected script assembled at runtime, and the element holding the payload is framed" width="100%">
+</picture>
 
-![Evidence image of a reflected XSS in DVWA: the GET request carries a script in name, the response contains it unescaped, and the script ran in the proof browser](examples/dvwa/result/evidence/T-001-f36fb935b55957ee-reflected-xss-from-unescaped-output-http-1.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/evidence-xss-dark.png">
+  <img src="docs/images/evidence-xss.png" alt="Evidence image of a reflected XSS in DVWA: the GET request carries a script in name, the response contains it unescaped, and the script ran in the proof browser" width="100%">
+</picture>
 
 Each finding gets one of these verdicts. A negative verdict applies only to the requests that were tested.
 
@@ -156,7 +168,7 @@ appsec-verifier verify --non-interactive --yes --profile claude \
 
 `verify` writes to `--output` or, without it, to a new private directory for each run, e.g. `~/.local/share/appsec-verifier/runs/<project>/<start time>/` on Linux ([details](docs/cli.md#files-a-run-writes)):
 
-- `verification.md`: the report. Technical QA cites the recorded steps behind its observations and open questions. For each finding the report gives the verdict, the confidence, the evidence and a proof of concept: the requests the verdict rests on as raw HTTP and, for UI findings, a screenshot of the exploit or its effect.
+- `verification.md`: the report. In its Technical QA section, a model review of each test cites the recorded steps behind its observations and open questions. For each finding the report gives the verdict, the confidence, the evidence and a proof of concept: the requests the verdict rests on as raw HTTP and, for UI findings, a screenshot of the exploit or its effect.
 - `verification.yaml`: the same results as data ([schema](schemas/verification.schema.yaml)).
 - `agent-log.jsonl`: every step of the agent, refused steps included.
 - `failed-findings.json`, only when the test of a finding failed: its model calls and the error.
