@@ -28,6 +28,14 @@ A new or extended feature starts with an agreed requirement, before any code. A 
 3. Wait until the maintainer explicitly approves the wording. A request for the feature alone is not approval.
 4. Add the approved entry to `requirements.md`. Implement it only if the maintainer asked for that. If it cannot be met as written, propose a revision instead of deviating silently.
 
+## Making a change
+
+Fix the cause, not the case. A change prompted by one run, target, finding or failing test must hold for every case with the same cause (other targets and frameworks, other findings of the class, proof forms, model hosts), so do not branch on one target's routes, field names, messages or test data. Test the triggering case and, where the cause reaches further, one that differs from it; say in the summary where the change does not apply.
+
+Before changing behaviour, find and read the tests that cover it. If one fails afterwards, decide whether the change broke what it protects (then fix the change) or the behaviour was meant to change (then update the test and name it in the summary). Never delete, skip or loosen an assertion to make a change pass.
+
+Check the model cost of a change to what reaches the model or how often: prompts and action schemas (`agent/prompts.py`), tool results, steps and reviews per finding. Prompt text is paid on every model call, a tool result on every later step of its finding. Prefer the variant that sends less for the same effect: replace prompt text instead of adding beside it, and offer an instruction only to the classes that need it. Raise a length bound in `tests/test_hosts.py` only with the amount and reason in its comment, and state in the summary what the change adds per call (prompt length before and after) or per finding.
+
 ## Branches
 
 Before the first edit to a tracked file for a change, ask whether to work on a feature branch from `main` or directly on `main`, and wait for the answer. Recommend one with a short reason, for example a branch for a feature built over several steps and `main` for a self-contained change of a few files. If the request names the branch, use it. The answer covers that change only. Create a feature branch in a separate git worktree, because other sessions may use the shared checkout at the same time. The choice does not authorise commits, merges or pushes.
