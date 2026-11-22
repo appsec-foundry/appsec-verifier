@@ -4,8 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 extend-exclude = ["data", "docs", "examples", "schemas"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "UP017",  # datetime-timezone-utc — timezone.utc is fine; no mass rewrite to datetime.UTC
+]

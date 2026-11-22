@@ -7,7 +7,7 @@ User-facing overview: `README.md`. User guide to commands and files: `docs/cli.m
 ## Setup and checks
 
 ```sh
-pip install --require-hashes -r requirements-dev.lock   # pinned, hash-checked; Python 3.10
+pip install --require-hashes -r requirements-dev.lock   # pinned, hash-checked; Python 3.12
 pip install --no-deps --no-build-isolation -e .
 python -m pytest -q         # must pass
 ruff check .                # must be clean (config in pyproject.toml)
@@ -34,7 +34,7 @@ Before the first edit to a tracked file for a change, ask whether to work on a f
 
 ## Dependencies
 
-`requirements.lock` (runtime: base, `[agent]`, `[browser]`) and `requirements-dev.lock` (plus `[dev]`) pin every package, build tools included, with hashes. They were generated for Python 3.10 with pip-tools 7.6.2; the command is in each file's header. The container image (Python 3.12, without `[browser]`) installs from `container/requirements.txt` and `container/build-requirements.txt`, with the versions and hashes of `requirements.lock`; a version raised there is raised in both, and `tests/test_container_image.py` checks that they agree.
+`requirements.lock` (runtime: base, `[agent]`, `[browser]`) and `requirements-dev.lock` (plus `[dev]`) pin every package, build tools included, with hashes. They were generated for Python 3.12 with pip-tools 7.6.2; the command is in each file's header. The container image (Python 3.12, without `[browser]`) installs from `container/requirements.txt` and `container/build-requirements.txt`, with the versions and hashes of `requirements.lock`; a version raised there is raised in both, and `tests/test_container_image.py` checks that they agree.
 
 Versions are never raised automatically. Do not run `pip-compile --upgrade`, do not merge bot or tool updates unreviewed, and do not install from the version ranges in `setup.py` where the lockfiles apply. Regenerating a lockfile after a change to `setup.py` keeps the existing pins; check the diff, and revert any pin that moved without a reason. Raising a version is a change of its own: name the packages, read their changelog, check them for known vulnerabilities (OSV), run the tests with the new lockfile, and give the reason in the commit. `anthropic` stays below 1 (1.x moved to httpx2; `host_anthropic.py` is written against 0.x) until that migration is done.
 

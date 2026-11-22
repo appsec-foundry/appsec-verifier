@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-0.1.0a1-orange.svg)](appsec_verifier/version_info.py)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#limitations)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](setup.py)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](setup.py)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > [!NOTE]
@@ -17,7 +17,7 @@ AppSec Verifier checks which findings of an [AppSec Analyzer](https://github.com
 
 ## Quick start
 
-Verification has two stages: [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) first assesses the source code statically and writes its findings to `appsec-assessment.yaml`, then the Verifier tests these findings in the running application. This example does both for [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) on your machine. You need Python 3.10+, [pipx](https://pipx.pypa.io/stable/), Docker, and a signed-in Claude CLI (`claude`).
+Verification has two stages: [AppSec Analyzer](https://github.com/appsec-foundry/appsec-analyzer) first assesses the source code statically and writes its findings to `appsec-assessment.yaml`, then the Verifier tests these findings in the running application. This example does both for [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) on your machine. You need Python 3.12+, [pipx](https://pipx.pypa.io/stable/), Docker, and a signed-in Claude CLI (`claude`).
 
 1. **Create the assessment** with the [AppSec Analyzer quick start](https://github.com/appsec-foundry/appsec-analyzer#quick-start). It writes `~/assessments/juice-shop/appsec-assessment.yaml`.
 

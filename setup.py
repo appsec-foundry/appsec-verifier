@@ -56,7 +56,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/appsec-foundry/appsec-verifier",
     license="Apache-2.0",
-    python_requires=">=3.10",
+    python_requires=">=3.12",
     packages=find_packages(include=["appsec_verifier", "appsec_verifier.*"]),
     include_package_data=True,
     install_requires=[
