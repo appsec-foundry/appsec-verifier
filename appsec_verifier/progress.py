@@ -84,13 +84,14 @@ from .verify.report import _ORDER, _VERDICT_LABEL, _first_sentence, _overall, wh
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
-# Seen from the finding: green confirmed, red not reproduced or blocked (a likely false positive), yellow undecided.
-# A finding shown without exploit (VER-066) in the colour of a confirmed one, set apart by its mark and, unlike every
-# other verdict, not in bold, so a confirmed finding stands out more.
-_VERDICT_ROLES = {"confirmed": "ok", "shown-without-exploit": "ok", "not-reproducible": "critical",
-                  "blocked-by-control": "critical",
+# Seen from the application, as the report's squares (verify/report.py): red when the run confirmed the weakness,
+# green when a control blocked it or the run did not reproduce it, yellow undecided. A finding shown without exploit
+# (VER-066) in the colour of a confirmed one, set apart by its mark and, unlike every other verdict, not in bold, so a
+# confirmed finding stands out more.
+_VERDICT_ROLES = {"confirmed": "critical", "shown-without-exploit": "critical", "not-reproducible": "ok",
+                  "blocked-by-control": "ok",
                   "inconclusive": "warn", "not-attempted": "muted"}
-_VERDICT_MARKS = {"confirmed": "✔", "shown-without-exploit": "◐", "not-reproducible": "✘", "blocked-by-control": "✘",
+_VERDICT_MARKS = {"confirmed": "!", "shown-without-exploit": "◐", "not-reproducible": "○", "blocked-by-control": "⊘",
                   "inconclusive": "?"}
 _EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
 _SEVERITIES = ("critical", "high", "medium", "low")

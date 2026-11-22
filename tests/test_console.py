@@ -135,8 +135,8 @@ def test_results_list_no_needs_of_a_confirmed_finding_and_count_alike_variants()
     blocked = {f"T-{n}-{d * 16}": ("intrusive", "safe mode") for n, d in (("1", "b"), ("2", "d"), ("2", "e"),
                                                                            ("2", "f"))}
     lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], blocked)]
-    assert [line for line in lines if line.startswith(("✓", "·"))] == [
-        "✓ T-1 xss confirmed t-1", "· T-2 xss needs intrusive mode t-2"]
+    assert [line for line in lines if line.startswith(("!", "·"))] == [
+        "! T-1 xss confirmed t-1", "· T-2 xss needs intrusive mode t-2"]
     assert lines[lines.index("· T-2 xss needs intrusive mode t-2") + 1] == "run with --allow-intrusive · 3 variants"
     full = cli._results(Style(False), {"results": rows}, [], blocked, full=True)
     assert sum("needs intrusive mode" in line for line in full) == 4
@@ -159,15 +159,15 @@ def test_a_confirmed_finding_s_unconfirmed_variant_stands_under_it_and_only_unsu
             row("T-9", None, "inconclusive", "nothing held", confidence="low"),
             row("T-50", None, "not-attempted", "no supported proof method for CWE-915", status="unsupported")]
     lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], {})]
-    marked = [line for line in lines if line.startswith(("✓", "?", "·"))]
-    assert marked == ["✓ T-4 injection confirmed (medium) t-4", "? T-9 injection inconclusive (low) t-9"]
-    at = lines.index("✓ T-4 injection confirmed (medium) t-4")
+    marked = [line for line in lines if line.startswith(("!", "?", "·"))]
+    assert marked == ["! T-4 injection confirmed (medium) t-4", "? T-9 injection inconclusive (low) t-9"]
+    at = lines.index("! T-4 injection confirmed (medium) t-4")
     assert lines[at + 2] == ("variant-002: inconclusive (low) · No proof: the test ran, but the controls stopped at "
                              "step 7, where control 'true #1' got HTTP 500: the template does not form a valid "
                              "statement there.")
     assert lines[-1] == "1 unsupported or incomplete finding not listed (--print lists them)"
     full = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], {}, full=True)]
-    assert sum(line.startswith(("✓", "?", "·")) for line in full) == 4
+    assert sum(line.startswith(("!", "?", "·")) for line in full) == 4
 
 
 def test_facts_strip_escapes_and_colour_by_role():

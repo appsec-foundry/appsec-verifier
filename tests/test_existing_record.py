@@ -272,13 +272,16 @@ def test_a_negative_verdict_citing_a_source_read_names_the_requests_to_cite(tmp_
 @pytest.mark.parametrize("make,steps,verdict,lead", [
     (lambda p: card_context(p, "vulnerable"), CARD_STEPS, "confirmed",
      "account-2 reads the record that account-1 already had"),
-    (lambda p: card_context(p, "refused"), CARD_STEPS, "blocked-by-control", "not confirmed"),
+    (lambda p: card_context(p, "refused"), CARD_STEPS, "blocked-by-control",
+     "Insecure direct object reference blocked: account-2 was refused the record that account-1 already had "
+     "(400 Bad Request), while it got its own."),
     (lambda p: context(p, target("vulnerable")), None, "confirmed",
      "account-2 reads the record that account-1 already had"),
 ])
 def test_the_image_shows_the_other_accounts_own_records_as_allowed(tmp_path, make, steps, verdict, lead):
     """Run 155: the other account's own list and record are reads it may send, the contrast of the proof, not
-    controls expected to be refused; only a confirmation heads the image in red."""
+    controls expected to be refused. As in the report, a confirmation heads the image in red, a blocked access in
+    green with what was refused."""
     ctx, pages = make(tmp_path), []
     ctx.browser = SimpleNamespace(screenshots=("access-control",),
                                   render_exchanges=lambda html, name, marked: pages.append(html) or [])
@@ -291,6 +294,7 @@ def test_the_image_shows_the_other_accounts_own_records_as_allowed(tmp_path, mak
         assert "<td>allowed</td>" in row[:row.index("</tr>")], label
     assert page.count("is not open to everyone") <= 1                      # the read without login only
     assert "header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}" in page
+    assert "header.blocked-by-control,header.not-reproducible{border-bottom-color:#2e7d32}" in page
 
 
 def test_the_plan_allows_a_get_of_the_collection_and_nothing_else_there(tmp_path):

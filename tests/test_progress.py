@@ -93,7 +93,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert proof.split()[3] == "proof"
     assert proof.endswith("✓ proof checked: access differs between identities · steps 1, 2")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
-    assert done.endswith("✔ confirmed (high) · 1m00s · a read b")
+    assert done.endswith("! confirmed (high) · 1m00s · a read b")
     assert "\x1b" not in out.getvalue()
 
 
@@ -139,9 +139,10 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
     assert st("1/1 T-1", "bold") in title and st("1/1 T-1", "accent", "bold") not in out.getvalue()
 
 
-    for verdict, label, role in (("confirmed", "✔ confirmed", "ok"),
-                                 ("not-reproducible", "✘ not reproducible", "critical"),
-                                 ("blocked-by-control", "✘ blocked by control", "critical"),
+    # Seen from the application, as the report's squares: red confirmed, green blocked or not reproduced.
+    for verdict, label, role in (("confirmed", "! confirmed", "critical"),
+                                 ("not-reproducible", "○ not reproducible", "ok"),
+                                 ("blocked-by-control", "⊘ blocked by control", "ok"),
                                  ("inconclusive", "? inconclusive", "warn")):
         progress.finished(plan, ProbeResult(verdict=verdict))
         done = next(row for row in reversed(_rows(out)) if SGR.sub("", row).split()[3:4] == ["done"])
@@ -365,7 +366,7 @@ def test_a_checked_proof_stands_out_with_what_it_showed(monkeypatch, cls, shown)
     assert SGR.sub("", proof).endswith(f"✓ proof checked: {shown} · step 4")
     assert st("✓ proof checked", "ok", "bold") in proof and st("proof  ", "ok") in proof
     progress.finished(plan, result)
-    assert st("✔ confirmed (high)", "ok", "bold") in _rows(out)[-2] and _rows(out)[-1].strip() == "why"
+    assert st("! confirmed (high)", "critical", "bold") in _rows(out)[-2] and _rows(out)[-1].strip() == "why"
 
 
 def test_a_proof_the_check_sent_back_to_the_agent_says_why(monkeypatch):
@@ -756,7 +757,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_unde
     assert " 2/2 T-2  start " in rows[blank + 1]
     entry = [row[column:] for row in rows[done:blank]]
     assert all(row[:column].isspace() for row in rows[done + 1:blank]) and entry[-1] == "the rows flipped"
-    assert " ".join(entry[:-1]) == "✔ confirmed (high) · 0s · run $0.04 of $10.00"
+    assert " ".join(entry[:-1]) == "! confirmed (high) · 0s · run $0.04 of $10.00"
     assert entry[-2].endswith("run $0.04 of $10.00")                        # the spend stays whole
 
 

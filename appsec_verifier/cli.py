@@ -1978,10 +1978,11 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
     return [*([] if guided else _title(st, "verify")), *_facts(st, rows)]
 
 
-# Seen from the finding: green when the run confirmed it, in bold, or showed it without exploit (VER-066), red when
-# it could not reproduce it or a control blocked it (a likely false positive), yellow when the run could not decide.
-_VERDICT_MARK = {"confirmed": ("✓", "ok", "bold"), "shown-without-exploit": ("◐", "ok"),
-                 "not-reproducible": ("✗", "critical"), "blocked-by-control": ("⊘", "critical"),
+# Seen from the application, as the report's squares (verify/report.py): red when the run confirmed the weakness, in
+# bold, or showed it without exploit (VER-066), green when a control blocked it or the run did not reproduce it,
+# yellow when the run could not decide.
+_VERDICT_MARK = {"confirmed": ("!", "critical", "bold"), "shown-without-exploit": ("◐", "critical"),
+                 "not-reproducible": ("○", "ok"), "blocked-by-control": ("⊘", "ok"),
                  "inconclusive": ("?", "warn"), "not-attempted": ("·", "muted")}
 
 

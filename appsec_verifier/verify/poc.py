@@ -1532,6 +1532,7 @@ _EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 syste
 pre,code{font-family:ui-monospace,Menlo,Consolas,monospace}
 header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #555;white-space:pre-wrap}
 header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}header.inconclusive{border-bottom-color:#b26a00}
+header.blocked-by-control,header.not-reproducible{border-bottom-color:#2e7d32}
 header b{font-size:20px}header .k{color:#ffeb3b;font-weight:bold}header small{color:#bbb;font-size:13px}
 header.head{white-space:normal;padding:12px 16px 14px}header.head .id{font-size:14px;color:#bbb}
 header.head .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
@@ -1539,6 +1540,7 @@ header.head p{margin:6px 0 0}header.head small{display:block;margin-top:6px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
 text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
 .verdict.inconclusive{background:#b26a00}
+.verdict.blocked-by-control,.verdict.not-reproducible{background:#2e7d32}
 .what{margin:10px 14px 0;font-size:15px}
 .pair{display:flex;gap:14px;margin:10px 14px 0}.pair section{flex:1;min-width:0;margin:0}
 .pair h3{padding-top:6px}pre.req{border-bottom:1px solid #ddd}.dec{color:#555}
@@ -1909,10 +1911,12 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
 _COMPARISON_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
 header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #555}
 header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}header.inconclusive{border-bottom-color:#b26a00}
+header.blocked-by-control,header.not-reproducible{border-bottom-color:#2e7d32}
 header .id{font-size:14px;color:#bbb}header .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
 text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
 .verdict.inconclusive{background:#b26a00}
+.verdict.blocked-by-control,.verdict.not-reproducible{background:#2e7d32}
 .why{margin:0 16px 12px;padding:8px 12px;background:#111;color:#fff;border-radius:4px;font-size:15px}
 .why b{color:#ffeb3b;margin-right:6px}.why p{margin:0}.why p+p{margin-top:4px}
 .why .closing{color:#ccc;font-size:13px}
@@ -1992,9 +1996,10 @@ def comparison_summary(ctx, history: list[dict], rows: list[dict], result) -> di
     target = f"{operation.get('method', 'GET')} {operation.get('path', '')}".strip()
     restriction = proof.get("access_restriction") if isinstance(proof.get("access_restriction"), dict) else None
     if not access:
-        return {"lead": f"{weakness(ctx)} not confirmed. The comparison did not show the access. "
-                        + _VERDICT_SENTENCE.get(verdict, "No completed proof."),
-                "checks": [], "closing": "", "restricted": bool(restriction)}
+        lead = (_blocked_lead(ctx, plan, rows, attack, target) if verdict == "blocked-by-control" else
+                f"{weakness(ctx)} not confirmed. The comparison did not show the access. "
+                + _VERDICT_SENTENCE.get(verdict, "No completed proof."))
+        return {"lead": lead, "checks": [], "closing": "", "restricted": bool(restriction)}
     if plan.get("signed_in"):
         shown = f"without a login, {target} returns the same answer as for {plan['signed_in']}"
     elif plan.get("reference"):
@@ -2032,6 +2037,22 @@ def comparison_summary(ctx, history: list[dict], rows: list[dict], result) -> di
                f"{verdict.capitalize()}: the access is shown, " + (
                    "but the verdict is not a confirmation." if restriction else "but no rule rates it."))
     return {"lead": lead, "checks": checks, "closing": closing, "restricted": bool(restriction)}
+
+
+def _blocked_lead(ctx, plan, rows, attack, target) -> str:
+    """What the application refused, as the sentence that heads a comparison ending blocked-by-control (VER-035)."""
+    res = attack["entry"]["response"]
+    status = f"{res['status']} {res.get('statusText') or ''}".strip()
+    who = attack["who"]
+    if isinstance(plan.get("change"), dict):
+        refused = f"{who}'s change of the record that {plan.get('owner')} created was refused"
+    else:
+        what = (f"the record that {plan['existing']} already had" if plan.get("existing")
+                else f"the record that {plan['owner']} created" if plan.get("owner") else target)
+        refused = f"{who} was refused {what}"
+    own = any(r["kind"] == "normal" and r["who"] == who and 200 <= (r["entry"]["response"].get("status") or 0) < 300
+              for r in rows)
+    return f"{weakness(ctx)} blocked: {refused} ({status})" + (", while it got its own" if own else "") + "."
 
 
 def comparison_document(ctx, history: list[dict], shown: list[tuple[int, dict]], result, har_path,
