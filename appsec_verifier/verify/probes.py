@@ -84,6 +84,9 @@ PROOF_FORMS = {
                       "Another account changed the record the owner created"),
     "named-record": ("another account got the owner's record that names the owner",
                      "Another account got the owner's identical answer for a record that names the owner's user name"),
+    "listed-record": ("another account got the record only the owner's list shows",
+                      "Another account got the owner's identical answer for a record that only the owner's list of "
+                      "the collection shows"),
     "privileged-comparison": ("normal account got the privileged answer",
                               "A normal account got the same answer as the privileged account"),
     "comparison-without-credentials": ("same answer without credentials, unlike a random path",
@@ -131,6 +134,9 @@ PROOF_RULES = {
     "named-record": "Another account got the owner's identical answer for a record that names the owner's user name "
                     "and not its own, while its own record names its own user name and a request without login did "
                     "not get the record.",
+    "listed-record": "Another account got the owner's identical answer for a record that the owner's list of the "
+                     "collection shows and its own list does not, while its own record answers differently and a "
+                     "request without login did not get the record.",
     "privileged-comparison": "A normal account got the identical answer of the privileged account, while a request "
                              "without login was refused.",
     "comparison-without-credentials": "A request without credentials got the identical answer of the signed-in "
@@ -159,6 +165,7 @@ BECAUSE = {
     "record-marker": "another account read the record the owner created",
     "record-change": "another account changed the record the owner created",
     "named-record": "another account read a record that names the owner",
+    "listed-record": "another account read a record that only the owner's list shows",
     "privileged-comparison": "a normal account got the privileged account's answer",
     "comparison-without-credentials": "a request without credentials got the signed-in account's answer",
 }

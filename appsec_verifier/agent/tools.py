@@ -675,10 +675,9 @@ class AgentTools:
                         second = self.ctx.marker[0] + secrets.token_hex(4)
                     plan = {**plan, "second_marker": second}
             elif plan.get("existing"):
-                # VER-067: a record the account already has, which names its user name; the plan only reads.
+                # VER-067: a record the account already has; the plan only reads.
                 if "existing" not in methods:
-                    raise ToolError("comparing a record an account already has needs two normal accounts that sign "
-                                    "in with a user name (VER-067)")
+                    raise ToolError("comparing a record an account already has needs two normal accounts (VER-067)")
                 if plan["existing"] not in normal_roles(self.ctx.identities):
                     raise ToolError("existing must be a normal account; a privileged account only reads (VER-041)")
             elif plan.get("signed_in"):
@@ -704,7 +703,8 @@ class AgentTools:
                 if "reference" not in methods and getattr(self.ctx.plan, "cwe", None) in RECORD_CWES:
                     raise ToolError("an IDOR concerns another account's record, which a privileged comparison cannot "
                                     "show; it needs a test_resource, two normal accounts with --allow-intrusive "
-                                    "(VER-010), or two that sign in with a user name (existing, VER-067)")
+                                    "(VER-010), or a record one of two normal accounts already has (existing, "
+                                    "VER-067)")
                 if "reference" not in methods:
                     raise ToolError("a privileged comparison needs a privileged and a normal account (VER-041)")
                 if plan["reference"] not in privileged_roles(self.ctx.identities):

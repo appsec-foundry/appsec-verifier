@@ -1,5 +1,5 @@
 """Deterministic action authority and finite repetition allowances (VER-008, VER-010, VER-011, VER-014, VER-015,
-VER-036, VER-043, VER-047, VER-052, VER-056, VER-057).
+VER-036, VER-043, VER-047, VER-052, VER-056, VER-057, VER-067).
 
 ScopeGuard remains the connection authority. Assessment routes and independently
 checked request derivations narrow that scope; model plans alone add nothing.
@@ -15,7 +15,9 @@ and its read showed with the marker (ctx.owned), and a GET on the change's path
 may read what the creating answer returned (ctx.created) when the finding names
 no read. Both come from the target's answers (agent/tools.py), never from the
 model. A comparison without credentials (VER-057) may also read the random path
-next to the finding's that plan_test generated, without credentials.
+next to the finding's that plan_test generated, without credentials. Under an
+existing-record plan (VER-067) any identity may GET the record's collection, the
+planned path before its placeholder, whose lists show whose record it is.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from ..limits import LimitExceeded, execution_deadline
 from ..tools.http import SAFE_METHODS, same_origin
 from ..verification_context import path_values, planned_route, record_segment, record_segments
 from .derivation import refused_write, request_hint
-from .experiments import EXPOSURE_CWES, brackets, control_values, normal_roles, take_sink, token
+from .experiments import EXPOSURE_CWES, brackets, control_values, existing_collection, normal_roles, take_sink, token
 from .tools import ToolError, _strings
 
 
@@ -124,6 +126,11 @@ class Controller:
         if (self.plan or {}).get("kind") == "access-control" and self.plan.get("owner"):
             routes += [{"method": e.method, "path": e.path, "preparation": True}
                        for e in getattr(p, "preparation", ())]
+        accepted = self.plan or {}
+        collection = existing_collection(accepted.get("path", "")) if accepted.get("existing") else None
+        if accepted.get("kind") == "access-control" and collection:
+            # VER-067: each account's list of the record's collection shows whose record it is; a GET only.
+            routes.append({"method": "GET", "path": collection})
         if change and self._names_change(routes, change):
             routes = [*routes, {"method": "GET", "path": change["path"], "derived": True}]
         return routes
@@ -219,9 +226,12 @@ class Controller:
         # Under an own-resource plan the owner, and only the owner, may also write to the finding's routes (VER-010).
         owner_write = (name == "http_request" and self.plan and self.plan.get("owner") and method not in SAFE_METHODS
                        and args.get("role") == self.plan["owner"])
+        # VER-067: under an existing-record plan, the GET of the record's collection, whose lists show the owner.
+        listing = (name == "http_request" and method == "GET" and bool(self.plan) and bool(self.plan.get("existing"))
+                   and urlsplit(route_path).path.rstrip("/") == existing_collection(self.plan.get("path", "")))
         if (name != "plan_test" and self.plan
                 and (self.plan.get("kind") in ("boolean", "timing", "access-control") or self.plan.get("resource"))
-                and not owner_write and not change_write and (
+                and not owner_write and not change_write and not listing and (
             not self._matches(self.plan["path"], route_path) or method != self.plan.get("method", "GET")
         )):
             raise ToolError("request does not match the accepted test plan")

@@ -557,7 +557,7 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
     refused), `attack`, or `effect` (the owner's read after another account's change). Only the latest accepted
     test plan, the declared test resource and the finding's markers decide; a step they do not place gets no
     role, nothing is guessed (VER-035)."""
-    from ..agent.experiments import latest_plan, normal_roles, token
+    from ..agent.experiments import existing_collection, latest_plan, normal_roles, token
 
     cls, marker = getattr(ctx.plan, "cls", None), getattr(ctx, "marker", None) or ("", "")
     _, plan = latest_plan(history)
@@ -622,9 +622,15 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
                     roles[n] = ("attack", "without login")
         elif plan.get("existing"):          # VER-067: a record the owner already has
             owner = plan["existing"]
-            owner_paths = {args[n].get("path") for n, _ in shown if role[n] == owner}
+            collection = existing_collection(plan.get("path", ""))
+            listing = {n for n, _ in shown
+                       if collection and urlsplit(args[n].get("path") or "").path.rstrip("/") == collection}
+            owner_paths = {args[n].get("path") for n, _ in shown if role[n] == owner and n not in listing}
             for n, _ in shown:
-                if role[n] == owner:
+                if n in listing:
+                    roles[n] = (("normal", "owner lists its records") if role[n] == owner
+                                else ("control", "another account lists its records"))
+                elif role[n] == owner:
                     roles[n] = ("normal", "owner reads its record")
                 elif role[n] is None:
                     roles[n] = ("control", "without login")

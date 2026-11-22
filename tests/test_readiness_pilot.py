@@ -32,10 +32,16 @@ def document(collection="/api/Notes", file="routes/notes.ts"):
 def test_preparation_changes_readiness_and_is_shown_before_execution():
     plan = plans_from(document())[0]
     assert [(e.method, e.path) for e in plan.preparation] == [("POST", "/api/Notes")]
-    assert _blocker(replace(plan, preparation=()), identities=IDENTITIES[:2], safe=False, source=False)[0] == "access"
-    assert _blocker(replace(plan, preparation=()), identities=IDENTITIES[:2], safe=False, source=True) is None
-    assert _blocker(plan, identities=IDENTITIES[:2], safe=False) is None
-    assert _blocker(plan, identities=IDENTITIES[:2], safe=True)[0] == "intrusive"
+    # GET /api/Notes/:id follows its collection, whose lists can show whose note it is without a write (VER-067)
+    assert _blocker(replace(plan, preparation=()), identities=IDENTITIES[:2], safe=False, source=False) is None
+    assert _blocker(plan, identities=IDENTITIES[:2], safe=True) is None
+    # a GET without one leaves the own-resource proof, which needs the preparation
+    latest = replace(plan, endpoints=tuple(e._replace(path="/api/Notes/latest") if e.method == "GET"
+                                           else e for e in plan.endpoints))
+    assert _blocker(replace(latest, preparation=()), identities=IDENTITIES[:2], safe=False, source=False)[0] == "access"
+    assert _blocker(replace(latest, preparation=()), identities=IDENTITIES[:2], safe=False, source=True) is None
+    assert _blocker(latest, identities=IDENTITIES[:2], safe=False) is None
+    assert _blocker(latest, identities=IDENTITIES[:2], safe=True)[0] == "intrusive"
     assert _blocker(plan, identities=IDENTITIES[:1], safe=False)[0] == "resource"
     assert "POST /api/Notes (prepares)" in "\n".join(_test_cases(Style(False), [plan], {}))
 

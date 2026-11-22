@@ -351,8 +351,7 @@ def _checked(result, history, cited, ctx=None):
                  "on the target")
         events["marker"] = "".join(getattr(ctx, "marker", None) or ())
     elif plan.get("existing"):
-        scope = (f"cited requests only, on a record {plan['existing']} already had, which names its user name; "
-                 "nothing was created")
+        scope = f"cited requests only, on a record {plan['existing']} already had; nothing was created"
     elif plan.get("reference") or plan.get("signed_in"):
         scope = "cited requests only; the access comparison and its expected restriction are recorded separately"
     if ctx is not None and getattr(ctx.plan, "cls", None) == "access-control":
@@ -377,6 +376,8 @@ def _checked(result, history, cited, ctx=None):
     }
     if plan.get("exposure"):
         result.proof["form"] = "declared-exposure"
+    if plan.get("existing") and getattr(ctx, "existing_form", None):
+        result.proof["form"] = ctx.existing_form          # VER-067: by the user name or the collection's list
     elif events.get("access_observation"):
         result.proof["form"] = "selected-access"
     result.identities_used = sorted(

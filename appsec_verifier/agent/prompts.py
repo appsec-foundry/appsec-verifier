@@ -564,15 +564,19 @@ def _access_hint(ctx) -> str:
     if "existing" in methods:
         hint += (
             "\nExisting-record proof (VER-067), without writes: call plan_test with kind access-control, existing set "
-            "to one normal account and path the GET that reads a record by its identifier (a placeholder such as :id "
-            "may stand for it). Read a record that belongs to that account as that account, without a role, and as "
+            "to one normal account and path the GET that reads a record by its identifier, with a placeholder such "
+            "as :id for it. Read a record that belongs to that account as that account, without a role, and as "
             "another normal account, all with the same path; then, as that other account, read its own record with "
-            "the same GET. Confirmed needs the owner's answer to name the owner's user name and no other account's, "
-            "the read without a role not to get that answer, the other account to get the owner's identical answer, "
-            "and the other account's own record to name its own user name and not the owner's; the Verifier "
-            "compares the user names itself. 403 or 404 for the other account's read of the owner's record gives "
-            "blocked-by-control, a complete different answer not-reproducible. A record that names every account, "
-            "such as a list of users, proves nothing. Cite the reads."
+            "the same GET. The Verifier decides in code whose record it is, in one of two ways: the owner's answer "
+            "names the owner's user name and no other account's, and the other account's own record names its own "
+            "and not the owner's; or, where the path's identifier follows its collection (/items for /items/:id), "
+            "each account's GET of that collection lists the identifier of its own record and does not hold the "
+            "other's. The plan allows that GET; send it as each of the two accounts and cite both. Confirmed needs "
+            "the read without a role not to get the owner's answer, the other account to get the owner's identical "
+            "answer, and its own record to answer differently. 403 or 404 for the other account's read of the "
+            "owner's record gives blocked-by-control, and so does another client error except 401, 407, 408 and 429 "
+            "when that account's own record is answered; a complete different answer gives not-reproducible. A "
+            "record that names every account, or a list both accounts get alike, proves nothing. Cite the reads."
         )
     if "owner" in methods and not _creates(ctx):
         # Run 144: without a creating request the agent spent its steps searching the source for one.
@@ -598,8 +602,8 @@ def _access_hint(ctx) -> str:
         )
         if "owner" not in methods and "existing" not in methods:
             hint += ("\nA finding about another account's record, not a privileged function, cannot be confirmed in "
-                     "this run: it needs a configured test_resource or two normal accounts, with --allow-intrusive or "
-                     "signed in with a user name. Report that missing prerequisite instead of trying other plans.")
+                     "this run: it needs a configured test_resource or two normal accounts. Report that missing "
+                     "prerequisite instead of trying other plans.")
     if "signed_in" in methods:
         hint += (
             "\nComparison without credentials, for a finding whose function a request without credentials reaches: "
@@ -616,16 +620,16 @@ def _access_hint(ctx) -> str:
         if (not {"owner", "existing", "reference"} & set(methods)
                 and getattr(plan, "cwe", None) not in EXPOSURE_CWES):
             hint += ("\nA finding about another account's record or a privileged function needs a configured "
-                     "test_resource, two normal accounts with --allow-intrusive or signed in with a user name, or a "
-                     "privileged and a normal account; if a request without credentials is refused, report that "
-                     "missing prerequisite.")
+                     "test_resource, two normal accounts, or a privileged and a normal account; if a request without "
+                     "credentials is refused, report that missing prerequisite.")
         if getattr(plan, "cwe", None) in EXPOSURE_CWES:
             hint += ("\nFor this finding's CWE your own requests reach only a configured test_resource; use the "
                      "comparison.")
     if "existing" in methods:
         return hint + ("\nThe existing-record proof needs the identifiers of both accounts' records: find them with "
-                       "the finding's GET or a prerequisite read (prerequisite: true, VER-047), such as a whoami "
-                       "route. The other proofs need no user id or record id beforehand.")
+                       "the GET of the record's collection under the plan, the finding's GET, or a prerequisite read "
+                       "(prerequisite: true, VER-047), such as a whoami route. The other proofs need no user id or "
+                       "record id beforehand.")
     return hint + ("\nNone of these proofs needs an account's user id or record id beforehand; reads that only "
                    "look one up, such as a whoami route, are not part of the finding.")
 

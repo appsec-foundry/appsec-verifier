@@ -7,10 +7,10 @@ import html
 import json
 import re
 import secrets
-from urllib.parse import parse_qsl, unquote
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from ..planning import STRATEGY_SCHEMA
-from ..verification_context import planned_route, record_segments, route_matches
+from ..verification_context import _PLACEHOLDER, planned_route, record_segments, route_matches
 
 SCALAR = {"type": ["string", "number", "boolean"], "maxLength": 4000}
 
@@ -156,7 +156,7 @@ PLAN_SCHEMA = {
         # VER-057: the account whose answer a request without credentials must receive; the Verifier sends both and
         # a random path next to the finding's, and compares the answers in code.
         "signed_in": {"type": "string", "minLength": 1, "maxLength": 80},
-        # VER-067: the normal account whose existing record, which names its user name, the other account reads.
+        # VER-067: the normal account whose existing record the other account reads.
         "existing": {"type": "string", "minLength": 1, "maxLength": 80},
         "strategy": STRATEGY_SCHEMA,
         # One template, or up to three candidates the Verifier tries in turn when the template does not form a valid
@@ -366,8 +366,8 @@ def named_roles(identities) -> list[str]:
 def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[str]:
     """How this run can prove an access-control finding (VER-010): `resource`, the operator's test resource,
     which takes precedence; else `owner`, a resource a normal account creates (two normal accounts and writes),
-    `existing`, a record a normal account already has that names its user name (two normal accounts that sign in
-    with a user name, VER-067), and, except for an IDOR, `reference`, a comparison with a privileged account for a
+    `existing`, a record a normal account already has, shown by its user name or its collection's list (two normal
+    accounts, VER-067), and, except for an IDOR, `reference`, a comparison with a privileged account for a
     privileged function (VER-041), and `signed_in`, a request without credentials that gets an account's answer
     (VER-057); missing authentication and exposure only the last. The test plan, plan_test, the prompt and
     technical QA all read this, so a finding no method fits is not tested (VER-008)."""
@@ -378,7 +378,7 @@ def access_methods(finding_id, cwe, scope, identities, *, writes: bool) -> list[
         return ["signed_in"] if signed_in else []
     normal = normal_roles(identities)
     reference = bool(normal and privileged_roles(identities)) and cwe not in RECORD_CWES
-    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("existing", len(named_roles(identities)) >= 2),
+    return [m for m, ok in (("owner", writes and len(normal) >= 2), ("existing", len(normal) >= 2),
                             ("reference", reference), ("signed_in", signed_in)) if ok]
 
 
@@ -1433,36 +1433,94 @@ def _names(text: str, name: str) -> bool:
     return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text or "", re.IGNORECASE) is not None
 
 
+def existing_collection(template: str) -> str | None:
+    """The read of a record's collection that lists whose records they are (VER-067): the planned path before its
+    one placeholder, such as /api/cards for /api/cards/:id; None for a path with no placeholder or several."""
+    parts = urlsplit(template or "").path.split("/")
+    marks = [i for i, p in enumerate(parts) if _PLACEHOLDER.fullmatch(p)]
+    return "/".join(parts[:marks[0]]) if len(marks) == 1 and marks[0] >= 2 else None
+
+
+def _record_id(template: str, path: str) -> str | None:
+    """The identifier `path` gives the one placeholder of `template`, or None."""
+    parts = urlsplit(template or "").path.split("/")
+    marks = [i for i, p in enumerate(parts) if _PLACEHOLDER.fullmatch(p)]
+    if len(marks) != 1 or not route_matches(template, path):
+        return None
+    return urlsplit(path).path.split("/")[marks[0]]
+
+
+def _json_values(body: str) -> tuple[set[str], set[str]]:
+    """The identifiers a JSON list states for its items, the value of each object's `id`, and every scalar value it
+    holds; both empty for an answer that is not JSON."""
+    try:
+        value = json.loads(body or "")
+    except ValueError:
+        return set(), set()
+    ids, leaves, stack = set(), set(), [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            own = item.get("id")
+            if isinstance(own, int | str) and not isinstance(own, bool) and str(own):
+                ids.add(str(own))
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif item is not None:
+            leaves.add(str(item))
+    return ids, leaves
+
+
+# A client error that refuses the record, unlike a missing login, a timeout or a rate limit (VER-067).
+_NOT_REFUSALS = {401, 407, 408, 429}
+
+
 def existing_check(ctx, history, cited, *, negative=False, blocked=False):
-    """A record the owner already has, which names its account (VER-067): the owner's read of it names the owner's
-    user name and no other normal account's, a read without a role does not get it, and another normal account's
-    read gets the owner's identical answer (the recorded digest, taken before redaction), while that account's read
-    of its own record names its user name and not the owner's. Negatively, the other account's read of the owner's
-    record is refused (blocked-by-control) or answered completely without it (not-reproducible). Only GETs of the
-    planned route count; a record that names neither account or both proves nothing."""
+    """A record the owner already has (VER-067). It is the owner's when the owner's complete answer names the owner's
+    user name and no other normal account's, or when the owner's read of the record's collection lists its
+    identifier and another normal account's read of that collection does not hold it; that account's own record,
+    shown the same way, is the contrast. A read without a role must not get the owner's answer, and the other
+    account's read confirms with the owner's identical answer (the recorded digest, taken before redaction) when its
+    own record differs. Negatively, 403 or 404 for the other account's read of the owner's record, or another client
+    error while its own record is answered, gives blocked-by-control, a complete answer without the record
+    not-reproducible. Only GETs of the planned route and of its collection count; a record that names neither account
+    or both, and a list both accounts see alike, prove nothing."""
     _, plan = latest_plan(history)
     owner = plan["existing"]
+    ctx.existing_form = None                  # the form a passing check names: by user name or by list
+    normal = normal_roles(getattr(ctx, "identities", None))
     sessions = getattr(ctx, "sessions", None)
-    names = {role: (sessions.user_name(role) if sessions is not None else None) or ""
-             for role in normal_roles(getattr(ctx, "identities", None))}
-    if len(names.get(owner, "")) < 3:
-        return f"{owner} signs in without a user name of at least three characters that a record could name"
-    accounts = {role: name for role, name in names.items()
-                if role == owner or (len(name) >= 3 and name.lower() != names[owner].lower())}
-    if len(accounts) < 2:
-        return "no other normal account signs in with a user name of its own"
-    reads = []
+    names = {role: (sessions.user_name(role) if sessions is not None else None) or "" for role in normal}
+    accounts = {}
+    if len(names.get(owner, "")) >= 3:
+        accounts = {role: name for role, name in names.items()
+                    if role == owner or (len(name) >= 3 and name.lower() != names[owner].lower())}
+    collection = existing_collection(plan["path"])
+    reads, lists = [], {}
     for n in cited if isinstance(cited, list) else []:
         h = history[n - 1] if type(n) is int and 1 <= n <= len(history) else {}
         args, res = h.get("args") or {}, h.get("result") or {}
         if h.get("tool") != "http_request" or type(res.get("status")) is not int:
             return f"proof needs answered target requests; step {n} is none"
-        if (args.get("method") or "GET").upper() != "GET" or not route_matches(plan["path"], args.get("path", "")):
-            return f"every cited request must be a GET of the planned path {plan['path']}; step {n} is not"
+        path, role = args.get("path", ""), args.get("role") or None
+        listing = bool(collection) and urlsplit(path).path.rstrip("/") == collection
+        if (args.get("method") or "GET").upper() != "GET" or not (route_matches(plan["path"], path) or listing):
+            return (f"every cited request must be a GET of the planned path {plan['path']}"
+                    + (f" or of its collection {collection}" if collection else "") + f"; step {n} is not")
         response = getattr(ctx, "responses", {}).get(n)
         if not response:
             return "the resource observation is missing"
-        reads.append((args.get("role") or None, args.get("path"), res["status"], response))
+        if not listing:
+            reads.append((role, path, res["status"], response))
+        elif role in normal and 200 <= res["status"] < 300 and response.get("complete"):
+            lists.setdefault(role, {}).setdefault(path, _json_values(response.get("body", "")))
+
+    def listed(role, against):
+        """The identifiers `role`'s reads of the collection list that `against`'s same reads do not hold."""
+        mine = lists.get(role, {})
+        return {i for path, (ids, _) in mine.items() if path in lists.get(against, {})
+                for i in ids if i not in lists[against][path][1]}
 
     def answered(status):
         return 200 <= status < 300
@@ -1470,41 +1528,74 @@ def existing_check(ctx, history, cited, *, negative=False, blocked=False):
     def names_only(response, role):
         """The complete answer names `role`'s account and no other normal account of the run."""
         body = response.get("body", "")
-        return bool(response.get("complete")) and _names(body, accounts[role]) and not any(
+        return role in accounts and bool(response.get("complete")) and _names(body, accounts[role]) and not any(
             _names(body, name) for other, name in accounts.items() if other != role)
+
+    others = [role for role in normal if role != owner]
+
+    def owns(role, path, response, against):
+        """How `role`'s answered read at `path` is shown to be its own record and not `against`'s."""
+        if names_only(response, role):
+            return "named"
+        if _record_id(plan["path"], path) in listed(role, against):
+            return "listed"
+        return None
 
     owned = {}
     for role, path, status, response in reads:
-        if role == owner and answered(status) and response.get("digest") and names_only(response, owner):
-            owned.setdefault(path, response)
+        if role == owner and answered(status) and response.get("digest"):
+            ways = {how for other in others if (how := owns(owner, path, response, other))}
+            if ways:
+                owned.setdefault(path, (response, "named" if "named" in ways else "listed"))
     if not owned:
-        return (f"cite {owner}'s answered read of its own record, one whose complete answer names its user name and "
-                "no other account's")
+        ways = (["one whose complete answer names its user name and no other account's"] if len(accounts) >= 2
+                else [])
+        if collection:
+            ways.append(f"one whose identifier {owner}'s GET of {collection} lists while the other account's GET of "
+                        "it does not hold it; cite both")
+        if not ways:
+            return (f"{owner} signs in without a user name a record could name, and {plan['path']} has no "
+                    "collection whose list shows whose record it is")
+        return f"cite {owner}'s answered read of its own record, " + ", or ".join(ways)
+    def own_record(role, path, mine, how):
+        """`role`'s answered read of its own record, shown as the owner's record was, with another answer."""
+        return any(r_ == role and p != path and answered(s) and r.get("digest") != mine["digest"]
+                   and owns(role, p, r, owner) == how for r_, p, s, r in reads)
+
     problem = "cite a read of the owner's record without a role"
-    for path, mine in owned.items():
+    for path, (mine, how) in owned.items():
         anonymous = [(status, r) for role, p, status, r in reads if role is None and p == path]
         if not anonymous:
             continue
-        if any(answered(s) and (r.get("digest") == mine["digest"] or _names(r.get("body", ""), accounts[owner]))
+        if any(answered(s) and (r.get("digest") == mine["digest"]
+                                or how == "named" and _names(r.get("body", ""), accounts[owner]))
                for s, r in anonymous):
             return "the owner's record is visible without a login, so it is public"
         theirs = [(role, s, r) for role, p, s, r in reads
-                  if role in accounts and role != owner and p == path and r.get("identity") != mine.get("identity")]
-        present = [role for role, s, r in theirs
-                   if answered(s) and (r.get("digest") == mine["digest"] or _names(r.get("body", ""), accounts[owner]))]
+                  if role in others and p == path and r.get("identity") != mine.get("identity")]
+        present = [role for role, s, r in theirs if answered(s) and (
+            r.get("digest") == mine["digest"] or how == "named" and _names(r.get("body", ""), accounts[owner]))]
         if negative:
             if present:
                 return "the owner's record is present for the other account"
-            if any(s in (403, 404) if blocked else answered(s) and r.get("complete") for _, s, r in theirs):
+            if (blocked and any(s in (403, 404) or 400 <= s < 500 and s not in _NOT_REFUSALS
+                                and own_record(role, path, mine, how) for role, s, r in theirs)
+                    or not blocked and any(answered(s) and r.get("complete") for _, s, r in theirs)):
+                ctx.existing_form = "named-record" if how == "named" else "listed-record"
                 return None
-            problem = ("cite the other account's read of the owner's record answered 403 or 404" if blocked else
+            problem = ("cite the other account's read of the owner's record answered 403 or 404, or another client "
+                       "error other than 401, 407, 408 or 429 together with that account's answered read of its own "
+                       "record" if blocked else
                        "cite the other account's complete answered read of the owner's record without that record")
             continue
         for role in dict.fromkeys(role for role, s, r in theirs if answered(s) and r.get("digest") == mine["digest"]):
-            if any(r_ == role and p != path and answered(s) and names_only(r, role) for r_, p, s, r in reads):
+            if own_record(role, path, mine, how):
+                ctx.existing_form = "named-record" if how == "named" else "listed-record"
                 return None
         problem = ("another normal account must get the owner's identical answer for its record, and that "
-                   "account's read of its own record must name its user name and not the owner's")
+                   "account's read of its own record must "
+                   + ("name its user name and not the owner's" if how == "named" else
+                      f"be one that its GET of {collection} lists and {owner}'s does not hold, with another answer"))
     return problem
 
 

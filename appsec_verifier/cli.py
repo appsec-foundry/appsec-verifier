@@ -1603,7 +1603,7 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
     route near its location can supply one (agent/controller.py); in safe mode not when every route the source
     registers for its handlers writes (VER-008), the routes its test agent would start from (agent/loop.py)."""
     from .agent.access_policy import access_rule, rule_requests
-    from .agent.experiments import EXPOSURE_CWES, RECORD_CWES, access_methods
+    from .agent.experiments import EXPOSURE_CWES, RECORD_CWES, access_methods, existing_collection, named_roles
     from .endpoints import WRITE_METHODS
     from .verification_context import missing_capabilities, record_segment
 
@@ -1624,17 +1624,36 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
     if plan.cls == "access-control":
         # VER-010: the operator's test resource first; else one a normal account creates, a record it already has
         # (VER-067), a privileged reference, or the comparison without credentials (VER-057)
-        methods = access_methods(plan.id, plan.cwe, scope, identities, writes=not safe)
-        if not methods and access_methods(plan.id, plan.cwe, scope, identities, writes=True):
-            return "intrusive", ("safe mode; without a declared test resource or two accounts that sign in with a "
-                                 "user name the Verifier creates one, which writes")
+        # Without one, the comparison reads with a GET request of the finding; an account creates its resource
+        # with a write request of the finding that names no existing record (VER-014) and reads it back with a GET
+        # of the finding, or, for a write proof, with a GET on the path of the finding's write that changes a
+        # record (VER-010; agent/tools.py, routes as agent/controller.py builds them).
+        variants = getattr(plan, "verification_context", {}).get("variants", [])
+        named = [(v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants] or [
+            *((e.method, e.path) for e in plan.endpoints),
+            *((r.get("method", "GET"), r["path"]) for key in ("injection_inputs", "session_checks")
+              for r in scope.get(key, []) if r["finding_id"] == plan.id)]
+        named += [(e.method, e.path) for e in getattr(plan, "preparation", ())]
+        gets = [p for m, p in named if m in ("GET", "PAGE", "ALL")]
+
+        def usable(methods):
+            # VER-067: without user names a record shows its owner only through its collection's list, so a
+            # finding whose named reads have no collection needs another proof.
+            if "existing" in methods and len(named_roles(identities)) < 2 and gets and not any(
+                    existing_collection(p) for p in gets):
+                return [m for m in methods if m != "existing"]
+            return methods
+
+        methods = usable(access_methods(plan.id, plan.cwe, scope, identities, writes=not safe))
+        if not methods and usable(access_methods(plan.id, plan.cwe, scope, identities, writes=True)):
+            return "intrusive", ("safe mode; without a declared test resource, or a record an account already has "
+                                 "that its user name or its collection's list shows, the Verifier creates one, which "
+                                 "writes")
         if not methods and plan.cwe in RECORD_CWES:
-            return "resource", ("no declared test resource, and not two normal accounts with --allow-intrusive or "
-                                "signed in with a user name; a privileged account does not prove another account's "
-                                "record")
+            return "resource", ("no declared test resource and not two normal accounts; a privileged account does "
+                                "not prove another account's record")
         if not methods:
-            return "resource", ("no declared test resource, and neither two normal accounts with --allow-intrusive "
-                                "or signed in with a user name nor a privileged account")
+            return "resource", "no declared test resource, and neither two normal accounts nor a privileged account"
         # VER-010: no access breaks the operator's rule that anyone may use every request a comparison would use.
         ruled = rule_requests(plan, writes="owner" in methods)
         if ruled and "resource" not in methods and not any(
@@ -1650,16 +1669,6 @@ def _blocker(plan, *, identities, browser, listener, scope, safe, source=None) -
             for r in resources
         ):
             return "resource", "a declared test resource names roles unavailable in this run"
-        # Without one, the comparison reads with a GET request of the finding; an account creates its resource
-        # with a write request of the finding that names no existing record (VER-014) and reads it back with a GET
-        # of the finding, or, for a write proof, with a GET on the path of the finding's write that changes a
-        # record (VER-010; agent/tools.py, routes as agent/controller.py builds them).
-        variants = getattr(plan, "verification_context", {}).get("variants", [])
-        named = [(v["request"].get("method", "GET"), v["request"].get("path", "")) for v in variants] or [
-            *((e.method, e.path) for e in plan.endpoints),
-            *((r.get("method", "GET"), r["path"]) for key in ("injection_inputs", "session_checks")
-              for r in scope.get(key, []) if r["finding_id"] == plan.id)]
-        named += [(e.method, e.path) for e in getattr(plan, "preparation", ())]
         writes = [p for m, p in named if m in ("POST", "PUT", "PATCH", "ALL")]
         reads = any(m in ("GET", "PAGE", "ALL") for m, _ in named)
         creates = any(record_segment(p) is None for p in writes)

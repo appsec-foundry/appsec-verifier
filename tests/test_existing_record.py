@@ -1,4 +1,5 @@
-"""VER-067: prove a read of an existing record by the account it names, without writes."""
+"""VER-067: prove a read of a record an account already has, shown by its user name or its collection's list,
+without writes."""
 from __future__ import annotations
 
 import base64
@@ -6,6 +7,7 @@ import copy
 import io
 import json
 from dataclasses import replace
+from urllib.parse import urlsplit
 
 import pytest
 from test_agent_tools import Resp, _ctx
@@ -13,10 +15,11 @@ from test_endpoints import _blocker, _plan
 from test_experiments import STRATEGY
 
 from appsec_verifier.agent.controller import Controller
-from appsec_verifier.agent.experiments import access_methods
+from appsec_verifier.agent.experiments import access_methods, existing_collection
 from appsec_verifier.agent.loop import AgentProbe
 from appsec_verifier.agent.prompts import _system
 from appsec_verifier.agent.tools import AgentTools, ToolError
+from appsec_verifier.endpoints import Endpoint
 from appsec_verifier.loader import plans_from
 
 USERS = {"1": "alice@example.com", "2": "bob@example.com", "3": "carol@example.com"}
@@ -30,9 +33,9 @@ TOKENS = [{"role": "account-1", "method": "bearer", "auth": {"token_env": "A"}},
           {"role": "account-2", "method": "bearer", "auth": {"token_env": "B"}}]
 
 
-def document():
-    return {"threats": [{"id": "T-1", "cwe": "CWE-639", "severity": "high", "title": "Read another user's profile",
-                         "scenario": "GET /api/users/:id", "evidence": {"file": "routes/users.ts", "line": 20}}]}
+def document(path="/api/users/:id"):
+    return {"threats": [{"id": "T-1", "cwe": "CWE-639", "severity": "high", "title": "Read another user's record",
+                         "scenario": f"GET {path}", "evidence": {"file": "routes/users.ts", "line": 20}}]}
 
 
 def requester(headers):
@@ -43,6 +46,9 @@ def requester(headers):
     return next(i for i, name in USERS.items() if name == user)
 
 
+REFUSALS = {"protected": 403, "refused": 400, "limited": 429}
+
+
 def target(kind):
     """A fake user API: `kind` decides what another account's read of the owner's record gets."""
     def transport(method, url, headers, **kw):
@@ -51,8 +57,8 @@ def target(kind):
         me = requester(headers)
         if me is None and kind != "public":
             return Resp(401, '{"error":"login required"}')
-        if kind == "protected" and me != record:
-            return Resp(403, '{"error":"forbidden"}')
+        if kind in REFUSALS and me != record:
+            return Resp(REFUSALS[kind], '{"error":"Malicious activity detected."}')
         if kind == "own-only" and me != record:
             record = me
         if kind == "list":
@@ -65,10 +71,10 @@ def target(kind):
     return transport
 
 
-def context(tmp_path, transport, *, identities=NAMED, safe=True):
+def context(tmp_path, transport, *, identities=NAMED, safe=True, path="/api/users/:id"):
     ctx = _ctx(tmp_path, transport, safe=safe, read_only=safe, env=ENV | {"A": "token-1", "B": "token-2"},
                idents=copy.deepcopy(identities))
-    ctx.plan, ctx.marker = plans_from(document())[0], ("vrf1a2b3c4d", "5e6f7a8b")
+    ctx.plan, ctx.marker = plans_from(document(path))[0], ("vrf1a2b3c4d", "5e6f7a8b")
     ctx.assume_restrictions = True
     ctx.budget = ctx.http._budget
     ctx.evidence_dir = tmp_path / "evidence"
@@ -129,10 +135,21 @@ def test_the_other_accounts_own_record_must_name_it(tmp_path):
     assert "read of its own record must name its user name" in result.rationale
 
 
-@pytest.mark.parametrize("kind,verdict", [("protected", "blocked-by-control"), ("own-only", "not-reproducible")])
+@pytest.mark.parametrize("kind,verdict", [("protected", "blocked-by-control"), ("refused", "blocked-by-control"),
+                                          ("own-only", "not-reproducible")])
 def test_a_refused_or_different_answer_for_the_other_account_is_a_negative_verdict(tmp_path, kind, verdict):
+    """A 400 refuses the owner's record as 403 does, because the same request returns the other account's own."""
     result = run(context(tmp_path, target(kind)), verdict)
     assert (result.verdict, result.confidence) == (verdict, "medium"), result.rationale
+
+
+def test_a_client_error_refuses_only_with_the_other_accounts_own_record_and_never_a_rate_limit(tmp_path):
+    result = run(context(tmp_path, target("refused")), "blocked-by-control",
+                 [{"tool": "plan_test", "args": PLAN}, *READS[:3]])
+    assert result.verdict == "inconclusive"
+    assert "together with that account's answered read of its own record" in result.rationale
+    result = run(context(tmp_path, target("limited")), "blocked-by-control")
+    assert result.verdict == "inconclusive"
 
 
 def test_a_negative_verdict_is_refused_when_the_other_account_got_the_record(tmp_path):
@@ -141,13 +158,94 @@ def test_a_negative_verdict_is_refused_when_the_other_account_got_the_record(tmp
     assert "present for the other account" in result.rationale
 
 
-def test_accounts_without_a_user_name_cannot_plan_it(tmp_path):
-    """A bearer token or pasted session names no user name a record could contain; safe mode then has no proof
-    for an IDOR, as before."""
-    tools = AgentTools(context(tmp_path, target("vulnerable"), identities=TOKENS))
-    with pytest.raises(ToolError, match="sign in with a user name"):
-        tools.plan_test(**PLAN)
-    assert access_methods("T-1", "CWE-639", {}, TOKENS, writes=False) == []
+CARDS = {"5": "Bearer token-1", "6": "Bearer token-2"}         # card id: the session of the account that owns it
+
+
+def cards(kind):
+    """A fake card API for accounts without a user name: GET /api/cards lists the caller's own cards; `kind` decides
+    what another account's read of a card gets."""
+    def transport(method, url, headers, **kw):
+        assert method == "GET", "the existing-record proof only reads"
+        me, path = headers.get("Authorization"), urlsplit(url).path
+        if me is None and kind != "public":
+            return Resp(401, '{"error":"login required"}')
+        if path == "/api/cards":
+            items = [{"id": int(i), "last4": "4242"} for i, owner in CARDS.items() if kind == "unscoped" or owner == me]
+            return Resp(200, json.dumps({"status": "success", "data": items}))
+        card = path.rsplit("/", 1)[1]
+        if kind in REFUSALS and CARDS.get(card) != me:
+            return Resp(REFUSALS[kind], '{"status":"error","data":"Malicious activity detected."}')
+        body = {"last4": "4242"} if kind == "static" else {"id": int(card), "last4": "4242", "UserId": CARDS[card][-1]}
+        return Resp(200, json.dumps({"status": "success", "data": body}))
+    return transport
+
+
+CARD_PLAN = {**PLAN, "path": "/api/cards/:id", "hypothesis": "Another account reads the owner's card by its id"}
+LISTS = [{"tool": "http_request", "args": {"path": "/api/cards", "role": role}} for role in ("account-1", "account-2")]
+CARD_READS = [{"tool": "http_request", "args": {"path": "/api/cards/5", **({"role": role} if role else {})}}
+              for role in ("account-1", None, "account-2")] + [
+    {"tool": "http_request", "args": {"path": "/api/cards/6", "role": "account-2"}}]
+CARD_STEPS = [{"tool": "plan_test", "args": CARD_PLAN}, *LISTS, *CARD_READS]
+
+
+def card_context(tmp_path, kind):
+    return context(tmp_path, cards(kind), identities=TOKENS, path="/api/cards/:id")
+
+
+def test_a_record_only_the_owners_list_shows_confirms_for_accounts_without_a_user_name(tmp_path):
+    """Run 149: a record that names its owner only by an internal id. Each account's list of the collection shows
+    whose record it is, without a user name and in safe mode; the collection GET is sent under the plan."""
+    result = run(card_context(tmp_path, "vulnerable"), "confirmed", CARD_STEPS)
+    assert (result.verdict, result.confidence) == ("confirmed", "medium"), result.rationale
+    assert result.proof["form"] == "listed-record"
+    assert result.proof["access_restriction"]["assumed"] is True
+    assert "nothing was created" in result.proof["scope"]
+
+
+@pytest.mark.parametrize("kind,steps,why", [
+    ("unscoped", CARD_STEPS, "does not hold it"),                    # a list every account gets alike
+    ("vulnerable", [CARD_STEPS[0], LISTS[0], *CARD_READS], "does not hold it"),   # no list of the other account
+    ("public", CARD_STEPS, "visible without a login"),
+    ("static", CARD_STEPS, "with another answer"),                   # every identifier answers alike
+])
+def test_a_list_that_does_not_single_out_the_owner_confirms_nothing(tmp_path, kind, steps, why):
+    result = run(card_context(tmp_path, kind), "confirmed", steps)
+    assert result.verdict == "inconclusive"
+    assert why in result.rationale
+
+
+@pytest.mark.parametrize("kind,steps,verdict", [
+    ("refused", CARD_STEPS, "blocked-by-control"),        # Juice's 400, with the other account's own card answered
+    ("protected", CARD_STEPS, "blocked-by-control"),
+    ("refused", CARD_STEPS[:-1], "inconclusive"),         # without the other account's own card
+    ("limited", CARD_STEPS, "inconclusive"),              # a rate limit refuses nothing
+])
+def test_a_card_refused_to_the_other_account_is_blocked_by_control(tmp_path, kind, steps, verdict):
+    result = run(card_context(tmp_path, kind), "blocked-by-control", steps)
+    assert result.verdict == verdict, result.rationale
+
+
+def test_the_plan_allows_a_get_of_the_collection_and_nothing_else_there(tmp_path):
+    assert existing_collection("/api/cards/:id") == "/api/cards"
+    assert existing_collection("/api/orders/{id}/owned") == "/api/orders"
+    assert [existing_collection(p) for p in ("/:id", "/api/me", "/a/:x/b/:y")] == [None, None, None]
+    ctx = card_context(tmp_path, "vulnerable")
+    controller = Controller(ctx)
+    with pytest.raises(ToolError, match="no matching route"):
+        controller.before("http_request", {"role": "account-1", "path": "/api/cards"})
+    controller.plan = {k: v for k, v in CARD_PLAN.items() if k != "strategy"}
+    controller.before("http_request", {"role": "account-1", "path": "/api/cards"})
+    with pytest.raises(ToolError):
+        controller.before("http_request", {"role": "account-1", "method": "POST", "path": "/api/cards",
+                                           "json": {"last4": "vrf1a2b3c4d"}})
+
+
+def test_accounts_without_a_user_name_prove_it_only_by_a_list(tmp_path):
+    """A bearer token or pasted session names no user name a record could contain, so only the list remains."""
+    result = run(context(tmp_path, target("vulnerable"), identities=TOKENS), "confirmed")
+    assert result.verdict == "inconclusive"
+    assert "GET of /api/users lists" in result.rationale and "names its user name" not in result.rationale
+    assert access_methods("T-1", "CWE-639", {}, TOKENS, writes=False) == ["existing"]
     assert access_methods("T-1", "CWE-639", {}, NAMED, writes=False) == ["existing"]
     assert access_methods("T-1", "CWE-306", {}, NAMED, writes=False) == ["signed_in"]     # exposure: unchanged
 
@@ -175,10 +273,16 @@ def test_only_a_normal_account_owns_the_record_and_the_plan_only_reads(tmp_path)
                                                    "json": {"email": value}})
 
 
-def test_the_test_plan_tests_an_idor_in_safe_mode_with_named_accounts():
+def test_the_test_plan_tests_an_idor_in_safe_mode_where_a_name_or_a_list_can_show_the_owner():
     plan = replace(_plan("access-control"), cwe="CWE-639")
     assert _blocker(plan, identities=NAMED, safe=True) is None
-    assert _blocker(plan, identities=TOKENS, safe=True)[0] == "intrusive"
+    assert _blocker(plan, identities=TOKENS, safe=True) is None                # names no GET: the source may
+    listed = replace(plan, endpoints=(Endpoint("GET", "/api/cards/:id", None),))
+    assert _blocker(listed, identities=TOKENS, safe=True) is None
+    profile = replace(plan, endpoints=(Endpoint("GET", "/api/profile", None),))
+    assert _blocker(profile, identities=NAMED, safe=True) is None
+    assert _blocker(profile, identities=TOKENS, safe=True)[0] == "intrusive"
+    assert _blocker(profile, identities=TOKENS, safe=False) is None
 
 
 def test_the_agent_is_told_of_the_proof_and_not_to_search_for_a_creation_route(tmp_path):
@@ -187,9 +291,9 @@ def test_the_agent_is_told_of_the_proof_and_not_to_search_for_a_creation_route(t
     assert "Existing-record proof (VER-067)" in text
     assert "No request of this finding, no evidenced preparation" in text
     assert "prefer it to searching for a creation route" in text
-    tokens = context(tmp_path, target("vulnerable"), identities=TOKENS, safe=False)
-    assert "Existing-record proof" not in _system(tokens)
-    assert "report that missing prerequisite" in _system(tokens)
+    assert "each account's GET of that collection lists the identifier of its own record" in text
+    tokens = _system(context(tmp_path, target("vulnerable"), identities=TOKENS, safe=False))
+    assert "Existing-record proof (VER-067)" in tokens and "prefer it to searching for a creation route" in tokens
 
 
 def test_a_run_that_may_write_does_not_claim_to_test_findings_at_the_same_time():

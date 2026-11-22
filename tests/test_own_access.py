@@ -716,9 +716,13 @@ def test_the_test_plan_follows_the_accounts_and_the_mode():
     assert _blocker(plan, identities=normal, scope={"test_resources": [RESOURCE]}) is None
     assert _blocker(plan, identities=normal[1:], scope={"test_resources": [RESOURCE]})[0] == "resource"
     # VER-008, VER-010: an IDOR is another account's record; a privileged account cannot prove it, so it is not
-    # tested unless an account can create the record or the operator declares one
+    # tested unless an account can create the record, the operator declares one, or, without writes, a user name or
+    # the list of the record's collection shows whose record it is (VER-067)
     idor = replace(plan, cwe="CWE-639")
-    assert _blocker(idor, identities=normal + admin)[0] == "intrusive"
+    assert _blocker(idor, identities=normal + admin) is None              # names no GET: the source may give one
+    assert _blocker(replace(idor, endpoints=(Endpoint("GET", "/api/Items/:id", True),)), identities=normal) is None
+    profile = replace(idor, endpoints=(Endpoint("GET", "/api/profile", True),))
+    assert _blocker(profile, identities=normal + admin)[0] == "intrusive"
     need, reason = _blocker(idor, identities=normal[:1] + admin)
     assert need == "resource" and "privileged account does not prove another account's record" in reason
     assert _blocker(idor, identities=normal + admin, safe=False) is None
@@ -742,8 +746,12 @@ def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
     assert _blocker(_plan("access-control", put, get), identities=two + admin, safe=False, source=False) is None
     assert _blocker(_plan("access-control", get), identities=two, safe=False, source=False) is None
     assert _blocker(_plan("access-control", put), identities=two, safe=False, source=False)[0] == "access"
+    # an IDOR without a creating write: the list of the record's collection can still show whose record it is
+    # (VER-067), a GET without a collection cannot
     idor = replace(_plan("access-control", put, get), cwe="CWE-639")
-    assert _blocker(idor, identities=two, safe=False, source=False)[0] == "access"
+    assert _blocker(idor, identities=two, safe=False, source=False) is None
+    profile = replace(_plan("access-control", put, Endpoint("GET", "/api/profile", True)), cwe="CWE-639")
+    assert _blocker(profile, identities=two, safe=False, source=False)[0] == "access"
     # a write proof creates, changes by identifier and reads the changed path (VER-010)
     assert _blocker(_plan("access-control", post, put), identities=two, safe=False, source=False) is None
     assert _blocker(_plan("access-control", post), identities=two, safe=False, source=False)[1].startswith("no GET")
@@ -755,8 +763,8 @@ def test_an_access_finding_without_a_request_its_proof_can_use_is_not_tested():
     (ROLES[:2], False, {}, "CWE-639", "Own-resource proof"),
     (ROLES, True, {}, "CWE-862", "Privileged-function proof"),
     (ROLES, False, {"test_resources": [RESOURCE]}, "CWE-639", "use the configured test_resource"),
-    (ROLES[:2], True, {}, "CWE-639", "cannot be confirmed in this run"),
-    (ROLES, True, {}, "CWE-639", "cannot be confirmed in this run"),        # an IDOR: no privileged comparison
+    (ROLES[:2], True, {}, "CWE-639", "Existing-record proof (VER-067)"),    # two accounts, without writes
+    (ROLES[:1] + ROLES[2:], True, {}, "CWE-639", "cannot be confirmed in this run"),   # no privileged comparison
 ])
 def test_the_prompt_names_only_the_proofs_the_run_allows(identities, safe, scope, cwe, expected):
     ctx = SimpleNamespace(plan=SimpleNamespace(id="T-1", cls="access-control", cwe=cwe), identities=identities,

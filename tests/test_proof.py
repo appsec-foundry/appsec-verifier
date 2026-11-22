@@ -580,6 +580,7 @@ def test_every_proof_form_the_check_records_is_described_and_every_description_i
                                 {"existing": "a"}, {"reference": "b"}]}
     forms = {proof_form(cls, plan) for cls, listed in plans.items() for plan in listed}
     forms |= {proof_form(cls, {}) for cls in DEFAULT_FORMS}
-    forms |= {"archive-marker", "selected-access", "declared-exposure", "auth-artifact"}  # checked or legacy forms
+    forms |= {"archive-marker", "selected-access", "declared-exposure", "auth-artifact",   # checked or legacy forms
+              "listed-record"}                       # an existing record shown by the lists (VER-067)
     assert forms == set(PROOF_FORMS)
     assert proof_form("access-control", {"change": {"method": "PUT"}, "owner": "a"}) == "record-change"
