@@ -125,6 +125,37 @@ def test_a_refused_derivation_says_what_the_cited_step_does_not_show(tmp_path):
     assert not getattr(ctx, "derived_requests", [])
 
 
+def test_a_refusal_for_an_unshown_input_says_the_request_may_go_without_it_where_it_would(tmp_path):
+    """Run 147: the declaration showed the route that creates the owner's record but none of its fields, and the
+    agent searched for evidence of a field instead of deriving the route without it. The refusal says so only where
+    the request itself would be accepted, and a plan still needs evidence for the input it tests."""
+    ctx = context(tmp_path)
+    source(ctx, "app.get('/go/next', handler)")
+    with pytest.raises(ToolError, match="derive it without those inputs unless a plan tests one of them"):
+        derive(ctx, inputs=[{"location": "query", "name": "x"}])
+    assert derive(ctx)["accepted"]
+
+    ctx = context(tmp_path)
+    source(ctx, "app.get('/admin/report', handler)")
+    with pytest.raises(ToolError, match="shows no input named 'x' for this request") as refused:
+        derive(ctx, path="/admin/report", inputs=[{"location": "query", "name": "x"}])
+    assert "derive it without" not in str(refused.value)
+    with pytest.raises(ToolError, match="original resource"):
+        derive(ctx, path="/admin/report")
+
+    ctx = context(tmp_path)
+    ctx.plan = replace(ctx.plan, cls="injection", cwe="CWE-89", verification_context={"variants": [{
+        "id": "old", "request": {"method": "GET", "path": "/go", "inputs": [{"location": "query", "name": "q"}]}}]})
+    source(ctx, "app.get('/go', handler)")
+    assert derive(ctx, "/go")["accepted"]
+    args = {"kind": "boolean", "hypothesis": "The filter changes the SQL predicate", "strategy": STRATEGY,
+            "variant": "old", "path": "/go", "input_location": "params", "input_name": "filter",
+            "baseline": "pear", "sql_template": "pear' AND {{predicate}} -- ", "pointer": "/items"}
+    with pytest.raises(ToolError, match="the input does not match the finding variant"):
+        Controller(ctx).before("plan_test", args)
+        AgentTools(ctx).plan_test(**args)
+
+
 def test_scope_path_restriction_also_applies_to_recorded_forms(tmp_path):
     ctx = context(tmp_path)
     ctx.scope = {**ctx.scope, "path_prefixes": ["/go/allowed"]}

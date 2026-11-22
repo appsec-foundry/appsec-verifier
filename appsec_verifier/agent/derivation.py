@@ -729,9 +729,14 @@ def derive(ctx, *, evidence_step, method, path, inputs, reason):
         routed = [r for r in candidates if r["method"] in (method, "ALL")
                   and planned_route(resolve(ctx, r["path"]), url)]
         unshown = [str(i.get("name"))[:40] for i in inputs if not any(_offers(r, i) for r in routed)]
+        # Without those inputs the request itself would be accepted: say so, since it may carry them anyway.
+        droppable = bool(routed) and (any(related(resolve(ctx, r["path"]), url) for r in roots)
+                                      or any(r in workflow for r in routed))
         detail = (f": the cited step shows no {method} request to this path" if not routed
                   else ": the cited step shows no input named " + ", ".join(repr(n) for n in unshown[:3])
-                  + " for this request" if unshown
+                  + " for this request"
+                  + ("; derive it without those inputs unless a plan tests one of them: a request may also carry "
+                     "fields its derivation does not name" if droppable else "") if unshown
                   else ": no single form, link or declaration of the cited step carries these inputs together"
                   if not matching else "")      # a matching request that is not related to the finding's own
         raise ValueError(_hinted("request or inputs lack recorded evidence for the finding's original resource"
