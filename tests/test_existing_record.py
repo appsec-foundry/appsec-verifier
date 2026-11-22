@@ -262,6 +262,84 @@ def test_one_round_of_proof_feedback_names_every_request_the_proof_cites(tmp_pat
                                           "another normal account's read of it", "its own record"))
 
 
+ORIENTATION = [{"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": n}} for n in range(1, 7)]
+
+
+class Run160:
+    """Run 160: six source reads, the plan at step 7, both lists and the other account's read, a negative verdict
+    the check refuses for three missing reads, then those reads and the verdict again."""
+    calls = 0
+
+    def __init__(self):
+        self.queue = [*ORIENTATION, CARD_STEPS[0], LISTS[0], LISTS[1], CARD_READS[2],
+                      {"verdict": {"verdict": "blocked-by-control", "rationale": "card refused",
+                                   "proof_steps": [8, 9, 10]}}]
+        self.final, self.plans, self.feedback = None, [], []
+
+    def next_step(self, ctx, history):
+        type(self).calls += 1
+        last = history[-1] if history else {}
+        if last.get("tool") == "plan_test":
+            self.plans.append(last["result"])
+        if last.get("tool") == "proof_feedback":
+            self.feedback.append(last["result"])
+            n = len(history)
+            self.final = {"verdict": {"verdict": "blocked-by-control", "rationale": "card refused",
+                                      "proof_steps": [8, 9, 10, n + 1, n + 2, n + 3]}}
+            self.queue = [CARD_READS[0], CARD_READS[1], CARD_READS[3], self.final]
+        if not self.queue:
+            return copy.deepcopy(self.final)                     # the presentation round repeats the verdict
+        return copy.deepcopy(self.queue.pop(0))
+
+
+def test_a_plan_after_long_orientation_keeps_the_steps_its_proof_needs(tmp_path):
+    """Run 160 (VER-015): with 12 steps the refused verdict at step 11 left one step for three missing reads. The
+    first accepted plan keeps the steps its proof needs, its six requests plus three, here up to step 16, and its
+    answer names every request the proof cites."""
+    planners = []
+
+    def factory():
+        planners.append(Run160())
+        return planners[-1]
+
+    result = AgentProbe("access-control", factory, max_steps=12).run(card_context(tmp_path, "refused"))
+    assert result.verdict == "blocked-by-control", result.rationale
+    assert result.proof["form"] == "listed-record"
+    agent = planners[0]
+    assert agent.plans[0]["max_steps"] == 16
+    assert "account-1's and the other account's GET of /api/cards" in agent.plans[0]["needs"]
+    assert agent.feedback[0]["remaining_steps"] == 5
+
+
+def test_steps_are_added_only_to_a_first_plan_whose_proof_would_not_fit(tmp_path):
+    """Refused cases (VER-015): without a plan, and with a plan that leaves its proof enough steps, the bound stays;
+    a revised plan adds none, so planning again gains no steps."""
+    class Reader:
+        calls = 0
+
+        def __init__(self, plans=()):
+            self.plans, self.results = dict(plans), []
+
+        def next_step(self, ctx, history):
+            type(self).calls += 1
+            if history and history[-1].get("tool") == "plan_test":
+                self.results.append(history[-1]["result"])
+            if len(history) + 1 in self.plans:
+                return {"tool": "plan_test", "args": self.plans[len(history) + 1]}
+            return {"tool": "read_source", "args": {"path": "routes/basket.ts", "around_line": len(history) + 1}}
+
+    revised = {**CARD_PLAN, "hypothesis": "The other account reads the owner's card through its list",
+               "strategy": {**CARD_PLAN.get("strategy", STRATEGY), "revision_reason": "read through the list"}}
+    for plans, decisions, raised in (((), 12, None), ({1: CARD_PLAN}, 12, None), ({7: CARD_PLAN, 15: revised}, 16, 16)):
+        Reader.calls = 0
+        agent = Reader(plans)
+        result = AgentProbe("access-control", lambda agent=agent: agent, max_steps=12).run(
+            card_context(tmp_path, "refused"))
+        assert result.limits_hit == "attempts" and Reader.calls == decisions, (plans, Reader.calls)
+        assert agent.results and agent.results[0].get("max_steps") == raised or not plans
+        assert all("max_steps" not in r for r in agent.results[1:])
+
+
 def test_a_negative_verdict_citing_a_source_read_names_the_requests_to_cite(tmp_path):
     steps = [CARD_STEPS[0], {"tool": "read_source", "args": {"path": "routes/basket.ts"}}, *CARD_STEPS[1:]]
     result = run(card_context(tmp_path, "refused"), "blocked-by-control", steps)      # cites steps 2-8

@@ -89,7 +89,7 @@ Every run has limits on model costs, model calls, requests to the target, steps 
 | `--cost-limit USD` | model costs; not with `codex-cli` and `copilot-cli` | 10 |
 | `--max-calls N` | model calls | 500 |
 | `--max-requests N` | requests to the target | 2000 |
-| `--max-attempts N` | agent steps per finding | 12 |
+| `--max-attempts N` | agent steps per finding; a finding whose test plan needs more for its proof gets them | 12 |
 | `--max-duration SECONDS` | run time | 1800 |
 | `--rate N` | requests per second; `0` turns the limit off | 5 |
 | `--parallel N` | findings tested at the same time, 1 to 8 | 4, or 2 with `codex-cli` and `copilot-cli` |

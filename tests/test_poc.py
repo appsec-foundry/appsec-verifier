@@ -244,11 +244,14 @@ def test_a_refuted_finding_still_gets_its_proof_of_concept(tmp_path):
 
 
 def test_a_finding_stopped_by_a_limit_keeps_what_it_sent(tmp_path):
+    """The plan at step 1 keeps the steps of its proof, an allowed and a denied read plus three, up to step 6
+    (VER-015); an agent still reading then is stopped by the limit, and the proof of concept keeps what it sent: four
+    reads, without the read without a role the declared resource refuses."""
     ctx = _ctx(tmp_path, lambda m, u, h, **k: Resp())
-    result, _ = _run(ctx, [_get("customer-a"), _get("customer-b")], max_steps=2)
+    result, _ = _run(ctx, [_get("customer-a"), _get("customer-b"), _get(None)] * 2, max_steps=2)
     assert result.limits_hit == "attempts"
     _, har = _har(tmp_path)
-    assert len(har["log"]["entries"]) == 1 and result.poc["shown"] == []
+    assert len(har["log"]["entries"]) == 4 and result.poc["shown"] == []
 
 
 def test_a_finding_that_sent_nothing_has_no_proof_of_concept(tmp_path):

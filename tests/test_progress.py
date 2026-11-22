@@ -117,6 +117,19 @@ def test_the_proof_line_names_the_form_and_a_qa_objection_has_its_own_line():
     assert "✓ proof checked: same answer without credentials, unlike a random path · steps 4, 5, 6" in text
 
 
+def test_a_plan_that_raises_the_step_bound_says_so():
+    """VER-015: a first plan whose proof needs more steps than are left raises the bound; the plan line names it, so
+    a later step past the announced bound is no surprise."""
+    out = io.StringIO()
+    progress = RunProgress(out, clock=Clock(), env={})
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    progress.step({"step": 7, "tool": "plan_test", "args": {"path": "/api/Cards/:id"},
+                   "result": {"accepted": True, "max_steps": 16}})
+    progress.close()
+    assert "test plan · /api/Cards/:id · ≤16 steps" in " ".join(out.getvalue().split())
+
+
 def test_a_stopped_technical_qa_says_why():
     """Runs 154, 156 and 159 showed "Technical QA: stopped" without the reason: a model call that failed."""
     out = io.StringIO()

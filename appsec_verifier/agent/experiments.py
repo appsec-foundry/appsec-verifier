@@ -1808,28 +1808,44 @@ def comparison_ready(ctx, history, steps):
                     "comparison supports no negative verdict"}
 
 
-def access_proof_reads(plan) -> str | None:
-    """Every request a self-made access-control proof under `plan` cites, for a confirmation and a negative verdict
-    alike (VER-010, VER-043, VER-067), so one round of proof feedback names all of them; None where the Verifier sends
-    the comparison itself or the operator declared the resource."""
+def _access_proof(plan) -> tuple[str, int] | None:
+    """The requests a self-made access-control proof under `plan` cites, in words and their number."""
     if plan.get("kind") != "access-control" or plan.get("signed_in") or plan.get("exposure"):
         return None
     if plan.get("change"):
         return (f"{plan['owner']}'s write that creates the record with the marker, its read that shows the marker, "
-                "another normal account's change of that record with second_marker, and the owner's next read")
+                "another normal account's change of that record with second_marker, and the owner's next read", 4)
     if plan.get("owner"):
         return (f"{plan['owner']}'s write that creates the record with the marker, its read of the record, the same "
-                "read without a role, and another normal account's read of it")
+                "read without a role, and another normal account's read of it", 4)
     if plan.get("existing"):
         owner, collection = plan["existing"], existing_collection(plan.get("path", ""))
         lists = (f"{owner}'s and the other account's GET of {collection}, where the list shows whose record it is; "
                  if collection else "")
         return (f"{lists}{owner}'s read of its record, the same read without a role, another normal account's read "
-                "of it, and that account's read of its own record")
+                "of it, and that account's read of its own record", 6 if collection else 4)
     if plan.get("reference"):
         return (f"{plan['reference']}'s read, the same read without a role, and a normal account's read, all with "
-                "the same inputs")
+                "the same inputs", 3)
     return None
+
+
+def access_proof_reads(plan) -> str | None:
+    """Every request a self-made access-control proof under `plan` cites, for a confirmation and a negative verdict
+    alike (VER-010, VER-043, VER-067), so the plan's answer and one round of proof feedback name all of them; None
+    where the Verifier sends the comparison itself or the operator declared the resource."""
+    proof = _access_proof(plan)
+    return proof[0] if proof else None
+
+
+def proof_steps(plan) -> int:
+    """The steps a finding variant keeps from its first accepted plan on (VER-015): the requests its access proof
+    cites, plus three for the verdict, one correction and a spare step. An operator-declared resource needs an allowed
+    and a denied identity's read (access_check); a plan whose requests the Verifier sends itself, as an injection
+    experiment's controls, needs none of the agent's own."""
+    proof = _access_proof(plan)
+    cited = proof[1] if proof else 2 if plan.get("kind") == "access-control" and plan.get("resource") else 0
+    return cited + 3
 
 
 def access_check(ctx, history, cited, *, negative=False, blocked=False):

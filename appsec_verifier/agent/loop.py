@@ -13,7 +13,8 @@ verdict. Every action is validated against the strict tool schemas here,
 whichever planner produced it, and nothing invalid runs: a tool call or verdict with invalid
 arguments goes back to the planner as an error and counts as a failed action, any
 other invalid action ends the finding inconclusive. The loop executes tool calls through the confined AgentTools,
-enforces a step limit, the run budget and the authorisation window (checked
+enforces a step limit, which the first accepted plan raises to the steps its proof needs where fewer are left
+(VER-015), the run budget and the authorisation window (checked
 before every planner call), and never lets a bad tool call escape
 — errors go back to the planner as data. Every tool result is redacted of
 credential values before the planner sees it (VER-016). A planner that never
@@ -48,8 +49,18 @@ _VERDICTS = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-
 # What the action log keeps of a tool result: outcome and refusal reasons, never body or source text.
 _LOGGED_RESULT = ("status", "length", "executed", "markup_break", "blocked", "error", "path", "start_line",
                   "marker_read", "callback_hit", "accepted", "elapsed_ms", "engine_error", "name_error",
-                  "body_withheld", "plan_step", "observation", "steps", "error_kind", "recovery")
+                  "body_withheld", "plan_step", "observation", "steps", "error_kind", "recovery", "max_steps")
 _PROPOSAL_CAP = 500
+
+
+def _proof_needs(cls: str, plan: dict) -> str | None:
+    """Every request an access-control proof under `plan` cites, as the plan's answer and the proof feedback name
+    them (VER-043)."""
+    from .experiments import access_proof_reads
+
+    needs = access_proof_reads(plan) if cls == "access-control" else None
+    return f"the proof, confirmed or negative, cites {needs}; each an answered request sent after the plan" \
+        if needs else None
 
 
 def _request_attempts(history: list[dict]) -> int:
@@ -225,6 +236,8 @@ class AgentProbe:
         last_rejected = None
         last_cited = None
         repairs = 0
+        # VER-015: the variant's first accepted plan keeps the steps its proof needs, past the attempts bound.
+        limit, planned = self._max_steps, False
         # VER-059: after a verdict that cites steps the agent composes its presentation from the recorded steps, and
         # may correct it once before the Verifier leaves anything out. `presented` holds the result and verdict whose
         # presentation is awaited; they stand, and the answer adds only its presentation.
@@ -314,7 +327,7 @@ class AgentProbe:
                 try:
                     ctx.budget.check_time()
                     ctx.guard.check_window()
-                    if _request_attempts(history) >= self._max_steps:
+                    if _request_attempts(history) >= limit:
                         raise LimitExceeded("attempts", "per-finding request attempt limit reached")
                     controller.before("http_request", request, experiment=True)
                     result = controller.run(lambda request=request: tools.http_request(**request))
@@ -383,11 +396,13 @@ class AgentProbe:
                 feedback = report_experiment(sent_steps)
             return None
 
-        for decision in range(1, self._max_steps + 1):
+        decision = 0
+        while decision < limit:
+            decision += 1
             step = len(history) + 1
             ctx.controller_state = {
-                "remaining_decisions": self._max_steps - decision + 1,
-                "remaining_request_actions": self._max_steps - _request_attempts(history),
+                "remaining_decisions": limit - decision + 1,
+                "remaining_request_actions": limit - _request_attempts(history),
                 "remaining_run_requests": ctx.budget.limits.max_requests - ctx.budget.requests,
             }
             try:
@@ -395,7 +410,7 @@ class AgentProbe:
                 ctx.budget.check_finding_cost()  # VER-051: stop this finding, not the run, at its spend cap
                 ctx.guard.check_window()  # no model call once the authorisation window has closed
                 if ctx.progress is not None:
-                    ctx.progress.activity(decision, self._max_steps)
+                    ctx.progress.activity(decision, limit)
                 controller.before_model()
                 proposal = controller.run(lambda: planner.next_step(ctx, history))
             except LimitExceeded as exc:
@@ -442,7 +457,7 @@ class AgentProbe:
                     problems = [*([f"it would leave out {'; '.join(checked.left_out)}"] if checked.left_out else []),
                                 *([checked.why] if checked.why else [])]
                     if problems and verdict.get("presentation") is not None and not presentation_repaired \
-                            and decision < self._max_steps:
+                            and decision < limit:
                         presentation_repaired, presented = True, (result, verdict)
                         ask_presentation(step, "presentation_feedback", result, verdict, {
                             "status": "presentation needs a correction", "reason": "; ".join(problems),
@@ -452,23 +467,21 @@ class AgentProbe:
                     return conclude(step, result, verdict)
                 result = check_proof(ctx, history, _result_from_verdict(verdict), verdict.get("proof_steps"))
                 if ((result.proof or {}).get("checked") is False and not (result.proof or {}).get("observed_access")
-                        and repairs < 2 and decision < self._max_steps):
+                        and repairs < 2 and decision < limit):
                     repairs += 1
                     last_rejected = result
                     last_cited = verdict.get("proof_steps")
                     feedback = {
                         "status": "insufficient",
                         "missing": result.proof["missing"],
-                        "remaining_steps": self._max_steps - decision,
+                        "remaining_steps": limit - decision,
                     }
                     # VER-043: an access-control proof cites several requests; name all of them at once, since
                     # a check names only its first failing condition and the repairs are few.
-                    from .experiments import access_proof_reads
                     from .experiments import latest_plan as governing_plan
 
-                    if self.cls == "access-control" and (needs := access_proof_reads(governing_plan(history)[1])):
-                        feedback["needs"] = (f"the proof, confirmed or negative, cites {needs}; each an answered "
-                                             "request sent after the plan")
+                    if needs := _proof_needs(self.cls, governing_plan(history)[1]):
+                        feedback["needs"] = needs
                     _log(ctx, step, tool="proof_feedback", result=feedback)
                     history.append({"tool": "proof_feedback", "args": {}, "result": feedback})
                     continue
@@ -498,7 +511,7 @@ class AgentProbe:
                         if asked else "A confirmed verdict whose proof check passed is not reviewed (VER-046)."))
                 else:
                     # VER-046: no question about a test this run's mode does not send (VER-052).
-                    feedback = qa.consider(history, result, tools, controller, self._max_steps - decision,
+                    feedback = qa.consider(history, result, tools, controller, limit - decision,
                                            intent=intent_only,
                                            follow_up=untested_write(ctx, result).limits_hit != "safe-mode")
                 if feedback is not None:
@@ -512,7 +525,7 @@ class AgentProbe:
                 # proof stay as they are. Without a step left, the verdict's own presentation counts.
                 cites = assess(ctx, history, sent, result, verdict.get("proof_steps"), None).why \
                     != "the verdict cites no step"
-                if cites and not presentation_requested and decision < self._max_steps:
+                if cites and not presentation_requested and decision < limit:
                     presentation_requested, presented = True, (result, verdict)
                     ask_presentation(step, "presentation_request", result, verdict, {
                         "status": "verdict recorded; compose its presentation",
@@ -532,9 +545,9 @@ class AgentProbe:
                 continue
             call = {"tool": name, "args": args, **({"note": action["note"]} if action.get("note") else {})}
             if ctx.progress is not None:
-                ctx.progress.activity(decision, self._max_steps, name, args)
+                ctx.progress.activity(decision, limit, name, args)
             try:
-                if name in ("http_request", "browser_check") and _request_attempts(history) >= self._max_steps:
+                if name in ("http_request", "browser_check") and _request_attempts(history) >= limit:
                     raise LimitExceeded("attempts", "per-finding request attempt limit reached")
                 controller.before(name, args)
                 tools.note = action.get("note")     # shown as the agent's reason if it asks for writes (VER-052)
@@ -548,6 +561,16 @@ class AgentProbe:
             controller.observe(name, args, result)
             if name == "plan_test" and result.get("accepted"):
                 ctx.accepted_plans[len(history) + 1] = result["experiment"]
+                from .experiments import proof_steps
+
+                # VER-015: the first accepted plan keeps the steps its proof needs; a revised one adds none. VER-043:
+                # its answer names every request the proof cites, so no refused verdict has to name them.
+                if not planned and decision + proof_steps(result["experiment"]) > limit:
+                    limit = decision + proof_steps(result["experiment"])
+                    result["max_steps"] = limit
+                planned = True
+                if needs := _proof_needs(self.cls, result["experiment"]):
+                    result["needs"] = needs
             if ctx.sessions is not None:
                 result = ctx.sessions.redact(result)  # VER-016: no credential value reaches the planner
             _log(ctx, step, **call, result={k: result[k] for k in _LOGGED_RESULT if k in result})
@@ -580,7 +603,7 @@ class AgentProbe:
                     return _finish(ctx, len(history), stop)
         return _finish(
             ctx,
-            self._max_steps,
+            limit,
             attach_stopped(
                 ProbeResult(
                     verdict="inconclusive", rationale="step budget exhausted without a verdict", limits_hit="attempts"

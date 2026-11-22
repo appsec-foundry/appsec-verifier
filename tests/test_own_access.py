@@ -720,6 +720,21 @@ def test_proof_feedback_names_every_request_of_each_access_proof():
         assert access_proof_reads(plan) is None
 
 
+def test_the_steps_a_first_plan_keeps_are_the_requests_its_proof_cites_plus_three():
+    """VER-015: the verdict, one correction and one spare step beside the requests each access proof cites; three for
+    a plan whose proof the Verifier sends itself."""
+    from appsec_verifier.agent.experiments import proof_steps
+
+    base = {"kind": "access-control", "path": "/api/Items/:id"}
+    assert proof_steps({**base, "existing": "account-1"}) == 9
+    assert proof_steps({**base, "path": "/api/profile", "existing": "account-1"}) == 7
+    assert proof_steps({**base, "owner": "account-1"}) == 7
+    assert proof_steps({**base, "owner": "account-1", "change": {"method": "PUT", "path": "/api/Items/:id"}}) == 7
+    assert proof_steps({**base, "reference": "admin-1"}) == 6
+    assert proof_steps({**base, "resource": "basket"}) == 5            # an allowed and a denied identity's read
+    assert [proof_steps(p) for p in ({**base, "signed_in": "account-1"}, {"kind": "boolean", "path": "/x"})] == [3, 3]
+
+
 def test_the_test_plan_follows_the_accounts_and_the_mode():
     normal, admin = [{"role": "account-1"}, {"role": "account-2"}], [{"role": "admin-1", "privileged": True}]
     plan = _plan("access-control")

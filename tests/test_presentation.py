@@ -143,7 +143,10 @@ def test_a_verdict_without_a_presentation_is_asked_for_it_once(tmp_path):
 def test_at_the_last_decision_the_verdict_s_own_presentation_counts_without_a_request(tmp_path):
     browser = Browser()
     ctx = _ctx(tmp_path, lambda *a, **k: Resp(), browser=browser)
-    result, planner = _run(ctx, [_get("customer-a"), _get("customer-b"), _verdict(_good())], max_steps=4)
+    # The plan keeps the steps of its proof, an allowed and a denied read plus three, up to step 6 (VER-015), so the
+    # reads are sent twice and the verdict is the sixth decision.
+    reads = [_get("customer-a"), _get("customer-b")] * 2
+    result, planner = _run(ctx, [*reads, _verdict(_good())], max_steps=4)
     assert result.poc["presentation"] == {"composed_by": "test-agent", "summary": SUMMARY}
     assert not any("presentation_request" in seen for seen in planner.seen)
 

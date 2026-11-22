@@ -631,7 +631,9 @@ class RunProgress:
                     reason = (args.get("strategy") or {}).get("revision_reason") or args.get("note") or ""
                     label = "plan revised" if self._planned else "test plan"
                     self._planned, self._plan = True, args
-                    self._record("plan", _line(label, _clip(args.get("path", "")),
+                    # VER-015: a first plan whose proof needs more steps than are left raises the bound.
+                    bound = f"≤{result['max_steps']} steps" if isinstance(result.get("max_steps"), int) else ""
+                    self._record("plan", _line(label, _clip(args.get("path", "")), bound,
                                                _clip(reason, 180) if reason else ""))
                     return
                 # First what the step does in plain words and what it showed for the proof, or that it failed; on
