@@ -23,9 +23,10 @@ EXIT_BLOCKED = 2
 DAY = 24 * 60 * 60
 # Data only, as yaml.safe_load; the C loader reads a report in milliseconds instead of most of a second.
 _LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-_VERDICTS = (("confirmed", "confirmed"), ("shown_without_exploit", "shown without exploit"),
-             ("not_reproducible", "not reproducible"), ("blocked", "blocked by control"),
-             ("inconclusive", "inconclusive"), ("not_attempted", "not attempted"))
+# As the report names them (verify/report.py, VER-013), by the report summary's keys.
+_VERDICTS = (("confirmed", "verified"), ("shown_without_exploit", "verified without exploit"),
+             ("not_reproducible", "not verified: not reproduced"), ("blocked", "not verified: blocked by a control"),
+             ("inconclusive", "undecided"), ("not_attempted", "not attempted"))
 _STATE_ROLES = {"running": "accent", "finished": "ok", "interrupted": "warn", "unfinished": "warn",
                 "report unreadable": "critical"}
 

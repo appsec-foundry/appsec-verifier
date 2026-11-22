@@ -372,7 +372,7 @@ def test_the_image_shows_the_other_accounts_own_records_as_allowed(tmp_path, mak
         assert "<td>allowed</td>" in row[:row.index("</tr>")], label
     assert page.count("is not open to everyone") <= 1                      # the read without login only
     assert "header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}" in page
-    assert "header.blocked-by-control,header.not-reproducible{border-bottom-color:#2e7d32}" in page
+    assert "header.blocked-by-control,header.not-reproducible{border-bottom-color:#757575}" in page
 
 
 def test_the_plan_allows_a_get_of_the_collection_and_nothing_else_there(tmp_path):

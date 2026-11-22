@@ -183,9 +183,9 @@ def test_the_rating_stays_and_the_report_shows_the_verdict_like_a_confirmation_b
                proof={**row["proof"], "form": "name-error"})
     md = to_markdown(doc, {"threats": [threat]})
     summary = md.split("## Summary", 1)[1].split("## Tested findings", 1)[0]
-    assert summary.splitlines()[2].startswith("🟥 1 shown without exploit · ")
-    assert "| 🟥 Shown without exploit | [T-037](#t-037)" in summary and "**Shown" not in summary
-    assert "🟥 confirmed or shown without exploit" in md
+    assert summary.splitlines()[2].startswith("🟥 1 verified without exploit · ")
+    assert "| 🟥 Verified without exploit | [T-037](#t-037)" in summary and "**Verified" not in summary
+    assert "🟥 verified, also without exploit" in md
 
 
 def test_the_verdict_and_its_count_are_schema_valid():

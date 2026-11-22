@@ -90,13 +90,29 @@ def test_no_color_wins_over_force_color(assessment, monkeypatch):
     assert "\x1b" not in _overview(assessment)
 
 
+def test_the_verdicts_after_done_have_the_names_and_colours_of_the_results_above():
+    """Run 162: the results showed a blocked finding in one colour and the Verdicts line after Done in another
+    (VER-013). Both now name and colour every verdict alike."""
+    summary = {"confirmed": 1, "shown_without_exploit": 0, "not_reproducible": 1, "blocked": 1, "inconclusive": 1,
+               "not_attempted": 0}
+    doc = {"meta": {"summary": summary}, "results": []}
+    paths = {"md": "r.md", "yaml": "r.yaml", "evidence": "/nonexistent-evidence"}
+    st = Style(True)
+    verdicts = next(line for line in cli._verify_summary(st, doc, paths, []) if "Verdicts" in line)
+    for verdict, n in (("confirmed", 1), ("not-reproducible", 1), ("blocked-by-control", 1), ("inconclusive", 1)):
+        from appsec_verifier.verify.report import _VERDICT_LABEL
+
+        assert st(f"{n} {_VERDICT_LABEL[verdict]}", cli._VERDICT_MARK[verdict][1]) in verdicts, verdict
+    assert st("1 not verified: blocked by a control", "muted") in verdicts
+
+
 def test_results_strip_escapes_from_assessment_and_model_text(capsys):
     doc = {"results": [{"finding_ref": {"id": f"T-1{HOSTILE}", "title": f"xss{HOSTILE}"}, "class": "xss",
                         "verdict": "confirmed", "confidence": f"high{HOSTILE}", "rationale": f"ran{HOSTILE}"}]}
     for st in (Style(False), Style(True)):
         plain = SGR.sub("", "\n".join(cli._results(st, doc, [], {}, full=True)))
         assert "\x1b" not in plain and "\x07" not in plain
-        assert "confirmed" in plain and "ran]0;pwned[2J" in plain
+        assert "verified" in plain and "ran]0;pwned[2J" in plain
 
 
 def test_results_name_what_an_untested_variant_needs_and_how_to_provide_it():
@@ -118,7 +134,7 @@ def test_results_name_what_an_untested_variant_needs_and_how_to_provide_it():
     assert lines[at + 1] == "run with --allow-intrusive"
     at = lines.index("· T-3 injection needs marker file sqli")
     assert lines[at + 1] == "a marker_file in a scope file"
-    at = lines.index("? T-2 access-control inconclusive idor")
+    at = lines.index("? T-2 access-control undecided idor")
     assert lines[at + 1] == "Agent's assessment: no proof."
 
 
@@ -136,7 +152,7 @@ def test_results_list_no_needs_of_a_confirmed_finding_and_count_alike_variants()
                                                                            ("2", "f"))}
     lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], blocked)]
     assert [line for line in lines if line.startswith(("!", "·"))] == [
-        "! T-1 xss confirmed t-1", "· T-2 xss needs intrusive mode t-2"]
+        "! T-1 xss verified t-1", "· T-2 xss needs intrusive mode t-2"]
     assert lines[lines.index("· T-2 xss needs intrusive mode t-2") + 1] == "run with --allow-intrusive · 3 variants"
     full = cli._results(Style(False), {"results": rows}, [], blocked, full=True)
     assert sum("needs intrusive mode" in line for line in full) == 4
@@ -160,9 +176,9 @@ def test_a_confirmed_finding_s_unconfirmed_variant_stands_under_it_and_only_unsu
             row("T-50", None, "not-attempted", "no supported proof method for CWE-915", status="unsupported")]
     lines = [" ".join(line.split()) for line in cli._results(Style(False), {"results": rows}, [], {})]
     marked = [line for line in lines if line.startswith(("!", "?", "·"))]
-    assert marked == ["! T-4 injection confirmed (medium) t-4", "? T-9 injection inconclusive (low) t-9"]
-    at = lines.index("! T-4 injection confirmed (medium) t-4")
-    assert lines[at + 2] == ("variant-002: inconclusive (low) · No proof: the test ran, but the controls stopped at "
+    assert marked == ["! T-4 injection verified (medium) t-4", "? T-9 injection undecided (low) t-9"]
+    at = lines.index("! T-4 injection verified (medium) t-4")
+    assert lines[at + 2] == ("variant-002: undecided (low) · No proof: the test ran, but the controls stopped at "
                              "step 7, where control 'true #1' got HTTP 500: the template does not form a valid "
                              "statement there.")
     assert lines[-1] == "1 unsupported or incomplete finding not listed (--print lists them)"

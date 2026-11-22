@@ -1349,7 +1349,7 @@ def test_a_confirmed_result_says_why_in_its_image_and_report_and_another_verdict
     assert "a host name the Verifier generated for this finding" in why["checks"][0]["text"]
     assert why["closing"] == poc.CHECKED_IN_CODE
     page = shot["html"]
-    assert f"<span class='verdict confirmed'>confirmed</span>{html.escape(lead)}</div>" in page
+    assert f"<span class='verdict confirmed'>verified</span>{html.escape(lead)}</div>" in page
     assert "<div class=why><p><b>Why this proves it</b> The Location of the redirect" in page
     assert html.escape(poc.CHECKED_IN_CODE) in page and "What the steps showed" not in page
     text = to_markdown({"meta": {}, "results": [{

@@ -80,17 +80,18 @@ from .planning import category, category_name
 from .preflight import printable
 from .term_style import Style, columns
 from .verify.probes import proof_shown
-from .verify.report import _ORDER, _VERDICT_LABEL, _first_sentence, _overall, why_not_confirmed
+from .verify.report import _ORDER, _VERDICT_LABEL, VERIFIED_VERDICTS, _first_sentence, _overall, why_not_confirmed
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI = re.compile(r"\033\[[0-9;]*m")
-# Seen from the application, as the report's squares (verify/report.py): red when the run confirmed the weakness,
-# green when a control blocked it or the run did not reproduce it, yellow undecided. A finding shown without exploit
-# (VER-066) in the colour of a confirmed one, set apart by its mark and, unlike every other verdict, not in bold, so a
-# confirmed finding stands out more.
-_VERDICT_ROLES = {"confirmed": "critical", "shown-without-exploit": "critical", "not-reproducible": "ok",
-                  "blocked-by-control": "ok",
-                  "inconclusive": "warn", "not-attempted": "muted"}
+# As the report's squares (verify/report.py, VER-013): red a verified weakness, yellow undecided, grey not verified by
+# the tested requests. A finding shown without exploit (VER-066) in the colour of a confirmed one, set apart by its
+# mark and, unlike every other verdict, not in bold, so a confirmed finding stands out more.
+_VERDICT_ROLES = {"confirmed": "critical", "shown-without-exploit": "critical", "not-reproducible": "muted",
+                  "blocked-by-control": "muted", "inconclusive": "warn", "not-attempted": "muted"}
+# What a checked negative verdict's proof showed, on the proof line (VER-013).
+_NEGATIVE_SHOWN = {"blocked-by-control": "the application refused the attack",
+                   "not-reproducible": "the attack showed no effect"}
 _VERDICT_MARKS = {"confirmed": "!", "shown-without-exploit": "◐", "not-reproducible": "○", "blocked-by-control": "⊘",
                   "inconclusive": "?"}
 _EVENT_ROLES = {"start": "accent", "agent": "agent", "proof": "ok", "rating": "accent", "↻": "warn", "⚠": "warn"}
@@ -765,12 +766,15 @@ class RunProgress:
             self._record("agent", _line(("■ test agent finished", "agent", "bold"), steps,
                                         duration(self._clock() - self._finding_at)))
             proof = result.proof if isinstance(result.proof, dict) else {}
-            if result.verdict == "confirmed" and proof.get("checked") is True:
+            negative = _NEGATIVE_SHOWN.get(result.verdict)
+            if proof.get("checked") is True and (result.verdict == "confirmed" or negative):
+                # VER-013: a checked proof in the verdict's colour; for a negative verdict what the refusal showed.
                 cited = [n for n in proof.get("steps") or [] if isinstance(n, int)]
                 where = f"step{'s' if len(cited) > 1 else ''} {', '.join(map(str, cited))}" if cited else ""
-                shown = (proof_shown(proof, plan.cls) or (None,))[0]
-                self._record("proof", _line([("✓ proof checked", "ok", "bold"),
-                                             *([(f": {shown}", "ok")] if shown else [])], where), role="ok")
+                shown = negative or (proof_shown(proof, plan.cls) or (None,))[0]
+                role = _VERDICT_ROLES[result.verdict]
+                self._record("proof", _line([("✓ proof checked", role, "bold"),
+                                             *([(f": {shown}", role)] if shown else [])], where), role=role)
                 return
             missing = proof.get("missing") if proof.get("checked") is False else None
             if isinstance(missing, list) and missing:
@@ -903,10 +907,11 @@ class RunProgress:
             return
         # A finding's result over its runs here, as the report gives it.
         results = Counter(_overall([{"verdict": v} for v in verdicts]) for verdicts in self._group_verdicts.values())
-        others = [v for v in (*_ORDER, *sorted(set(results) - set(_ORDER))) if v != "confirmed" and results[v]]
+        others = [v for v in (*_ORDER, *sorted(set(results) - set(_ORDER)))
+                  if v not in VERIFIED_VERDICTS and results[v]]
+        verified = sum(results[v] for v in VERIFIED_VERDICTS)
         line = [(f"{category_name(self._group)}: ",), *_line(
-            (f"{results['confirmed']} of {len(self._group_verdicts)} confirmed",
-             "ok" if results["confirmed"] else "muted"),
+            (f"{verified} of {len(self._group_verdicts)} verified", "critical" if verified else "muted"),
             *((f"{results[v]} {_VERDICT_LABEL.get(v, v)}", _VERDICT_ROLES.get(v, "muted")) for v in others),
             (duration(self._group_end - self._group_at), "muted"))]
         self._group_verdicts = {}

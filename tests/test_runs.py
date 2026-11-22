@@ -104,7 +104,7 @@ def test_the_list_shows_each_projects_runs_newest_first_with_what_they_did(capsy
     lines = [" ".join(line.split()) for line in out.splitlines()]
     dvwa = lines.index("dvwa · 4 runs · 2.5 MB")
     rows = lines[dvwa + 1:dvwa + 5]
-    verdicts = ("intrusive http://localhost:4280/ 4 confirmed · 1 blocked by control · 12 inconclusive · "
+    verdicts = ("intrusive http://localhost:4280/ 4 verified · 1 not verified: blocked by a control · 12 undecided · "
                 "50 not attempted")
     assert [row.split()[0] for row in rows] == ["2026-11-14T11-00-00", "2026-11-14T10-00-00", "2026-11-14T09-00-00",
                                                 "2026-11-13T14-30-05"]

@@ -112,14 +112,14 @@ def test_each_tested_finding_gets_its_section_at_the_end_of_its_entry():
     assert first.index("# a comment that looks like a heading") < first.index("**Fix:** escape output.")
     assert first.index("**Fix:** escape output.") < first.index("##### Dynamic verification")
     second = _between(copy, '<a id="t-002">', "### 🟡 Medium (1)")
-    assert "##### Dynamic verification" in second and "blocked by control (high)" in second
+    assert "##### Dynamic verification" in second and "not verified: blocked by a control (high)" in second
     third = _between(copy, '<a id="t-003">', "## 9. Abuse Cases")
     assert "Dynamic verification" not in third                       # not tested, no section
 
 
 def test_the_section_shows_verdict_rating_rationale_and_proof():
     first = _between(_copy(), '<a id="t-001">', '<a id="t-002">')
-    assert "**Verdict:** confirmed (high) · tested 2026-11-08 07:48 UTC by AppSec Verifier 0.9" in first
+    assert "**Verdict:** verified (high) · tested 2026-11-08 07:48 UTC by AppSec Verifier 0.9" in first
     assert "likelihood Medium → High, severity High → Critical; impact unchanged" in first
     assert "###### Proof of concept" in first
     # Request and response share one fence, longer than the target's backticks, so its content stays fenced.
@@ -158,11 +158,12 @@ def test_the_summary_precedes_the_findings():
     copy = _copy()
     summary = _between(copy, "## Dynamic verification\n", "## Management Summary")
     assert copy.index("## Table of Contents") < copy.index("## Dynamic verification\n")
-    assert "3 findings tested: 2 confirmed · 1 blocked by control · 1 not tested." in summary
+    assert "3 findings tested: 2 verified · 1 not verified: blocked by a control · 1 not tested." in summary
     assert "may show target data; review before sharing" in summary
-    assert "| [F-001](#t-001) Stored XSS | confirmed (high) | High | Critical (changed) |" in summary
-    assert "| [F-002](#t-002) SQL \\| injection | blocked by control (high) | High | Medium (changed) |" in summary
-    assert "| F-004 Not in the report | confirmed (high) | Low | Low |" in summary         # not placed, no link
+    assert "| [F-001](#t-001) Stored XSS | verified (high) | High | Critical (changed) |" in summary
+    assert ("| [F-002](#t-002) SQL \\| injection | not verified: blocked by a control (high) | High | "
+            "Medium (changed) |") in summary
+    assert "| F-004 Not in the report | verified (high) | Low | Low |" in summary         # not placed, no link
     assert "2 of 3 ratings changed." in summary
 
 

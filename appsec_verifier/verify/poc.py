@@ -1532,7 +1532,7 @@ _EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 syste
 pre,code{font-family:ui-monospace,Menlo,Consolas,monospace}
 header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #555;white-space:pre-wrap}
 header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}header.inconclusive{border-bottom-color:#b26a00}
-header.blocked-by-control,header.not-reproducible{border-bottom-color:#2e7d32}
+header.blocked-by-control,header.not-reproducible{border-bottom-color:#757575}
 header b{font-size:20px}header .k{color:#ffeb3b;font-weight:bold}header small{color:#bbb;font-size:13px}
 header.head{white-space:normal;padding:12px 16px 14px}header.head .id{font-size:14px;color:#bbb}
 header.head .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
@@ -1540,7 +1540,7 @@ header.head p{margin:6px 0 0}header.head small{display:block;margin-top:6px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
 text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
 .verdict.inconclusive{background:#b26a00}
-.verdict.blocked-by-control,.verdict.not-reproducible{background:#2e7d32}
+.verdict.blocked-by-control,.verdict.not-reproducible{background:#757575}
 .what{margin:10px 14px 0;font-size:15px}
 .pair{display:flex;gap:14px;margin:10px 14px 0}.pair section{flex:1;min-width:0;margin:0}
 .pair h3{padding-top:6px}pre.req{border-bottom:1px solid #ddd}.dec{color:#555}
@@ -1911,12 +1911,12 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
 _COMPARISON_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
 header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #555}
 header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}header.inconclusive{border-bottom-color:#b26a00}
-header.blocked-by-control,header.not-reproducible{border-bottom-color:#2e7d32}
+header.blocked-by-control,header.not-reproducible{border-bottom-color:#757575}
 header .id{font-size:14px;color:#bbb}header .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
 text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
 .verdict.inconclusive{background:#b26a00}
-.verdict.blocked-by-control,.verdict.not-reproducible{background:#2e7d32}
+.verdict.blocked-by-control,.verdict.not-reproducible{background:#757575}
 .why{margin:0 16px 12px;padding:8px 12px;background:#111;color:#fff;border-radius:4px;font-size:15px}
 .why b{color:#ffeb3b;margin-right:6px}.why p{margin:0}.why p+p{margin-top:4px}
 .why .closing{color:#ccc;font-size:13px}

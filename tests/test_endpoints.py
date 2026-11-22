@@ -614,3 +614,18 @@ def test_the_settings_count_findings_and_name_the_quick_ones_added():
     assert "2 findings, severity high and above, with 1 quick below it" in line
     categories = next(row for row in rows if "Categories" in row)        # the findings of each category (VER-026)
     assert categories.endswith(": Injection 1 · Cross-Site Scripting (XSS) 1")
+
+
+def test_the_settings_explain_the_colours_of_the_results_before_the_first_finding():
+    """VER-013: each result's colour is explained in that colour, and not verified is not read as absent."""
+    from appsec_verifier.limits import Limits
+
+    st = cli.Style(True)
+    info = {"profile": "anthropic-api", "model": "m", "runtime": "fake", "auth": "none"}
+    plans = [_plan("xss", Endpoint("GET", "/x", None))]
+    legend = cli._verify_settings(st, "a.yaml", "http://t", {}, plans, Limits(), True, True, info)[-1]
+    plain = cli._verify_settings(cli.Style(False), "a.yaml", "http://t", {}, plans, Limits(), True, True, info)[-1]
+    assert plain.split(":", 1)[0].strip() == "Results"
+    for text, role in (("verified: a weakness to fix", "critical"), ("undecided: check again", "warn"),
+                       ("not verified: not shown by the tests, may still exist", "muted")):
+        assert st(text, role) in legend, text

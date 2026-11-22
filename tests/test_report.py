@@ -341,11 +341,11 @@ def _report():
 def test_the_summary_links_tested_findings_with_colour_rating_and_what_the_test_showed():
     md = _report()
     summary = md.split("## Summary", 1)[1].split("## Tested findings", 1)[0]
-    assert summary.splitlines()[2] == "🟥 **1 confirmed** · ⬜ 1 not tested · 2 of 2 findings selected"
-    assert ("| 🟥 **Confirmed** | [T-037](#t-037) · Stored XSS | **🟠 High → 🔴 Critical** | "
+    assert summary.splitlines()[2] == "🟥 **1 verified** · ▫ 1 not tested · 2 of 2 findings selected"
+    assert ("| 🟥 **Verified** | [T-037](#t-037) · Stored XSS | **🟠 High → 🔴 Critical** | "
             "The injected script ran in the browser. |") in summary
     assert "Ratings changed after verification: [T-037](#t-037)" in summary
-    assert "### Cross-Site Scripting (XSS) · 1 of 1 confirmed\n\n| Result | Finding |" in summary
+    assert "### Cross-Site Scripting (XSS) · 1 of 1 verified\n\n| Result | Finding |" in summary
     assert md.index("## Summary") < md.index('### Cross-Site Scripting (XSS)\n\n<a id="t-037"></a>\n#### 🟥 T-037') \
         < md.index("## Appendix")
 
@@ -366,7 +366,7 @@ def test_the_summary_and_the_entries_follow_the_categories_in_the_order_tested()
     md = to_markdown(doc, {"threats": [_analyzer_threat()]})
     summary = md.split("## Summary", 1)[1].split("## Tested findings", 1)[0]
     headings = [line for line in summary.splitlines() if line.startswith("### ")]
-    assert headings == ["### Cross-Site Scripting (XSS) · 1 of 2 confirmed", "### SQL injection · 0 of 1 confirmed"]
+    assert headings == ["### Cross-Site Scripting (XSS) · 1 of 2 verified", "### SQL injection · 0 of 1 verified"]
     first = summary.split(headings[0], 1)[1].split(headings[1], 1)[0]
     assert first.index("T-037") < first.index("T-050") and "T-051" not in first
     assert summary.count("| Result | Finding | Severity | What the test showed |") == 2
@@ -374,12 +374,12 @@ def test_the_summary_and_the_entries_follow_the_categories_in_the_order_tested()
     assert [line for line in tested.splitlines() if line.startswith("### ")] == [
         "### Cross-Site Scripting (XSS)", "### SQL injection"]
     assert tested.index("#### 🟥 T-037") < tested.index("#### 🟨 T-050") < tested.index("### SQL injection") \
-        < tested.index("#### 🟩 T-051")
+        < tested.index("#### ⬜ T-051")
 
 
 def test_a_tested_entry_leads_with_its_card_what_the_test_showed_and_deviation():
     entry = _report().split("#### 🟥 T-037", 1)[1].split("## Appendix", 1)[0]
-    assert "| 🟥 **Confirmed**, high confidence | **🟠 High → 🔴 Critical** | CWE-79 · XSS |" in entry
+    assert "| 🟥 **Verified**, high confidence | **🟠 High → 🔴 Critical** | CWE-79 · XSS |" in entry
     assert "**What the test showed:** The injected script ran in the browser." in entry
     assert f"- **Deviation:** {DEVIATION.removeprefix('Deviation: ')}" in entry and "- **Rating changed:** " in entry
     assert "The agent's account" not in entry and "q reaches innerHTML" not in entry    # in the appendix
@@ -414,7 +414,7 @@ def test_the_appendix_is_collapsed_and_holds_plan_explanation_and_observations_a
 
 def test_without_the_assessment_the_report_still_lists_every_finding():
     md = to_markdown(_report_doc())
-    assert "| 🟥 **Confirmed** | [T-037](#t-037) · Stored XSS | – |" in md and "no rating changed" not in md
+    assert "| 🟥 **Verified** | [T-037](#t-037) · Stored XSS | – |" in md and "no rating changed" not in md
     assert "<a id=\"t-038\"></a>T-038" in md
 
 

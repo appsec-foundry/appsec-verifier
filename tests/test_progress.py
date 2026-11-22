@@ -84,7 +84,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert header.split() == ["TIME", "FINDING", "EVENT", "PROGRESS", "ELAPSED", "LEFT", "DETAIL"]
     # VER-026: the category stands before its findings, and after them what they showed and the time it took.
     assert gap == "" and heading == "Access control: testing 2 findings"
-    assert footer == "Access control: 1 of 1 confirmed · 1m00s"
+    assert footer == "Access control: 1 of 1 verified · 1m00s"
     assert start.split()[1:7] == ["1/2", "T-1", "start", "0%", "0s", "≤29m"]
     assert start.endswith("Basket of another user readable · high")
     assert agent.split()[3] == "agent" and agent.endswith("▶ test agent started · Sonnet 5.5 · no identities")
@@ -93,7 +93,7 @@ def test_off_a_terminal_each_event_is_one_plain_grid_line():
     assert proof.split()[3] == "proof"
     assert proof.endswith("✓ proof checked: access differs between identities · steps 1, 2")
     assert done.split()[1:7] == ["1/2", "T-1", "done", "50%", "1m00s", "~1m"]
-    assert done.endswith("! confirmed (high) · 1m00s · a read b")
+    assert done.endswith("! verified (high) · 1m00s · a read b")
     assert "\x1b" not in out.getvalue()
 
 
@@ -115,6 +115,25 @@ def test_the_proof_line_names_the_form_and_a_qa_objection_has_its_own_line():
     assert "step None" not in text
     assert "Technical QA: needs-attention · jwt.pub is a public key." in text
     assert "✓ proof checked: same answer without credentials, unlike a random path · steps 4, 5, 6" in text
+
+
+@pytest.mark.parametrize("verdict, shown", [("blocked-by-control", "the application refused the attack"),
+                                            ("not-reproducible", "the attack showed no effect")])
+def test_a_checked_negative_verdict_says_its_proof_was_checked_in_grey(monkeypatch, verdict, shown):
+    """Run 162 showed "✗ no proof" in yellow above a blocked verdict whose proof the Verifier had checked (VER-013): the
+    proof line says it was checked and what the refusal showed, in the grey of a result not verified."""
+    monkeypatch.setenv("COLUMNS", "400")
+    out = Tty()
+    progress = RunProgress(out, clock=Clock(), env={}, live=False)
+    st = progress.st
+    progress.begin([_plan()])
+    progress.finding(_plan())
+    result = ProbeResult(verdict=verdict, rationale="bob got 403 for every basket", proof={"checked": True,
+                                                                                         "steps": [2, 3]})
+    progress.agent_finished(_plan(), result)
+    proof = _rows(out)[-1]
+    assert SGR.sub("", proof).endswith(f"✓ proof checked: {shown} · steps 2, 3") and "no proof" not in proof
+    assert st("✓ proof checked", "muted", "bold") in proof and st("proof  ", "muted") in proof
 
 
 def test_a_plan_that_raises_the_step_bound_says_so():
@@ -165,11 +184,11 @@ def test_the_start_line_names_the_requests_and_the_verdict_colour_is_seen_from_t
     assert st("1/1 T-1", "bold") in title and st("1/1 T-1", "accent", "bold") not in out.getvalue()
 
 
-    # Seen from the application, as the report's squares: red confirmed, green blocked or not reproduced.
-    for verdict, label, role in (("confirmed", "! confirmed", "critical"),
-                                 ("not-reproducible", "○ not reproducible", "ok"),
-                                 ("blocked-by-control", "⊘ blocked by control", "ok"),
-                                 ("inconclusive", "? inconclusive", "warn")):
+    # As the report's squares (VER-013): red verified, grey not verified by the tested requests, yellow undecided.
+    for verdict, label, role in (("confirmed", "! verified", "critical"),
+                                 ("not-reproducible", "○ not verified: not reproduced", "muted"),
+                                 ("blocked-by-control", "⊘ not verified: blocked by a control", "muted"),
+                                 ("inconclusive", "? undecided", "warn")):
         progress.finished(plan, ProbeResult(verdict=verdict))
         done = next(row for row in reversed(_rows(out)) if SGR.sub("", row).split()[3:4] == ["done"])
         assert st(label, role, "bold") in done, verdict
@@ -304,7 +323,7 @@ def test_refused_steps_and_limits_need_attention_and_the_done_line_names_the_lim
     assert rows[1].endswith("step 2 · GET /a · stopped by limit: request cap 1 exceeded")
     assert rows[2].endswith("■ test agent finished · 2 steps · 0s")
     assert rows[3].split()[3] == "proof" and rows[3].endswith("✗ no proof: stopped by the requests limit")
-    assert rows[4].endswith("? inconclusive · 0s · Limit reached: the run's requests to the target; raise them with "
+    assert rows[4].endswith("? undecided · 0s · Limit reached: the run's requests to the target; raise them with "
                             "--max-requests.")
 
 
@@ -323,7 +342,7 @@ def test_a_test_agent_that_made_no_progress_is_shown_as_stopped_with_its_last_fa
     rows = [" ".join(row.split()) for row in _unruled(_rows(out))[6:]]
     assert rows[0].endswith("step 8 · stopped: " + reason) and "by limit" not in rows[0]
     assert rows[2].endswith("✗ no proof: the test agent made no progress and was stopped")
-    assert rows[3].endswith("? inconclusive · 0s · Agent stuck: the Verifier refused its steps repeatedly, the last a "
+    assert rows[3].endswith("? undecided · 0s · Agent stuck: the Verifier refused its steps repeatedly, the last a "
                             "test plan the Verifier refused. A new run may get further.")
 
 
@@ -333,7 +352,7 @@ def test_an_inconclusive_finding_says_why_when_nothing_above_did():
     progress.begin([_plan()])
     progress.finding(_plan())
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="claude call failed: no answer"))
-    assert _rows(out)[-1].endswith("? inconclusive · 0s · Agent's assessment: claude call failed: no answer.")
+    assert _rows(out)[-1].endswith("? undecided · 0s · Agent's assessment: claude call failed: no answer.")
 
 
 @pytest.mark.parametrize("result, why, done", [
@@ -343,9 +362,6 @@ def test_an_inconclusive_finding_says_why_when_nothing_above_did():
                  proof={"checked": False, "contract": 3, "missing": ["no executed browser_check"]}),
      "no executed browser_check", "No proof: the agent's confirmation failed the proof check: no executed "
                                   "browser_check."),
-    # A negative verdict is no missing proof: its done line does not repeat the reason.
-    (ProbeResult(verdict="not-reproducible", rationale="bob got 403 for every basket",
-                 proof={"checked": True, "steps": [2, 3]}), "bob got 403 for every basket", None),
     (ProbeResult(verdict="inconclusive", rationale="probe failed: KeyError"), "probe failed: KeyError",
      "Verifier error: the test stopped on an internal error (KeyError); failed-findings.json in the run directory "
      "has the details."),
@@ -390,9 +406,9 @@ def test_a_checked_proof_stands_out_with_what_it_showed(monkeypatch, cls, shown)
     progress.agent_finished(plan, result)
     proof = _rows(out)[-1]
     assert SGR.sub("", proof).endswith(f"✓ proof checked: {shown} · step 4")
-    assert st("✓ proof checked", "ok", "bold") in proof and st("proof  ", "ok") in proof
+    assert st("✓ proof checked", "critical", "bold") in proof and st("proof  ", "critical") in proof   # VER-013
     progress.finished(plan, result)
-    assert st("! confirmed (high)", "critical", "bold") in _rows(out)[-2] and _rows(out)[-1].strip() == "why"
+    assert st("! verified (high)", "critical", "bold") in _rows(out)[-2] and _rows(out)[-1].strip() == "why"
 
 
 def test_a_proof_the_check_sent_back_to_the_agent_says_why(monkeypatch):
@@ -687,7 +703,7 @@ def test_with_costs_shown_the_done_line_gives_the_run_spend_and_not_the_finding_
     progress.finding(_plan())
     spent[0] = 1.62
     progress.finished(_plan(), ProbeResult(verdict="inconclusive", rationale="no answer"))
-    assert _rows(out)[-1].endswith(f"inconclusive · 0s · {spend} · Agent's assessment: no answer.")
+    assert _rows(out)[-1].endswith(f"undecided · 0s · {spend} · Agent's assessment: no answer.")
     assert "$0.42" not in _rows(out)[-1]
 
 
@@ -744,7 +760,7 @@ def test_with_costs_shown_entries_give_the_running_total_and_the_status_line_the
     progress.finished(_plan(), ProbeResult(verdict="inconclusive"))
     done = _rows(live)[-2]
     assert progress.st("$1.62", "accent") in done
-    assert SGR.sub("", done).endswith("inconclusive · 0s · run $1.62 of $10.00 at API prices")
+    assert SGR.sub("", done).endswith("undecided · 0s · run $1.62 of $10.00 at API prices")
     said = "No proof: the test agent ended without a proof the Verifier could check."
     assert SGR.sub("", _rows(live)[-1]).strip() == said
     progress.close()
@@ -783,7 +799,7 @@ def test_on_a_terminal_findings_are_set_apart_and_the_tested_request_stands_unde
     assert " 2/2 T-2  start " in rows[blank + 1]
     entry = [row[column:] for row in rows[done:blank]]
     assert all(row[:column].isspace() for row in rows[done + 1:blank]) and entry[-1] == "the rows flipped"
-    assert " ".join(entry[:-1]) == "! confirmed (high) · 0s · run $0.04 of $10.00"
+    assert " ".join(entry[:-1]) == "! verified (high) · 0s · run $0.04 of $10.00"
     assert entry[-2].endswith("run $0.04 of $10.00")                        # the spend stays whole
 
 
@@ -1045,12 +1061,12 @@ def test_verify_shows_the_grid_on_stderr_and_the_run_usage_in_the_summary(tmp_pa
     assert any(row.endswith("✗ no proof: rejection alone is insufficient") for row in rows)
     assert any("step 1 · Sending a request to the target · GET /rest/basket/2 → 403" in row for row in rows)
     done = next(row for row in rows if row.split()[3:4] == ["done"])
-    assert done.split()[3:5] == ["done", "100%"] and "inconclusive" in done
+    assert done.split()[3:5] == ["done", "100%"] and "undecided" in done
     assert done.endswith(" · run $0.50 of $10.00 · Agent's assessment: rejection alone is insufficient.")
     assert "$0.50 · run" not in done                                      # the running total only
     # The verdict cites no step: the image of its requests follows, named img, not proof (VER-035).
     assert rows[-2].split()[3] == "img" and "screenshot" in rows[-2]
-    assert rows[-1].endswith(": 0 of 1 confirmed · 1 inconclusive · 0s")     # the category's closing line (VER-026)
+    assert rows[-1].endswith(": 0 of 1 verified · 1 undecided · 0s")     # the category's closing line (VER-026)
     assert "Run        : " in out and "2 requests · $0.50 of $10.00" in out
 
 
@@ -1119,10 +1135,10 @@ def test_each_category_stands_between_a_heading_and_a_line_with_its_results():
     progress.close()
     rows = _unruled(_rows(out))
     first = rows.index("Cross-Site Scripting (XSS): testing 2 findings")
-    closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 2m00s")
+    closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 verified · 1 undecided · 2m00s")
     assert rows[first - 1] == "" and " 1/3 T-1  start " in rows[first + 1] and first < closing
     assert rows[closing + 1:closing + 3] == ["", "SQL injection: testing 1 finding"]
-    assert rows[-1] == "SQL injection: 0 of 1 confirmed · 1 not reproducible · 5s"
+    assert rows[-1] == "SQL injection: 0 of 1 verified · 1 not verified: not reproduced · 5s"
 
 
 def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_terminal():
@@ -1140,7 +1156,7 @@ def test_the_headings_and_closing_lines_are_bold_and_coloured_by_result_on_a_ter
     heading = "Cross-Site Scripting (XSS): testing 1 finding"
     assert (st("Cross-Site Scripting (XSS)", "bold") + ": testing 1 finding\n" + st("─" * len(heading), "accent")
             in text)
-    assert st("1 of 1 confirmed", "ok") in text and "Cross-Site Scripting (XSS): " in text
+    assert st("1 of 1 verified", "critical") in text and "Cross-Site Scripting (XSS): " in text
 
 
 def test_under_a_category_heading_the_start_entry_leaves_out_what_the_heading_says():
@@ -1178,7 +1194,7 @@ def test_a_confirmed_findings_further_variants_follow_under_a_heading_of_their_o
         progress.finished(plan, ProbeResult(verdict=verdict, rationale="r"))
     progress.close()
     rows = _unruled(_rows(out))
-    closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 confirmed · 1 inconclusive · 0s")
+    closing = rows.index("Cross-Site Scripting (XSS): 1 of 2 verified · 1 undecided · 0s")
     assert rows[closing + 1:closing + 3] == ["", "Confirmed findings: 1 further variant not tested"]
     start = rows[closing + 3]
     assert " 1/2 T-1  start " in start and "Basket of another user readable · high · xss" in start

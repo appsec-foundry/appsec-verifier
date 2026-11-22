@@ -1975,15 +1975,18 @@ def _verify_settings(st, assessment, target, scope, sel, limits, safe, read_only
     for key, note in notes:
         if note:
             rows.append((key, note, "warn" if note.startswith(("unavailable", "replaces")) else None))
+    rows.append(("Results", _RESULT_LEGEND))
     return [*([] if guided else _title(st, "verify")), *_facts(st, rows)]
 
 
-# Seen from the application, as the report's squares (verify/report.py): red when the run confirmed the weakness, in
-# bold, or showed it without exploit (VER-066), green when a control blocked it or the run did not reproduce it,
-# yellow when the run could not decide.
+# As the report's squares (verify/report.py, VER-013): red a verified weakness, in bold when confirmed, also one shown
+# without exploit (VER-066), grey one the tested requests did not verify, yellow when the run could not decide.
 _VERDICT_MARK = {"confirmed": ("!", "critical", "bold"), "shown-without-exploit": ("◐", "critical"),
-                 "not-reproducible": ("○", "ok"), "blocked-by-control": ("⊘", "ok"),
+                 "not-reproducible": ("○", "muted"), "blocked-by-control": ("⊘", "muted"),
                  "inconclusive": ("?", "warn"), "not-attempted": ("·", "muted")}
+# The colours explained before the first finding (VER-013), each in its own.
+_RESULT_LEGEND = [("verified: a weakness to fix", "critical"), ("undecided: check again", "warn"),
+                  ("not verified: not shown by the tests, may still exist", "muted")]
 
 
 _VERDICT_ORDER = ("confirmed", "shown-without-exploit", "not-reproducible", "blocked-by-control", "inconclusive",
@@ -2102,12 +2105,15 @@ def _run_usage(budget: RunBudget, seconds: float, agent_info: dict, show_costs: 
 
 
 def _verify_summary(st: Style, doc, paths, extra: list[tuple[str, str]]) -> list[str]:
+    from .verify.report import _VERDICT_LABEL
+
     s = doc["meta"]["summary"]
     code_only = sum(1 for r in doc["results"] if (r.get("eligibility") or {}).get("status") != "dynamic")
-    verdicts = ((s["confirmed"], "confirmed", "ok"),
-                (s.get("shown_without_exploit", 0), "shown without exploit", "ok"),
-                (s["not_reproducible"], "not reproducible", "critical"),
-                (s["blocked"], "blocked by control", "critical"), (s["inconclusive"], "inconclusive", "warn"),
+    # In the colours and names of the results above (VER-013).
+    counts = (("confirmed", s["confirmed"]), ("shown-without-exploit", s.get("shown_without_exploit", 0)),
+              ("not-reproducible", s["not_reproducible"]), ("blocked-by-control", s["blocked"]),
+              ("inconclusive", s["inconclusive"]))
+    verdicts = (*((n, _VERDICT_LABEL[v], _VERDICT_MARK[v][1]) for v, n in counts),
                 (s["not_attempted"] - code_only, "not tested", "muted"),
                 (code_only, "unsupported or incomplete", "muted"))
     evidence = Path(paths["evidence"])

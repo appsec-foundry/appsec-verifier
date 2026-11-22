@@ -45,14 +45,17 @@ from .poc import ROLE_TITLES, TARGET_DATA_NOTE
 from .presentation import COMPOSED_NOTE
 from .probes import proof_shown
 
+# VER-013: each verdict as the console, the reports and the images name it, led by whether the weakness is verified;
+# the stored values (verification.yaml, the Analyzer's annotations) keep their names.
 _VERDICT_LABEL = {
-    "confirmed": "confirmed",
-    "shown-without-exploit": "shown without exploit",
-    "not-reproducible": "not reproducible",
-    "blocked-by-control": "blocked by control",
-    "inconclusive": "inconclusive",
+    "confirmed": "verified",
+    "shown-without-exploit": "verified without exploit",
+    "not-reproducible": "not verified: not reproduced",
+    "blocked-by-control": "not verified: blocked by a control",
+    "inconclusive": "undecided",
     "not-attempted": "not attempted",
 }
+VERIFIED_VERDICTS = ("confirmed", "shown-without-exploit")
 
 
 # Verdicts a resumed run keeps; a finding with any other result is tested again.
@@ -205,12 +208,14 @@ _LABEL = {**_VERDICT_LABEL, "not-attempted": "not tested"}
 # Colours as AppSec Analyzer's report shows them: its severity badges (scripts/renderers/compact_tables.py,
 # BADGES), and for the result of a test a square, so that a result never reads as a severity.
 _SEVERITY_BADGE = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢", "informational": "⚪", "info": "⚪"}
-# A finding shown without exploit takes the colour of a confirmed one, the label alone tells them apart, and only a
-# confirmed one is set in bold (VER-066).
-_RESULT_BADGE = {"confirmed": "🟥", "shown-without-exploit": "🟥", "blocked-by-control": "🟩", "not-reproducible": "🟩",
-                 "inconclusive": "🟨", "not-attempted": "⬜"}
-_LEGEND = ("🟥 confirmed or shown without exploit · 🟩 not reproducible or blocked by control · 🟨 inconclusive · "
-           "⬜ not tested. Severity as in the assessment: 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low.")
+# By what a result asks of the reader (VER-013): red a verified weakness to fix, yellow an undecided one to check or
+# test again, grey one the tested requests did not verify. A finding shown without exploit takes the colour of a
+# confirmed one, the label alone tells them apart, and only a confirmed one is set in bold (VER-066).
+_RESULT_BADGE = {"confirmed": "🟥", "shown-without-exploit": "🟥", "blocked-by-control": "⬜", "not-reproducible": "⬜",
+                 "inconclusive": "🟨", "not-attempted": "▫"}
+_LEGEND = ("🟥 verified, also without exploit · 🟨 undecided · ⬜ not verified: the tested requests did not show the "
+           "weakness, which does not mean it is absent · ▫ not tested. Severity as in the assessment: 🔴 Critical, "
+           "🟠 High, 🟡 Medium, 🟢 Low.")
 _CLASS = {"xss": "XSS", "ssrf": "SSRF", "access-control": "access control", "open-redirect": "open redirect",
           "path-traversal": "path traversal"}
 _MAX_STEP_ROWS = 15
@@ -750,8 +755,8 @@ def _summary(tested, untested, threats: dict, ratings: dict, kinds: dict) -> lis
         for n, (fid, rows) in enumerate(tested):
             if n == 0 or kinds[tested[n - 1][0]] != kinds[fid]:
                 members = [r for f, r in tested if kinds[f] == kinds[fid]]
-                confirmed = sum(1 for r in members if _overall(r) == "confirmed")
-                lines += ["", f"### {category_name(kinds[fid])} · {confirmed} of {len(members)} confirmed", "",
+                verified = sum(1 for r in members if _overall(r) in VERIFIED_VERDICTS)
+                lines += ["", f"### {category_name(kinds[fid])} · {verified} of {len(members)} verified", "",
                           "| Result | Finding | Severity | What the test showed |", "| --- | --- | --- | --- |"]
             verdict, anchor, fr = _overall(rows), _anchor(fid), (rows[0].get("finding_ref") or {})
             label = _LABEL.get(verdict, verdict).capitalize() + (f" ({len(rows)} variants)" if len(rows) > 1 else "")

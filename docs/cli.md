@@ -120,16 +120,16 @@ Ctrl-C stops a run. The finding under test ends `inconclusive`, and the report i
 
 ## What the results mean
 
-Each tested finding gets one verdict. A negative verdict applies only to the requests that were tested.
+Each tested finding gets one verdict. The console and the report show it by whether the weakness is verified, in red, undecided, in yellow, or not verified, in grey, and the run explains these colours before the first finding. A negative verdict applies only to the requests that were tested: not verified does not mean the weakness is absent.
 
-| Verdict | Meaning |
-| --- | --- |
-| `confirmed` | The weakness was reproduced, and the Verifier's code checked the proof. |
-| `shown-without-exploit` | The target showed the weakness without an exploit, and the Verifier's code checked that proof. It is not a confirmation and does not change the rating. |
-| `not-reproducible` | Tested, but the weakness did not show. |
-| `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
-| `inconclusive` | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
-| `not-attempted` | Not tested: the finding cannot be tested against a running application, the run lacked something it needs, or a limit or Ctrl-C ended the run first. |
+| Verdict | Shown as | Meaning |
+| --- | --- | --- |
+| `confirmed` | verified (red) | The weakness was reproduced, and the Verifier's code checked the proof. |
+| `shown-without-exploit` | verified without exploit (red) | The target showed the weakness without an exploit, and the Verifier's code checked that proof. It is not a confirmation and does not change the rating. |
+| `not-reproducible` | not verified: not reproduced (grey) | Tested, but the weakness did not show. |
+| `blocked-by-control` | not verified: blocked by a control (grey) | A protection the static analysis could not see stopped the attack. |
+| `inconclusive` | undecided (yellow) | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
+| `not-attempted` | not tested | Not tested: the finding cannot be tested against a running application, the run lacked something it needs, or a limit or Ctrl-C ended the run first. |
 
 What counts as proof depends on the weakness. An XSS counts only when a marker script actually runs in the proof browser. An access-control finding needs a comparison in which another account, or a request without login, gets what it must not. An injection needs answers that follow true and false conditions the Verifier generates, or a database error that only the broken input causes. Code that is evaluated but returns no result can be shown without exploit: names no code can know make it fail, names the language always knows do not. The README's table [What it verifies](../README.md#what-it-verifies) lists every class, and the [specification](specification.md#proof-per-class-ver-009-to-ver-013) has the exact rules.
 

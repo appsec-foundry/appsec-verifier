@@ -89,16 +89,16 @@ For a reflected XSS in DVWA, the proof browser's screenshot shows the dialog the
   <img src="docs/images/evidence-xss.png" alt="Evidence image of a reflected XSS in DVWA: the GET request carries a script in name, the response contains it unescaped, and the script ran in the proof browser" width="100%">
 </picture>
 
-Each finding gets one of these verdicts. A negative verdict applies only to the requests that were tested.
+Each finding gets one of these verdicts, shown by whether the weakness is verified. A negative verdict applies only to the requests that were tested: not verified does not mean the weakness is absent.
 
-| Verdict | Meaning |
-| --- | --- |
-| `confirmed` | The weakness was reproduced and the proof checked. |
-| `shown-without-exploit` | The target showed the weakness without an exploit, for example evaluated code whose result never returns. The proof was checked; it is not a confirmation and leaves the rating as it was. |
-| `not-reproducible` | Tested, but the weakness did not show. |
-| `blocked-by-control` | A protection the static analysis could not see stopped the attack. |
-| `inconclusive` | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
-| `not-attempted` | Not testable against a running system (such as a hard-coded secret), or not reached because of a limit or an interruption. |
+| Verdict | Shown as | Meaning |
+| --- | --- | --- |
+| `confirmed` | verified (red) | The weakness was reproduced and the proof checked. |
+| `shown-without-exploit` | verified without exploit (red) | The target showed the weakness without an exploit, for example evaluated code whose result never returns. The proof was checked; it is not a confirmation and leaves the rating as it was. |
+| `not-reproducible` | not verified: not reproduced (grey) | Tested, but the weakness did not show. |
+| `blocked-by-control` | not verified: blocked by a control (grey) | A protection the static analysis could not see stopped the attack. |
+| `inconclusive` | undecided (yellow) | No decision, for example because a request failed, a limit was reached or the proof did not hold. |
+| `not-attempted` | not tested | Not testable against a running system (such as a hard-coded secret), or not reached because of a limit or an interruption. |
 
 ## Safety
 
