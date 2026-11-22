@@ -16,7 +16,7 @@ import os
 from collections import Counter
 from pathlib import Path
 
-from ..auth.model_data import model_data
+from ..auth.model_data import _MASK, model_data
 
 # Matched case-insensitively against every part of the resolved path below the repository root.
 _SECRET_DIRS = frozenset({".git", ".hg", ".svn", ".ssh", ".aws", ".gnupg", ".docker", ".kube"})
@@ -119,10 +119,13 @@ class SourceReader:
         so fixtures, generated code or copies in one directory do not crowd out the rest.
         The same exclusions as `find` apply (credential, key and VCS files, heavy vendor directories, symlinks
         that leave the repository); files above the read limit and binary files are skipped, and the traversal
-        and the bytes read are bounded. Read-only; the model supplies no pattern, only a string."""
+        and the bytes read are bounded. Read-only; the model supplies no pattern, only a string.
+        Only the files whose text holds the string are masked, since masking cannot add it there, unless the
+        string reaches into what masking inserts (`_masking_may_add`); the answer is the same either way."""
         if not isinstance(text, str) or "\x00" in text or not _SEARCH_TEXT[0] <= len(text.strip()) <= _SEARCH_TEXT[1]:
             raise SourceAccessError(f"a content search needs {_SEARCH_TEXT[0]} to {_SEARCH_TEXT[1]} characters")
         needle = text.lower()
+        every_file = self._masking_may_add(needle)
         matches, more, scanned, read = [], {}, 0, 0
 
         def done(stopped):
@@ -169,7 +172,10 @@ class SourceReader:
                 if len(data) > MAX_SOURCE_BYTES or b"\x00" in data[:8192]:   # grown since stat, or binary
                     continue
                 unshown = 0
-                clean = model_data(data.decode("utf-8", errors="replace"), self.sessions)
+                decoded = data.decode("utf-8", errors="replace")
+                if not every_file and needle not in decoded.lower():
+                    continue        # masking every file is most of a search's time
+                clean = model_data(decoded, self.sessions)
                 for number, line in enumerate(clean.splitlines(), 1):
                     if needle in line.lower():
                         if len(matches) < limit:
@@ -179,6 +185,20 @@ class SourceReader:
                 if unshown:
                     more[str(rel)] = unshown
         return done(False)
+
+    def _masking_may_add(self, needle: str) -> bool:
+        """Whether masking could put `needle` (lower case) into a file whose own text lacks it. Masking replaces a
+        value with a bracketed placeholder, quoted where it replaces a number, so only a needle with a bracket or a
+        quote, or one inside a placeholder, can. Placeholders that cannot be listed count as reachable."""
+        if any(c in needle for c in '[]"'):
+            return True
+        labels = {_MASK}
+        if self.sessions is not None:
+            listed = getattr(self.sessions, "placeholder_labels", None)
+            if listed is None:
+                return True
+            labels |= set(listed())
+        return any(needle in label.lower() for label in labels)
 
     def read_all(self, relpath: str) -> str:
         """A whole file under the same confinement and 1 MiB limit as read_window, for checks in code (VER-008);

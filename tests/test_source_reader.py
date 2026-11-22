@@ -197,6 +197,69 @@ def test_search_bounds_the_list_of_further_files(tmp_path):
     assert out["truncated"] is True
 
 
+class _EveryFile(SourceReader):
+    """The reference answer: every file masked before it is searched."""
+
+    def _masking_may_add(self, needle):
+        return True
+
+
+def _masked_repo(tmp_path):
+    from appsec_verifier.auth.sessions import SessionManager
+
+    (tmp_path / "config.ts").write_text('password = "hunter2xyz"\n{"accessToken": 207391}\n'
+                                        "Authorization: Bearer abcdefgh12345\nconst limit = 3\n")
+    (tmp_path / "session.ts").write_text("const cookie = 'sessionValue77'\n")
+    (tmp_path / "plain.ts").write_text("const limit = 4\nrouter.get('/api/Cards')\n")
+    return SessionManager([{"role": "account-1", "auth": {"token_env": "TOKEN"}}], None,
+                          env={"TOKEN": "sessionValue77"})
+
+
+@pytest.mark.parametrize("text", ["const limit", "api/Cards", "withheld", "credential", '": "', "[cred",
+                                  "account-1 tok", "hunter2xyz", "sessionValue77", "207391", "bearer"])
+def test_search_answers_as_if_every_file_were_masked(tmp_path, text):
+    """Skipping the files that lack the string changes no answer, also for a string only masking puts into a file,
+    and no secret value is found (VER-016)."""
+    sessions = _masked_repo(tmp_path)
+    out = SourceReader(tmp_path, sessions=sessions).search(text)
+    assert out == _EveryFile(tmp_path, sessions=sessions).search(text)
+    assert not any(s in m["text"] for m in out["matches"] for s in ("hunter2xyz", "sessionValue77", "207391"))
+
+
+def test_search_finds_what_only_masking_puts_into_a_file(tmp_path):
+    """A placeholder and the quotes around a masked number are found as the model sees the file."""
+    reader = SourceReader(tmp_path, sessions=_masked_repo(tmp_path))
+    assert [(m["path"], m["line"]) for m in reader.search("withheld")["matches"]] == [
+        ("config.ts", 1), ("config.ts", 2), ("config.ts", 3)]
+    assert [(m["path"], m["line"]) for m in reader.search('": "')["matches"]] == [("config.ts", 2)]
+    assert [m["path"] for m in reader.search("account-1 tok")["matches"]] == ["session.ts"]
+
+
+def test_search_masks_only_the_files_that_hold_the_string(tmp_path, monkeypatch):
+    """Masking is most of a search's time, so a file without the string is not masked; every file is when the
+    string reaches into a placeholder or the placeholders cannot be listed (refused shortcut)."""
+    from appsec_verifier.agent import source_reader
+
+    sessions = _masked_repo(tmp_path)
+    masked, real = [], source_reader.model_data
+    monkeypatch.setattr(source_reader, "model_data", lambda text, s=None: masked.append(text) or real(text, s))
+
+    def count(reader, text):
+        masked.clear()
+        reader.search(text)
+        return len(masked)
+
+    class Unlisted:
+        def redact(self, value):
+            return value
+
+    assert count(SourceReader(tmp_path, sessions=sessions), "api/Cards") == 1
+    assert count(SourceReader(tmp_path), "const limit") == 2
+    assert count(SourceReader(tmp_path, sessions=sessions), "account-1 tok") == 3
+    assert count(SourceReader(tmp_path, sessions=sessions), '": "') == 3
+    assert count(SourceReader(tmp_path, sessions=Unlisted()), "api/Cards") == 3
+
+
 @pytest.mark.parametrize("text", ["", "ab", "  a ", "x" * 201, "a\x00bc"])
 def test_search_rejects_a_query_out_of_bounds(tmp_path, text):
     with pytest.raises(SourceAccessError):

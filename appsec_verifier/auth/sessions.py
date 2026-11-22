@@ -449,6 +449,11 @@ class SessionManager:
         return out
 
     @_locked
+    def placeholder_labels(self) -> set[str]:
+        """Every text `redact` can put in place of a secret value (VER-016)."""
+        return {*self._placeholders().values(), MIXED_CREDENTIAL, "[redacted]"}
+
+    @_locked
     def holds_placeholder(self, text: str) -> bool:
         """Whether `text` holds a placeholder of a secret value, so it does not show the value (VER-016)."""
         return MIXED_CREDENTIAL in text or any(label in text for label in set(self._placeholders().values()))
