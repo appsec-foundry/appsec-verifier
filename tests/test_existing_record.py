@@ -7,6 +7,7 @@ import copy
 import io
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -266,6 +267,30 @@ def test_a_negative_verdict_citing_a_source_read_names_the_requests_to_cite(tmp_
     result = run(card_context(tmp_path, "refused"), "blocked-by-control", steps)      # cites steps 2-8
     assert result.verdict == "inconclusive"
     assert "step 2 is not one: cite only steps 3-8" in result.rationale
+
+
+@pytest.mark.parametrize("make,steps,verdict,lead", [
+    (lambda p: card_context(p, "vulnerable"), CARD_STEPS, "confirmed",
+     "account-2 reads the record that account-1 already had"),
+    (lambda p: card_context(p, "refused"), CARD_STEPS, "blocked-by-control", "not confirmed"),
+    (lambda p: context(p, target("vulnerable")), None, "confirmed",
+     "account-2 reads the record that account-1 already had"),
+])
+def test_the_image_shows_the_other_accounts_own_records_as_allowed(tmp_path, make, steps, verdict, lead):
+    """Run 155: the other account's own list and record are reads it may send, the contrast of the proof, not
+    controls expected to be refused; only a confirmation heads the image in red."""
+    ctx, pages = make(tmp_path), []
+    ctx.browser = SimpleNamespace(screenshots=("access-control",),
+                                  render_exchanges=lambda html, name, marked: pages.append(html) or [])
+    result = run(ctx, verdict, steps)
+    assert result.verdict == verdict, result.rationale
+    page = pages[-1]
+    assert lead in page and f"<header class='head {verdict}'>" in page
+    for label in ("another account reads its own record", *(("another account lists its records",) if steps else ())):
+        row = page[page.index(label):]
+        assert "<td>allowed</td>" in row[:row.index("</tr>")], label
+    assert page.count("is not open to everyone") <= 1                      # the read without login only
+    assert "header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}" in page
 
 
 def test_the_plan_allows_a_get_of_the_collection_and_nothing_else_there(tmp_path):

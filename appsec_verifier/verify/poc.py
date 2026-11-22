@@ -627,9 +627,10 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
                        if collection and urlsplit(args[n].get("path") or "").path.rstrip("/") == collection}
             owner_paths = {args[n].get("path") for n, _ in shown if role[n] == owner and n not in listing}
             for n, _ in shown:
+                # The other account's own list and record are allowed reads, the contrast, not a refused control.
                 if n in listing:
                     roles[n] = (("normal", "owner lists its records") if role[n] == owner
-                                else ("control", "another account lists its records"))
+                                else ("normal", "another account lists its records"))
                 elif role[n] == owner:
                     roles[n] = ("normal", "owner reads its record")
                 elif role[n] is None:
@@ -637,7 +638,7 @@ def step_roles(ctx, history: list[dict], shown: list[tuple[int, dict]]) -> dict[
                 elif args[n].get("path") in owner_paths:
                     roles[n] = ("attack", "another account reads the owner's record")
                 else:
-                    roles[n] = ("control", "another account reads its own record")
+                    roles[n] = ("normal", "another account reads its own record")
         elif plan.get("owner") or plan.get("reference"):
             owner = plan.get("owner") or plan.get("reference")
             normal = set(normal_roles(getattr(ctx, "identities", None))) - {owner}
@@ -1529,7 +1530,8 @@ def _image_response(ctx, e, marks, marked_lines, view: str | None = None):
 
 _EXCHANGE_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
 pre,code{font-family:ui-monospace,Menlo,Consolas,monospace}
-header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #b00020;white-space:pre-wrap}
+header{background:#111;color:#fff;padding:10px 14px;border-bottom:4px solid #555;white-space:pre-wrap}
+header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}header.inconclusive{border-bottom-color:#b26a00}
 header b{font-size:20px}header .k{color:#ffeb3b;font-weight:bold}header small{color:#bbb;font-size:13px}
 header.head{white-space:normal;padding:12px 16px 14px}header.head .id{font-size:14px;color:#bbb}
 header.head .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
@@ -1676,7 +1678,8 @@ def head_html(ctx, verdict: str, sentence: str, more: str = "") -> str:
 
     title = _TITLE_LOCATION.sub("", str(getattr(ctx.plan, "title", "") or "")[:300])[:90]
     label = _VERDICT_LABEL.get(verdict, verdict)
-    return (f"<header class=head><div class=id>{html.escape(' · '.join(filter(None, (str(ctx.plan.id), title))))}"
+    return (f"<header class='head {html.escape(verdict)}'><div class=id>"
+            f"{html.escape(' · '.join(filter(None, (str(ctx.plan.id), title))))}"
             f"</div><div class=lead><span class='verdict {html.escape(verdict)}'>{html.escape(label)}</span>"
             f"{html.escape(sentence)}</div>{more}</header>")
 
@@ -1904,7 +1907,8 @@ def _exchange_screenshot(ctx, history: list[dict], shown: list[tuple[int, dict]]
 
 
 _COMPARISON_CSS = """body{margin:0;background:#fff;color:#111;font:16px/1.45 system-ui,Helvetica,Arial,sans-serif}
-header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #b00020}
+header{background:#111;color:#fff;padding:12px 16px;border-bottom:4px solid #555}
+header.confirmed,header.shown-without-exploit{border-bottom-color:#b00020}header.inconclusive{border-bottom-color:#b26a00}
 header .id{font-size:14px;color:#bbb}header .lead{font-size:21px;font-weight:bold;line-height:1.3;margin-top:4px}
 .verdict{background:#555;color:#fff;font:bold 15px sans-serif;padding:1px 8px;border-radius:4px;margin-right:10px;
 text-transform:uppercase;vertical-align:2px}.verdict.confirmed,.verdict.shown-without-exploit{background:#b00020}
@@ -1999,6 +2003,8 @@ def comparison_summary(ctx, history: list[dict], rows: list[dict], result) -> di
         shown = f"another account changed the record that {plan.get('owner')} created"
     elif plan.get("owner"):
         shown = f"{attack['who']} reads the record that {plan['owner']} created"
+    elif plan.get("existing"):
+        shown = f"{attack['who']} reads the record that {plan['existing']} already had"
     else:
         shown = f"{attack['who']} gets what the allowed identity gets from {target}"
     # VER-035: the weakness and because what, or what was shown although the verdict is not a confirmation.
