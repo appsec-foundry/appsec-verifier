@@ -31,7 +31,7 @@ from appsec_verifier.agent.steps import (
 )
 from appsec_verifier.cli import ProfileError, _build_planner_factory
 from appsec_verifier.endpoints import Endpoint
-from appsec_verifier.limits import CALL_RESERVE_USD, LimitExceeded, Limits, RunBudget
+from appsec_verifier.limits import CALLS_BEFORE_SHARING, LimitExceeded, Limits, RunBudget
 from appsec_verifier.loader import FindingPlan
 from appsec_verifier.scope import ScopeGuard
 from appsec_verifier.tools import GuardedHttpClient
@@ -980,6 +980,14 @@ class _CappedHost:
         return HostReply(step=_wire("submit_verdict"), usd=min(self.cost, allowance))
 
 
+def _primed(limits, cost=0.5):
+    """A run whose first calls, each costing `cost`, have shown what a call costs."""
+    ctx = _ctx(limits)
+    for _ in range(CALLS_BEFORE_SHARING):
+        ctx.budget.note_cost(cost)
+    return ctx
+
+
 def _calls_together(host, ctx, n):
     from concurrent.futures import ThreadPoolExecutor
 
@@ -999,45 +1007,62 @@ def _calls_together(host, ctx, n):
 
 
 def test_calls_a_host_stops_at_their_share_run_at_the_same_time():
-    """VER-065: findings tested together do not take turns at the model while the ceiling covers the shares."""
+    """VER-065: findings tested together do not take turns at the model while the ceiling covers the shares, each
+    five times the dearest call so far."""
     host = _CappedHost(barrier=threading.Barrier(4, timeout=5))
-    _calls_together(host, _ctx(Limits(cost_limit_usd=30)), 4)
-    assert host.peak == 4 and host.allowances == [CALL_RESERVE_USD] * 4
+    _calls_together(host, _primed(Limits(cost_limit_usd=30)), 4)
+    assert host.peak == 4 and host.allowances == [2.5] * 4
+
+
+def test_a_runs_first_calls_run_alone_and_set_the_share():
+    """Until the first calls have shown what a call costs, each runs alone with the whole rest; then the share
+    follows the dearest call."""
+    ctx = _ctx(Limits(cost_limit_usd=30))
+    first = _CappedHost(cost=0.25)
+    _calls_together(first, ctx, CALLS_BEFORE_SHARING)
+    assert first.peak == 1 and first.allowances == [30.0, 29.75, 29.5]
+    ctx.budget.note_cost(1.0)
+    later = _CappedHost(barrier=threading.Barrier(2, timeout=5))
+    _calls_together(later, ctx, 2)
+    assert later.peak == 2 and later.allowances == [5.0, 5.0]
 
 
 def test_near_the_ceiling_or_without_a_cap_calls_take_turns_with_the_whole_rest():
     """Refused case: once the unreserved rest covers no second share, each call waits until no other runs and may
     spend what is left; on a host that cannot stop a call at an allowance calls never run together."""
     host = _CappedHost()
-    _calls_together(host, _ctx(Limits(cost_limit_usd=3)), 3)
-    assert host.peak == 1 and host.allowances == [3.0, 2.5, 2.0]
+    _calls_together(host, _primed(Limits(cost_limit_usd=4)), 3)
+    assert host.peak == 1 and host.allowances == [2.5, 2.0, 1.5]
     uncapped = _CappedHost(capped=False)
-    _calls_together(uncapped, _ctx(Limits(cost_limit_usd=30)), 3)
-    assert uncapped.peak == 1 and uncapped.allowances == [30.0, 29.5, 29.0]
+    _calls_together(uncapped, _primed(Limits(cost_limit_usd=30)), 3)
+    assert uncapped.peak == 1 and uncapped.allowances == [28.5, 28.0, 27.5]
 
 
 def test_calls_at_the_same_time_never_spend_past_the_ceiling():
     """Refused case (VER-015): every call spends all it may, yet the shares keep the run under its ceiling, and
     once it is reached no further call starts."""
-    ctx = _ctx(Limits(cost_limit_usd=9))
-    results = _calls_together(_CappedHost(cost=5.0), ctx, 8)
-    assert ctx.budget.cost == pytest.approx(9.0)
+    ctx = _primed(Limits(cost_limit_usd=12))
+    host = _CappedHost(cost=5.0)
+    results = _calls_together(host, ctx, 10)
+    assert host.peak > 1 and ctx.budget.cost == pytest.approx(12.0)
     assert any(isinstance(r, LimitExceeded) and r.kind == "cost" for r in results)
 
 
 def test_calls_run_at_the_same_time_again_after_one_had_the_whole_rest():
     """A call that ran alone with the whole rest gives its hold back, so later calls run together again."""
-    ctx = _ctx(Limits(cost_limit_usd=30))
+    ctx = _primed(Limits(cost_limit_usd=30))
     _calls_together(_CappedHost(capped=False), ctx, 1)
     host = _CappedHost(barrier=threading.Barrier(3, timeout=5))
     _calls_together(host, ctx, 3)
-    assert host.peak == 3 and host.allowances == [CALL_RESERVE_USD] * 3
+    assert host.peak == 3 and host.allowances == [2.5] * 3
 
 
-@pytest.mark.parametrize(("ceiling", "allowed"), [(30.0, "2.00"), (3.5, "3.50")])
-def test_claude_cli_is_given_its_share_or_the_whole_rest(ceiling, allowed):
+@pytest.mark.parametrize(("primed", "ceiling", "allowed"), [(True, 30.0, "2.50"), (True, 5.0, "3.50"),
+                                                             (False, 30.0, "30.00")])
+def test_claude_cli_is_given_its_share_or_the_whole_rest(primed, ceiling, allowed):
     host, run = _claude([_lines(CLAUDE_INIT, _claude_result(_wire("http_request", path="/x")))])
-    HostPlanner(host).next_step(_ctx(Limits(cost_limit_usd=ceiling)), [])
+    limits = Limits(cost_limit_usd=ceiling)
+    HostPlanner(host).next_step(_primed(limits) if primed else _ctx(limits), [])
     argv = run.calls[0]["argv"]
     assert argv[argv.index("--max-budget-usd") + 1] == allowed
 

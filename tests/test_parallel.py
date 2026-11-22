@@ -151,9 +151,11 @@ def test_findings_tested_together_call_the_model_at_the_same_time():
             return HostReply(step={"action": "submit_verdict", "args_json": "{}", "note": "n"}, usd=0.25)
 
     budget = RunBudget(Limits(cost_limit_usd=30, rate_rps=0))
+    for _ in range(3):              # the run's first calls, which run alone, cost 0.25 each
+        budget.note_cost(0.25)
     probe = Probe(work=lambda ctx: HostPlanner(Host()).next_step(ctx, []), pause=0)
     _run([_plan(f"T-{n}") for n in range(1, 4)], probe, 3, budget=budget, limits=budget.limits)
-    assert not barrier.broken and seen == [2.0] * 3 and budget.cost == pytest.approx(0.75)
+    assert not barrier.broken and seen == [1.25] * 3 and budget.cost == pytest.approx(1.5)
 
 
 def test_an_intrusive_run_tests_one_finding_at_a_time():

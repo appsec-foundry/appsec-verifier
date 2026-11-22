@@ -21,10 +21,11 @@ A run that tests several findings at the same time (VER-065) shares one
 ceiling are serialised, the finding a model call is charged to is kept per
 thread, and `cancel` ends the run's remaining requests and model calls. A
 paid model call holds a share of the cost ceiling until its cost is counted
-(`model_slot`): on a host that stops a call at its allowance a share of
-CALL_RESERVE_USD, so such calls run at the same time while the unreserved
-rest covers two shares; otherwise, and near the ceiling, the whole rest, one
-call at a time. A
+(`model_slot`): on a host that stops a call at its allowance, once the
+run's first calls have shown what a call costs, a share of CALL_SHARE_FACTOR
+times the dearest call so far, so such calls run at the same time while the
+unreserved rest covers two shares; otherwise, and near the ceiling, the whole
+rest, one call at a time. A
 deadline can interrupt only the main thread; a worker thread the runner marks
 (`worker_thread`) checks it when the bounded work returns, and that work must
 carry the timeout itself (the model call, the request to the target).
@@ -68,9 +69,11 @@ MAX_PARALLEL = 8        # findings a run may test at the same time (VER-065)
 # Verifier does not know.
 DEFAULT_PARALLEL = 4
 SUBSCRIPTION_PARALLEL = 2
-# What a model call may spend while others run beside it, on a host that stops a call at its allowance; no call of
-# the recorded runs spent more than USD 0.60.
-CALL_RESERVE_USD = 2.0
+# On a host that stops a call at its allowance, a model call may spend this multiple of the dearest call of the run so
+# far while others run beside it. Replaying the recorded runs four findings at a time, no call of some 6,200 cost more
+# than that; at four times one did. The run's first calls run alone, so that the dearest call is known.
+CALL_SHARE_FACTOR = 5.0
+CALLS_BEFORE_SHARING = 3
 _worker = threading.local()
 
 
@@ -199,6 +202,8 @@ class RunBudget:
         self._reserved = 0.0
         self._in_flight = 0
         self._alone = False         # a call holds the whole rest
+        self._paid_calls = 0        # model calls that reported a cost, and the dearest of them
+        self._dearest_call = 0.0
         self._pace_lock = threading.Lock()  # one request rate for the run (VER-065)
         self._local = threading.local()     # the finding this thread's model calls are charged to
         self.cancelled = False
@@ -260,11 +265,11 @@ class RunBudget:
 
     @contextmanager
     def model_slot(self, profile, *, capped: bool = False):
-        """Hold a paid model call's share of the cost ceiling until its cost is counted (VER-015, VER-065). A host
-        that stops a call at the allowance it is given (`capped`) takes CALL_RESERVE_USD while the unreserved
-        rest covers two such shares, so its calls run at the same time; otherwise, and near the ceiling, a call
-        waits until no other runs and may use all of the rest (`call_allowance`). The subscription CLIs report no
-        spend and take no share."""
+        """Hold a paid model call's share of the cost ceiling until its cost is counted (VER-015, VER-065). On a host
+        that stops a call at the allowance it is given (`capped`), once CALLS_BEFORE_SHARING calls reported their
+        cost, a call takes CALL_SHARE_FACTOR times the dearest of them while the unreserved rest covers two such
+        shares, so its calls run at the same time; otherwise, and near the ceiling, a call waits until no other runs
+        and may use all of the rest (`call_allowance`). The subscription CLIs report no spend and take no share."""
         if profile in ("codex-cli", "copilot-cli"):
             yield
             return
@@ -272,8 +277,10 @@ class RunBudget:
             while True:
                 remaining = self.remaining_cost()
                 free = (math.inf if remaining is None else remaining) - self._reserved
-                if capped and not self._alone and free >= 2 * CALL_RESERVE_USD:
-                    allowance = CALL_RESERVE_USD
+                portion = CALL_SHARE_FACTOR * self._dearest_call
+                if (capped and not self._alone and self._paid_calls >= CALLS_BEFORE_SHARING and portion > 0
+                        and free >= 2 * portion):
+                    allowance = portion
                     break
                 if self._in_flight == 0:
                     allowance = None
@@ -330,6 +337,9 @@ class RunBudget:
             raise LimitExceeded("cost", "a model call reported no usable cost, so the spending can no longer "
                                         "be bounded")
         self.cost += usd
+        if usd > 0:
+            self._paid_calls += 1
+            self._dearest_call = max(self._dearest_call, usd)
         if self._finding_id is not None:
             self._finding_costs[self._finding_id] += usd
         if self.limits.cost_limit_usd and self.cost > self.limits.cost_limit_usd:
