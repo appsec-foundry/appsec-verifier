@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 
 from .auth.accounts import FROM_TARGET
 from .limits import DEFAULT_PARALLEL, MAX_PARALLEL, SUBSCRIPTION_PARALLEL, Limits, RunBudget
-from .loader import AssessmentError, plans_from, read_assessment, select
+from .loader import AssessmentError, plans_from, read_assessment, repository_labels, select
 from .preflight import (
     Check,
     check_accounts,
@@ -839,7 +839,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
             ask_secret=_ask_secret if interactive else None, doc={"identities": pasted} if pasted else None)
     if id_errors:
         return _blocked("The identities cannot be used", id_errors, _identities_fix(id_errors))
-    if args.source and (bad := check_source(args.source)).status == "fail":
+    if args.source and (bad := check_source(args.source, list(repository_labels(doc).values()))).status == "fail":
         return _blocked("The source checkout cannot be read", [bad.message],
                         "give --source a readable checkout of the application, or omit it")
     budget = RunBudget(limits)
@@ -991,7 +991,7 @@ def _verify(args: argparse.Namespace, invocation: str | None, default_yes: bool,
 
         add(check_target(http, target, proxy=proxy_for(scope, target)))
         if args.source:  # VER-032: show the source checkout the agent reads from (a fail already stopped above)
-            add(check_source(args.source))
+            add(check_source(args.source, list(repository_labels(doc).values())))
         reachable = not failed(checks)
         if reachable and login:
             add(*_sign_in_accounts(sessions, identities, login, planner_factory.host, budget, doc, args.source))
@@ -1223,7 +1223,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         if not errors and (programs := _login_programs(identities)):
             add(Check("Programs", "info", programs))
     if args.source:
-        add(check_source(args.source))
+        add(check_source(args.source, list(repository_labels(doc or {}).values())))
     plan: list[str] = []
     if not failed(checks):
         plan_check, plan = _preflight_plan(st, doc, plans, scope, identities, target)
@@ -1865,6 +1865,8 @@ def _test_cases(st, plans, blocked: dict[str, tuple[str, str]], hints: dict[str,
         tail_parts = [requests, f"{len(group)} variants"] if len(group) > 1 and not distinct else [requests]
         tail = " · ".join(x for x in tail_parts if x) or ("" if distinct else "no request in the assessment" + (
             "; its file path may name one" if page_candidates(p.instance) else ""))       # VER-056
+        if p.repository:        # an assessment of several repositories (VER-007)
+            tail = printable(p.repository) + (" · " + tail if tail else "")
         text = title + ((" · " + tail) if tail else "")
         if st.enabled and not full:
             text = _fit(text, max(columns() - 1 - width, 20))

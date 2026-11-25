@@ -4,13 +4,15 @@ against schemas/assessment.schema.yaml, which covers only the fields read here,
 and its finding ids must be unique (VER-032). Error messages name the place and
 the rule; the only value they quote is a repeated id, escaped by repr. Each plan
 also carries the requests the finding names and its scenario (endpoints.py).
+In an assessment of several repositories every location is read as
+`<label>/<file>`, as the Analyzer names it (`qualified`, VER-007).
 Offline: no network, no model calls.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -70,6 +72,7 @@ class FindingPlan:
     variant_id: str | None = None
     variant_digest: str | None = None
     rating: dict = field(default_factory=dict)  # the Analyzer's rating and all variants, for VER-039 on the console
+    repository: str | None = None   # the label of its location's repository, in an assessment of several
 
 
 def _first_location(threat: dict) -> str | None:
@@ -158,20 +161,85 @@ def assessment_errors(doc: dict) -> list[str]:
     return errors[:_MAX_ERRORS] + ([f"… {len(errors) - _MAX_ERRORS} more"] if len(errors) > _MAX_ERRORS else [])
 
 
+def _plain_name(label) -> bool:
+    """A repository label the Analyzer accepts as a path namespace (`Namespaces` in its
+    scripts/orchestrator/assessment_workspace.py): one directory name, not hidden. Stricter here: printable, no
+    backslash, at most 255 characters, as the console names it."""
+    return (isinstance(label, str) and 0 < len(label) <= 255 and label.isprintable() and not label.startswith(".")
+            and "/" not in label and "\\" not in label)
+
+
+def _inventory(doc: dict) -> list[dict]:
+    inventory = doc.get("source_inventory")
+    rows = inventory.get("repositories") if isinstance(inventory, dict) else None
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def repository_labels(doc: dict) -> dict[str, str]:
+    """`repository_id` → label of each repository an assessment of several repositories lists, for a label that is a
+    plain directory name and names one repository only; empty for an assessment of one repository."""
+    rows = _inventory(doc)
+    if len(rows) < 2:
+        return {}
+    ids = Counter(r.get("repository_id") for r in rows if isinstance(r.get("repository_id"), str))
+    names = Counter(r.get("label") for r in rows if isinstance(r.get("label"), str))
+    return {r["repository_id"]: r["label"] for r in rows
+            if ids[r.get("repository_id")] == 1 and _plain_name(r.get("label")) and names[r["label"]] == 1}
+
+
+_QUALIFIERS = ("repository_id", "sha256")
+
+
+def qualified(doc: dict) -> dict:
+    """VER-007: an assessment of several repositories names each location's file relative to its repository, with the
+    repository's `repository_id`. This copy names it `<label>/<file>`, as the Analyzer's report, route inventory and
+    change keys do (`_project` in its scripts/orchestrator/assessment_workspace.py), so the cross-run key, the tested
+    location and a source directory that holds each checkout under its label agree. A location whose repository is
+    not listed under a usable label keeps no file and locates nothing. An assessment of one repository, and one
+    already qualified, is returned unchanged."""
+    if len(_inventory(doc)) < 2:
+        return doc
+    labels = repository_labels(doc)
+
+    def walk(value):
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        if "repository_id" not in value:
+            return {k: walk(v) for k, v in value.items()}
+        label = labels.get(value["repository_id"]) if isinstance(value["repository_id"], str) else None
+        row = {k: walk(v) for k, v in value.items() if k not in _QUALIFIERS}
+        for key in ("file", "path"):
+            if isinstance(value.get(key), str):
+                if label:
+                    row[key] = f"{label}/{value[key]}"
+                else:
+                    del row[key]
+        return row
+
+    return {k: v if k == "source_inventory" else walk(v) for k, v in doc.items()}
+
+
 def read_assessment(assessment_path: Path) -> dict:
-    """The assessment, or AssessmentError when it lacks the structure read here."""
+    """The assessment, or AssessmentError when it lacks the structure read here; locations qualified (`qualified`)."""
     doc = _load_yaml(assessment_path)
     errors = assessment_errors(doc)
     if errors:
         raise AssessmentError(errors)
-    return doc
+    return qualified(doc)
 
 
 def plans_from(doc: dict) -> list[FindingPlan]:
     from .planning import enrich
 
+    doc = qualified(doc)
     catalog = load_verifiable_cwes()
-    return enrich([classify(t, catalog, doc.get("attack_surface")) for t in doc["threats"]], doc)
+    labels = set(repository_labels(doc).values())
+    plans = [classify(t, catalog, doc.get("attack_surface")) for t in doc["threats"]]
+    plans = [replace(p, repository=p.instance.split("/", 1)[0])
+             if p.instance and p.instance.split("/", 1)[0] in labels else p for p in plans]
+    return enrich(plans, doc)
 
 
 def load_plans(assessment_path: Path) -> list[FindingPlan]:

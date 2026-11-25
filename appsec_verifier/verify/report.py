@@ -1228,13 +1228,16 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
     Never changes or removes a finding. The key is the Verifier's own: AppSec
     Analyzer uses `threats[].verification` for its static verification findings
     (REQ-040). The fields are defined in schemas/annotated-assessment.schema.yaml."""
+    from ..loader import qualified
     from ..matchkey import match_key
     from .rating import rate
 
     by_id = {r["finding_ref"]["id"]: r for r in doc["results"] if r["finding_ref"].get("id")}
     # The cross-run key finds a result whose finding has another id in this assessment, and only for a finding
     # that alone carries that key: another finding that shares the key of a tested one was not tested.
-    threats = [t for t in assessment.get("threats") or [] if isinstance(t, dict)]
+    # The keys of an assessment of several repositories name the repository (VER-007); the copy keeps its locations.
+    keyed = qualified(assessment).get("threats") or []
+    threats = [t for t in keyed if isinstance(t, dict)]
     present = {t.get("id") for t in threats}
     unmatched = [match_key(t) for t in threats if t.get("id") not in by_id]
     by_key = {}
@@ -1251,10 +1254,10 @@ def annotate_assessment(assessment: dict, doc: dict, *, verification_report: str
         "verifier_version": doc["meta"].get("verifier_version"),
         "verification_report": verification_report,
     }
-    for t in out.get("threats") or []:
+    for t, k in zip(out.get("threats") or [], keyed, strict=True):
         if not isinstance(t, dict):
             continue
-        r = by_id.get(t.get("id")) or by_key.get(match_key(t) or "")
+        r = by_id.get(t.get("id")) or by_key.get(match_key(k) or "")
         if not r:
             continue
         variants = [row for row in doc["results"] if row["finding_ref"].get("id") == t.get("id")]

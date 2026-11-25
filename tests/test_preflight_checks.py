@@ -235,6 +235,43 @@ def test_verify_blocks_before_contact_on_an_unreadable_source(tmp_path, monkeypa
     assert "source checkout cannot be read" in capsys.readouterr().err
 
 
+# An assessment of several repositories (VER-007): the source directory holds each checkout under its label.
+
+def test_a_source_directory_with_every_assessed_repository_passes(tmp_path):
+    for label in ("orders-api", "user-service"):
+        (tmp_path / label).mkdir()
+    check = check_source(str(tmp_path), ["user-service", "orders-api"])
+    assert check.status == "ok" and "orders-api, user-service" in check.message
+
+
+def test_a_source_directory_without_some_repositories_warns(tmp_path):
+    (tmp_path / "orders-api").mkdir()
+    check = check_source(str(tmp_path), ["orders-api", "user-service"])
+    assert check.status == "warn" and "user-service" in check.message and "orders-api" not in check.message
+
+
+def test_a_source_directory_without_any_assessed_repository_fails(tmp_path):
+    """Refused case: one repository's own checkout given for an assessment of several, and a link that leaves the
+    directory, which the agent would not read."""
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    given = tmp_path / "orders-api"
+    given.mkdir()
+    (given / "user-service").symlink_to(outside, target_is_directory=True)
+    check = check_source(str(given), ["orders-api", "user-service"])
+    assert check.status == "fail" and "none of the assessed repositories" in check.message
+
+
+def test_verify_blocks_before_contact_when_the_source_holds_no_assessed_repository(tmp_path, monkeypatch, capsys):
+    target = Target(default=_resp())
+    inventory = {"repositories": [{"repository_id": "repo-" + c * 16, "label": label}
+                                  for c, label in (("a", "orders-api"), ("b", "user-service"))]}
+    rc, asked = _verify(tmp_path, monkeypatch, target, source=str(tmp_path),
+                        assessment={"source_inventory": inventory, "threats": [THREAT]})
+    assert rc == cli.EXIT_BLOCKED and asked == [] and target.calls == []
+    assert "none of the assessed repositories" in capsys.readouterr().err
+
+
 # ── identities (VER-016, VER-028) ─────────────────────────────────────────────
 
 FORM = {"role": "alice", "method": "form",
@@ -591,7 +628,7 @@ def test_the_generation_test_runs_once_on_request(run, capsys):
 
 # ── verify runs the same checks before the first model call ───────────────────
 
-def _verify(tmp_path, monkeypatch, target, identities=None, source=None):
+def _verify(tmp_path, monkeypatch, target, identities=None, source=None, assessment=None):
     asked = []
 
     class Planner:
@@ -601,7 +638,7 @@ def _verify(tmp_path, monkeypatch, target, identities=None, source=None):
 
     monkeypatch.setattr(cli, "_build_planner_factory", lambda args: (Planner, dict(INFO)))
     monkeypatch.setattr(httpx_transport, "transport_from_scope", lambda scope: target)
-    argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", {"threats": [THREAT]})),
+    argv = ["verify", "--assessment", str(_write(tmp_path / "a.yaml", assessment or {"threats": [THREAT]})),
             "--scope", str(_write(tmp_path / "s.yaml", SCOPE)), "--yes", "--test-all",
             "--output", str(tmp_path / "out")]
     if identities:

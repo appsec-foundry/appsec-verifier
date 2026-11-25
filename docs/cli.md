@@ -45,7 +45,7 @@ After you confirm, the Verifier checks that the target answers, that every test 
 
 `--url` names the target. Without a scope file the Verifier contacts only that URL's scheme, host and port, and sends only reading requests. A [scope file](#scope-file) given with `--scope` can allow more, such as several hosts, a private network or a proxy, and records the test period and who is responsible. With a scope file `--url` is optional and must lie inside the scope.
 
-`--source DIR` lets the test agent read a checkout of the application's source code. The agent uses it to find the exact request of a finding when the assessment does not name it. It never reads `.env` files, keys, credential stores or `.git/`.
+`--source DIR` lets the test agent read a checkout of the application's source code. The agent uses it to find the exact request of a finding when the assessment does not name it. For an assessment of several repositories, give the directory that holds each checkout under the repository name the Analyzer's report shows, for example `orders-api/` and `user-service/`. It never reads `.env` files, keys, credential stores or `.git/`.
 
 ### Test accounts
 

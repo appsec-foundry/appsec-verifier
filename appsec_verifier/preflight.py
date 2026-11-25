@@ -17,7 +17,8 @@ check for a source checkout, and the checks that contact something:
   before the first finding; a login program starts here (VER-040).
 - `check_accounts`: two roles whose tokens name the same account cannot show an
   access-control contrast, so the run stops (VER-010, VER-032).
-- `check_source`: only with `--source`, that the path is a readable directory.
+- `check_source`: only with `--source`, that the path is a readable directory; for an assessment of several
+  repositories, that it holds their checkouts under their labels (VER-007).
   Offline; its contents are never read here, and that the agent will find a
   finding's code there is not proved (VER-032).
 - `generation_test`: only on request, one fixed prompt without target data,
@@ -268,10 +269,18 @@ def _check_url(label, method, done, url, headers, origin, http, scope) -> Check:
 
 # ── source (VER-032) ────────────────────────────────────────────────────────────
 
-def check_source(source_dir: str) -> Check:
-    """`--source` points to a readable directory. Offline: only the local path is
-    examined, never its contents, and that the agent will find a finding's code
-    there is not proved."""
+def _names(labels) -> str:
+    shown = ", ".join(labels[:5])
+    return shown + (f" and {len(labels) - 5} more" if len(labels) > 5 else "")
+
+
+def check_source(source_dir: str, labels: list[str] | tuple = ()) -> Check:
+    """`--source` points to a readable directory and, for an assessment of several
+    repositories (`labels`, loader.repository_labels), holds a directory for each
+    of them inside it, where the agent reads `<label>/<file>` (VER-007). None
+    fails, some missing warns. Offline: only the local path and those directories
+    are examined, never their contents, and that the agent will find a finding's
+    code there is not proved."""
     import os
     from pathlib import Path
 
@@ -284,7 +293,25 @@ def check_source(source_dir: str) -> Check:
         return Check("Source", "fail", f"{source_dir}: not a directory")
     if not os.access(root, os.R_OK | os.X_OK):
         return Check("Source", "fail", f"{source_dir}: the directory cannot be read")
-    return Check("Source", "ok", f"{source_dir}: readable source checkout")
+    if not labels:
+        return Check("Source", "ok", f"{source_dir}: readable source checkout")
+
+    def held(label: str) -> bool:      # a link that leaves the directory is not read there (source_reader)
+        try:
+            inside = (root / label).resolve()
+            return inside != root and inside.is_relative_to(root) and inside.is_dir()
+        except OSError:
+            return False
+
+    labels = sorted(labels)
+    missing = [label for label in labels if not held(label)]
+    if len(missing) == len(labels):
+        return Check("Source", "fail", f"{source_dir}: holds none of the assessed repositories; give the directory "
+                                       f"that holds their checkouts as {_names(labels)}")
+    if missing:
+        return Check("Source", "warn", f"{source_dir}: no checkout of {_names(missing)}; the agent reads only the code "
+                                       f"of the other repositories")
+    return Check("Source", "ok", f"{source_dir}: checkouts of {_names(labels)}")
 
 
 # ── model (VER-017, VER-019, VER-023) ──────────────────────────────────────────

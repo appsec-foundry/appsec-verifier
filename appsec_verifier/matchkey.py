@@ -8,6 +8,8 @@ Analyzer's `scripts/model/build_threat_model_yaml.py` (`MATCH_KEY_VERSION` 2),
 the reference, so the Verifier's key equals the Analyzer's for the same finding.
 One deliberate difference: a finding without an evidence file gets no key here
 (input-incomplete, VER-006) instead of the Analyzer's fallback fingerprint.
+In an assessment of several repositories the file carries its repository's
+label (`loader.qualified`), as in the Analyzer's keys.
 """
 
 from __future__ import annotations
